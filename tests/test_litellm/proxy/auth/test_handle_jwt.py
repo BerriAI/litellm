@@ -13,6 +13,7 @@ import litellm
 
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
+    JWTAuthBuilderResult,
     JWTLiteLLMRoleMap,
     LiteLLM_JWTAuth,
     LiteLLM_ModelTable,
@@ -7144,3 +7145,62 @@ async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatc
     else:
         create_team.assert_not_awaited()
         assert result["team_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_jwt_built_user_api_key_auth_carries_team_and_user_budget_fallbacks():
+    """A JWT-authenticated caller has no key row, so the fallback chains have
+    to ride team_grants and the user fields on UserAPIKeyAuth for the
+    auth-time reroute to find them."""
+    result: JWTAuthBuilderResult = {
+        "is_proxy_admin": False,
+        "team_object": LiteLLM_TeamTable(
+            team_id="team-1",
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        ),
+        "user_object": LiteLLM_UserTable(
+            user_id="user-1",
+            budget_fallbacks={"gpt-4o": ["claude-haiku"]},
+        ),
+        "end_user_object": None,
+        "org_object": None,
+        "token": "jwt-token",
+        "team_id": "team-1",
+        "user_id": "user-1",
+        "user_email": None,
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {"sub": "user-1"},
+    }
+
+    auth = JWTAuthManager.user_api_key_auth_from_result(result)
+
+    assert auth.team_budget_fallbacks == {"gpt-4o": ["gpt-4o-mini"]}
+    assert auth.user_budget_fallbacks == {"gpt-4o": ["claude-haiku"]}
+
+
+@pytest.mark.asyncio
+async def test_jwt_admin_does_not_inherit_user_budget_fallbacks():
+    result: JWTAuthBuilderResult = {
+        "is_proxy_admin": True,
+        "team_object": None,
+        "user_object": LiteLLM_UserTable(
+            user_id="admin-1",
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        ),
+        "end_user_object": None,
+        "org_object": None,
+        "token": "jwt-token",
+        "team_id": None,
+        "user_id": "admin-1",
+        "user_email": None,
+        "end_user_id": None,
+        "org_id": None,
+        "team_membership": None,
+        "jwt_claims": {"sub": "admin-1"},
+    }
+
+    auth = JWTAuthManager.user_api_key_auth_from_result(result)
+
+    assert auth.user_budget_fallbacks is None

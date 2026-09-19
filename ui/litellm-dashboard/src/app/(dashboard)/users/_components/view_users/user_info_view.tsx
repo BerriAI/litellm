@@ -337,6 +337,7 @@ export default function UserInfoView({
           formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
         metadata: formValues.metadata ?? userData.metadata,
         model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
+        budget_fallbacks: "budget_fallbacks" in formValues ? formValues.budget_fallbacks : userData.budget_fallbacks,
         object_permission: mcpEntitlement
           ? { ...userData.object_permission, ...mcpEntitlement }
           : userData.object_permission,
@@ -399,6 +400,7 @@ export default function UserInfoView({
       // replaces the user's existing budgets with whatever was typed.
       model_max_budget: userData.model_max_budget,
       model_max_budget_usage: userData.model_max_budget_usage,
+      budget_fallbacks: userData.budget_fallbacks,
     },
   };
 

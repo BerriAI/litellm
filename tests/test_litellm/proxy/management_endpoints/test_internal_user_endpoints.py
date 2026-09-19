@@ -2272,6 +2272,46 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
     broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
 
 
+@pytest.mark.asyncio
+async def test_bulk_user_budget_fallbacks_update_serializes_and_refreshes_cache(mocker: MockerFixture) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    saved_user: Final = LiteLLM_UserTable(
+        user_id="user-spruce", budget_fallbacks={"gpt-4o": ["claude-haiku"]}
+    )
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
+    prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: exercise a real isolated cache
+    broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    response: Final = await bulk_user_update(
+        data=BulkUpdateUserRequest(
+            all_users=True, user_updates={"budget_fallbacks": {"gpt-4o": ["gpt-4o-mini"]}}
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_changed_by=None,
+    )
+
+    prisma_client.db.litellm_usertable.update_many.assert_awaited_once_with(
+        where={}, data={"budget_fallbacks": json.dumps({"gpt-4o": ["gpt-4o-mini"]})}
+    )
+    prisma_client.update_data.assert_not_called()
+    assert response.successful_updates == 1
+    assert response.results[0].updated_user["budget_fallbacks"] == {"gpt-4o": ["gpt-4o-mini"]}
+    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
+    broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
+
+
 def test_generate_request_base_validator():
     """
     Test that GenerateRequestBase validator converts empty string to None for max_budget
@@ -3309,6 +3349,7 @@ async def test_user_info_v2_response_shape(mocker):
         "object_permission",
         "model_max_budget",
         "model_max_budget_usage",
+        "budget_fallbacks",
     }
     assert set(response_dict.keys()) == expected_fields
 
@@ -4603,3 +4644,110 @@ async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mo
     written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
     assert written_data.get("password") is not None
     assert written_data["password"] != strong_password
+
+
+@pytest.mark.asyncio
+async def test_new_user_forwards_budget_fallbacks_into_user_persistence(mocker):
+    """/user/new must carry budget_fallbacks into generate_key_helper_fn so it
+    lands on the user row (previously the field was accepted but dropped)."""
+    from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
+        _noop,
+    )
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        _noop,
+    )
+    key_gen = mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.management_endpoints.internal_user_endpoints.generate_key_helper_fn",
+        new=mocker.AsyncMock(side_effect=RuntimeError("reached key generation")),
+    )
+    prisma_client = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.count = mocker.AsyncMock(return_value=0)
+    mocker.patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+        "litellm.proxy.proxy_server.prisma_client", prisma_client
+    )
+
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    request = NewUserRequest(
+        user_role="internal_user",
+        budget_fallbacks={"gpt-4o": ["gpt-4o-mini", "claude-haiku"]},
+    )
+
+    with pytest.raises(ProxyException):
+        await new_user(data=request, user_api_key_dict=admin)
+
+    assert key_gen.call_count == 1
+    assert key_gen.call_args.kwargs["budget_fallbacks"] == {"gpt-4o": ["gpt-4o-mini", "claude-haiku"]}
+
+
+@pytest.mark.asyncio
+async def test_update_user_replaces_budget_fallbacks(_admin_prisma, mocker):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = _admin_prisma
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user"}
+    existing_user.user_id = "target-user"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    mock_prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+
+    user_request = UpdateUserRequest(
+        user_id="target-user",
+        budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+    )
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
+    assert written_data["budget_fallbacks"] == {"gpt-4o": ["gpt-4o-mini"]}
+
+
+@pytest.mark.asyncio
+async def test_update_user_clears_budget_fallbacks_with_empty_map(_admin_prisma, mocker):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_single_user_helper,
+    )
+
+    mock_prisma_client = _admin_prisma
+    existing_user = mocker.MagicMock()
+    existing_user.model_dump.return_value = {"user_id": "target-user"}
+    existing_user.user_id = "target-user"
+    mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
+    mock_prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "target-user"})
+
+    user_request = UpdateUserRequest(user_id="target-user", budget_fallbacks={})
+    admin_caller = UserAPIKeyAuth(user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    await _update_single_user_helper(user_request=user_request, user_api_key_dict=admin_caller)
+
+    written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
+    assert written_data["budget_fallbacks"] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_value",
+    [["gpt-4o-mini"], {"gpt-4o": "gpt-4o-mini"}, {"gpt-4o": [1, 2]}],
+)
+async def test_update_internal_user_params_rejects_malformed_budget_fallbacks(bad_value):
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _update_internal_user_params,
+    )
+
+    data = UpdateUserRequest(user_id="u-1", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]})
+    data_json = data.model_dump(exclude_unset=True)
+    data_json["budget_fallbacks"] = bad_value
+
+    with pytest.raises(HTTPException) as exc_info:
+        _update_internal_user_params(data_json=data_json, data=data)
+
+    assert exc_info.value.status_code == 400

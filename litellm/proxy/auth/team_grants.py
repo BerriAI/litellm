@@ -60,6 +60,7 @@ class TeamGrants(TypedDict, total=False):
     team_max_budget: ReadOnly[float | None]
     team_soft_budget: ReadOnly[float | None]
     team_model_max_budget: ReadOnly[dict[str, object] | None]
+    team_budget_fallbacks: ReadOnly[dict[str, list[str]] | None]
     team_spend: ReadOnly[float | None]
     team_models: ReadOnly[Sequence[str]]
     team_blocked: ReadOnly[bool]
@@ -103,6 +104,7 @@ def team_grants(
         team_max_budget=team_object.max_budget,
         team_soft_budget=team_object.soft_budget,
         team_model_max_budget=team_object.model_max_budget,
+        team_budget_fallbacks=team_object.budget_fallbacks,
         team_spend=team_object.spend,
         team_models=tuple(team_object.models),
         team_blocked=team_object.blocked,

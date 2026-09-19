@@ -7,6 +7,14 @@ import * as networking from "@/components/networking";
 
 vi.mock("@/components/networking");
 
+vi.mock("@/components/key_team_helpers/BudgetFallbacksEditor", () => ({
+  BudgetFallbacksEditor: ({ onChange }: { onChange: (v: Record<string, string[]>) => void }) => (
+    <button type="button" onClick={() => onChange({ "gpt-4": ["claude-haiku"] })}>
+      Set Budget Fallback
+    </button>
+  ),
+}));
+
 vi.mock("@/components/key_team_helpers/fetch_available_models_team_key", () => ({
   getModelDisplayName: vi.fn((model: string) => model),
 }));
@@ -655,6 +663,35 @@ describe("UserEditView", () => {
         expect(screen.getByLabelText("Metadata")).toHaveValue("not json");
       });
       expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    describe("budget fallbacks", () => {
+      const userDataWithFallbacks = {
+        ...MOCK_USER_DATA,
+        user_info: {
+          ...MOCK_USER_DATA.user_info,
+          budget_fallbacks: { "gpt-4": ["gpt-3.5-turbo"] },
+        },
+      };
+
+      it("should leave budget_fallbacks out of an edit that did not touch it", async () => {
+        const payload = await submittedPayload({ userData: userDataWithFallbacks });
+
+        expect(payload).not.toHaveProperty("budget_fallbacks");
+      });
+
+      it("should send the configured budget_fallbacks map on save", async () => {
+        const onSubmit = vi.fn();
+        renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} userData={userDataWithFallbacks} />);
+
+        await userEvent.click(await screen.findByRole("button", { name: "Set Budget Fallback" }));
+        await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+        await waitFor(() => {
+          expect(onSubmit).toHaveBeenCalled();
+        });
+        expect(onSubmit.mock.calls[0][0].budget_fallbacks).toEqual({ "gpt-4": ["claude-haiku"] });
+      });
     });
 
     // /user/new validates model_max_budget behind an enterprise license, so a

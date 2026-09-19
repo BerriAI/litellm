@@ -76,6 +76,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
     soft_budget: float | None = None
     budget_duration: str | None = None
     budget_limits: list[BudgetLimitEntry] | None = None
+    budget_fallbacks: dict[str, list[str]] | None = None
     models: list[str] = []
     blocked: bool = False
     router_settings: dict | None = None
@@ -114,6 +115,7 @@ class LiteLLM_TeamTable(TeamBase):
             "model_aliases",
             "router_settings",
             "budget_limits",
+            "budget_fallbacks",
         ]
 
         if isinstance(values, BaseModel):
