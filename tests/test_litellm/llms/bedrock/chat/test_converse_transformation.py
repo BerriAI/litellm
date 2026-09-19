@@ -376,11 +376,41 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
 
 
 @pytest.mark.parametrize(
+    "model, param, value, expected_max_tokens",
+    [
+        ("us.openai.gpt-6-astra", "max_tokens", 1, 16),
+        ("us.openai.gpt-6-astra", "max_completion_tokens", 1, 16),
+        ("us.openai.gpt-6-astra", "max_tokens", 64, 64),
+        ("us.xai.grok-4.6", "max_tokens", 1, 16),
+        ("global.xai.grok-4.6", "max_completion_tokens", 1, 16),
+        ("us.xai.grok-4.6", "max_tokens", 32, 32),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "max_tokens", 1, 1),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.openai.gpt-6-astra", "max_tokens", 1, 16),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.xai.grok-4.6", "max_tokens", 1, 16),
+        ("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz", "max_tokens", 1, 1),
+    ],
+)
+def test_map_openai_params_enforces_minimum_max_tokens_for_openai_compat_models(
+    model: str, param: str, value: int, expected_max_tokens: int
+):
+    optional_params = AmazonConverseConfig().map_openai_params(
+        non_default_params={param: value},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["maxTokens"] == expected_max_tokens
+
+
+@pytest.mark.parametrize(
     "model",
     [
         "us.openai.gpt-5.6-sol",
         "global.openai.gpt-5.6-terra",
         "bedrock/converse/us.openai.gpt-5.6-luna",
+        "us.openai.gpt-6-astra",
+        "bedrock/converse/global.openai.gpt-6-astra",
     ],
 )
 def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(model, local_model_cost_map):
@@ -411,6 +441,7 @@ def test_reasoning_effort_maps_to_reasoning_effort_for_openai_gpt5_converse(mode
     [
         "us.openai.gpt-5.6-sol",
         "bedrock/converse/global.openai.gpt-5.6-luna",
+        "us.openai.gpt-6-astra",
     ],
 )
 def test_openai_gpt5_converse_never_forwards_thinking(model, local_model_cost_map):
