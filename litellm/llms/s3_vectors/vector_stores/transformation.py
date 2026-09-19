@@ -26,6 +26,19 @@ else:
 
 _DEFAULT_QUERY_EMBEDDING_MODEL: Final = "text-embedding-3-small"
 _DEFAULT_TOP_K: Final = 5
+S3_VECTORS_STORE_ID_ERROR: Final = (
+    "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
+    "or vector_bucket_name must be provided in litellm_params"
+)
+
+
+def split_s3_vectors_store_id(vector_store_id: str, fallback_bucket_name: object) -> tuple[str, str]:
+    if ":" in vector_store_id:
+        bucket_name, index_name = vector_store_id.split(":", 1)
+        return bucket_name, index_name
+    if not isinstance(fallback_bucket_name, str) or not fallback_bucket_name:
+        raise ValueError(S3_VECTORS_STORE_ID_ERROR)
+    return fallback_bucket_name, vector_store_id
 
 
 class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM):
@@ -74,16 +87,7 @@ class S3VectorsVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAWSLLM
 
     @staticmethod
     def _query_target(vector_store_id: str, litellm_params: Mapping[str, object]) -> tuple[str, str]:
-        if ":" in vector_store_id:
-            bucket_name, index_name = vector_store_id.split(":", 1)
-            return bucket_name, index_name
-        bucket_name_from_params: Final = litellm_params.get("vector_bucket_name")
-        if not isinstance(bucket_name_from_params, str) or not bucket_name_from_params:
-            raise ValueError(
-                "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
-                "or vector_bucket_name must be provided in litellm_params"
-            )
-        return bucket_name_from_params, vector_store_id
+        return split_s3_vectors_store_id(vector_store_id, litellm_params.get("vector_bucket_name"))
 
     @staticmethod
     def _query_request(
