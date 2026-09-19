@@ -307,7 +307,7 @@ class TestProcessEmbedContentResponseUsage:
 
     MODEL = "gemini-embedding-2"
 
-    def test_multimodal_image_preserves_usage_metadata(self):
+    def test_multimodal_image_preserves_usage_metadata(self, local_model_cost_map):
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
             "usageMetadata": {
@@ -400,7 +400,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert result.usage.prompt_tokens > 0
 
-    def test_file_reference_image_billed_per_image_not_text(self):
+    def test_file_reference_image_billed_per_image_not_text(self, local_model_cost_map):
         """files/... image refs must bill per-image, not at the text token rate."""
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
@@ -432,7 +432,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost == pytest.approx(0.00012)
 
-    def test_file_reference_non_image_not_counted_as_image(self):
+    def test_file_reference_non_image_not_counted_as_image(self, local_model_cost_map):
         """A files/... ref resolving to a non-image mime must not be image-counted."""
         response_json = {
             "embedding": {"values": [0.1, 0.2]},
@@ -467,7 +467,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost == pytest.approx(2.0 * 0.00016)
 
-    def test_video_plus_audio_does_not_double_bill_text(self):
+    def test_video_plus_audio_does_not_double_bill_text(self, local_model_cost_map):
         """Video+audio responses must not get video tokens reassigned to text."""
         response_json = {
             "embedding": {"values": [0.1]},
