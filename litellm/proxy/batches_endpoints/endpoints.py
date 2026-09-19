@@ -6,7 +6,7 @@
 ######################################################################
 import asyncio
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from types import MappingProxyType
 from typing import Any, Final, cast
 
@@ -57,17 +57,17 @@ from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 router: Final = APIRouter()
 
 
-def _litellm_metadata_of(data: dict) -> dict:
+def _litellm_metadata_of(data: MutableMapping[str, object]) -> MutableMapping[str, object]:
     """The request's litellm_metadata mapping, created on the request when it carries none.
 
     The success handler reads this mapping, so a flag or a model group set here has to live
     inside it rather than beside it.
     """
     existing: Final = data.get("litellm_metadata")
-    if isinstance(existing, dict):
+    if isinstance(existing, MutableMapping):
         return existing
-    created: Final = {}  # mutable-ok: the logging layer copies and extends this mapping, so it cannot be a read-only view
-    data["litellm_metadata"] = created
+    created: Final[dict[str, object]] = {}  # mutable-ok: the logging layer copies and extends this mapping
+    data["litellm_metadata"] = created  # rebind-ok: the success handler reads the request's own mapping
     return created
 
 

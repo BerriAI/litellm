@@ -49,6 +49,7 @@ from litellm.router import (
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
 
@@ -1216,6 +1217,43 @@ async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(m
     assert payload["model_group"] == _BATCH_GROUP
     assert usage_keys == []
 
+
+@pytest.mark.parametrize(
+    ("call_type", "expected_key", "expected_successes"),
+    [
+        ("aretrieve_batch", None, 0),
+        ("retrieve_batch", None, 0),
+        ("acompletion", "batch-dep:successes", 1),
+    ],
+)
+def test_sync_deployment_callback_on_success_skips_batch_retrieves(
+    call_type: str, expected_key: str | None, expected_successes: int
+):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {"model": _BATCH_DEPLOYMENT_MODEL, "api_base": _BATCH_API_BASE, "api_key": "sk-fake"},
+                "model_info": {"id": "batch-dep"},
+            }
+        ]
+    )
+
+    key = router.sync_deployment_callback_on_success(
+        kwargs={
+            "call_type": call_type,
+            "litellm_params": {"metadata": {"model_group": _BATCH_GROUP}, "model_info": {"id": "batch-dep"}},
+        },
+        completion_response=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert key == expected_key
+    assert (
+        get_deployment_successes_for_current_minute(litellm_router_instance=router, deployment_id="batch-dep")
+        == expected_successes
+    )
 
 _ROUTING_STRATEGY_CACHE_MARKERS = ("_map", "_request_count", ":tpm:", ":rpm:")
 
