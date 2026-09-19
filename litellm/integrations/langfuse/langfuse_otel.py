@@ -210,6 +210,8 @@ class LangfuseOtelLogger(OpenTelemetry):
                             "type": "function_call",
                             "arguments": arguments_obj,
                         }
+                        if (namespace := getattr(item, "namespace", None)) is not None:
+                            langfuse_tool_call["namespace"] = namespace
                         output_items_data.append(langfuse_tool_call)
             if output_items_data:
                 safe_set_attribute(

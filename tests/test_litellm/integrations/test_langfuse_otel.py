@@ -897,7 +897,8 @@ class TestLangfuseOtelResponsesAPI:
                 == "The weather in San Francisco is sunny, 20°C."
             )
 
-    def test_responses_api_with_function_calls(self):
+    @pytest.mark.parametrize("namespace", (None, "weather", ""))
+    def test_responses_api_with_function_calls(self, namespace: str | None):
         """Test Langfuse OTEL logger with Responses API function_call output."""
         from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
         from openai.types.responses import ResponseFunctionToolCall
@@ -911,6 +912,7 @@ class TestLangfuseOtelResponsesAPI:
                     id="fc-123",
                     type="function_call",
                     name="get_weather",
+                    namespace=namespace,
                     call_id="call-abc",
                     arguments='{"location": "San Francisco", "unit": "celsius"}',
                     status="completed",
@@ -958,6 +960,10 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["call_id"] == "call-abc"
             assert output_data[0]["arguments"]["location"] == "San Francisco"
             assert output_data[0]["arguments"]["unit"] == "celsius"
+            if namespace is None:
+                assert "namespace" not in output_data[0]
+            else:
+                assert output_data[0]["namespace"] == namespace
 
     def test_responses_api_function_call_with_redacted_arguments(self):
         """Sentinel arguments (invalid JSON) must not kill the whole observation output."""
