@@ -1857,6 +1857,16 @@ class ResponsesWebSocketStreaming:
         if self.logging_obj:
             self.logging_obj.pre_call(input=message, api_key="")
 
+    def _failure_exception(self) -> Exception | None:
+        failed_event: Final = next(
+            (event for event in self.messages if event.get("type") in _RESPONSES_WS_FAILURE_EVENT_TYPES), None
+        )
+        if failed_event is None:
+            return None
+        return _map_stream_error_to_exception(
+            _ws_event_error(failed_event), self.authorized_model or "", self.custom_llm_provider or ""
+        )
+
     async def _log_messages(self) -> None:
         if not self.logging_obj:
             return
@@ -1864,16 +1874,11 @@ class ResponsesWebSocketStreaming:
             self.logging_obj.model_call_details["messages"] = self.input_messages
         if not self.messages:
             return
-        failed_event: Final = next(
-            (event for event in self.messages if event.get("type") in _RESPONSES_WS_FAILURE_EVENT_TYPES), None
-        )
-        if failed_event is None:
+        exception: Final = self._failure_exception()
+        if exception is None:
             asyncio.create_task(self.logging_obj.dispatch_success_handlers(self.messages, prefer_async_handlers=True))
             return
         self._record_usage_for_failure()
-        exception: Final = _map_stream_error_to_exception(
-            _ws_event_error(failed_event), self.authorized_model or "", self.custom_llm_provider or ""
-        )
         traceback_exception: Final = "".join(traceback.format_exception(exception))
         asyncio.create_task(
             self.logging_obj.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True)
@@ -2306,8 +2311,8 @@ class ResponsesWebSocketStreaming:
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
 
-    async def bidirectional_forward(self) -> None:
-        """Run both forwarding directions concurrently."""
+    async def bidirectional_forward(self) -> Exception | None:
+        """Run both forwarding directions concurrently and return the provider failure that ended the connection."""
         forward_task: Final = asyncio.create_task(self.backend_to_client())
         try:
             await self.client_to_backend()
@@ -2324,6 +2329,7 @@ class ResponsesWebSocketStreaming:
                 await self.backend_ws.close()
             except Exception:
                 pass
+        return self._failure_exception()
 
 
 # ---------------------------------------------------------------------------

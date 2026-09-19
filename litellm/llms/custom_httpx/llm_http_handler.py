@@ -6589,7 +6589,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         **kwargs: Any,
-    ):
+    ) -> Exception | None:
         """
         Handles Responses API WebSocket mode.
 
@@ -6623,7 +6623,7 @@ class BaseLLMHTTPHandler:
                 **kwargs,
             )
             await handler.run()
-            return
+            return None
 
         import websockets
         from websockets.asyncio.client import ClientConnection
@@ -6744,7 +6744,7 @@ class BaseLLMHTTPHandler:
                     authorized_model=model,
                     custom_llm_provider=custom_llm_provider,
                 )
-                await streaming.bidirectional_forward()
+                return await streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:
             verbose_logger.exception("Error connecting to responses WS backend: %s", e)
@@ -6758,6 +6758,7 @@ class BaseLLMHTTPHandler:
                     pass
                 else:
                     raise Exception(f"Unexpected error while closing WebSocket: {close_error}")
+        return None
 
     def image_edit_handler(
         self,
