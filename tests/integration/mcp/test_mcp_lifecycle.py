@@ -7,11 +7,12 @@ import pytest
 import yaml
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
+
 from integration._support.client import Gateway
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
-from integration._support.mcp import call_tool, mcp_peer, register_mcp, tool_names
 from integration._support.process import owned_proxy
+from integration._support.mcp import call_tool, mcp_peer, register_mcp, tool_names
 
 
 @pytest.mark.covers("mcp.call_tool.saved_headers.reach_actual_transport")
