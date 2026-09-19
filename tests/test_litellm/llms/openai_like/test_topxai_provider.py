@@ -2,9 +2,17 @@
 Tests for the TopxAI provider configuration and integration.
 """
 
-import litellm
+import json
+from typing import Final
 
-TOPXAI_BASE_URL = "https://ai.topxea.com/v1"
+import httpx
+import pytest
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+# Provider endpoint: https://ai.topxea.com/docs (verified 2026-09-19)
+TOPXAI_BASE_URL: Final = "https://ai.topxea.com/v1"
 
 
 class TestTopxAIProviderConfig:
@@ -101,6 +109,52 @@ class TestTopxAIProviderConfig:
         )
         assert url == f"{TOPXAI_BASE_URL}/chat/completions"
 
+    @pytest.mark.parametrize("api_base", (None, "https://relay.example.com/v1/"))
+    def test_topxai_responses_routes_and_transforms(
+        self, monkeypatch: pytest.MonkeyPatch, api_base: str | None
+    ) -> None:
+        monkeypatch.setenv("TOPXAI_API_KEY", "sk-topxai-test")
+        expected_base: Final = (api_base or TOPXAI_BASE_URL).rstrip("/")
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            assert request.method == "POST"
+            assert str(request.url) == f"{expected_base}/responses"
+            assert request.headers["Authorization"] == "Bearer sk-topxai-test"
+            payload: Final = json.loads(request.content)
+            assert payload["model"] == "gpt-5.6-sol"
+            assert payload["input"] == "Reply with OK"
+            return httpx.Response(
+                200,
+                json={
+                    "id": "resp_topxai_test",
+                    "object": "response",
+                    "created_at": 1,
+                    "model": "gpt-5.6-sol",
+                    "status": "completed",
+                    "output": [{
+                        "type": "message",
+                        "id": "msg_test",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "OK", "annotations": []}],
+                    }],
+                    "usage": {"input_tokens": 4, "output_tokens": 1, "total_tokens": 5},
+                },
+            )
+
+        with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            response: Final = litellm.responses(
+                model="topxai/gpt-5.6-sol",
+                input="Reply with OK",
+                api_base=api_base,
+                client=HTTPHandler(client=client),
+            )
+
+        assert response.status == "completed"
+        assert response.output[0].content[0].text == "OK"
+        assert response.usage.input_tokens == 4
+        assert response.usage.output_tokens == 1
+
     def test_topxai_router_config(self):
         from litellm import Router
 
@@ -121,7 +175,8 @@ class TestTopxAIProviderConfig:
 
 
 class TestTopxAIModelMetadata:
-    TOPXAI_MODELS = (
+    # Catalog and capabilities: https://ai.topxea.com/pricing (verified 2026-09-19)
+    TOPXAI_MODELS: Final = (
         "topxai/claude-sonnet-5",
         "topxai/claude-opus-5",
         "topxai/claude-fable-5-1",
@@ -132,12 +187,16 @@ class TestTopxAIModelMetadata:
         "topxai/kimi-k3",
         "topxai/GLM-5.3-Abliterated",
     )
-    TEXT_ONLY_MODELS = ("topxai/GLM-5.3-Abliterated",)
-    TIERED_MODELS = {
-        "topxai/gpt-5.6-sol": "272k",
-        "topxai/gpt-6-astra": "272k",
-        "topxai/grok-4.6": "200k",
-    }
+    TEXT_ONLY_MODELS: Final = ("topxai/GLM-5.3-Abliterated",)
+    # First premium token and output multiplier, verified 2026-09-19:
+    # https://ai.topxea.com/pricing/gpt-5.6-sol
+    # https://ai.topxea.com/pricing/gpt-6-astra
+    # https://ai.topxea.com/pricing/grok-4.6
+    TIERED_MODELS: Final = (
+        ("topxai/gpt-5.6-sol", 272_001, 1.5),
+        ("topxai/gpt-6-astra", 272_001, 1.5),
+        ("topxai/grok-4.6", 200_000, 2.0),
+    )
 
     @staticmethod
     def _load(path_parts):
@@ -171,13 +230,42 @@ class TestTopxAIModelMetadata:
             assert info["max_input_tokens"] >= 500_000
             assert info["source"].startswith("https://ai.topxea.com/pricing/")
 
-    def test_topxai_long_context_tiers_double_the_input_rate(self):
-        model_cost = self._load(("model_prices_and_context_window.json",))
-        for model, tier in self.TIERED_MODELS.items():
-            info = model_cost[model]
-            assert info[f"input_cost_per_token_above_{tier}_tokens"] == 2 * info["input_cost_per_token"]
-            assert info[f"cache_read_input_token_cost_above_{tier}_tokens"] == 2 * info["cache_read_input_token_cost"]
-            assert info[f"output_cost_per_token_above_{tier}_tokens"] > info["output_cost_per_token"]
+    @pytest.mark.parametrize("model,first_premium_token,output_multiplier", TIERED_MODELS)
+    @pytest.mark.parametrize("offset", (-1, 0, 1))
+    @pytest.mark.parametrize("cached_tokens,cache_write_tokens", ((0, 0), (1000, 0), (0, 500), (1000, 500)))
+    def test_topxai_cost_at_context_boundary(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model: str,
+        first_premium_token: int,
+        output_multiplier: float,
+        offset: int,
+        cached_tokens: int,
+        cache_write_tokens: int,
+    ) -> None:
+        info: Final = self._load(("model_prices_and_context_window.json",))[model]
+        monkeypatch.setitem(litellm.model_cost, model, info)
+        prompt_tokens: Final = first_premium_token + offset
+        completion_tokens: Final = 17
+        # Whole-request input/cache rates double at these boundaries; sources above
+        input_multiplier: Final = 2 if offset >= 0 else 1
+        expected_input: Final = input_multiplier * (
+            (prompt_tokens - cached_tokens - cache_write_tokens) * info["input_cost_per_token"]
+            + cached_tokens * info["cache_read_input_token_cost"]
+            + cache_write_tokens * info["cache_creation_input_token_cost"]
+        )
+        expected_output: Final = (
+            completion_tokens * info["output_cost_per_token"] * (output_multiplier if offset >= 0 else 1)
+        )
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cache_read_input_tokens=cached_tokens,
+            cache_creation_input_tokens=cache_write_tokens,
+        )
+        assert prompt_cost == pytest.approx(expected_input)
+        assert completion_cost == pytest.approx(expected_output)
 
     def test_topxai_models_synced_to_backup(self):
         model_cost = self._load(("model_prices_and_context_window.json",))
