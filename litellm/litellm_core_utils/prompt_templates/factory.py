@@ -5164,25 +5164,45 @@ def _bedrock_tools_pt(tools: list, model: str | None = None) -> list[BedrockTool
     return tool_block_list
 
 
+def _append_function_prompt_to_message(
+    message: dict[str, object],  # mutable-ok: OpenAI message dict contract
+    function_prompt: str,
+) -> dict[str, object]:  # mutable-ok: OpenAI message dict contract
+    role: Final = message.get("role")
+    if not isinstance(role, str) or "system" not in role:
+        return message
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return {  # mutable-ok: system message dict contract
+            **message,
+            "content": f"{content} {function_prompt}",
+        }
+    existing_items: Final[Sequence[object]] = (  # pyright: ignore[reportUnknownVariableType]  # list narrowing
+        content if isinstance(content, list) else ()
+    )
+    return {  # mutable-ok: system message dict contract
+        **message,
+        "content": [  # mutable-ok: content block list contract
+            *existing_items,
+            {"type": "text", "text": f" {function_prompt}"},  # mutable-ok: text block dict
+        ],
+    }
+
+
 # Function call template
-def function_call_prompt(messages: list, functions: list):
-    function_prompt = """Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:"""
-    for function in functions:
-        function_prompt += f"""\n{function}\n"""
-
-    function_added_to_prompt = False
-    for message in messages:
-        if "system" in message["role"]:
-            if isinstance(message["content"], str):
-                message["content"] += f""" {function_prompt}"""
-            else:
-                message["content"].append({"type": "text", "text": f""" {function_prompt}"""})
-            function_added_to_prompt = True
-
-    if function_added_to_prompt is False:
-        messages.append({"role": "system", "content": f"""{function_prompt}"""})
-
-    return messages
+def function_call_prompt(
+    messages: list[dict[str, object]],  # mutable-ok: public signature accepts list
+    functions: list[dict[str, object]],  # mutable-ok: public signature accepts list
+) -> list[dict[str, object]]:  # mutable-ok: public signature returns list
+    header: Final = 'Produce JSON OUTPUT ONLY! Adhere to this format {"name": "function_name", "arguments":{"argument_name": "argument_value"}} The following functions are available to you:'
+    function_prompt: Final = header + "".join(f"\n{function}\n" for function in functions)
+    has_system: Final = any(isinstance(m.get("role"), str) and "system" in str(m.get("role")) for m in messages)
+    if has_system:
+        return [_append_function_prompt_to_message(m, function_prompt) for m in messages]  # mutable-ok: OpenAI messages
+    return [  # mutable-ok: OpenAI messages list contract
+        *messages,
+        {"role": "system", "content": function_prompt},  # mutable-ok: system message dict contract
+    ]
 
 
 def response_schema_prompt(model: str, response_schema: dict) -> str:
