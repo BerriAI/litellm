@@ -6,7 +6,6 @@ SELECTABLE: Final = re.compile(r"^tests/e2e/([A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_.
 UNSUPPORTED: Final = re.compile(
     r"^tests/e2e/(ui|claude_code|load)/"
     r"|^tests/e2e/mcp/test_mcp_oauth_happy_path_e2e\.py$"
-    r"|^tests/e2e/mcp/test_mcp_chat_completion_oauth_e2e\.py$"
     r"|^tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e\.py$"
     r"|^tests/e2e/batches/test_managed_files_enforcement_e2e\.py$"
     r"|^tests/e2e/guardrails/test_presidio_masking_e2e\.py$"
