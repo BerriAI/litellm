@@ -251,7 +251,7 @@ def test_a_missing_setting_names_the_env_var_to_set(monkeypatch):
 
 
 def test_a_table_that_is_not_fully_qualified_is_refused():
-    with pytest.raises(ValueError, match="catalog.schema.table"):
+    with pytest.raises(ValueError, match=r"catalog\.schema\.table"):
         connection_for(
             ZerobusInitParams(
                 workspace_url=WORKSPACE_URL,
