@@ -7,6 +7,7 @@ from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
+import httpx
 from openai.types.batch import Errors
 from openai.types.batch_error import BatchError
 from openai.types.batch_request_counts import BatchRequestCounts
@@ -21,6 +22,7 @@ from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_STORAGE_BACKEND_NAME
 from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -33,7 +35,7 @@ from litellm.proxy.openai_files_endpoints.storage_backend_service import Storage
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
-from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileData, LiteLLMBatch
+from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileData, LiteLLMBatch, LlmProviders
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -46,6 +48,7 @@ BatchStatus: TypeAlias = Literal["in_progress", "finalizing", "completed", "fail
 TERMINAL_BATCH_STATUSES: Final[frozenset[str]] = frozenset({"completed", "failed", "cancelled", "expired"})
 _BATCH_ENDPOINT_ADAPTER: Final[TypeAdapter[BatchEndpoint]] = TypeAdapter(BatchEndpoint)
 _CANCEL_POLL_SECONDS: Final = 1.0
+_FILES_API_PROBE_TIMEOUT_SECONDS: Final = 5.0
 _COMPLETION_WINDOW_SECONDS: Final = 24 * 60 * 60
 LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE: Final = (
     "upload it through POST /v1/files with purpose=batch and either the x-litellm-model header or the "
@@ -184,9 +187,67 @@ def litellm_executed_provider_of(credentials: Mapping[str, object]) -> str | Non
     return provider if provider in LITELLM_EXECUTED_BATCH_PROVIDERS else None
 
 
-def resolve_litellm_executed_provider(llm_router: "Router", model: str, team_id: str | None) -> str | None:
+class _HttpGetter(Protocol):
+    async def get(
+        self, url: str, *, headers: dict[str, str] | None = None, timeout: float | httpx.Timeout | None = None
+    ) -> httpx.Response: ...
+
+
+class FilesApiProbe(Protocol):
+    async def __call__(self, api_base: str, api_key: str | None) -> bool: ...
+
+
+async def upstream_lacks_files_api(api_base: str, api_key: str | None, http_client: _HttpGetter | None = None) -> bool:
+    client: Final = http_client or get_async_httpx_client(llm_provider=LlmProviders.HOSTED_VLLM)
+    try:
+        response: Final = await client.get(
+            f"{api_base.rstrip('/')}/files",
+            headers={"Authorization": f"Bearer {api_key}"} if api_key else None,
+            timeout=_FILES_API_PROBE_TIMEOUT_SECONDS,
+        )
+    except httpx.HTTPError:
+        return False
+    return response.status_code == httpx.codes.NOT_FOUND
+
+
+def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str, str | None] | None:
+    model: Final = credentials.get("model")
+    api_base: Final = credentials.get("api_base")
+    api_key: Final = credentials.get("api_key")
+    if not isinstance(model, str):
+        return None
+    try:
+        _, _, resolved_api_key, resolved_api_base = litellm.get_llm_provider(
+            model=model,
+            custom_llm_provider=provider,
+            api_base=api_base if isinstance(api_base, str) else None,
+            api_key=api_key if isinstance(api_key, str) else None,
+        )
+    except Exception:  # noqa: BLE001  # get_llm_provider raises on a model it cannot map, which means nothing to probe
+        return None
+    return None if resolved_api_base is None else (resolved_api_base, resolved_api_key)
+
+
+async def litellm_executed_provider_for(
+    credentials: Mapping[str, object], lacks_files_api: FilesApiProbe = upstream_lacks_files_api
+) -> str | None:
+    provider: Final = litellm_executed_provider_of(credentials)
+    if provider is None:
+        return None
+    upstream: Final = _upstream_of(credentials, provider)
+    if upstream is None:
+        return None
+    return provider if await lacks_files_api(*upstream) else None
+
+
+async def resolve_litellm_executed_provider(
+    llm_router: "Router",
+    model: str,
+    team_id: str | None,
+    lacks_files_api: FilesApiProbe = upstream_lacks_files_api,
+) -> str | None:
     credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model, team_id=team_id)
-    return None if credentials is None else litellm_executed_provider_of(credentials)
+    return None if credentials is None else await litellm_executed_provider_for(credentials, lacks_files_api)
 
 
 def _provider_of(model: object) -> str | None:

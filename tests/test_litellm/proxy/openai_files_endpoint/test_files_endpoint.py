@@ -646,6 +646,7 @@ def batch_upload_seams(mocker: MockerFixture, monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
     setup_proxy_logging_object(monkeypatch, llm_router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"
     )
@@ -666,7 +667,11 @@ def batch_upload_seams(mocker: MockerFixture, monkeypatch):
         "litellm.acreate_file", new=mocker.AsyncMock(return_value=uploaded)
     )
     try:
-        yield stored, provider_upload
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream_files_route = upstream.get("http://vllm.test/v1/files").mock(
+                return_value=httpx.Response(404, json={"detail": "Not Found"})
+            )
+            yield stored, provider_upload, upstream_files_route
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 
@@ -688,7 +693,7 @@ def _upload_batch_file(headers: dict[str, str], form: dict[str, str]):
 def test_batch_upload_for_a_litellm_executed_model_is_kept_by_litellm(
     batch_upload_seams, headers: dict[str, str], form: dict[str, str]
 ):
-    stored, provider_upload = batch_upload_seams
+    stored, provider_upload, _ = batch_upload_seams
 
     response = _upload_batch_file(headers, form)
 
@@ -702,7 +707,7 @@ def test_batch_upload_for_a_litellm_executed_model_is_kept_by_litellm(
 
 
 def test_batch_upload_naming_an_executed_and_a_provider_model_is_rejected(batch_upload_seams):
-    stored, provider_upload = batch_upload_seams
+    stored, provider_upload, _ = batch_upload_seams
 
     response = _upload_batch_file({}, {"target_model_names": "my-vllm,gemini-2.0-flash"})
 
@@ -713,8 +718,47 @@ def test_batch_upload_naming_an_executed_and_a_provider_model_is_rejected(batch_
     provider_upload.assert_not_awaited()
 
 
+@pytest.mark.parametrize("purpose", ["assistants", "user_data"])
+def test_non_batch_upload_for_a_litellm_executed_model_is_rejected_with_the_purpose_to_use(
+    batch_upload_seams, purpose: str
+):
+    stored, provider_upload, _ = batch_upload_seams
+
+    response = _upload_batch_file({"x-litellm-model": "my-vllm"}, {"purpose": purpose})
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "purpose"
+    assert "purpose=batch" in error["message"]
+    assert f"purpose={purpose}" in error["message"]
+    stored.assert_not_awaited()
+    provider_upload.assert_not_awaited()
+
+
+@pytest.mark.parametrize("purpose", ["batch", "assistants"])
+@pytest.mark.parametrize(
+    "upstream_answer",
+    [httpx.Response(200, json={"object": "list", "data": []}), httpx.Response(405), httpx.ConnectError("refused")],
+    ids=["lists files", "files route without list", "unreachable"],
+)
+def test_upload_for_a_litellm_executed_model_goes_to_the_provider_unless_the_server_lacks_a_files_api(
+    batch_upload_seams, upstream_answer: httpx.Response | httpx.ConnectError, purpose: str
+):
+    stored, provider_upload, upstream_files_route = batch_upload_seams
+    upstream_files_route.mock(side_effect=[upstream_answer])
+
+    response = _upload_batch_file({"x-litellm-model": "my-vllm"}, {"purpose": purpose})
+
+    assert response.status_code == 200, response.text
+    stored.assert_not_awaited()
+    provider_upload.assert_awaited_once()
+    assert provider_upload.call_args.kwargs["custom_llm_provider"] == "hosted_vllm"
+    assert provider_upload.call_args.kwargs["api_base"] == "http://vllm.test/v1"
+
+
 def test_batch_upload_for_a_provider_model_still_goes_to_the_provider(batch_upload_seams):
-    stored, provider_upload = batch_upload_seams
+    stored, provider_upload, _ = batch_upload_seams
 
     response = _upload_batch_file({"x-litellm-model": "gemini-2.0-flash"}, {})
 
