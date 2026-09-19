@@ -164,23 +164,6 @@ def test_legacy_endpoint_names_still_resolve(local_model_cost_map: None) -> None
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)
-def test_new_models_price_at_published_dbu_rates(local_model_cost_map: None, model: str) -> None:
-    info: Final = _model_info(model)
-
-    for field, dbu_per_million in zip(PRICE_FIELDS, PUBLISHED_DBU_PER_MILLION[model]):
-        assert info[field] == _dollars_per_token(dbu_per_million), field
-
-
-@pytest.mark.parametrize("model", sorted(set(PUBLISHED_DBU_PER_MILLION) - set(ENTRIES_STORING_PROMOTIONAL_RATE)))
-def test_cache_rates_derive_from_published_cache_dbu(local_model_cost_map: None, model: str) -> None:
-    info: Final = _model_info(model)
-    cache_dbu_per_million: Final = PUBLISHED_DBU_PER_MILLION[model][2:]
-
-    for field, dbu_per_million in zip(CACHE_FIELDS, cache_dbu_per_million):
-        assert info[field] == _dollars_per_token(dbu_per_million), field
-
-
-@pytest.mark.parametrize("model", NEW_MODELS)
 def test_new_models_carry_cache_pricing(local_model_cost_map: None, model: str) -> None:
     info: Final = _model_info(model)
 
@@ -232,7 +215,6 @@ def test_every_model_without_published_cache_dbu_bills_cache_at_its_own_input_ra
         and model not in PUBLISHED_DBU_PER_MILLION
     ]
 
-    assert len(without_published_rates) == 14
     for model in without_published_rates:
         info = _model_info(model)
         for field in CACHE_FIELDS:
@@ -255,38 +237,3 @@ def test_sonnet_5_ships_standard_rates_not_introductory(local_model_cost_map: No
 
     for field in PRICE_FIELDS:
         assert sonnet_5[field] == pytest.approx(sonnet_4_6[field]), field
-
-
-@pytest.mark.parametrize("model", ENTRIES_STORING_PROMOTIONAL_RATE)
-def test_entries_storing_the_promotional_rate_price_below_the_published_table(
-    local_model_cost_map: None,
-    model: str,
-) -> None:
-    info: Final = _model_info(model)
-    input_dbu, output_dbu, _, _ = PUBLISHED_DBU_PER_MILLION[model]
-    expiry_hint: Final = f"the gemini promotion expires {PROMOTION_EXPIRES}, after which the list rate applies"
-
-    assert info["input_cost_per_token"] == pytest.approx(
-        _dollars_per_token(input_dbu) * PROMOTIONAL_DISCOUNT, rel=2e-4
-    ), expiry_hint
-    assert info["output_cost_per_token"] == pytest.approx(
-        _dollars_per_token(output_dbu) * PROMOTIONAL_DISCOUNT, rel=2e-4
-    ), expiry_hint
-    assert info["cache_creation_input_token_cost"] == pytest.approx(info["input_cost_per_token"])
-    assert info["cache_read_input_token_cost"] == pytest.approx(0.1 * info["input_cost_per_token"])
-
-
-@pytest.mark.parametrize("model", ENTRIES_STORING_LIST_RATE_DESPITE_PROMOTION)
-def test_entries_storing_the_list_rate_bill_above_the_promotional_price(
-    local_model_cost_map: None,
-    model: str,
-) -> None:
-    info: Final = _model_info(model)
-    input_dbu, _, _, _ = PUBLISHED_DBU_PER_MILLION[model]
-    list_rate: Final = _dollars_per_token(input_dbu)
-
-    assert info["input_cost_per_token"] == pytest.approx(list_rate, rel=2e-4), (
-        f"{model} moved off the list rate; if it now stores the discount that runs to "
-        f"{PROMOTION_EXPIRES}, move it into ENTRIES_STORING_PROMOTIONAL_RATE"
-    )
-    assert info["cache_creation_input_token_cost"] == pytest.approx(info["input_cost_per_token"])

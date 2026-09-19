@@ -288,6 +288,12 @@ class PolicyAttachment(BaseModel):
         default=None,
         description="Tag patterns this attachment applies to. Supports wildcards (e.g., health-*).",
     )
+    priority: int | None = Field(
+        default=None,
+        ge=-2147483648,
+        le=2147483647,
+        description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+    )
 
     model_config = ConfigDict(extra="forbid")
 

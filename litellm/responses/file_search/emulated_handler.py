@@ -390,7 +390,7 @@ def _synthesize_responses_api_response(
 
 
 async def _call_aresponses(input, model, tools, **kwargs):  # pragma: no cover – thin wrapper for patching in tests
-    from litellm.responses.main import aresponses
+    from litellm.responses.main import aresponses  # noqa: TID251  # inner call must not re-enter file-search emulation
 
     return await aresponses(input=input, model=model, tools=tools, **kwargs)
 

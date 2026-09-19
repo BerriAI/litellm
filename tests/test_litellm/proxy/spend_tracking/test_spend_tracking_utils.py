@@ -1,7 +1,7 @@
 import asyncio
 import datetime
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import timezone
 from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -44,6 +44,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     should_store_prompts_and_responses_in_spend_logs,
 )
 from litellm.proxy.utils import hash_token
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -1048,6 +1049,27 @@ def test_get_logging_payload_replaces_rejected_or_prompt_shaped_models_with_the_
     assert payload["model"] == expected_model
 
 
+@pytest.mark.parametrize("requested_model", [{"bad": "value"}, ["gpt-5.2"], 1])
+def test_get_logging_payload_replaces_a_non_string_model_with_the_placeholder(
+    requested_model: dict[str, str] | list[str] | int,
+):
+    kwargs: Final = {
+        "model": requested_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "call_type": "acompletion",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test", "status": "failure"}},
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=ValueError("model must be a string"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == UNKNOWN_MODEL_SPEND_LOG_MODEL
+
+
 @pytest.mark.parametrize(
     ("metadata", "response_obj"),
     [
@@ -1187,6 +1209,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
         start_time,
         end_time,
         org_id,
+        project_id=None,
     ):
         """Mock update_database and capture the payload it creates"""
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -1327,6 +1350,33 @@ def test_get_logging_payload_includes_agent_id_from_kwargs():
     )
 
     assert payload["agent_id"] == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
+
+
+def test_get_logging_payload_populates_litellm_call_id_alongside_provider_request_id():
+    """
+    LIT-6302: request_id stays the provider response id, so clients holding the
+    x-litellm-call-id header value could never find their row. The payload now
+    also carries litellm_call_id as its own column for lookups by either id.
+    """
+    call_id = "b980eea9-5cd9-4099-93cd-8291e46c76fd"
+
+    payload = get_logging_payload(
+        kwargs={
+            "model": "gpt-4o-mini",
+            "litellm_call_id": call_id,
+            "litellm_params": {"metadata": {"user_api_key": "test-key"}},
+        },
+        response_obj=litellm.ModelResponse(
+            id="chatcmpl-provider-id",
+            choices=[],
+            usage=litellm.Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+        ),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["request_id"] == "chatcmpl-provider-id"
+    assert payload["litellm_call_id"] == call_id
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
@@ -2908,6 +2958,16 @@ def test_get_spend_logs_metadata_keeps_master_key_alias_readable():
     assert meta["user_api_key"] == LITELLM_PROXY_MASTER_KEY_ALIAS
 
 
+def test_get_spend_logs_metadata_keeps_user_agent():
+    """`add_litellm_data_to_request` stamps the caller's User-Agent next to its IP, but
+    the spend log metadata dropped it, so an abusive client could not be identified
+    from the Logs page."""
+    meta = _get_spend_logs_metadata({"requester_ip_address": "203.0.113.9", "user_agent": "abusive-client/9.9"})
+    assert meta["requester_ip_address"] == "203.0.113.9"
+    assert meta["user_agent"] == "abusive-client/9.9"
+    assert _get_spend_logs_metadata(None)["user_agent"] is None
+
+
 def test_redact_logged_api_key_bearer_only_returns_none():
     # "bearer " with nothing after stripping is equivalent to no key
     assert _redact_logged_api_key("bearer ") is None
@@ -3966,6 +4026,184 @@ def test_get_logging_payload_failed_request_without_standard_logging_payload_lea
     assert payload["custom_llm_provider"] == ""
 
 
+def _router_rejected_failure_payload(model_group: str, llm_router: litellm.Router | None) -> SpendLogsPayload:
+    return get_logging_payload(
+        kwargs={
+            "model": model_group,
+            "litellm_params": {
+                "metadata": {"user_api_key": "test-key", "model_group": model_group, "status": "failure"}
+            },
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=llm_router,
+    )
+
+
+_ProviderResolution = tuple[str, str, str | None, str | None]
+
+
+def _router_init_provider_stub(
+    model: str,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    litellm_params: GenericLiteLLMParams | None = None,
+) -> _ProviderResolution:
+    prefix, _, suffix = model.partition("/")
+    return (suffix or model, custom_llm_provider or (prefix if suffix else "openai"), api_base, api_key)
+
+
+def _oauth_tripwire(resolution_attempts: list[str]) -> Callable[..., _ProviderResolution]:
+    def _trip(
+        model: str,
+        custom_llm_provider: str | None = None,
+        api_base: str | None = None,
+        api_key: str | None = None,
+        litellm_params: GenericLiteLLMParams | None = None,
+    ) -> _ProviderResolution:
+        resolution_attempts.append(model)
+        raise AssertionError("get_llm_provider would run the OAuth device flow")
+
+    return _trip
+
+
+def _openai_and_anthropic_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "openai-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-a"}},
+            {"model_name": "openai-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-b"}},
+            {"model_name": "mixed-group", "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-a"}},
+            {
+                "model_name": "mixed-group",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-c"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "model_group,expected_provider",
+    [("openai-group", "openai"), ("mixed-group", ""), ("not-in-router", "")],
+)
+def test_get_logging_payload_router_rejected_request_takes_provider_from_model_group(
+    model_group: str, expected_provider: str
+):
+    payload = _router_rejected_failure_payload(model_group, _openai_and_anthropic_router())
+
+    assert payload["model_group"] == model_group
+    assert payload["custom_llm_provider"] == expected_provider
+
+
+def test_get_logging_payload_router_rejected_request_without_router_leaves_provider_empty():
+    assert _router_rejected_failure_payload("openai-group", None)["custom_llm_provider"] == ""
+
+
+@pytest.mark.parametrize(
+    "litellm_params,expected_provider",
+    [
+        ({"model": "github_copilot/gpt-4o"}, "github_copilot"),
+        ({"model": "gpt-5", "custom_llm_provider": "chatgpt"}, "chatgpt"),
+    ],
+)
+def test_get_logging_payload_inferred_provider_never_resolves_declared_authenticating_providers(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, str], expected_provider: str
+):
+    resolution_attempts: list[str] = []
+
+    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_provider_stub)
+    llm_router = litellm.Router(model_list=[{"model_name": "oauth-group", "litellm_params": litellm_params}])
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire(resolution_attempts))
+
+    payload = _router_rejected_failure_payload("oauth-group", llm_router)
+
+    assert payload["custom_llm_provider"] == expected_provider
+    assert resolution_attempts == []
+
+
+@pytest.mark.parametrize(
+    "litellm_params",
+    [
+        {"model": "github_copilot/gpt-4o"},
+        {"model": "gpt-5", "custom_llm_provider": "chatgpt"},
+        {"model": "openai/gpt-4o-mini", "api_key": "sk-a"},
+    ],
+)
+def test_get_logging_payload_inferred_provider_honours_global_litellm_proxy_override(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, str]
+):
+    monkeypatch.setattr(litellm, "get_llm_provider", _router_init_provider_stub)
+    llm_router = litellm.Router(model_list=[{"model_name": "proxied-group", "litellm_params": litellm_params}])
+    monkeypatch.setattr(litellm, "get_llm_provider", _oauth_tripwire([]))
+    monkeypatch.setattr(litellm, "use_litellm_proxy", True)
+
+    payload = _router_rejected_failure_payload("proxied-group", llm_router)
+
+    assert payload["custom_llm_provider"] == "litellm_proxy"
+
+
+def test_get_logging_payload_router_rejected_request_for_unresolvable_deployment_leaves_provider_empty(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    with monkeypatch.context() as router_init:
+        router_init.setattr(litellm, "get_llm_provider", _router_init_provider_stub)
+        llm_router = litellm.Router(
+            model_list=[{"model_name": "opaque-group", "litellm_params": {"model": "my-unprefixed-model"}}]
+        )
+
+    payload = _router_rejected_failure_payload("opaque-group", llm_router)
+
+    assert payload["model_group"] == "opaque-group"
+    assert payload["custom_llm_provider"] == ""
+
+
+def test_get_logging_payload_inferred_provider_does_not_rewrite_spend_log_model():
+    llm_router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-group",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+                    "aws_region_name": "us-east-1",
+                },
+            },
+            {
+                "model_name": "bedrock-group",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+                    "aws_region_name": "us-west-2",
+                },
+            },
+        ]
+    )
+
+    payload = _router_rejected_failure_payload("bedrock-group", llm_router)
+
+    assert payload["custom_llm_provider"] == "bedrock"
+    assert payload["model"] == "bedrock-group"
+
+
+def test_get_logging_payload_logged_provider_wins_over_model_group_provider():
+    payload = get_logging_payload(
+        kwargs={
+            "model": "openai-group",
+            "litellm_params": {"metadata": {"user_api_key": "test-key", "model_group": "openai-group"}},
+            "standard_logging_object": {
+                **_make_failed_request_standard_logging_payload(),
+                "model_group": "openai-group",
+                "custom_llm_provider": "azure",
+            },
+        },
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        llm_router=_openai_and_anthropic_router(),
+    )
+
+    assert payload["custom_llm_provider"] == "azure"
+
+
 class _ModelRouterSpendLogKwargs(TypedDict):
     model: ReadOnly[str]
     litellm_params: ReadOnly[dict[str, dict[str, str]]]
@@ -4613,3 +4851,58 @@ def test_spend_log_request_id_is_the_response_id_a_bridged_messages_caller_recei
         )
         == "resp_01Lit6806Bridged"
     )
+
+
+def test_azure_spillover_stamped_from_response_headers():
+    """Raw provider response headers on the logging kwargs mark the request as spilled."""
+    kwargs: Final = {
+        **_routed_call_kwargs({"id": "mi-1"}),
+        "response_headers": {
+            "x-ms-is-spilled-over": "true",
+            "x-ms-spillover-from-deployment": "my-ptu",
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(id="chatcmpl-spill-raw", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["azure_spillover"] == {"from_deployment": "my-ptu"}
+
+
+def test_azure_spillover_stamped_from_standard_logging_additional_headers():
+    """Streaming requests carry the processed llm_provider- headers on the standard payload."""
+    kwargs: Final = {
+        **_routed_call_kwargs({"id": "mi-1"}),
+        "standard_logging_object": {
+            "hidden_params": {
+                "additional_headers": {
+                    "llm_provider-x-ms-is-spilled-over": "true",
+                    "llm_provider-x-ms-spillover-from-deployment": "my-ptu",
+                }
+            },
+            "metadata": {},
+            "model_map_information": None,
+        },
+    }
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=litellm.ModelResponse(id="chatcmpl-spill-sl", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["azure_spillover"] == {"from_deployment": "my-ptu"}
+
+
+def test_azure_spillover_absent_without_spillover_headers():
+    payload = get_logging_payload(
+        kwargs=_routed_call_kwargs({"id": "mi-1"}),
+        response_obj=litellm.ModelResponse(id="chatcmpl-no-spill", choices=[], usage=litellm.Usage()),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+    metadata = json.loads(payload["metadata"])
+    assert metadata["azure_spillover"] is None

@@ -129,10 +129,9 @@ def _is_mcp_passthrough_cold_start(mcp_servers: list[str] | None, client_ip: str
     spec-compliant WWW-Authenticate challenge instead of surfacing a generic
     admission error.
 
-    Uses "all" semantics (mirrors
-    :meth:`MCPRequestHandler._target_servers_delegate_auth_to_upstream`): one
-    non-passthrough target in a co-targeted set must not flip the bypass open
-    for the others. Fails closed when any target cannot be resolved."""
+    Uses "all" semantics: one non-passthrough target in a co-targeted set must
+    not flip the bypass open for the others. Fails closed when any target
+    cannot be resolved."""
     if not mcp_servers:
         return False
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -142,6 +141,27 @@ def _is_mcp_passthrough_cold_start(mcp_servers: list[str] | None, client_ip: str
     for name in mcp_servers:
         server = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
         if server is None or not getattr(server, "is_oauth_passthrough", False):
+            return False
+    return True
+
+
+def _is_legacy_delegate_cold_start(mcp_servers: list[str] | None, client_ip: str | None) -> bool:
+    """Allow only credential-free legacy delegates to reach the route's OAuth challenge."""
+    if not mcp_servers:
+        return False
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+        global_mcp_server_manager,
+    )
+    from litellm.types.mcp import MCPAuth
+
+    for name in mcp_servers:
+        server = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
+        if server is None or server.auth_type != MCPAuth.oauth2:
+            return False
+        if server.delegate_auth_to_upstream is not True:
+            return False
+        if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
             return False
     return True
 
@@ -277,9 +297,18 @@ def _admission_failure_fallback(
         mcp_servers_from_path is not None
         and not _has_client_supplied_mcp_auth(mcp_auth_header, mcp_server_auth_headers)
         and _is_litellm_auth_admission_error(exc)
-        and _is_mcp_passthrough_cold_start(
-            mcp_servers_from_path,
-            client_ip=IPAddressUtils.get_mcp_client_ip(request),
+        and (
+            _is_mcp_passthrough_cold_start(
+                mcp_servers_from_path,
+                client_ip=IPAddressUtils.get_mcp_client_ip(request),
+            )
+            or (
+                not bearer_presented
+                and _is_legacy_delegate_cold_start(
+                    mcp_servers_from_path,
+                    client_ip=IPAddressUtils.get_mcp_client_ip(request),
+                )
+            )
         )
     ):
         verbose_logger.debug("MCP pass-through cold start: deferring admission to route 401 emitter")
@@ -434,22 +463,6 @@ class MCPRequestHandler:
                 api_key=f"Bearer {_get_bearer_token_or_received_api_key(litellm_api_key)}",
                 request=request,
             )
-        elif MCPRequestHandler._target_servers_delegate_auth_to_upstream(
-            path=request_route,
-            mcp_servers=mcp_servers,
-            client_ip=IPAddressUtils.get_mcp_client_ip(request),
-        ):
-            # Operator opted this oauth2 server into upstream-delegated auth: the
-            # client authenticates directly with the upstream MCP server, so any
-            # Authorization bearer is an upstream token, never a LiteLLM key. Skip
-            # LiteLLM validation entirely — covering both the no-credential
-            # discovery request and the authenticated call carrying the upstream
-            # bearer — so a tool call that succeeds never carries a phantom 401
-            # auth span; the bearer is forwarded upstream unchanged. Gated by
-            # _target_servers_delegate_auth_to_upstream, which returns True only
-            # when EVERY target is auth_type=oauth2 with delegate_auth_to_upstream
-            # set; fails closed otherwise.
-            validated_user_api_key_auth = UserAPIKeyAuth()
         elif MCPRequestHandler._target_servers_are_true_passthrough(
             path=request_route,
             mcp_servers=mcp_servers,
@@ -661,64 +674,6 @@ class MCPRequestHandler:
         return [servers_and_path]
 
     @staticmethod
-    def _target_servers_delegate_auth_to_upstream(
-        path: str, mcp_servers: list[str] | None, client_ip: str | None
-    ) -> bool:
-        """
-        True only when EVERY MCP server the request targets is configured for
-        ``auth_type == oauth2`` AND has ``delegate_auth_to_upstream=True``.
-        Fails closed when any target does not opt in or cannot be resolved.
-
-        Used by :meth:`process_mcp_request` to skip LiteLLM API-key/SSO auth
-        entirely (PKCE passthrough) so the client authenticates directly with
-        the upstream MCP server. Mixed-target requests (e.g. one delegated +
-        one non-delegated server) fall back to normal LiteLLM auth.
-        """
-        # Inline imports avoid a circular dependency: mcp_server_manager imports
-        # from this module.
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            MCPServerManager,
-            global_mcp_server_manager,
-        )
-        from litellm.types.mcp import MCPAuth
-
-        # Must mirror the downstream header-vs-path override
-        # (``extract_mcp_auth_context``) or an attacker could set
-        # ``x-mcp-servers`` to a delegate-enabled server while the URL path
-        # targets a non-delegate server, skipping LiteLLM auth for it.
-        target_names: Final = MCPRequestHandler._resolve_target_server_names(path=path, mcp_servers_header=mcp_servers)
-        if not target_names:
-            return False
-
-        for name in target_names:
-            server = global_mcp_server_manager.get_mcp_server_by_name(name, client_ip=client_ip)
-            if server is None or server.auth_type != MCPAuth.oauth2:
-                return False
-            # `is True` is intentional: opt-in must be an explicit boolean
-            # True. A MagicMock attribute (in tests) or any other truthy
-            # non-bool must not silently enable the bypass.
-            if getattr(server, "delegate_auth_to_upstream", False) is not True:
-                return False
-            # Never delegate for M2M (client_credentials) servers: LiteLLM
-            # fetches the upstream token automatically using stored credentials,
-            # so allowing anonymous bypass would let any external caller invoke
-            # tools authenticated as LiteLLM's service account.
-            #
-            # Resolve the flow rather than reading has_client_credentials directly:
-            # this is a security gate, and a legacy row whose oauth2_flow was never
-            # stamped still carries the M2M credential shape (client_id/secret +
-            # token_url, no authorization_url). Treating an unstamped-but-M2M-shaped
-            # row as non-M2M here would reopen the anonymous bypass the explicit
-            # column no longer closes on its own. Shares the one resolution helper
-            # with the egress backstop and the anonymous-delegate allowlist; all fail
-            # closed on the ambiguous shape and are removed together once no null rows
-            # remain. A pure-PKCE delegate server (no stored credentials) resolves to a
-            # non-M2M flow and keeps its bypass.
-            if MCPServerManager.effective_oauth2_flow(server) == "client_credentials":
-                return False
-        return True
-
-    @staticmethod
     def _target_servers_are_true_passthrough(path: str, mcp_servers: list[str] | None, client_ip: str | None) -> bool:
         """
         True only when EVERY MCP server the request targets is ``auth_type == true_passthrough``.
@@ -726,7 +681,7 @@ class MCPRequestHandler:
 
         Used by :meth:`process_mcp_request` to skip LiteLLM admission auth entirely: the gateway is a
         transparent proxy and the caller's ``Authorization`` is an upstream token, never a LiteLLM key.
-        Mirrors :meth:`_target_servers_delegate_auth_to_upstream`; a mixed-target request keeps normal auth.
+        A mixed-target request keeps normal auth.
         """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,

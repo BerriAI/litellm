@@ -49,6 +49,17 @@ if TYPE_CHECKING:
     import tiktoken
 
 
+def _map_reasoning_effort(value: object) -> object:
+    effort: Final[object] = cast(Mapping[str, object], value).get("effort") if isinstance(value, Mapping) else value
+    if effort is True:
+        return "medium"
+    if effort is False:
+        return "none"
+    if effort == "auto":
+        return None
+    return effort
+
+
 def _extract_fireworks_hidden_params(payload: dict) -> dict:
     """
     Collect Fireworks-specific response fields (perf_metrics, prompt_token_ids,
@@ -327,12 +338,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             elif param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param == "reasoning_effort":
-                if value is True:
-                    optional_params["reasoning_effort"] = "medium"
-                elif value is False:
-                    optional_params["reasoning_effort"] = "none"
-                elif value != "auto":
-                    optional_params["reasoning_effort"] = value
+                effort = _map_reasoning_effort(value)
+                if effort is not None:
+                    optional_params["reasoning_effort"] = effort
             elif param in supported_openai_params:
                 if value is not None:
                     optional_params[param] = value
@@ -601,6 +609,9 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         if not matches:
             return None
         return max(matches, key=lambda match: len(match[0]))[1]
+
+    def get_model_cost_key(self, model: str) -> str:
+        return f"fireworks_ai/{resolve_fireworks_resource_name(model)}"
 
     def get_provider_info(self, model: str) -> ProviderSpecificModelInfo:
         supports_function_calling_value: Final = self._get_model_cost_capability(

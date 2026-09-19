@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Any, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import (
@@ -19,6 +19,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
     is_encrypted_reasoning_block,
@@ -231,6 +232,27 @@ def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tup
     return headers, api_key
 
 
+class _EagerInputStreamingFunction(BaseModel):
+    eager_input_streaming: StrictBool | None = None
+
+
+class _EagerInputStreamingTool(BaseModel):
+    eager_input_streaming: StrictBool | None = None
+    function: _EagerInputStreamingFunction | None = None
+
+
+def eager_input_streaming_flag(tool: object) -> bool | None:
+    try:
+        parsed: Final = _EagerInputStreamingTool.model_validate(tool)
+    except ValidationError as error:
+        if isinstance(tool, Mapping):
+            raise UnsupportedParamsError(message="eager_input_streaming must be a boolean") from error
+        return None
+    if parsed.eager_input_streaming is not None:
+        return parsed.eager_input_streaming
+    return parsed.function.eager_input_streaming if parsed.function is not None else None
+
+
 class AnthropicError(BaseLLMException):
     def __init__(
         self,
@@ -372,6 +394,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                     return True
 
         return False
+
+    def is_eager_input_streaming_used(self, tools: Sequence[object] | None) -> bool:
+        return any(eager_input_streaming_flag(tool) is True for tool in tools or ())
 
     @staticmethod
     def _supports_sampling_params(model: str) -> bool:
@@ -538,6 +563,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         value: Final = litellm.model_cost.get(model, {}).get(key)
         return value if isinstance(value, bool) else None
+
+    @staticmethod
+    def supports_fast_mode(model: str, custom_llm_provider: str) -> bool:
+        return (
+            custom_llm_provider == "anthropic"
+            and AnthropicModelInfo._get_exact_model_capability(model, "supports_fast_mode") is True
+        )
 
     @staticmethod
     def _get_provider_resolved_capability(model: str, key: str, custom_llm_provider: str) -> bool | None:
@@ -1403,12 +1435,19 @@ class _ReplayedWebSearchResult(BaseModel):
     encrypted_content: str = ""
 
 
+class _ReplayedWebSearchToolResultError(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["web_search_tool_result_error"]
+    error_code: str = ""
+
+
 class _ReplayedWebSearchToolResult(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["web_search_tool_result"]
     tool_use_id: str
-    content: tuple[_ReplayedWebSearchResult, ...]
+    content: tuple[_ReplayedWebSearchResult, ...] | _ReplayedWebSearchToolResultError
 
 
 class _ReplayedServerToolUse(BaseModel):
@@ -1432,17 +1471,12 @@ def _flattenable_web_search_tool_result(block: object) -> _ReplayedWebSearchTool
     """
     The parsed block when it is a ``web_search_tool_result`` carrying no
     ``encrypted_content``, else None for anything Anthropic itself issued.
-
-    An empty ``content`` list is flattenable too. It is what the interceptor emits
-    when a search legitimately returns nothing and when a search raises, and it
-    carries neither evidence to preserve nor an ``encrypted_content`` to respect,
-    so leaving it in place only buys the 400 this whole function exists to avoid.
     """
     try:
         parsed: Final = _WEB_SEARCH_TOOL_RESULT_ADAPTER.validate_python(block)
     except ValidationError:
         return None
-    if any(result.encrypted_content for result in parsed.content):
+    if isinstance(parsed.content, tuple) and any(result.encrypted_content for result in parsed.content):
         return None
     return parsed
 
@@ -1454,8 +1488,12 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
         return None
 
 
-def _render_web_search_results(query: str, results: tuple[_ReplayedWebSearchResult, ...]) -> str:
+def _render_web_search_results(
+    query: str, results: tuple[_ReplayedWebSearchResult, ...] | _ReplayedWebSearchToolResultError
+) -> str:
     header: Final = f"Web search results for '{query}':" if query else "Web search results:"
+    if isinstance(results, _ReplayedWebSearchToolResultError):
+        return f"{header}\n\nSearch failed: {results.error_code or 'unavailable'}"
     if not results:
         return f"{header}\n\nNo results were returned."
     body: Final = "\n\n".join(
