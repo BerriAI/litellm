@@ -66,6 +66,7 @@ class ResponsesInputMessage(BaseModel):
 
 
 ResponsesInput = str | list[ResponsesInputMessage]
+ResponsesToolChoice = Literal["auto", "required", "none"]
 
 
 class ResponsesRequest(BaseModel):
@@ -74,6 +75,7 @@ class ResponsesRequest(BaseModel):
     instructions: str | None = None
     stream: bool = False
     tools: list[ResponsesFunctionTool] | None = None
+    tool_choice: ResponsesToolChoice | None = None
     guardrails: list[str] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
@@ -351,7 +353,13 @@ class EndpointsClient:
         )
 
     def responses_with_tools(
-        self, key: str, model: str, text: str, tools: list[ResponsesFunctionTool]
+        self,
+        key: str,
+        model: str,
+        text: str,
+        tools: list[ResponsesFunctionTool],
+        *,
+        tool_choice: ResponsesToolChoice | None = None,
     ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
@@ -361,6 +369,7 @@ class EndpointsClient:
                 input=text,
                 instructions="You are a helpful assistant",
                 tools=tools,
+                tool_choice=tool_choice,
             ),
         )
 
