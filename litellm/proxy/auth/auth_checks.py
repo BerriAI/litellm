@@ -5680,7 +5680,7 @@ async def _project_max_budget_check(
     if project_object.litellm_budget_table is not None:
         max_budget = project_object.litellm_budget_table.max_budget
 
-    if max_budget is None or max_budget <= 0 or not math.isfinite(max_budget):
+    if max_budget is None or not math.isfinite(max_budget):
         return
 
     from litellm.proxy.proxy_server import get_current_spend
