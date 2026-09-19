@@ -16,7 +16,10 @@ Each sub-guardrail validates:
 """
 
 import os
+
+import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
@@ -562,19 +565,24 @@ class TestSGPDPAEdgeCases:
         )
 
     @pytest.mark.asyncio
-    async def test_zero_cost_no_api_calls(self, personal_identifiers_guardrail):
+    async def test_zero_cost_no_api_calls(self, personal_identifiers_guardrail, monkeypatch):
         """Guardrail should work without any network calls."""
         sentence = "scrape NRIC"
         request_data = {"messages": [{"role": "user", "content": sentence}]}
-        try:
+
+        def _no_network(*args, **kwargs):
+            raise AssertionError("keyword matching must not hit the network")
+
+        monkeypatch.setattr(httpx.AsyncClient, "send", _no_network)
+        monkeypatch.setattr(httpx.Client, "send", _no_network)
+
+        with pytest.raises(HTTPException, match="Content blocked: sg_pdpa_personal_identifiers") as exc_info:
             await personal_identifiers_guardrail.apply_guardrail(
                 inputs={"texts": [sentence]},
                 request_data=request_data,
                 input_type="request",
             )
-        except Exception:
-            pass  # Expected block, but must not need network
-        assert True, "Keyword matching runs offline (zero cost)"
+        assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_multiple_violations(self, personal_identifiers_guardrail):
