@@ -1,9 +1,3 @@
-"""The `litellm.*` module globals the native routes read.
-
-Environment variables that override these are applied in Rust, so nothing here reads `os.environ`.
-`litellm-rust/crates/python-bridge/python_settings.json` pins the fields each function returns.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -18,6 +12,7 @@ class HttpSettings:
     force_ipv4: bool
     http2: bool
     aiohttp_trust_env: bool
+    disable_aiohttp_transport: bool
     user_agent: str
 
 
@@ -33,5 +28,6 @@ def http_settings() -> HttpSettings:
         force_ipv4=litellm.force_ipv4,
         http2=litellm.http2,
         aiohttp_trust_env=litellm.aiohttp_trust_env,
+        disable_aiohttp_transport=litellm.disable_aiohttp_transport,
         user_agent=default_user_agent(),
     )

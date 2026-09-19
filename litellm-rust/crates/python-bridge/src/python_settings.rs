@@ -2,12 +2,6 @@ use pyo3::prelude::*;
 
 const MODULE: &str = "litellm.rust_bridge.settings";
 
-/// Every group of `litellm.*` module globals the native routes read. Environment overrides are
-/// applied on the Rust side, so each function returns only what the Python process configured.
-/// A group is deleted once Rust owns loading that configuration, so this enum only shrinks.
-///
-/// `litellm/rust_bridge/settings.py` is the only Python module behind it, and
-/// `python_settings.json` pins the fields each function returns on both sides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PythonSettings {
     Http,

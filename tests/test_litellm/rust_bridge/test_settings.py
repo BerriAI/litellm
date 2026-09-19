@@ -26,6 +26,7 @@ def test_http_settings_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(litellm, "force_ipv4", True)
     monkeypatch.setattr(litellm, "http2", True)
     monkeypatch.setattr(litellm, "aiohttp_trust_env", True)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     assert settings.http_settings() == settings.HttpSettings(
         ssl_verify="/etc/ssl/corp.pem",
@@ -35,7 +36,8 @@ def test_http_settings_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch
         force_ipv4=True,
         http2=True,
         aiohttp_trust_env=True,
-        user_agent=settings.http_settings().user_agent,
+        disable_aiohttp_transport=True,
+        user_agent=default_user_agent(),
     )
 
 

@@ -16,8 +16,6 @@ pub enum Verify {
     BuiltInRoots,
 }
 
-/// One fully resolved client configuration. Every field is a plain value so the pool can
-/// key cached clients on it.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct HttpClientConfig {
     pub verify: Verify,
@@ -30,9 +28,6 @@ pub struct HttpClientConfig {
 }
 
 impl HttpClientConfig {
-    /// Port of `get_ssl_verify` + `get_ssl_configuration`: the configured (environment-overlaid)
-    /// `ssl_verify`, then `SSL_CERT_FILE`, then the built-in roots. Settings rustls has no
-    /// equivalent for are an error instead of a silent no-op.
     pub fn resolve(settings: &HttpSettings) -> Result<Self, Error> {
         if let Some(level) = &settings.ssl_security_level {
             return Err(Error::Unsupported {
@@ -60,12 +55,11 @@ impl HttpClientConfig {
             force_ipv4: settings.force_ipv4,
             http2: settings.http2,
             user_agent: settings.user_agent.clone(),
-            trust_proxy_env: settings.trust_proxy_env,
+            trust_proxy_env: settings.trust_proxy_env || settings.http2 || settings.httpx_transport,
             connect_timeout: settings.connect_timeout,
         })
     }
 
-    /// A builder carrying every shared setting; variants add their own policy on top.
     pub fn client_builder(&self) -> Result<reqwest::ClientBuilder, Error> {
         let base = reqwest::Client::builder().connect_timeout(self.connect_timeout);
         let with_roots = match &self.verify {
@@ -240,6 +234,19 @@ mod tests {
                 connect_timeout: Duration::from_secs(7),
             }
         );
+    }
+
+    #[rstest]
+    #[case::aiohttp_default(HttpSettings::default(), false)]
+    #[case::aiohttp_trust_env(HttpSettings { trust_proxy_env: true, ..HttpSettings::default() }, true)]
+    #[case::http2_uses_httpx(HttpSettings { http2: true, ..HttpSettings::default() }, true)]
+    #[case::aiohttp_disabled(HttpSettings { httpx_transport: true, ..HttpSettings::default() }, true)]
+    fn environment_proxies_apply_whenever_python_would_use_httpx(
+        #[case] settings: HttpSettings,
+        #[case] expected: bool,
+    ) {
+        let config = HttpClientConfig::resolve(&settings).unwrap();
+        assert_eq!(config.trust_proxy_env, expected);
     }
 
     #[test]
