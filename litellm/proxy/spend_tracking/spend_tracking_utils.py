@@ -1,9 +1,11 @@
+import json
 import os
 import re
 import secrets
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from datetime import datetime as dt
+from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
@@ -385,6 +387,70 @@ def _looks_like_model_name(model: str) -> bool:
     return len(candidate) <= MAX_SPEND_LOG_MODEL_NAME_LENGTH and not any(char.isspace() for char in candidate)
 
 
+_TRUNCATION_MARKER: Final = re.compile(
+    rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars\. "
+    rf"{re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}\) \.\.\."
+)
+_SCRUBBED_ERROR_TEXT_FIELDS: Final = frozenset(("error_message", "traceback"))
+
+
+def _raw_model_spellings(raw_model: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((raw_model, repr(raw_model)[1:-1], json.dumps(raw_model)[1:-1])))
+
+
+def _overlap_at_end(text: str, spelling: str) -> int:
+    lengths: Final = range(min(len(text), len(spelling) - 1), 0, -1)
+    return next((length for length in lengths if text.endswith(spelling[:length])), 0)
+
+
+def _overlap_at_start(text: str, spelling: str) -> int:
+    lengths: Final = range(min(len(text), len(spelling) - 1), 0, -1)
+    return next((length for length in lengths if text.startswith(spelling[-length:])), 0)
+
+
+def _scrub_raw_model_split_by_truncation(text: str, spellings: tuple[str, ...]) -> str:
+    marker: Final = _TRUNCATION_MARKER.search(text)
+    if marker is None:
+        return text
+    head: Final = text[: marker.start()]
+    tail: Final = text[marker.end() :]
+    head_cut: Final = max(_overlap_at_end(head, spelling) for spelling in spellings)
+    tail_cut: Final = max(_overlap_at_start(tail, spelling) for spelling in spellings)
+    return "".join(
+        (
+            head[: len(head) - head_cut],
+            UNKNOWN_MODEL_SPEND_LOG_MODEL if head_cut else "",
+            marker.group(0),
+            UNKNOWN_MODEL_SPEND_LOG_MODEL if tail_cut else "",
+            tail[tail_cut:],
+        )
+    )
+
+
+def _scrub_raw_model_from_error_text(text: str, spellings: tuple[str, ...]) -> str:
+    whole_occurrences_scrubbed: Final = reduce(
+        lambda scrubbed, spelling: scrubbed.replace(spelling, UNKNOWN_MODEL_SPEND_LOG_MODEL), spellings, text
+    )
+    return _scrub_raw_model_split_by_truncation(whole_occurrences_scrubbed, spellings)
+
+
+def _scrub_raw_model_from_error_information(
+    error_information: StandardLoggingPayloadErrorInformation | None, raw_model: str
+) -> StandardLoggingPayloadErrorInformation | None:
+    if error_information is None or not raw_model:
+        return error_information
+    spellings: Final = _raw_model_spellings(raw_model)
+    return cast(
+        StandardLoggingPayloadErrorInformation,
+        {
+            key: _scrub_raw_model_from_error_text(value, spellings)
+            if key in _SCRUBBED_ERROR_TEXT_FIELDS and isinstance(value, str)
+            else value
+            for key, value in error_information.items()
+        },
+    )
+
+
 def get_logging_payload(
     kwargs: dict | None,
     response_obj: object,
@@ -502,13 +568,27 @@ def get_logging_payload(
     )
     failed_with_prompt_shaped_model: Final = (
         _get_status_for_spend_log(metadata=metadata) == "failure"
-        and not _model_group
+        and not _model_id
         and not _looks_like_model_name(resolved_model)
     )
     model_name: Final = (
         UNKNOWN_MODEL_SPEND_LOG_MODEL
         if rejected_as_unknown_model or failed_with_prompt_shaped_model or model_is_malformed
         else resolved_model
+    )
+    model_is_placeholdered: Final = model_name == UNKNOWN_MODEL_SPEND_LOG_MODEL
+    persisted_model_group: Final = (
+        ""
+        if model_is_placeholdered and _model_group == raw_model and not _looks_like_model_name(raw_model)
+        else _model_group
+    )
+    persisted_metadata: Final = (
+        {
+            **metadata,
+            "error_information": _scrub_raw_model_from_error_information(metadata.get("error_information"), raw_model),
+        }
+        if model_is_placeholdered
+        else metadata
     )
     litellm_call_id: Final = cast(
         str | None,
@@ -517,7 +597,7 @@ def get_logging_payload(
 
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
-        metadata,
+        persisted_metadata,
         applied_guardrails=(
             standard_logging_payload["metadata"].get("applied_guardrails", None)
             if standard_logging_payload is not None
@@ -576,7 +656,7 @@ def get_logging_payload(
         litellm_call_id=litellm_call_id,
         router_metadata=_get_router_metadata_for_spend_log(
             metadata=metadata,
-            requested_model=_model_group,
+            requested_model=persisted_model_group,
             selected_model=model_name,
             selected_provider=custom_llm_provider,
             router_correlation_id=litellm_call_id,
@@ -658,7 +738,7 @@ def get_logging_payload(
             request_tags=request_tags,
             end_user=end_user_id or "",
             api_base=_api_base,
-            model_group=_model_group,
+            model_group=persisted_model_group,
             model_id=_model_id,
             mcp_namespaced_tool_name=mcp_namespaced_tool_name,
             agent_id=agent_id,
