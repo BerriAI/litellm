@@ -574,10 +574,10 @@ async def test_lone_surrogate_escape_is_rejected_with_400(content: bytes):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("media_type", ["application/x-protobuf", "application/protobuf"])
-async def test_protobuf_body_is_left_unparsed(media_type: str):
-    request = _starlette_request(b"\x0a\x05hello\x12\x03{{{", media_type)
-    assert await _read_request_body(request) == {}
+@pytest.mark.parametrize("media_type", ["application/x-protobuf", "application/protobuf", "application/octet-stream"])
+async def test_json_body_under_a_binary_content_type_is_still_parsed(media_type: str):
+    request = _starlette_request(b'{"model": "claude-sonnet-5"}', media_type)
+    assert await _read_request_body(request) == {"model": "claude-sonnet-5"}
 
 
 @pytest.mark.asyncio

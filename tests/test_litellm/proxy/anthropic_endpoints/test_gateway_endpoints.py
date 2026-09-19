@@ -21,6 +21,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import ProxyException
 from litellm.proxy.anthropic_endpoints import gateway_endpoints
 from litellm.proxy.management_endpoints.ui_sso import _get_cli_sso_flow_cache_key, _set_cli_sso_flow
+from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 
 _DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 _MASTER_KEY: Final = "sk-master-key"
@@ -107,6 +108,7 @@ def _gateway_env(
     session_cache: Final = cache or DualCache(default_in_memory_ttl=600)
 
     app: Final = FastAPI()
+    app.add_middleware(PrometheusAuthMiddleware)
     app.include_router(gateway_endpoints.router)
 
     async def _fake_auth() -> object:
@@ -378,10 +380,11 @@ def test_otlp_endpoints_404_when_disabled(signal: str):
     assert resp.status_code == 404
 
 
-def test_otlp_protobuf_body_is_accepted_through_real_auth():
+@pytest.mark.parametrize("signal", ["metrics", "logs", "traces"])
+def test_otlp_protobuf_body_is_accepted_through_real_auth(signal: str):
     with _gateway_env(real_auth=True) as (client, _):
         resp = client.post(
-            "/claude_code_gateway/v1/metrics",
+            f"/claude_code_gateway/v1/{signal}",
             content=_PROTOBUF_BODY,
             headers={"Authorization": f"Bearer {_MASTER_KEY}", "Content-Type": "application/x-protobuf"},
         )
