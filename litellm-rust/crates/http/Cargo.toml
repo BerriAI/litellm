@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 http.workspace = true
+litellm-core-utils.workspace = true
 hyper-util.workspace = true
 reqwest.workspace = true
 rustls.workspace = true

@@ -3,6 +3,8 @@ use std::{
     time::Duration,
 };
 
+use litellm_core_utils::settings::{Layer, Lookup, merge};
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SslVerify {
     Enabled,
@@ -45,38 +47,35 @@ pub struct HttpSettingsLayer {
 }
 
 impl HttpSettingsLayer {
-    pub fn from_environment(env: &(dyn Fn(&str) -> Option<String> + Sync)) -> Self {
-        let enabled = |name: &str| {
-            env(name)
-                .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
-                .then_some(true)
-        };
-        let number = |name: &str| env(name).and_then(|value| value.trim().parse::<u32>().ok());
+    pub fn from_environment(env: &impl Lookup) -> Self {
         let seconds = |name: &str, default: u32| {
-            Duration::from_secs(u64::from(number(name).unwrap_or(default)))
+            Duration::from_secs(u64::from(env.parsed::<u32>(name).unwrap_or(default)))
         };
         Self {
-            ssl_verify: env("SSL_VERIFY").map(|value| SslVerify::parse(&value)),
-            ssl_cert_file: env("SSL_CERT_FILE").map(PathBuf::from),
-            ssl_certificate: env("SSL_CERTIFICATE").map(PathBuf::from),
-            ssl_security_level: env("SSL_SECURITY_LEVEL"),
-            ssl_ecdh_curve: env("SSL_ECDH_CURVE"),
+            ssl_verify: env.get("SSL_VERIFY").map(|value| SslVerify::parse(&value)),
+            ssl_cert_file: env.truthy("SSL_CERT_FILE").map(PathBuf::from),
+            ssl_certificate: env.get("SSL_CERTIFICATE").map(PathBuf::from),
+            ssl_security_level: env.get("SSL_SECURITY_LEVEL"),
+            ssl_ecdh_curve: env.get("SSL_ECDH_CURVE"),
             force_ipv4: None,
-            http2: enabled("LITELLM_HTTP2"),
-            aiohttp_trust_env: enabled("AIOHTTP_TRUST_ENV"),
-            disable_aiohttp_trust_env: enabled("DISABLE_AIOHTTP_TRUST_ENV"),
-            disable_aiohttp_transport: enabled("DISABLE_AIOHTTP_TRANSPORT"),
-            user_agent: env("LITELLM_USER_AGENT"),
-            tcp_keepalive: enabled("AIOHTTP_SO_KEEPALIVE").map(|_| TcpKeepalive {
+            http2: env.enabled("LITELLM_HTTP2"),
+            aiohttp_trust_env: env.enabled("AIOHTTP_TRUST_ENV"),
+            disable_aiohttp_trust_env: env.enabled("DISABLE_AIOHTTP_TRUST_ENV"),
+            disable_aiohttp_transport: env.enabled("DISABLE_AIOHTTP_TRANSPORT"),
+            user_agent: env.get("LITELLM_USER_AGENT"),
+            tcp_keepalive: env.enabled("AIOHTTP_SO_KEEPALIVE").map(|_| TcpKeepalive {
                 idle: seconds("AIOHTTP_TCP_KEEPIDLE", 60),
                 interval: seconds("AIOHTTP_TCP_KEEPINTVL", 30),
-                retries: number("AIOHTTP_TCP_KEEPCNT").unwrap_or(5),
+                retries: env.parsed("AIOHTTP_TCP_KEEPCNT").unwrap_or(5),
             }),
-            pool_idle_timeout: number("AIOHTTP_KEEPALIVE_TIMEOUT")
+            pool_idle_timeout: env
+                .parsed::<u32>("AIOHTTP_KEEPALIVE_TIMEOUT")
                 .map(|timeout| Duration::from_secs(u64::from(timeout))),
         }
     }
+}
 
+impl Layer for HttpSettingsLayer {
     fn or(self, lower: Self) -> Self {
         Self {
             ssl_verify: self.ssl_verify.or(lower.ssl_verify),
@@ -139,10 +138,7 @@ impl HttpSettings {
     pub fn from_layers(
         highest_precedence_first: impl IntoIterator<Item = HttpSettingsLayer>,
     ) -> Self {
-        let merged = highest_precedence_first
-            .into_iter()
-            .reduce(HttpSettingsLayer::or)
-            .unwrap_or_default();
+        let merged = merge(highest_precedence_first);
         let defaults = Self::default();
         let http2 = merged.http2.unwrap_or(defaults.http2);
         Self {
@@ -190,9 +186,7 @@ mod tests {
         None
     }
 
-    fn env_of(
-        values: &'static [(&'static str, &'static str)],
-    ) -> impl Fn(&str) -> Option<String> + Sync {
+    fn env_of(values: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
         move |name| {
             values
                 .iter()
