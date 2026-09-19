@@ -850,6 +850,34 @@ class TestRedactStreamingResponsesForCustomLogger:
         assert response_obj.choices[0].message.content == "secret content"
         assert model_call_details["async_complete_streaming_response"] is response_obj
 
+    def test_turn_off_message_logging_gets_redacted_copy(self):
+        response_obj = litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    message=litellm.Message(content="stream-secret", role="assistant")
+                )
+            ]
+        )
+        model_call_details = {
+            "stream": True,
+            "complete_streaming_response": response_obj,
+        }
+        opted_out_logger = CustomLogger(turn_off_message_logging=True)
+        default_logger = CustomLogger()
+
+        redacted_details = redact_streaming_responses_for_custom_logger(
+            model_call_details=model_call_details, custom_logger=opted_out_logger
+        )
+        shared_details = redact_streaming_responses_for_custom_logger(
+            model_call_details=model_call_details, custom_logger=default_logger
+        )
+
+        assert redacted_details["complete_streaming_response"].choices[0].message.content == "redacted-by-litellm"
+        assert shared_details is model_call_details
+        assert shared_details["complete_streaming_response"].choices[0].message.content == "stream-secret"
+        assert model_call_details["complete_streaming_response"] is response_obj
+        assert response_obj.choices[0].message.content == "stream-secret"
+
     def test_compliant_logger_gets_shared_response(self):
         model_call_details, response_obj = self._model_call_details()
         compliant_logger = CustomLogger()
