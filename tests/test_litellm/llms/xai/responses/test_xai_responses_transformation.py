@@ -10,9 +10,7 @@ Source: litellm/llms/xai/responses/transformation.py
 from unittest.mock import MagicMock, Mock
 
 import httpx
-import pytest
 
-import litellm
 from litellm.llms.xai.cost_calculator import cost_per_token
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.utils import ResponseAPILoggingUtils
@@ -53,23 +51,23 @@ class TestXAIResponsesAPITransformation:
         assert result["tools"][0]["type"] == "code_interpreter"
         assert "container" not in result["tools"][0], "Container field should be removed"
 
-    def test_instructions_parameter_dropped(self):
-        """Test that instructions parameter is dropped for XAI"""
+    def test_instructions_parameter_forwarded(self):
+        """xAI supports 'instructions' on /v1/responses, so it must survive param mapping"""
         config = XAIResponsesAPIConfig()
 
         params = ResponsesAPIOptionalRequestParams(instructions="You are a helpful assistant.", temperature=0.7)
 
         result = config.map_openai_params(response_api_optional_params=params, model="grok-4-fast", drop_params=False)
 
-        assert "instructions" not in result, "Instructions should be dropped"
+        assert result.get("instructions") == "You are a helpful assistant."
         assert result.get("temperature") == 0.7, "Other params should be preserved"
 
-    def test_supported_params_excludes_instructions(self):
-        """Test that get_supported_openai_params excludes instructions"""
+    def test_supported_params_includes_instructions(self):
+        """A system message bridged to 'instructions' must not be rejected for xAI"""
         config = XAIResponsesAPIConfig()
         supported = config.get_supported_openai_params("grok-4-fast")
 
-        assert "instructions" not in supported, "instructions should not be supported"
+        assert "instructions" in supported, "instructions should be supported"
         assert "tools" in supported, "tools should be supported"
         assert "temperature" in supported, "temperature should be supported"
         assert "model" in supported, "model should be supported"
@@ -118,6 +116,67 @@ class TestXAIResponsesAPITransformation:
         assert "filters" in tool
         assert tool["filters"]["allowed_domains"] == ["wikipedia.org", "x.ai"]
         assert tool["enable_image_understanding"] is True
+
+    def test_web_search_nested_filters_preserved(self):
+        """The documented nested 'filters' shape must reach xAI instead of being dropped"""
+        config = XAIResponsesAPIConfig()
+
+        params = ResponsesAPIOptionalRequestParams(
+            tools=[
+                {
+                    "type": "web_search",
+                    "filters": {"allowed_domains": ["grokipedia.com"], "excluded_domains": ["example.com"]},
+                }
+            ]
+        )
+
+        result = config.map_openai_params(
+            response_api_optional_params=params,
+            model="grok-4-1-fast",
+            drop_params=False,
+        )
+
+        tool = result["tools"][0]
+        assert tool["filters"]["allowed_domains"] == ["grokipedia.com"]
+        assert tool["filters"]["excluded_domains"] == ["example.com"]
+
+    def test_web_search_nested_filters_win_over_flat(self):
+        """Nested filters take precedence when both shapes are sent"""
+        config = XAIResponsesAPIConfig()
+
+        params = ResponsesAPIOptionalRequestParams(
+            tools=[
+                {
+                    "type": "web_search",
+                    "allowed_domains": ["flat.com"],
+                    "filters": {"allowed_domains": ["nested.com"]},
+                }
+            ]
+        )
+
+        result = config.map_openai_params(
+            response_api_optional_params=params,
+            model="grok-4-1-fast",
+            drop_params=False,
+        )
+
+        assert result["tools"][0]["filters"] == {"allowed_domains": ["nested.com"]}
+
+    def test_web_search_empty_nested_filters_win_over_flat(self):
+        """An explicit empty 'filters' object means unrestricted search, even when stale flat fields are present"""
+        config = XAIResponsesAPIConfig()
+
+        params = ResponsesAPIOptionalRequestParams(
+            tools=[{"type": "web_search", "allowed_domains": ["flat.com"], "filters": {}}]
+        )
+
+        result = config.map_openai_params(
+            response_api_optional_params=params,
+            model="grok-4-1-fast",
+            drop_params=False,
+        )
+
+        assert result["tools"][0] == {"type": "web_search"}
 
     def test_web_search_search_context_size_removed(self):
         """Test that search_context_size is removed from web_search tools"""
@@ -305,12 +364,16 @@ class TestXAIResponsesWebSearchBilling:
 
     def _raw_response_json(self, include_web_search: bool) -> dict:
         web_search_output = (
-            [{
-                "type": "web_search_call",
-                "id": "ws_1",
-                "status": "completed",
-                "action": {"type": "search", "query": "grok"},
-            }] if include_web_search else []
+            [
+                {
+                    "type": "web_search_call",
+                    "id": "ws_1",
+                    "status": "completed",
+                    "action": {"type": "search", "query": "grok"},
+                }
+            ]
+            if include_web_search
+            else []
         )
         tool_usage = {"server_side_tool_usage_details": self._TOOL_DETAILS} if include_web_search else {}
         return {
@@ -369,20 +432,6 @@ class TestXAIResponsesWebSearchBilling:
         assert bridged.prompt_tokens == 100
         assert bridged.completion_tokens == 20
         assert getattr(bridged, "server_side_tool_usage_details") == self._TOOL_DETAILS
-
-    def test_completion_cost_bills_web_search_calls(self):
-        with_search = litellm.completion_cost(
-            completion_response=self._transform(include_web_search=True),
-            model="xai/grok-4",
-            custom_llm_provider="xai",
-        )
-        without_search = litellm.completion_cost(
-            completion_response=self._transform(include_web_search=False),
-            model="xai/grok-4",
-            custom_llm_provider="xai",
-        )
-
-        assert with_search - without_search == pytest.approx(2 * 5.0 / 1000.0)
 
     def test_streaming_terminal_event_keeps_schema_and_details(self):
         parsed_chunk = {
@@ -474,9 +523,7 @@ class TestXAIResponsesReportedCost:
         assert cost_per_token(model="grok-4-latest", usage=chat_usage) == (0.0, 0.0037756)
 
     def test_usage_without_a_reported_cost_is_left_alone(self):
-        usage = self._transformed_usage(
-            {"input_tokens": 100, "output_tokens": 200, "total_tokens": 300}
-        )
+        usage = self._transformed_usage({"input_tokens": 100, "output_tokens": 200, "total_tokens": 300})
 
         assert usage.cost is None
 

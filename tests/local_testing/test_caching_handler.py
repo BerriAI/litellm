@@ -927,24 +927,14 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
 
 
 def test_should_defer_streaming_cache_hit_callbacks_for_any_streaming_request():
-    assert (
-        _should_defer_streaming_cache_hit_callbacks(
-            kwargs={"stream": True},
-        )
-        is True
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    stream_replay = CustomStreamWrapper(
+        completion_stream=iter(()), model="gpt-4o", logging_obj=logging_obj
     )
-    assert (
-        _should_defer_streaming_cache_hit_callbacks(
-            kwargs={"stream": False},
-        )
-        is False
-    )
-    assert (
-        _should_defer_streaming_cache_hit_callbacks(
-            kwargs={},
-        )
-        is False
-    )
+    assert _should_defer_streaming_cache_hit_callbacks(cached_result=stream_replay) is True
+    assert _should_defer_streaming_cache_hit_callbacks(cached_result=ModelResponse()) is False
+    assert _should_defer_streaming_cache_hit_callbacks(cached_result={"id": "msg_1"}) is False
 
 
 @pytest.mark.asyncio

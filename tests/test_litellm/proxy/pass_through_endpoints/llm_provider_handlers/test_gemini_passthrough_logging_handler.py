@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
@@ -396,4 +396,53 @@ class TestGeminiPassthroughLoggingHandler:
         # Verify logging object was updated
         assert mock_logging_obj.model_call_details["response_cost"] == expected_cost
         assert mock_logging_obj.model_call_details["model"] == "veo-2.0-generate-001"
+        assert mock_logging_obj.model_call_details["custom_llm_provider"] == "gemini"
+
+    def test_interactions_create_response_is_priced_as_gemini(self):
+        """Regression for LIT-6896: Gemini API Interactions passthrough must not log zero usage."""
+        usage = {
+            "total_tokens": 1030,
+            "total_input_tokens": 10,
+            "input_tokens_by_modality": [{"modality": "text", "tokens": 10}],
+            "total_output_tokens": 1020,
+            "output_tokens_by_modality": [
+                {"modality": "text", "tokens": 20},
+                {"modality": "video", "tokens": 1000},
+            ],
+            "total_tool_use_tokens": 0,
+            "total_thought_tokens": 0,
+        }
+        mock_httpx_response = MagicMock(spec=httpx.Response)
+        mock_httpx_response.json.return_value = {
+            "id": "interactions/abc",
+            "model": "gemini-omni-flash-preview",
+            "status": "completed",
+            "usage": usage,
+        }
+        mock_logging_obj = MagicMock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {}
+        mock_logging_obj.litellm_call_id = "call-6896"
+
+        result = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
+            httpx_response=mock_httpx_response,
+            response_body=mock_httpx_response.json.return_value,
+            logging_obj=mock_logging_obj,
+            url_route="https://generativelanguage.googleapis.com/v1beta/interactions",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body={"model": "gemini-omni-flash-preview", "input": "make a clip"},
+        )
+
+        model_info = litellm.get_model_info(model="gemini-omni-flash-preview", custom_llm_provider="gemini")
+        expected_cost = (
+            10 * model_info["input_cost_per_token"]
+            + 20 * model_info["output_cost_per_token"]
+            + 1000 * model_info["output_cost_per_video_token"]
+        )
+        assert result["result"].id == "call-6896"
+        assert result["result"].usage.completion_tokens_details.video_tokens == 1000
+        assert result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+        assert result["kwargs"]["custom_llm_provider"] == "gemini"
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "gemini"

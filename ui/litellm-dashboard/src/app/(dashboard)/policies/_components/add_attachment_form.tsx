@@ -8,6 +8,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { FieldGroup, FieldLabel, FieldTitle } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -36,6 +37,7 @@ interface AttachmentFormValues {
   keys: string[];
   models: string[];
   tags: string[];
+  priority: number | null;
 }
 
 const EMPTY_VALUES: AttachmentFormValues = {
@@ -44,7 +46,11 @@ const EMPTY_VALUES: AttachmentFormValues = {
   keys: [],
   models: [],
   tags: [],
+  priority: null,
 };
+
+const INT32_MIN = -2147483648;
+const INT32_MAX = 2147483647;
 
 const attachmentShape = {
   policy_names: z.array(z.string()).min(1, "Please select at least one policy"),
@@ -52,6 +58,12 @@ const attachmentShape = {
   keys: z.array(z.string()),
   models: z.array(z.string()),
   tags: z.array(z.string()),
+  priority: z
+    .number({ error: "Priority must be a whole number" })
+    .int("Priority must be a whole number")
+    .min(INT32_MIN, `Priority must be at least ${INT32_MIN}`)
+    .max(INT32_MAX, `Priority must be at most ${INT32_MAX}`)
+    .nullable(),
 };
 
 const buildAttachmentSchema = (scopeType: ScopeType, teamsLoaded: boolean, availableTeams: string[]) =>
@@ -419,6 +431,28 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
                   </FormField>
                 </>
               )}
+
+              <FormField
+                control={form.control}
+                name="priority"
+                label={labelWithHint(
+                  "Priority",
+                  "Lower numbers run first. Attachments with a priority run before attachments without one.",
+                )}
+                description="Optional. Leave blank to keep the default order: global, then teams, keys, tags, models."
+              >
+                {({ ref, value, onChange, ...field }) => (
+                  <Input
+                    {...field}
+                    ref={ref}
+                    type="number"
+                    step={1}
+                    value={value ?? ""}
+                    placeholder="e.g. 10"
+                    onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                  />
+                )}
+              </FormField>
             </FieldGroup>
 
             {impactResult && <ImpactPreviewAlert impactResult={impactResult} />}

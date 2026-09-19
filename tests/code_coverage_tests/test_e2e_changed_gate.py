@@ -142,7 +142,7 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
             ("tests/e2e/guardrails/test_bedrock_guardrail_e2e.py",),
             ("tests/e2e/guardrails/test_bedrock_guardrail_e2e.py",),
         ),
-        (("tests/e2e/logging/helpers.py", "docs/my-website/docs/index.md", "tests/e2e/CLAUDE.md"), ()),
+        (("tests/e2e/logging/helpers.py", "docs/my-website/docs/index.md", "tests/e2e/AGENTS.md"), ()),
         (
             ("tests/e2e/logging/test_datadog_e2e.py", "tests/e2e/logging/test_datadog_e2e.py"),
             ("tests/e2e/logging/test_datadog_e2e.py",),

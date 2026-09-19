@@ -17,6 +17,7 @@ import { getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
+import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 export interface LogDetailsDrawerProps {
   open: boolean;
@@ -245,6 +246,7 @@ export function LogDetailsDrawer({
   const logDetails = useLogDetails(currentLog?.request_id, startTime, open && !!currentLog?.request_id);
   const detailsData = logDetails.data as any;
   const isLoadingDetails = logDetails.isLoading;
+  const { data: logUser } = useUserLookup(open && currentLog?.user ? currentLog.user : null);
 
   // Build an enriched log entry that merges lazy-loaded details.
   // The list endpoint may already include messages/response when store_prompts_in_spend_logs is enabled,
@@ -465,6 +467,7 @@ export function LogDetailsDrawer({
                 logEntry={enrichedLog}
                 isLoadingDetails={isLoadingDetails}
                 accessToken={accessToken ?? null}
+                userEmail={logUser?.user_email || undefined}
               />
             </div>
           </div>

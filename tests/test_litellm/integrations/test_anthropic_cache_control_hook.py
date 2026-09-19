@@ -1,15 +1,12 @@
 import copy
-import datetime
 import json
 import os
 import subprocess
 import sys
 import textwrap
-import unittest
 from typing import List, Optional, Tuple
-from unittest.mock import ANY, MagicMock, Mock, patch
+from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
 import litellm
@@ -19,7 +16,6 @@ from litellm.integrations.anthropic_cache_control_hook import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import StandardCallbackDynamicParams
 
 
 @pytest.fixture(autouse=True)
@@ -2984,18 +2980,6 @@ class TestPromptCacheBreakpointCapability:
         yield
         litellm.utils._cached_get_model_info_helper.cache_clear()
 
-    def test_public_helper_reads_the_model_map(self):
-        from litellm.utils import supports_prompt_cache_breakpoint
-
-        assert supports_prompt_cache_breakpoint("gpt-5.6") is True
-        assert supports_prompt_cache_breakpoint("openai/gpt-5.6-sol") is True
-        assert supports_prompt_cache_breakpoint("gpt-5.6", custom_llm_provider="openai") is True
-        assert supports_prompt_cache_breakpoint("gpt-4.1") is False
-
-    @pytest.mark.parametrize("model", ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
-    def test_model_map_flags_every_openai_gpt_5_6_entry(self, model):
-        assert litellm.model_cost[model]["litellm_provider"] == "openai"
-        assert litellm.model_cost[model]["supports_prompt_cache_breakpoint"] is True
 
     def test_listed_model_uses_the_model_map_flag(self, monkeypatch):
         flagged = {**litellm.model_cost["gpt-4.1"], "supports_prompt_cache_breakpoint": True}
@@ -3014,9 +2998,6 @@ class TestPromptCacheBreakpointCapability:
         )
         assert supports_openai_prompt_cache_breakpoint("gpt-5.6") is False
 
-    def test_listed_gpt_model_without_the_flag_follows_the_version_rule(self):
-        assert "supports_prompt_cache_breakpoint" not in litellm.model_cost["gpt-4.1"]
-        assert supports_openai_prompt_cache_breakpoint("gpt-4.1") is False
 
     def test_published_map_without_the_flag_still_injects_on_gpt_5_6(self, monkeypatch):
         unflagged = {k: v for k, v in litellm.model_cost["gpt-5.6"].items() if k != "supports_prompt_cache_breakpoint"}

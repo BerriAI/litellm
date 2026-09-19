@@ -102,6 +102,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     UpstreamCredentialProvider,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+    prepare_mcp_client,
     raise_public,
     raise_token_exchange_challenge,
     raise_user_oauth_challenge,
@@ -2804,6 +2805,8 @@ class MCPServerManager:
                         headers=headers,
                         server_label=server.name or server.server_name or server.alias or server.server_id,
                         relays_upstream_auth=server.is_client_forwarded_token,
+                        auth_type=server.auth_type,
+                        upstream_token_header=server.upstream_token_header,
                     )
                     tool_func.__name__ = prefixed_tool_name
                     tool_func.__doc__ = description
@@ -4259,15 +4262,20 @@ class MCPServerManager:
                     user_api_key_auth=user_api_key_auth,
                     extra_headers=extra_headers,
                 )
-                return MCPClient(
-                    server_url=server_url,
-                    transport_type=transport,
-                    auth_type=resolved_server.auth_type,
-                    timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
-                    extra_headers=extra_headers,
-                    resolved_auth=resolved_auth,
-                    sampling_callback=sampling_cb,
-                    elicitation_callback=elicitation_cb,
+                return await prepare_mcp_client(
+                    resolved_server,
+                    MCPClient(
+                        server_url=server_url,
+                        transport_type=transport,
+                        auth_type=resolved_server.auth_type,
+                        timeout=(
+                            resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT
+                        ),
+                        extra_headers=extra_headers,
+                        resolved_auth=resolved_auth,
+                        sampling_callback=sampling_cb,
+                        elicitation_callback=elicitation_cb,
+                    ),
                 )
 
             # Create SigV4 auth if configured
@@ -4297,17 +4305,20 @@ class MCPServerManager:
                 else AuthResolution.no_auth
             )
             record_auth_resolution(server.server_id, legacy_source)
-            return MCPClient(
-                server_url=server_url,
-                transport_type=transport,
-                auth_type=resolved_server.auth_type,
-                auth_value=auth_value,
-                auth_header_name=auth_header_name,
-                timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
-                extra_headers=extra_headers,
-                aws_auth=aws_auth,
-                sampling_callback=sampling_cb,
-                elicitation_callback=elicitation_cb,
+            return await prepare_mcp_client(
+                resolved_server,
+                MCPClient(
+                    server_url=server_url,
+                    transport_type=transport,
+                    auth_type=resolved_server.auth_type,
+                    auth_value=auth_value,
+                    auth_header_name=auth_header_name,
+                    timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
+                    extra_headers=extra_headers,
+                    aws_auth=aws_auth,
+                    sampling_callback=sampling_cb,
+                    elicitation_callback=elicitation_cb,
+                ),
             )
 
     async def _get_tools_from_server(
@@ -5581,6 +5592,7 @@ class MCPServerManager:
         server: MCPServer,
         raw_headers: dict[str, str] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -5634,6 +5646,7 @@ class MCPServerManager:
             incoming_bearer_token = auth_hdr[len("bearer ") :]
 
         pre_hook_kwargs: Final = {
+            "guardrail_context": guardrail_context,
             "name": name,
             "arguments": arguments,
             "server_name": server_name,
@@ -5701,6 +5714,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         start_time: datetime.datetime,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ):
         """Create and return a during hook task for MCP tool calls.
 
@@ -5720,6 +5734,7 @@ class MCPServerManager:
         )
 
         during_hook_kwargs: Final = {
+            "guardrail_context": guardrail_context,
             "name": name,
             "arguments": arguments,
             "server_name": server_name_from_prefix,
@@ -6265,6 +6280,7 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         host_progress_callback: Callable | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -6311,6 +6327,7 @@ class MCPServerManager:
             server=mcp_server,
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
+            guardrail_context=guardrail_context,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -6326,6 +6343,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
+                guardrail_context=guardrail_context,
             )
             tasks.append(during_hook_task)
 
