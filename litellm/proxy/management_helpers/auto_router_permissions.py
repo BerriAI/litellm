@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.models.organization import LiteLLM_OrganizationTable
@@ -82,6 +82,17 @@ class _MemberJevClassifierConfig(BaseModel):
 
 class _MemberComplexityRouterConfig(RequestComplexityRouterConfig):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
+
+    @model_validator(mode="after")
+    def _validate_jev_classifier_config(self) -> "_MemberComplexityRouterConfig":
+        jev: Final = self.jev_classifier_config
+        if self.classifier_type != "jev":
+            if jev is not None:
+                raise ValueError("jev_classifier_config requires classifier_type 'jev'; otherwise it has no effect")
+            return self
+        if jev is None:
+            raise ValueError("jev_classifier_config is required when classifier_type is 'jev'")
+        return self
 
 
 class _RouterConfigSource(BaseModel):

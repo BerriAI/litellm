@@ -26,7 +26,9 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
 )
 from litellm.types.utils import Choices, Message, ModelResponse
 
-ROUTING_HTTP_REQUEST: Final = Request({"type": "http", "method": "POST", "path": "/auto_router/test_routing", "headers": []})
+ROUTING_HTTP_REQUEST: Final = Request(
+    {"type": "http", "method": "POST", "path": "/auto_router/test_routing", "headers": []}
+)
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
 
@@ -451,7 +453,9 @@ async def test_no_llm_router_on_the_proxy_is_a_500(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(proxy_server, "llm_router", None)
 
     with pytest.raises(HTTPException) as exc_info:
-        await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=_request("what is 2+2"), user_api_key_dict=ADMIN)
+        await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST, data=_request("what is 2+2"), user_api_key_dict=ADMIN
+        )
 
     assert exc_info.value.status_code == 500
 
@@ -890,11 +894,15 @@ class TestAutoRouterSession:
         class _Table:
             async def find_first(self, where: Mapping[str, object], order: Mapping[str, object]):
                 lookups.append((where, order))
-                matching = [r for r in rows if (r["api_key"], r["session_id"]) == (where["api_key"], where["session_id"])]
+                matching = [
+                    r for r in rows if (r["api_key"], r["session_id"]) == (where["api_key"], where["session_id"])
+                ]
                 return max(matching, key=lambda r: r["last_turn_at"], default=None)
 
         monkeypatch.setattr(
-            proxy_server, "prisma_client", type("P", (), {"db": type("D", (), {"litellm_autoroutersession": _Table()})()})()
+            proxy_server,
+            "prisma_client",
+            type("P", (), {"db": type("D", (), {"litellm_autoroutersession": _Table()})()})(),
         )
         return lookups
 
@@ -2694,6 +2702,96 @@ async def test_validate_config_returns_the_write_gates_verdict_without_saving():
 
 
 @pytest.mark.asyncio
+async def test_validate_complexity_router_config_rejects_keyless_jev_and_accepts_keyed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.auto_router_endpoints import (
+        validate_complexity_router_config,
+    )
+    from litellm.types.management_endpoints.auto_router_endpoints import (
+        ComplexityRouterConfigValidationRequest,
+    )
+
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+
+    keyless_validation = ComplexityRouterConfigValidationRequest(
+        complexity_router_config={
+            "tiers": TIERS,
+            "classifier_type": "jev",
+            "jev_classifier_config": {"model": "jev-latest"},
+        }
+    )
+    rejected = await validate_complexity_router_config(keyless_validation, ADMIN)
+    assert rejected.valid is False
+    assert rejected.error is not None
+    assert "jev_classifier_config.api_key or TYPESAFE_API_KEY is required" in rejected.error
+
+    # Explicit api_key makes it valid
+    keyed_validation = ComplexityRouterConfigValidationRequest(
+        complexity_router_config={
+            "tiers": TIERS,
+            "classifier_type": "jev",
+            "jev_classifier_config": {"model": "jev-latest", "api_key": "sk-typesafe-test"},
+        }
+    )
+    valid_keyed = await validate_complexity_router_config(keyed_validation, ADMIN)
+    assert valid_keyed.valid is True
+    assert valid_keyed.error is None
+
+    # Environment secret makes it valid
+    monkeypatch.setenv("TYPESAFE_API_KEY", "sk-env-test")
+    valid_env = await validate_complexity_router_config(keyless_validation, ADMIN)
+    assert valid_env.valid is True
+    assert valid_env.error is None
+
+
+@pytest.mark.asyncio
+async def test_preview_auto_router_routing_keyless_jev_maps_to_400_not_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.router_strategy.complexity_router.config import JevClassifierConfig
+    from litellm.types.management_endpoints.auto_router_endpoints import (
+        AutoRouterRoutingTestRequest,
+        RequestComplexityRouterConfig,
+    )
+
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
+
+    # Request validation directly rejects a keyless Jev config
+    with pytest.raises(ValidationError) as schema_exc:
+        _request(
+            "what is 2+2",
+            classifier_type="jev",
+            jev_classifier_config={"model": "jev-latest"},
+        )
+    assert "jev_classifier_config.api_key or TYPESAFE_API_KEY is required" in str(schema_exc.value)
+
+    data = AutoRouterRoutingTestRequest.model_construct(
+        prompt="What is the capital of France?",
+        default_model="cheap-model",
+        complexity_router_config=RequestComplexityRouterConfig.model_construct(
+            tiers=TIERS,
+            classifier_type="jev",
+            jev_classifier_config=JevClassifierConfig.model_construct(model="jev-latest"),
+        ),
+        router_name="auto_router_routing_test",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
+            data=data,
+            user_api_key_dict=ADMIN,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Could not route this prompt" in exc_info.value.detail["error"]
+    assert "jev_classifier_config.api_key or TYPESAFE_API_KEY is required" in exc_info.value.detail["error"]
+
+
+@pytest.mark.asyncio
 async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypatch: pytest.MonkeyPatch):
     """routed_model_configured must not be an existence oracle for the whole proxy: a team
     admin probing a guessed global model name reads False unless the named team could
@@ -2730,12 +2828,16 @@ async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypa
     )
 
     monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-probe", models=["mid-model"]))
-    probing = await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=_request("team-probe"), user_api_key_dict=team_admin)
+    probing = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=_request("team-probe"), user_api_key_dict=team_admin
+    )
     assert probing.routed_model == "cheap-model"
     assert probing.routed_model_configured is False
 
     monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-grant", models=["cheap-model"]))
-    granted = await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=_request("team-grant"), user_api_key_dict=team_admin)
+    granted = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=_request("team-grant"), user_api_key_dict=team_admin
+    )
     assert granted.routed_model == "cheap-model"
     assert granted.routed_model_configured is True
 
@@ -2788,9 +2890,7 @@ async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: py
     assert not_their_team.value.status_code == 403
 
 
-def _configure_member_preview(
-    monkeypatch: pytest.MonkeyPatch, *, allowed: bool = True
-) -> UserAPIKeyAuth:
+def _configure_member_preview(monkeypatch: pytest.MonkeyPatch, *, allowed: bool = True) -> UserAPIKeyAuth:
     from litellm.proxy import proxy_server
     from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTable
 
@@ -2815,16 +2915,17 @@ def _configure_member_preview(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("access", ["allowed", "opt-out", "limited-key"])
-async def test_member_preview_and_validation_follow_team_opt_in(
-    monkeypatch: pytest.MonkeyPatch, access: str
-) -> None:
+async def test_member_preview_and_validation_follow_team_opt_in(monkeypatch: pytest.MonkeyPatch, access: str) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.auto_router_endpoints import validate_complexity_router_config
     from litellm.types.management_endpoints.auto_router_endpoints import ComplexityRouterConfigValidationRequest
 
-    actor: Final = _configure_member_preview(monkeypatch, allowed=access != "opt-out").model_copy(update={
-        "models": ["member-router"] if access == "limited-key" else [], "config": {"timeout": 60},
-    })
+    actor: Final = _configure_member_preview(monkeypatch, allowed=access != "opt-out").model_copy(
+        update={
+            "models": ["member-router"] if access == "limited-key" else [],
+            "config": {"timeout": 60},
+        }
+    )
     monkeypatch.setattr(proxy_server, "llm_router", _router())
     preview: Final = _request_from({"prompt": "what is 2+2", "team_id": "member-preview-team"})
     validation: Final = ComplexityRouterConfigValidationRequest(
@@ -2875,13 +2976,18 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
 
     checks: Final = AsyncMock(side_effect=check_and_tag)
     monkeypatch.setattr(auth_module, "_run_centralized_common_checks", checks)
-    http_request: Final = Request({
-        "type": "http", "method": "POST", "path": "/auto_router/test_routing",
-        "headers": [(b"x-litellm-tags", b"header-tag")],
-    })
+    http_request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/auto_router/test_routing",
+            "headers": [(b"x-litellm-tags", b"header-tag")],
+        }
+    )
     data: Final = _request_from(
         {"prompt": "hi", "team_id": "member-preview-team"},
-        classifier_type="llm", classifier_llm_config={"model": "cheap-model"},
+        classifier_type="llm",
+        classifier_llm_config={"model": "cheap-model"},
     )
     if over_budget:
         with pytest.raises(litellm.BudgetExceededError):
