@@ -25,6 +25,7 @@ import httpx
 import pytest
 from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
 from e2e_http import AuthHeaders, NoBody, unwrap
+from idp import Identity
 from mcp import ClientSession
 from mcp.client.auth import OAuthClientProvider
 from mcp.client.streamable_http import streamable_http_client
@@ -77,7 +78,13 @@ class InMemoryTokenStorage:
         self._client_info = client_info
 
 
-async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> tuple[str, str | None]:
+async def _browser_follow_authorize(
+    start_url: str,
+    storage_state_path: str,
+    identity: Identity | None = None,
+    server_alias: str | None = None,
+    allow_upstream_consent: bool = True,
+) -> tuple[str, str | None]:
     """Play the browser's role for a real upstream whose authorize endpoint
     serves an interactive consent page (Linear). A headless Chromium primed
     with a human's saved Linear session opens the gateway authorize URL and
@@ -115,6 +122,29 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
                 pass
             if "url" in captured:
                 break
+            if await page.locator("#username").count() and identity is not None:
+                await page.locator("#username").fill(identity.username)
+                await page.locator("#password").fill(identity.password)
+                await page.locator("#kc-login").click()
+                continue
+            if httpx.URL(page.url).host.endswith("linear.app") and not allow_upstream_consent:
+                raise AssertionError("cold reconnect required upstream consent")
+            if "/ui/connect" in page.url and server_alias is not None:
+                card = page.locator("div.cursor-pointer").filter(has=page.get_by_text(server_alias, exact=True))
+                if await card.count() != 1:
+                    await asyncio.sleep(0.5)
+                    continue
+                connect = card.get_by_text("Connect", exact=True)
+                if await connect.count():
+                    await connect.click()
+                    continue
+                if not await card.locator("svg.text-success").count():
+                    await asyncio.sleep(0.5)
+                    continue
+                finish = page.get_by_role("button", name="Finish connecting", exact=True)
+                if await finish.count() and await finish.is_enabled():
+                    await finish.click()
+                    continue
             control = page.locator(
                 'button[name="action"][value="approve"], button:has-text("Authorize"), '
                 'button:has-text("Allow"), button:has-text("@"), a:has-text("@")'
@@ -132,11 +162,18 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
         f"final={final_url.split('?', 1)[0]!r}; trail={trail[-6:]}"
     )
     params = dict(parse_qsl(httpx.URL(landing).query.decode()))
-    assert "code" in params, f"client redirect_uri carried no code: {landing}"
+    assert "code" in params, "client redirect_uri carried no authorization code"
     return params["code"], params.get("state")
 
 
-def _oauth_provider(url: str, storage: InMemoryTokenStorage, storage_state_path: str | None) -> OAuthClientProvider:
+def _oauth_provider(
+    url: str,
+    storage: InMemoryTokenStorage,
+    storage_state_path: str | None,
+    identity: Identity | None = None,
+    server_alias: str | None = None,
+    allow_upstream_consent: bool = True,
+) -> OAuthClientProvider:
     """The SDK's real OAuth machinery (RFC 9728/8414 discovery, RFC 7591 DCR,
     PKCE, token exchange) with the browser leg driven by Playwright against the
     upstream's consent screen."""
@@ -147,7 +184,9 @@ def _oauth_provider(url: str, storage: InMemoryTokenStorage, storage_state_path:
 
     async def _follow_redirect(authorize_url: str) -> None:
         assert storage_state_path is not None
-        code, state = await _browser_follow_authorize(authorize_url, storage_state_path)
+        code, state = await _browser_follow_authorize(
+            authorize_url, storage_state_path, identity, server_alias, allow_upstream_consent
+        )
         code_holder["code"] = code
         code_holder["state"] = state
 
@@ -202,7 +241,14 @@ class _HeaderInjectingTransport(httpx.AsyncBaseTransport):
             for name, value in self._headers.items():
                 if name not in request.headers:
                     request.headers[name] = value
+        else:
+            for name, value in self._headers.items():
+                if request.headers.get(name) == value:
+                    del request.headers[name]
         return await self._inner.handle_async_request(request)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
 
 
 def _oauth_http_client(
@@ -242,9 +288,14 @@ async def _list_and_call(
     tool: str,
     arguments: dict[str, str],
     gateway_url: str = PROXY_BASE_URL,
+    identity: Identity | None = None,
+    server_alias: str | None = None,
+    allow_upstream_consent: bool = True,
 ) -> OauthToolRun:
     async with _oauth_http_client(
-        headers, _oauth_provider(url, storage, storage_state_path), gateway_url
+        headers,
+        _oauth_provider(url, storage, storage_state_path, identity, server_alias, allow_upstream_consent),
+        gateway_url,
     ) as http_client:
         async with streamable_http_client(url, http_client=http_client) as (read, write, _):
             async with ClientSession(read, write) as session:
@@ -321,29 +372,22 @@ class ChatMcpClient:
         tool: str,
         arguments: dict[str, str],
         base_url: str = PROXY_BASE_URL,
+        identity: Identity | None = None,
+        allow_upstream_consent: bool = True,
     ) -> OauthToolRun:
-        deadline: Final = time.monotonic() + self.proxy.poll_timeout
-        last_error: Exception | None = None
-        while time.monotonic() < deadline:
-            try:
-                return asyncio.run(
-                    _list_and_call(
-                        _mcp_url(alias, base_url),
-                        headers,
-                        storage,
-                        storage_state_path,
-                        tool,
-                        arguments,
-                        base_url,
-                    )
-                )
-            except AssertionError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - retried to the deadline; the last error surfaces below
-                last_error = exc
-                time.sleep(self.proxy.poll_interval)
-        pytest.fail(
-            f"list and call for {alias!r} never completed within {self.proxy.poll_timeout}s; last error: {last_error!r}"
+        return asyncio.run(
+            _list_and_call(
+                f"{base_url.rstrip('/')}/mcp" if identity is not None else _mcp_url(alias, base_url),
+                headers,
+                storage,
+                storage_state_path,
+                tool,
+                arguments,
+                base_url,
+                identity,
+                alias,
+                allow_upstream_consent,
+            )
         )
 
     def server_user_credentials(self, server_id: str) -> tuple[McpServerUserCredentialRow, ...]:

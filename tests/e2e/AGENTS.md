@@ -33,7 +33,7 @@ Every test under `tests/e2e/mcp/` must exercise the proxy against the real Datad
 - Prefer calling real Datadog tools that prove the product path (e.g. `search_datadog_logs` for list/call and permission denials). Seed a unique marker (`e2e-datadog-mcp-*`) in a chat completion when you need a log the tool can find; dual-read with `dd_logs` from conftest when delivery matters
 - Delete the MCP server (and any keys) through `resources.defer` the same way every other suite tears down
 - If a new MCP behavior cannot be covered with Datadog's tool surface, say so in the PR and get agreement before inventing another upstream; the default is always Datadog
-- The two standing exceptions are `test_mcp_chat_completion_oauth_e2e.py` and `test_mcp_oauth_happy_path_e2e.py`. Datadog authenticates with the static `DD-API-KEY` / `DD-APPLICATION-KEY` headers and exposes no authorize/token dance at all, so these tests drive a real Linear MCP server instead; they are still real remote upstreams, so the no-mock, no-fixture rule above holds unchanged
+- The two standing exceptions are `test_mcp_chat_completion_oauth_e2e.py` and `test_mcp_oauth_happy_path_e2e.py`. Datadog authenticates with the static `DD-API-KEY` / `DD-APPLICATION-KEY` headers and exposes no authorize/token dance at all, so these tests drive a real Linear MCP server instead; they are still real remote upstreams, so the no-mock, no-fixture rule above holds unchanged. The direct OAuth test also uses the existing live provider edge to inspect forwarded headers without replay, and owns a separate source-built gateway for cold restarts
 
 ## Lay the pattern down in a class
 

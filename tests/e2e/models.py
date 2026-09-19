@@ -572,6 +572,10 @@ class McpInfo(BaseModel):
     logo_url: str | None = None
 
 
+class McpOauthCredentials(BaseModel):
+    upstream_resource: str
+
+
 class McpServerCreateBody(BaseModel):
     """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
     `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
@@ -587,6 +591,8 @@ class McpServerCreateBody(BaseModel):
     per_server_oauth_discovery: bool | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    registration_url: str | None = None
+    credentials: McpOauthCredentials | None = None
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None

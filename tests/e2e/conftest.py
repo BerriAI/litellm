@@ -220,6 +220,8 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     LIVE_PROVIDER_REQUIRED.set(item.get_closest_marker("provider_live") is not None)
     if item.get_closest_marker("e2e") is None:
         return
+    if isinstance(item, pytest.Function) and "oauth_gateway" in item.fixturenames:
+        return
     reason = _proxy_fail_reason()
     if reason is not None:
         pytest.fail(reason)

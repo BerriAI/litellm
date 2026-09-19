@@ -1,3 +1,4 @@
+import os
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -15,6 +16,12 @@ def main() -> int:
         _ = sys.stdout.write("::error::could not read the test execution report\n")
         return 1
     cases: Final = tuple(report.iter("testcase"))
+    expected_count: Final = os.environ.get("E2E_REQUIRED_TEST_COUNT")
+    if expected_count is not None and (
+        len(cases) != int(expected_count) or any(case.find("skipped") is not None for case in cases)
+    ):
+        _ = sys.stdout.write("::error::required test count was not met or a required case was skipped\n")
+        return 1
     passed: Final = frozenset(
         case.get("file") for case in cases if all(case.find(tag) is None for tag in ("skipped", "failure", "error"))
     )

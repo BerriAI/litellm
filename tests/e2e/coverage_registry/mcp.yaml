@@ -78,7 +78,7 @@
   auth_family: oauth
   assertions: [persists_across_processes]
   source: "outbound_credentials/per_user_oauth_store.py V2PerUserTokenStore"
-  rationale: Stored per-user token is resolved by a gateway process that did not run the consent
+  rationale: Stored per-user token survives a verified restart of an owned gateway with no Redis cache
 - id: mcp.list_tools.none.succeeds
   module: mcp
   tier: P1
