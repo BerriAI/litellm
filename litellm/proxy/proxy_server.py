@@ -1058,7 +1058,8 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
                 verbose_proxy_logger.info("Langfuse export channels flushed")
             else:
                 verbose_proxy_logger.warning(
-                    "Langfuse export did not finish within %dms; remaining spans are left to the background exporter",
+                    "Langfuse shutdown flush incomplete: a channel did not finish within %dms or a batch was rejected "
+                    "(see the export errors above); remaining spans are left to the background exporter",
                     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
                 )
         except Exception as e:  # noqa: BLE001  # shutdown must continue even if the flush fails

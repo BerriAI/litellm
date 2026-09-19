@@ -284,6 +284,7 @@ class LangFuseLogger:
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m"
             ) from e
         raise_if_unsupported_langfuse_version(self.langfuse_sdk_version)
+        from litellm.integrations.langfuse.langfuse_sdk import configured_release
 
         self.public_key, self.secret_key, self.langfuse_host = resolve_langfuse_credentials(
             langfuse_public_key=langfuse_public_key,
@@ -297,7 +298,7 @@ class LangFuseLogger:
             self.langfuse_environment: str | None = _env_override
         else:
             self.langfuse_environment = self.resolve_deployment_environment()
-        self.langfuse_release = os.getenv("LANGFUSE_RELEASE")
+        self.langfuse_release = configured_release()
         self.langfuse_debug = parse_langfuse_debug(os.getenv("LANGFUSE_DEBUG"))
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(flush_interval)
 
@@ -826,15 +827,15 @@ class LangFuseLogger:
                         cache_read_input_tokens=cache_read_input_tokens,
                     )
 
-            generation_name = clean_metadata.pop("generation_name", None)
-            if generation_name is None:
-                # if `generation_name` is None, use sensible default values
-                # If using litellm proxy user `key_alias` if not None
-                # If `key_alias` is None, just log `litellm-{call_type}` as the generation name
-                _user_api_key_alias: Final = cast(str | None, clean_metadata.get("user_api_key_alias", None))
-                generation_name = f"litellm-{cast(str, kwargs.get('call_type', 'completion'))}"
-                if _user_api_key_alias is not None:
-                    generation_name = f"litellm:{_user_api_key_alias}"
+            requested_generation_name: Final = clean_metadata.pop("generation_name", None)
+            _user_api_key_alias: Final = cast(str | None, clean_metadata.get("user_api_key_alias", None))
+            generation_name: Final = (
+                str(requested_generation_name)
+                if requested_generation_name is not None
+                else f"litellm:{_user_api_key_alias}"
+                if _user_api_key_alias is not None
+                else f"litellm-{cast(str, kwargs.get('call_type', 'completion'))}"
+            )
 
             if response_obj is not None:
                 system_fingerprint = getattr(response_obj, "system_fingerprint", None)

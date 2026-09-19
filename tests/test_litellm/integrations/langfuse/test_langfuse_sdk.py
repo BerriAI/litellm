@@ -11,6 +11,7 @@ import threading
 import uuid
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
+from time import monotonic, sleep
 from types import MappingProxyType
 from typing import Final
 
@@ -54,6 +55,12 @@ FIRST_TOKEN = CALL_START + timedelta(seconds=5)
 CALL_END = CALL_START + timedelta(seconds=20)
 TRACE_A = "a" * 32
 PARENT_C = "c" * 16
+
+
+@pytest.fixture(autouse=True)
+def _own_channel_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Channels leaked by other test modules would otherwise take part in every process-wide flush here."""
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._TRACING", {})
 
 
 @pytest.fixture(name="channel")
@@ -725,6 +732,47 @@ def test_channel_reacquired_within_the_grace_is_kept(monkeypatch: pytest.MonkeyP
     assert len(exporter.get_finished_spans()) == 1
 
 
+def test_retire_timer_of_an_earlier_release_cannot_kill_a_reacquired_channel(monkeypatch: pytest.MonkeyPatch):
+    """release, re-acquire, release: the first timer used to fire into a channel that a later holder still
+    counted on for its own grace period, shutting the batch thread down while spans were still queued."""
+    tracing, exporter = _acquire_recorded(monkeypatch, "pk-lease-race-test")
+
+    release_langfuse_tracing(tracing, grace_seconds=0.2)
+    assert _acquire(public_key="pk-lease-race-test", mock_mode=False, flush_interval=600.0) is tracing
+    release_langfuse_tracing(tracing, grace_seconds=600.0)
+
+    threading.Event().wait(0.5)
+    assert exporter.shutdowns == 0
+    assert _acquire(public_key="pk-lease-race-test", mock_mode=False, flush_interval=600.0) is tracing
+    tracing.tracer.start_span("generation").end()
+    assert tracing.flush() is True
+    assert len(exporter.get_finished_spans()) == 1
+
+
+class _RejectsEverything(SpanExporter):
+    def export(self, spans) -> SpanExportResult:
+        return SpanExportResult.FAILURE
+
+    def shutdown(self) -> None:
+        return None
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return True
+
+
+def test_flush_is_false_when_the_destination_rejected_a_batch(monkeypatch: pytest.MonkeyPatch):
+    """The shutdown hook logs "channels flushed" off this value; a drained queue whose batches all
+    failed at the destination is a loss, not a flush."""
+    monkeypatch.setattr(
+        "litellm.integrations.langfuse.langfuse_sdk._build_span_exporter", lambda **_: _RejectsEverything()
+    )
+    tracing = _acquire(public_key="pk-flush-truth-test", mock_mode=False, flush_interval=600.0)
+    tracing.tracer.start_span("generation").end()
+
+    assert tracing.flush() is False
+    assert flush_langfuse_tracing() is True, "an empty queue after the loss has nothing left to fail"
+
+
 def test_release_of_a_channel_the_registry_never_handed_out_is_a_no_op():
     exporter = InMemorySpanExporter()
     tracing = build_langfuse_tracing(
@@ -1012,19 +1060,56 @@ def test_exporter_does_not_retry_a_rejected_batch(monkeypatch, status):
     assert slept == []
 
 
+def _finished_span_named(name: object):
+    provider = TracerProvider()
+    span = provider.get_tracer("t").start_span("placeholder")
+    span._name = name  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]  # the SDK only stores str
+    span.end()
+    return span
+
+
+def test_exporter_drops_a_span_the_encoder_rejects_and_still_posts_the_rest(monkeypatch, caplog):
+    """One span the OTLP encoder cannot serialize used to raise out of ``export`` and lose every span in the batch."""
+    from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
+
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", lambda _: None)
+    exporter, seen = _exporter_over([200])
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        result = exporter.export((_finished_span(), _finished_span_named(12345), _finished_span()))
+
+    assert result is SpanExportResult.SUCCESS
+    (request,) = seen
+    decoded = ExportTraceServiceRequest()
+    decoded.ParseFromString(request.content)
+    assert [span.name for span in decoded.resource_spans[0].scope_spans[0].spans] == ["generation", "generation"]
+    assert "dropped 1 span(s)" in caplog.text
+
+
+def test_exporter_reports_failure_when_no_span_of_the_batch_can_be_encoded(monkeypatch):
+    exporter, seen = _exporter_over([200])
+
+    assert exporter.export((_finished_span_named(12345),)) is SpanExportResult.FAILURE
+    assert seen == []
+
+
 def test_built_exporter_uses_the_shared_litellm_handler_and_langfuse_headers(monkeypatch):
     """No private requests session or TLS adapter: the channel is the same handler the rest of litellm uses."""
     from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
     monkeypatch.delenv("LANGFUSE_TIMEOUT", raising=False)
+    monkeypatch.delenv("LANGFUSE_MAX_RETRIES", raising=False)
     default = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
     assert default.handler is _get_httpx_client()
-    assert default.timeout == 5
+    assert default.timeout == 20
+    assert len(default.delays) == 3
 
-    monkeypatch.setenv("LANGFUSE_TIMEOUT", "20")
+    monkeypatch.setenv("LANGFUSE_TIMEOUT", "7.5")
+    monkeypatch.setenv("LANGFUSE_MAX_RETRIES", "1")
     exporter = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
     assert exporter.endpoint == "https://lf.internal.example/api/public/otel/v1/traces"
-    assert exporter.timeout == 20
+    assert exporter.timeout == 7.5
+    assert exporter.delays == (1.0,)
     assert exporter.headers["Authorization"] == "Basic " + b64encode(b"pk:sk").decode()
     assert exporter.headers["x-langfuse-public-key"] == "pk"
     assert exporter.headers["x-langfuse-sdk-version"] == installed_langfuse_version()
@@ -1089,6 +1174,78 @@ class _RecordingPromptsApi:
             tags=[],
             prompt=f"label={label!r}",
         )
+
+
+class _BlockingPromptsApi(_RecordingPromptsApi):
+    """Every fetch after the first blocks until the test releases it, and may be told to fail."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.release = threading.Event()
+        self.fail_refresh = False
+
+    def get(self, name: str, *, version: int | None, label: str | None):
+        is_refresh = bool(self.requests)
+        prompt = super().get(name, version=version, label=label)
+        if is_refresh:
+            assert self.release.wait(5), "refresh was never released"
+            if self.fail_refresh:
+                raise RuntimeError("langfuse is down")
+        return prompt
+
+
+def _wait_until(predicate, timeout: float = 5.0) -> None:
+    for _ in range(int(timeout / 0.01)):
+        if predicate():
+            return
+        sleep(0.01)
+    raise AssertionError("condition not met in time")
+
+
+def test_stale_prompt_is_served_at_once_while_the_refresh_runs_elsewhere():
+    """``get_prompt`` runs on the proxy's event loop; a stale entry used to refetch inline and block every
+    request on the REST round trip. The stale prompt is returned immediately and refreshed off-thread."""
+    api = _BlockingPromptsApi()
+    client = LangfuseApiClient(api, prompt_cache_ttl_seconds=0)  # pyright: ignore[reportArgumentType]  # duck-typed prompts API
+
+    first = client.get_prompt("greeting")
+    started = monotonic()
+    stale = client.get_prompt("greeting")
+
+    assert stale is first, "the stale prompt must come back without waiting on the refresh"
+    assert monotonic() - started < 1.0, "the stale read waited on the blocked refresh"
+    _wait_until(lambda: len(api.requests) == 2)
+    api.release.set()
+    _wait_until(lambda: client.get_prompt("greeting") is not first)
+
+
+def test_a_failed_background_refresh_keeps_the_stale_prompt_in_service(caplog):
+    api = _BlockingPromptsApi()
+    api.fail_refresh = True
+    client = LangfuseApiClient(api, prompt_cache_ttl_seconds=0)  # pyright: ignore[reportArgumentType]  # duck-typed prompts API
+
+    first = client.get_prompt("greeting")
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        started = monotonic()
+        assert client.get_prompt("greeting") is first
+        assert monotonic() - started < 1.0, "the stale read waited on the blocked refresh"
+        api.release.set()
+        _wait_until(lambda: "refresh failed" in caplog.text)
+    assert client.get_prompt("greeting") is first
+
+
+def test_only_one_refresh_runs_for_a_stale_prompt_under_concurrent_reads():
+    api = _BlockingPromptsApi()
+    client = LangfuseApiClient(api, prompt_cache_ttl_seconds=0.3)  # pyright: ignore[reportArgumentType]  # duck-typed prompts API
+
+    first = client.get_prompt("greeting")
+    sleep(0.3)
+    for _ in range(20):
+        assert client.get_prompt("greeting") is first
+    _wait_until(lambda: len(api.requests) == 2)
+    api.release.set()
+    _wait_until(lambda: client.get_prompt("greeting") is not first)
+    assert len(api.requests) == 2
 
 
 def test_prompt_cache_keeps_a_missing_label_apart_from_the_label_named_none():

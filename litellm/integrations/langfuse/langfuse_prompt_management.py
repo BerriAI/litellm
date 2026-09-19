@@ -2,7 +2,6 @@
 Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 """
 
-import os
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, cast
 
@@ -121,7 +120,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
         self.langfuse_sdk_version = installed_langfuse_version()
         raise_if_unsupported_langfuse_version(self.langfuse_sdk_version)
 
-        from .langfuse_sdk import acquire_langfuse_tracing
+        from .langfuse_sdk import acquire_langfuse_tracing, configured_release
 
         self.api_client = langfuse_client_init(
             langfuse_public_key=langfuse_public_key,
@@ -139,7 +138,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             secret_key=str(self.secret_key),
             base_url=self.langfuse_host,
             environment=LangFuseLogger.resolve_deployment_environment(),
-            release=os.getenv("LANGFUSE_RELEASE"),
+            release=configured_release(),
             flush_interval=LangFuseLogger._get_langfuse_flush_interval(flush_interval),  # pyright: ignore[reportPrivateUsage]  # shared env-fallback helper, not part of the logger's API
             mock_mode=should_use_langfuse_mock(),
         )

@@ -46,7 +46,10 @@ __all__ = (
     "build_langfuse_client",
     "build_langfuse_tracing",
     "configured_flush_at",
+    "configured_max_retries",
+    "configured_release",
     "configured_sample_rate",
+    "configured_timeout",
     "flush_langfuse_tracing",
     "observation_attributes",
     "release_langfuse_tracing",
@@ -64,6 +67,20 @@ _TRACER_NAME: Final = "langfuse-sdk"
 _MAX_QUEUE_SIZE: Final = 100_000
 _DEFAULT_FLUSH_AT: Final = 512
 _CHANNEL_RETIRE_GRACE_SECONDS: Final = 60.0
+_DEFAULT_TIMEOUT_SECONDS: Final = 20.0
+_DEFAULT_MAX_RETRIES: Final = 3
+_COMMON_RELEASE_ENVS: Final = (
+    "RENDER_GIT_COMMIT",
+    "CI_COMMIT_SHA",
+    "CIRCLE_SHA1",
+    "SOURCE_VERSION",
+    "TRAVIS_COMMIT",
+    "GIT_COMMIT",
+    "GITHUB_SHA",
+    "BITBUCKET_COMMIT",
+    "BUILD_SOURCEVERSION",
+    "DRONE_COMMIT_SHA",
+)
 _SPAN_LIMITS: Final = SpanLimits(
     max_attributes=SpanLimits.UNSET,
     max_events=128,
@@ -429,6 +446,34 @@ def configured_sample_rate() -> float:
     return parsed
 
 
+def configured_timeout() -> float:
+    """``LANGFUSE_TIMEOUT`` in seconds for every export and REST call, the v2 SDK's 20 s when unset.
+
+    A value that is not a number raises, as the v2 client did at construction, so a typo is not silently ignored.
+    """
+    return float(os.environ.get("LANGFUSE_TIMEOUT", _DEFAULT_TIMEOUT_SECONDS))
+
+
+def configured_max_retries() -> int:
+    """``LANGFUSE_MAX_RETRIES`` as the number of re-sends after a failed export, the v2 SDK's knob and default."""
+    raw: Final = os.environ.get("LANGFUSE_MAX_RETRIES")
+    if raw is None:
+        return _DEFAULT_MAX_RETRIES
+    if not raw.strip().isdigit():
+        verbose_logger.warning(
+            "LANGFUSE_MAX_RETRIES=%r is not a whole number; retrying %d times", raw, _DEFAULT_MAX_RETRIES
+        )
+        return _DEFAULT_MAX_RETRIES
+    return int(raw)
+
+
+def configured_release() -> str | None:
+    """``LANGFUSE_RELEASE``, else the commit variable of the CI or deploy platform, as both SDK generations resolve it."""
+    return os.environ.get("LANGFUSE_RELEASE") or next(
+        (os.environ[name] for name in _COMMON_RELEASE_ENVS if name in os.environ), None
+    )
+
+
 def configured_flush_at() -> int:
     """``LANGFUSE_FLUSH_AT`` as the export batch size, the SDK's own knob, with its default when unset or unusable."""
     raw: Final = os.environ.get("LANGFUSE_FLUSH_AT")
@@ -485,7 +530,12 @@ class LangfuseSpanExporter(SpanExporter):
     delays: Sequence[float] = (1.0, 2.0, 4.0)
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
-        body: Final = encode_spans(spans).SerializeToString()
+        body: Final = _encode(spans)
+        if body is None:
+            return SpanExportResult.FAILURE
+        return self._send(body)
+
+    def _send(self, body: bytes) -> SpanExportResult:
         for delay in self.delays:
             outcome: _ExportOutcome = self._post(body)
             if outcome != "retry":
@@ -518,8 +568,26 @@ class LangfuseSpanExporter(SpanExporter):
         return True
 
 
+def _encode(spans: Sequence[ReadableSpan]) -> bytes | None:
+    """The OTLP body, or ``None`` when nothing survived: a span the encoder rejects is dropped, not the whole batch."""
+    try:
+        return encode_spans(spans).SerializeToString()
+    except Exception:  # noqa: BLE001  # protobuf raises TypeError or ValueError depending on the field
+        kept: Final = tuple(span for span in spans if _encodes(span))
+        verbose_logger.error("Langfuse export dropped %d span(s) the OTLP encoder rejected", len(spans) - len(kept))
+        return encode_spans(kept).SerializeToString() if kept else None
+
+
+def _encodes(span: ReadableSpan) -> bool:
+    try:
+        encode_spans((span,))
+    except Exception:  # noqa: BLE001  # same encoder failure modes as above
+        return False
+    return True
+
+
 def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> LangfuseSpanExporter:
-    """Endpoint, headers and timeout mirror the SDK's span processor so the server treats the spans as v4 SDK traffic."""
+    """Endpoint, headers, timeout and retries mirror the v2 SDK's so the server treats the spans as SDK traffic."""
     export_path: Final = os.getenv("LANGFUSE_OTEL_TRACES_EXPORT_PATH") or "/api/public/otel/v1/traces"
     encoded_auth: Final = b64encode(f"{public_key}:{secret_key}".encode()).decode("ascii")
     return LangfuseSpanExporter(
@@ -534,7 +602,8 @@ def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> 
                 "x-langfuse-public-key": public_key,
             }
         ),
-        timeout=float(os.getenv("LANGFUSE_TIMEOUT", "5")),
+        timeout=configured_timeout(),
+        delays=tuple(2.0**attempt for attempt in range(configured_max_retries())),
     )
 
 
@@ -549,6 +618,26 @@ def _resource(*, environment: str | None, release: str | None) -> Resource:
     )
 
 
+class _ExportLedger(SpanExporter):
+    """Counts the batches the exporter gave up on, so a flush can report delivery rather than a drained queue."""
+
+    def __init__(self, exporter: SpanExporter) -> None:
+        self.exporter: Final = exporter
+        self.failed_batches = 0
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        result: Final = self.exporter.export(spans)
+        if result is not SpanExportResult.SUCCESS:
+            self.failed_batches += 1
+        return result
+
+    def shutdown(self) -> None:
+        self.exporter.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self.exporter.force_flush(timeout_millis)
+
+
 @dataclass(frozen=True, slots=True)
 class LangfuseTracing:
     """litellm's own export channel to one Langfuse project: a provider, its tracer and the exporter behind them.
@@ -559,9 +648,12 @@ class LangfuseTracing:
 
     provider: TracerProvider
     tracer: Tracer
+    ledger: _ExportLedger
 
     def flush(self, timeout_millis: int = 30_000) -> bool:
-        return self.provider.force_flush(timeout_millis)
+        """``True`` only when the queue drained in time and every batch it held was accepted by the destination."""
+        failed_before: Final = self.ledger.failed_batches
+        return self.provider.force_flush(timeout_millis) and self.ledger.failed_batches == failed_before
 
     def shutdown(self) -> None:
         self.provider.shutdown()
@@ -584,6 +676,7 @@ class _TracingKey:
 class _Lease:
     tracing: LangfuseTracing
     holders: int
+    retire: threading.Timer | None = None
 
 
 _TRACING_LOCK: Final = threading.Lock()
@@ -619,7 +712,9 @@ def acquire_langfuse_tracing(
     with _TRACING_LOCK:
         cached: Final = _TRACING.get(key)
         if cached is not None:
-            _TRACING[key] = replace(cached, holders=cached.holders + 1)
+            if cached.retire is not None:
+                cached.retire.cancel()
+            _TRACING[key] = replace(cached, holders=cached.holders + 1, retire=None)
             return cached.tracing
         created: Final = build_langfuse_tracing(
             exporter=DiscardingSpanExporter()
@@ -648,25 +743,28 @@ def release_langfuse_tracing(tracing: LangfuseTracing, *, grace_seconds: float =
         key, lease = held
         if lease.holders <= 0:
             return
-        _TRACING[key] = replace(lease, holders=lease.holders - 1)
         if lease.holders > 1:
+            _TRACING[key] = replace(lease, holders=lease.holders - 1)
             return
-    if grace_seconds <= 0:
-        _retire_if_unheld(key, tracing)
-        return
-    retire: Final = threading.Timer(grace_seconds, _retire_if_unheld, args=(key, tracing))
-    retire.name = "langfuse-retire"
-    retire.daemon = True
-    retire.start()
-
-
-def _retire_if_unheld(key: _TracingKey, tracing: LangfuseTracing) -> None:
-    with _TRACING_LOCK:
-        lease: Final = _TRACING.get(key)
-        if lease is None or lease.tracing is not tracing or lease.holders > 0:
+        if grace_seconds > 0:
+            retire: Final = threading.Timer(grace_seconds, lambda: _retire_unless_reacquired(key, retire))
+            retire.name = "langfuse-retire"
+            retire.daemon = True
+            _TRACING[key] = _Lease(tracing=tracing, holders=0, retire=retire)
+            retire.start()
             return
         del _TRACING[key]
     tracing.shutdown()
+
+
+def _retire_unless_reacquired(key: _TracingKey, timer: threading.Timer) -> None:
+    """Only the timer the lease still points at may retire it; a re-acquire cancels and clears the pending one."""
+    with _TRACING_LOCK:
+        lease: Final = _TRACING.get(key)
+        if lease is None or lease.retire is not timer:
+            return
+        del _TRACING[key]
+    lease.tracing.shutdown()
 
 
 class _FlushWorker(threading.Thread):
@@ -725,15 +823,16 @@ def build_langfuse_tracing(
         id_generator=_RequestedIdGenerator(),
         span_limits=_SPAN_LIMITS,
     )
+    ledger: Final = _ExportLedger(exporter)
     provider.add_span_processor(
         BatchSpanProcessor(
-            exporter,
+            ledger,
             max_queue_size=_MAX_QUEUE_SIZE,
             max_export_batch_size=flush_at,
             schedule_delay_millis=flush_interval_millis,
         )
     )
-    return LangfuseTracing(provider=provider, tracer=provider.get_tracer(_TRACER_NAME))
+    return LangfuseTracing(provider=provider, tracer=provider.get_tracer(_TRACER_NAME), ledger=ledger)
 
 
 @dataclass(frozen=True, slots=True)
@@ -758,8 +857,9 @@ class LangfuseApiClient:
     over ``LangfuseTracing``; nothing here exports spans.
 
     Prompts are cached for ``LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS`` (60 by default) as the SDK
-    does, refreshed on the request that finds them stale; a refresh that fails keeps serving the
-    stale prompt rather than failing the request, again like the SDK.
+    does. A stale prompt is served at once and refreshed on a background thread, so the request
+    that finds it stale, and the event loop it runs on, never wait for the REST round trip; a
+    refresh that fails keeps serving the stale prompt rather than failing the request, again like the SDK.
     """
 
     def __init__(self, api: LangfuseAPI, *, prompt_cache_ttl_seconds: float) -> None:
@@ -767,6 +867,8 @@ class LangfuseApiClient:
         self.prompt_cache_ttl_seconds: Final = prompt_cache_ttl_seconds
         # mutable-ok: per-client prompt cache, guarded by _lock
         self._prompts: Final[dict[_PromptKey, _CachedPrompt]] = {}
+        # mutable-ok: keys with a refresh in flight, guarded by _lock
+        self._refreshing: Final[set[_PromptKey]] = set()
         self._lock: Final = threading.Lock()
 
     def auth_check(self) -> bool:
@@ -784,18 +886,34 @@ class LangfuseApiClient:
         key: Final[_PromptKey] = (name, version, label)
         with self._lock:
             cached: Final = self._prompts.get(key)
-        if cached is not None and monotonic() - cached.fetched_at < self.prompt_cache_ttl_seconds:
-            return cached.prompt
-        try:
-            fetched: Final = _prompt_client(self.api.prompts.get(name, version=version, label=label))
-        except Exception as error:
-            if cached is None:
-                raise
-            verbose_logger.warning("Langfuse prompt %r refresh failed, serving the cached version: %s", name, error)
-            return cached.prompt
+        if cached is None:
+            return self._fetch(key)
+        if monotonic() - cached.fetched_at >= self.prompt_cache_ttl_seconds:
+            self._refresh_in_background(key)
+        return cached.prompt
+
+    def _fetch(self, key: _PromptKey) -> PromptClient:
+        name, version, label = key
+        fetched: Final = _prompt_client(self.api.prompts.get(name, version=version, label=label))
         with self._lock:
             self._prompts[key] = _CachedPrompt(prompt=fetched, fetched_at=monotonic())
         return fetched
+
+    def _refresh_in_background(self, key: _PromptKey) -> None:
+        with self._lock:
+            if key in self._refreshing:
+                return
+            self._refreshing.add(key)
+        threading.Thread(target=self._refresh, args=(key,), name="langfuse-prompt-refresh", daemon=True).start()
+
+    def _refresh(self, key: _PromptKey) -> None:
+        try:
+            self._fetch(key)
+        except Exception as error:  # noqa: BLE001  # a failed refresh keeps the stale prompt in service
+            verbose_logger.warning("Langfuse prompt %r refresh failed, serving the cached version: %s", key[0], error)
+        finally:
+            with self._lock:
+                self._refreshing.discard(key)
 
 
 def build_langfuse_client(
@@ -819,7 +937,7 @@ def build_langfuse_client(
             x_langfuse_sdk_version=version("langfuse"),
             x_langfuse_public_key=public_key,
             httpx_client=httpx_client,
-            timeout=float(os.getenv("LANGFUSE_TIMEOUT", "5")),
+            timeout=configured_timeout(),
         ),
         prompt_cache_ttl_seconds=float(os.getenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", "60")),
     )

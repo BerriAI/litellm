@@ -1339,6 +1339,42 @@ def test_langfuse_environment_falls_back_to_deployment_env_var(monkeypatch):
     assert _exported_environment(logger) == "deployment-wide"
 
 
+def _exported_release(logger: LangFuseLogger):
+    from langfuse import LangfuseOtelSpanAttributes
+
+    return logger.tracing.provider.resource.attributes.get(LangfuseOtelSpanAttributes.RELEASE)
+
+
+@pytest.mark.parametrize("platform_var", ["GITHUB_SHA", "CI_COMMIT_SHA", "RENDER_GIT_COMMIT", "SOURCE_VERSION"])
+def test_release_falls_back_to_the_deploy_platforms_commit_variable(monkeypatch, platform_var):
+    """Deployments that never set ``LANGFUSE_RELEASE`` still got a release on every trace from the v2 SDK, which
+    read the CI or hosting platform's commit variable; dropping that silently blanked their release filter."""
+    from litellm.integrations.langfuse.langfuse_sdk import _COMMON_RELEASE_ENVS
+
+    for name in ("LANGFUSE_RELEASE", *_COMMON_RELEASE_ENVS):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(platform_var, "deadbeef")
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key=f"pk-release-{platform_var}")
+    assert logger.langfuse_release == "deadbeef"
+    assert _exported_release(logger) == "deadbeef"
+
+
+def test_explicit_langfuse_release_wins_over_the_platform_commit(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_RELEASE", "v9")
+    monkeypatch.setenv("GITHUB_SHA", "deadbeef")
+    logger = _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-release-explicit")
+    assert _exported_release(logger) == "v9"
+
+
+def test_non_string_generation_name_is_exported_as_its_text(monkeypatch):
+    """v2 coerced ``generation_name`` through pydantic; a raw int would now fail OTLP encoding and lose the batch."""
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"generation_name": 12345})
+
+    assert span.name == "12345"
+
+
 def test_dynamic_langfuse_environment_triggers_dynamic_logger():
     from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
     from litellm.types.utils import StandardCallbackDynamicParams
