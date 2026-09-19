@@ -128,6 +128,8 @@ def _redact_responses_api_output(output_items):
             for content_part in output_item.content:
                 if getattr(content_part, "text", None) is not None:
                     content_part.text = REDACTED_BY_LITELLM
+                if getattr(content_part, "refusal", None) is not None:
+                    content_part.refusal = REDACTED_BY_LITELLM
 
         # Redact reasoning items in output array
         if hasattr(output_item, "type") and output_item.type == "reasoning":
@@ -155,6 +157,8 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
             for content_item in output_item["content"]:
                 if isinstance(content_item, dict) and content_item.get("text") is not None:
                     content_item["text"] = redacted_str
+                if isinstance(content_item, dict) and content_item.get("refusal") is not None:
+                    content_item["refusal"] = redacted_str
 
         if output_item.get("type") == "reasoning" and isinstance(output_item.get("summary"), list):
             for summary_item in output_item["summary"]:
