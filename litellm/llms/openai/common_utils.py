@@ -11,7 +11,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, Optional
 from urllib.parse import urlsplit
 
 import httpx
@@ -22,6 +22,7 @@ from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from openai.types.chat.chat_completion_chunk import ChoiceDelta
 from openai.types.completion_usage import CompletionUsage
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -36,6 +37,8 @@ from litellm.llms.custom_httpx.http_handler import (
     http2_enabled,
 )
 
+_PROJECT_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+
 
 def with_openai_project_header(
     data: Mapping[str, object],
@@ -49,7 +52,7 @@ def with_openai_project_header(
     configured_project: Final = data.get("project")
     raw_headers: Final = data.get("extra_headers")
     extra_headers: Final[Mapping[str, str]] = (
-        cast(Mapping[str, str], raw_headers)  # cast-ok: file and batch APIs type headers as string pairs
+        _PROJECT_HEADERS_ADAPTER.validate_python(raw_headers)
         if isinstance(raw_headers, Mapping)
         else MappingProxyType({})
     )
