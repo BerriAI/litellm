@@ -74,12 +74,9 @@ def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
 
 
 def apply_provider_cache_read_default(model_info: ModelInfo, custom_llm_provider: str | None) -> ModelInfo:
-    """Dispatch to the provider's cache-read pricing default; providers without one keep their entry as is."""
-    match custom_llm_provider:
-        case "fireworks_ai":
-            return with_default_cache_read_rate(model_info)
-        case _:
-            return model_info
+    if custom_llm_provider == "fireworks_ai":
+        return with_default_cache_read_rate(model_info)
+    return model_info
 
 
 def _get_token_detail_value(details: object, key: str) -> int | None:
