@@ -1282,9 +1282,8 @@ def test_operation_exception_log_event_always_carries_required_pair():
 
 
 def test_operation_exception_log_event_records_without_the_events_api():
-    """OpenTelemetry removed ``opentelemetry._events`` in 1.44.0, so the plumbing
-    has to build and emit this event through the logs API alone. Importing it with
-    both Events modules absent stands in for that release."""
+    """Importing with both Events modules absent stands in for OpenTelemetry
+    1.44.0, which removed them."""
     import importlib
     import sys
     from unittest.mock import patch
