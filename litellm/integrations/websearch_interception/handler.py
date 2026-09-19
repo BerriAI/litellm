@@ -1354,11 +1354,6 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> tuple[AgenticLoopRequestPatch, tuple[SearchOutcome, ...]]:
         """
         Execute litellm.search() and build follow-up request patch.
-
-        Returns the patch alongside the parallel tuple of search outcomes (one
-        per tool_call). The caller uses these to optionally build
-        Anthropic-native ``web_search_tool_result`` content blocks for the
-        final response and to decide whether a follow-up call is worth making.
         """
 
         # Extract search queries from tool_use blocks
