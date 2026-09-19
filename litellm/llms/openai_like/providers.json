@@ -200,5 +200,14 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "inferenceapis": {
+    "base_url": "https://api.inferenceapis.com/v1",
+    "api_key_env": "INFERENCEAPIS_API_KEY",
+    "api_base_env": "INFERENCEAPIS_API_BASE",
+    "supported_endpoints": [
+      "/v1/chat/completions",
+      "/v1/responses"
+    ]
   }
 }
