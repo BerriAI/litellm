@@ -1,5 +1,74 @@
 {
   "cost_map": {
+    "dashscope/qwen4-max": {
+      "litellm_provider": "dashscope",
+      "mode": "chat",
+      "max_input_tokens": 252000,
+      "max_output_tokens": 65536,
+      "tiered_pricing": [
+        {
+          "range": [0, 32000],
+          "input_cost_per_token": 1.3e-06,
+          "output_cost_per_token": 6.5e-06
+        },
+        {
+          "range": [32000, 128000],
+          "input_cost_per_token": 2.6e-06,
+          "output_cost_per_token": 1.3e-05
+        },
+        {
+          "range": [128000, 252000],
+          "input_cost_per_token": 3.1e-06,
+          "output_cost_per_token": 1.55e-05
+        }
+      ]
+    },
+    "gemini/gemini-3.8-flash-lite": {
+      "litellm_provider": "gemini",
+      "mode": "chat",
+      "input_cost_per_token": 1.1e-07,
+      "output_cost_per_token": 4.4e-07,
+      "input_cost_per_token_above_128k_tokens": 2.2e-07,
+      "output_cost_per_token_above_128k_tokens": 8.8e-07
+    },
+    "openrouter/anthropic/claude-sonnet-5": {
+      "litellm_provider": "openrouter",
+      "mode": "chat",
+      "input_cost_per_token": 3.2e-06,
+      "output_cost_per_token": 1.6e-05
+    },
+    "perplexity/sonar-next": {
+      "litellm_provider": "perplexity",
+      "mode": "chat",
+      "input_cost_per_token": 1.05e-06,
+      "output_cost_per_token": 1.05e-06,
+      "citation_cost_per_token": 2e-06,
+      "search_context_cost_per_query": {
+        "search_context_size_low": 0.005,
+        "search_context_size_medium": 0.008,
+        "search_context_size_high": 0.012
+      }
+    },
+    "deepseek/deepseek-v4-chat": {
+      "litellm_provider": "deepseek",
+      "mode": "chat",
+      "input_cost_per_token": 2.9e-07,
+      "output_cost_per_token": 4.3e-07,
+      "cache_read_input_token_cost": 2.9e-08,
+      "cache_creation_input_token_cost": 0.0
+    },
+    "xai/grok-5": {
+      "litellm_provider": "xai",
+      "mode": "chat",
+      "input_cost_per_token": 1.35e-06,
+      "output_cost_per_token": 2.7e-06,
+      "cache_read_input_token_cost": 2.1e-07,
+      "search_context_cost_per_query": {
+        "search_context_size_low": 0.005,
+        "search_context_size_medium": 0.005,
+        "search_context_size_high": 0.005
+      }
+    },
     "gpt-5.6": {
       "cache_read_input_token_cost": 1.75e-07,
       "input_cost_per_audio_token": 4e-05,
@@ -165,6 +234,7 @@
     "claude-sonnet-5": {
       "cache_creation_input_token_cost": 3.75e-06,
       "cache_creation_input_token_cost_above_1hr": 6e-06,
+      "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
       "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
       "cache_read_input_token_cost": 3e-07,
       "cache_read_input_token_cost_above_200k_tokens": 6e-07,
@@ -27833,6 +27903,427 @@
         "cost_header": false
       },
       "endpoint": "/bedrock/model/$MODEL/converse-stream"
+    }
+    ,
+    {
+      "name": "dashscope-qwen4-max-tiered_input",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "dashscope/qwen4-max",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "tiered input"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "dashscope-tiered-input",
+          "object": "chat.completion",
+          "model": "qwen4-max",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252}
+        }
+      },
+      "expected": {"spend": 0.00507, "input_cost": 0.002392, "output_cost": 0.002678, "prompt_tokens": 1840, "completion_tokens": 412}
+    },
+    {
+      "name": "dashscope-qwen4-max-tiered_boundary_stays_lower_tier",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "dashscope/qwen4-max",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "tier boundary"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "dashscope-tiered-boundary",
+          "object": "chat.completion",
+          "model": "qwen4-max",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {"prompt_tokens": 32000, "completion_tokens": 412, "total_tokens": 32412}
+        }
+      },
+      "expected": {"spend": 0.044278, "input_cost": 0.0416, "output_cost": 0.002678, "prompt_tokens": 32000, "completion_tokens": 412}
+    },
+    {
+      "name": "dashscope-qwen4-max-tiered_second_tier",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "dashscope/qwen4-max",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "tier two"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "dashscope-tiered-second",
+          "object": "chat.completion",
+          "model": "qwen4-max",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {"prompt_tokens": 40000, "completion_tokens": 412, "total_tokens": 40412}
+        }
+      },
+      "expected": {"spend": 0.109356, "input_cost": 0.104, "output_cost": 0.005356, "prompt_tokens": 40000, "completion_tokens": 412}
+    },
+    {
+      "name": "dashscope-qwen4-max-tiered_above_top_range",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "dashscope/qwen4-max",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "top tier"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "dashscope-tiered-top",
+          "object": "chat.completion",
+          "model": "qwen4-max",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {"prompt_tokens": 300000, "completion_tokens": 412, "total_tokens": 300412}
+        }
+      },
+      "expected": {"spend": 0.936386, "input_cost": 0.93, "output_cost": 0.006386, "prompt_tokens": 300000, "completion_tokens": 412}
+    },
+    {
+      "name": "gemini-gemini-3.8-flash-lite-input_below_128k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-3.8-flash-lite",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "base pricing"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [{"content": {"parts": [{"text": "ok"}], "role": "model"}, "finishReason": "STOP", "index": 0}],
+          "usageMetadata": {"promptTokenCount": 1840, "candidatesTokenCount": 412, "totalTokenCount": 2252},
+          "modelVersion": "gemini-3.8-flash-lite"
+        }
+      },
+      "expected": {"spend": 0.00038368, "input_cost": 0.0002024, "output_cost": 0.00018128, "prompt_tokens": 1840, "completion_tokens": 412}
+    },
+    {
+      "name": "gemini-gemini-3.8-flash-lite-input_above_128k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-3.8-flash-lite",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "above threshold"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [{"content": {"parts": [{"text": "ok"}], "role": "model"}, "finishReason": "STOP", "index": 0}],
+          "usageMetadata": {"promptTokenCount": 130000, "candidatesTokenCount": 412, "totalTokenCount": 130412},
+          "modelVersion": "gemini-3.8-flash-lite"
+        }
+      },
+      "expected": {"spend": 0.02896256, "input_cost": 0.0286, "output_cost": 0.00036256, "prompt_tokens": 130000, "completion_tokens": 412}
+    },
+    {
+      "name": "claude-sonnet-5-cache_creation_1h_above_200k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "one hour cache"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg-cache-1h",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [{"type": "text", "text": "ok"}],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 150000,
+            "cache_creation_input_tokens": 60000,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 60000},
+            "cache_read_input_tokens": 0,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.62927,
+        "input_cost": 1.62,
+        "output_cost": 0.00927,
+        "cache_creation_cost": 0.72,
+        "prompt_tokens": 210000,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "openrouter-anthropic-claude-sonnet-5-provider_reported_cost",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "openrouter/anthropic/claude-sonnet-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "reported cost"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "or-reported",
+          "object": "chat.completion",
+          "model": "anthropic/claude-sonnet-5",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252, "cost": 0.0421}
+        }
+      },
+      "expected": {"spend": 0.0421, "input_cost": 0.0, "output_cost": 0.0421, "prompt_tokens": 1840, "completion_tokens": 412}
+    },
+    {
+      "name": "openrouter-anthropic-claude-sonnet-5-token_priced",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "openrouter/anthropic/claude-sonnet-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "token pricing"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "or-token",
+          "object": "chat.completion",
+          "model": "anthropic/claude-sonnet-5",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252}
+        }
+      },
+      "expected": {"spend": 0.01248, "input_cost": 0.005888, "output_cost": 0.006592, "prompt_tokens": 1840, "completion_tokens": 412}
+    },
+    {
+      "name": "perplexity-sonar-next-search_queries_and_citations",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "perplexity/sonar-next",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "search"}],
+        "web_search_options": {"search_context_size": "high"},
+        "stream": false,
+        "allowed_openai_params": ["web_search_options"]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "pplx-search",
+          "object": "chat.completion",
+          "model": "sonar-next",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "citations": [
+            "https://e.co/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "https://e.co/bbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "https://e.co/ccccccccccccccccccccccccccc",
+            "https://e.co/ddddddddddddddddddddddddddd"
+          ],
+          "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252, "num_search_queries": 3}
+        }
+      },
+      "expected": {
+        "spend": 0.0174446,
+        "input_cost": 0.002012,
+        "output_cost": 0.0004326,
+        "tool_usage_cost": 0.015,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "perplexity-sonar-next-no_search",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "perplexity/sonar-next",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "no search"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "pplx-no-search",
+          "object": "chat.completion",
+          "model": "sonar-next",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252}
+        }
+      },
+      "expected": {"spend": 0.0023646, "input_cost": 0.001932, "output_cost": 0.0004326, "prompt_tokens": 1840, "completion_tokens": 412}
+    },
+    {
+      "name": "deepseek-deepseek-v4-chat-prompt_cache_hit",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "deepseek/deepseek-v4-chat",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "cache hit"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "deepseek-cache",
+          "object": "chat.completion",
+          "model": "deepseek-v4-chat",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252,
+            "prompt_cache_hit_tokens": 1200,
+            "prompt_cache_miss_tokens": 640,
+            "prompt_tokens_details": {"cached_tokens": 1200}
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00039756,
+        "input_cost": 0.0002204,
+        "output_cost": 0.00017716,
+        "cache_read_cost": 0.0000348,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "deepseek-deepseek-v4-chat-no_cache_fields_bills_zero_cache",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "deepseek/deepseek-v4-chat",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "no cache"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "deepseek-no-cache",
+          "object": "chat.completion",
+          "model": "deepseek-v4-chat",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252}
+        }
+      },
+      "expected": {
+        "spend": 0.00071076,
+        "input_cost": 0.0005336,
+        "output_cost": 0.00017716,
+        "cache_read_cost": 0.0,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "xai-grok-5-reasoning_folded_into_completion",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "xai/grok-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "reasoning"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "xai-reasoning",
+          "object": "chat.completion",
+          "model": "grok-5",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2552,
+            "completion_tokens_details": {"reasoning_tokens": 300}
+          }
+        }
+      },
+      "expected": {"spend": 0.0044064, "input_cost": 0.002484, "output_cost": 0.0019224, "prompt_tokens": 1840, "completion_tokens": 712}
+    },
+    {
+      "name": "xai-grok-5-live_search",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "xai/grok-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "live search"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "xai-search",
+          "object": "chat.completion",
+          "model": "grok-5",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252,
+            "server_side_tool_usage_details": {"web_search_calls": 2}
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0135964,
+        "input_cost": 0.002484,
+        "output_cost": 0.0011224,
+        "tool_usage_cost": 0.01,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "xai-grok-5-provider_reported_cost",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "xai/grok-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [{"role": "user", "content": "reported xai cost"}],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "xai-reported",
+          "object": "chat.completion",
+          "model": "grok-5",
+          "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252,
+            "cost": 0.0421
+          }
+        }
+      },
+      "expected": {"spend": 0.0421, "input_cost": 0.0, "output_cost": 0.0421, "prompt_tokens": 1840, "completion_tokens": 412}
     }
   ]
 }
