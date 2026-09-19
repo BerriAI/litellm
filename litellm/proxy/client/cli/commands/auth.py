@@ -619,7 +619,23 @@ def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
     return {"x-litellm-cli-poll-secret": poll_secret}
 
 
-def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> CliAuthResult | None:
+def match_requested_team(teams: Sequence[CliTeam], requested_team: str | None) -> str | None:
+    """The team_id of the first team whose id or alias equals ``requested_team``."""
+    if requested_team is None:
+        return None
+    return next(
+        (
+            team_id
+            for team in teams
+            if (team_id := team.get("team_id")) is not None and requested_team in (team_id, team.get("team_alias"))
+        ),
+        None,
+    )
+
+
+def _poll_for_authentication(
+    base_url: str, key_id: str, poll_secret: str, team: str | None = None
+) -> CliAuthResult | None:
     """
     Poll the server for authentication completion and handle team selection.
 
@@ -649,6 +665,7 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Cl
             key_id=key_id,
             poll_secret=poll_secret,
             teams=normalized_teams,
+            requested_team=team,
         )
 
         # Use the team-specific JWT if selection succeeded
@@ -685,7 +702,11 @@ def _poll_for_authentication(base_url: str, key_id: str, poll_secret: str) -> Cl
 
 
 def _handle_team_selection_during_polling(
-    base_url: str, key_id: str, poll_secret: str, teams: list[CliTeam]
+    base_url: str,
+    key_id: str,
+    poll_secret: str,
+    teams: list[CliTeam],
+    requested_team: str | None = None,
 ) -> str | None:
     """
     Handle team selection and re-poll with selected team_id.
@@ -703,7 +724,10 @@ def _handle_team_selection_during_polling(
     click.echo("\n" + "=" * 60)
     click.echo("Select a team for your CLI session...")
 
-    team_id: Final = _render_and_prompt_for_team_selection(teams)
+    matched_team_id: Final = match_requested_team(teams, requested_team)
+    if requested_team is not None and matched_team_id is None:
+        click.echo(f"Team '{requested_team}' was not found among your teams; select one below.")
+    team_id: Final = matched_team_id or _render_and_prompt_for_team_selection(teams)
 
     if not team_id:
         click.echo("No team selected.")
@@ -842,9 +866,9 @@ def _replace_stored_token(record: CliTokenData, http: Http, vault: SecretVault) 
     return stored
 
 
-def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
+def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault, team: str | None) -> None:
     http: Final = requests.Session()
-    credential: Final = run_pkce_login(base_url, http, echo=click.echo)
+    credential: Final = run_pkce_login(base_url, http, echo=click.echo, team=team)
     if isinstance(credential, PkceFailure):
         click.echo(f"Authentication failed: {credential.reason}")
         return
@@ -866,14 +890,26 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     "--pkce",
     is_flag=True,
     default=False,
+    envvar="LITELLM_PROXY_LOGIN_PKCE",
+    show_envvar=True,
     help=(
         "Sign in with OAuth authorization code + PKCE through your system browser (loopback redirect), "
         "with a refresh token that renews the key automatically. Requires a proxy that serves "
         "/.well-known/litellm-cli-auth."
     ),
 )
+@click.option(
+    "--team",
+    envvar="LITELLM_PROXY_TEAM",
+    show_envvar=True,
+    default=None,
+    help=(
+        "Team id or alias to attribute this login to. Skips the team pick when it matches one of your "
+        "teams; otherwise you pick as usual."
+    ),
+)
 @click.pass_context
-def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
+def login(ctx: click.Context, config_claude: bool, pkce: bool, team: str | None) -> None:
     """Login to LiteLLM proxy using SSO authentication"""
     from litellm.constants import LITELLM_CLI_SOURCE_IDENTIFIER
 
@@ -888,7 +924,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
 
     try:
         if pkce:
-            _pkce_login(base_url, config_claude, context_secret_vault(ctx))
+            _pkce_login(base_url, config_claude, context_secret_vault(ctx), team)
             return
         cli_sso_flow: Final = _start_cli_sso_flow(base_url=base_url)
         key_id: Final = cli_sso_flow["login_id"]
@@ -919,7 +955,9 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool) -> None:
         # Poll for authentication completion
         click.echo("Waiting for authentication...")
 
-        auth_result: Final = _poll_for_authentication(base_url=base_url, key_id=key_id, poll_secret=poll_secret)
+        auth_result: Final = _poll_for_authentication(
+            base_url=base_url, key_id=key_id, poll_secret=poll_secret, team=team
+        )
 
         if auth_result:
             api_key: Final = auth_result["api_key"]
