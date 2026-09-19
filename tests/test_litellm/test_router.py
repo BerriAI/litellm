@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import dataclasses
 import functools
 import gc
 import json
@@ -16886,6 +16887,24 @@ def test_deployment_id_grant_restricts_routing_to_granted_deployment():
             )
             seen.add(response.choices[0].message.content)
         assert seen == {"from-azure"}
+
+
+def test_deployment_id_grant_filter_does_not_import_proxy_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    @dataclasses.dataclass(frozen=True, slots=True)
+    class Grants:
+        models: tuple[str, ...]
+        team_models: tuple[str, ...]
+
+    router = _same_name_router_for_deployment_id_grants()
+    monkeypatch.setitem(sys.modules, "fastapi", None)
+    monkeypatch.delitem(sys.modules, "litellm.proxy._types", raising=False)
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="gpt-4",
+        request_kwargs={"metadata": {"user_api_key_auth": Grants(models=("azure-gpt-4-id",), team_models=())}},
+    )
+
+    assert [d["model_info"]["id"] for d in deployments] == ["azure-gpt-4-id"]
 
 
 def test_public_name_grant_is_not_narrowed_by_deployment_id_grant():

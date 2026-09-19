@@ -5898,7 +5898,7 @@ def test_resolve_provider_from_deployment_falls_back_to_pre_alias():
     deployment.litellm_params.model = "bedrock/anthropic.claude-sonnet-4-6"
     deployment.litellm_params.custom_llm_provider = None
 
-    def lookup(model_group_name):
+    def lookup(model_group_name, user_api_key_auth=None):
         if model_group_name == "pre-alias-name":
             return deployment
         return None
@@ -5907,6 +5907,31 @@ def test_resolve_provider_from_deployment_falls_back_to_pre_alias():
 
     result = _resolve_provider_from_deployment(router, "post-alias-name", pre_alias_model_name="pre-alias-name")
     assert result == "bedrock"
+
+
+def test_resolve_provider_from_deployment_follows_the_granted_deployment():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "key1"},
+                "model_info": {"id": "openai-gpt-4-id"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "azure/gpt-4", "api_key": "key2", "api_base": "https://x"},
+                "model_info": {"id": "azure-gpt-4-id"},
+            },
+        ]
+    )
+
+    assert _resolve_provider_from_deployment(router, "gpt-4") == "openai"
+    assert (
+        _resolve_provider_from_deployment(
+            router, "gpt-4", user_api_key_dict=UserAPIKeyAuth(api_key="k", models=["azure-gpt-4-id"])
+        )
+        == "azure"
+    )
 
 
 def test_apply_overrides_multi_provider_default_picks_correct_provider(

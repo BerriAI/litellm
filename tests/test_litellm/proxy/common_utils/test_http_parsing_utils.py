@@ -20,6 +20,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_parsed_body,
     _safe_get_request_query_params,
     _safe_set_request_parsed_body,
+    check_file_size_under_limit,
     coerce_numeric_form_fields,
     get_form_data,
     get_request_body,
@@ -1203,3 +1204,49 @@ class TestCoerceNumericFormFields:
             numeric_fields=self.numeric_fields,
         )
         assert result == {"n": 3, "temperature": None, "image": buffer}
+
+
+def test_check_file_size_under_limit_uses_the_granted_deployment(monkeypatch):
+    from starlette.datastructures import UploadFile
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "whisper",
+                "litellm_params": {"model": "openai/whisper-1", "api_key": "key1"},
+                "model_info": {"id": "openai-whisper-id"},
+            },
+            {
+                "model_name": "whisper",
+                "litellm_params": {
+                    "model": "azure/whisper",
+                    "api_key": "key2",
+                    "api_base": "https://x",
+                    "max_file_size_mb": 0.000001,
+                },
+                "model_info": {"id": "azure-whisper-id"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    upload = UploadFile(filename="audio.mp3", file=io.BytesIO(b"\x00" * 16), size=16)
+    request_data = {"model": "whisper"}
+
+    assert check_file_size_under_limit(request_data, upload, ["whisper"]) is True
+    assert (
+        check_file_size_under_limit(
+            request_data, upload, ["whisper"], user_api_key_dict=UserAPIKeyAuth(api_key="k", models=["whisper"])
+        )
+        is True
+    )
+    with pytest.raises(ProxyException, match="File size is too large"):
+        check_file_size_under_limit(
+            request_data,
+            upload,
+            ["whisper"],
+            user_api_key_dict=UserAPIKeyAuth(api_key="k", models=["azure-whisper-id"]),
+        )

@@ -244,6 +244,7 @@ from litellm.types.router import (
     AllowedFailsPolicy,
     AssistantsTypedDict,
     AutoRouterCapabilityLimit,
+    CallerModelGrants,
     ConsumedRequestTagsStamp,
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
@@ -12723,9 +12724,7 @@ class Router:
         deployments: Sequence[Mapping[str, object]],
         user_api_key_auth: object,
     ) -> list[Mapping[str, object]]:
-        from litellm.proxy._types import UserAPIKeyAuth
-
-        if not deployments or not isinstance(user_api_key_auth, UserAPIKeyAuth):
+        if not deployments or not isinstance(user_api_key_auth, CallerModelGrants):
             return list(deployments)
 
         model_group_ids: Final = frozenset(self.get_model_ids(model_name=model))

@@ -1553,7 +1553,7 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     assert resp.get("max_output_tokens") == 4096
     # lookup happened by the internal routing key, not the public name
     router.get_deployment_by_model_group_name.assert_called_once_with(
-        "model_name_team-abc-123_4a6b8"
+        "model_name_team-abc-123_4a6b8", user_api_key_auth=key
     )
 
 

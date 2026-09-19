@@ -11051,7 +11051,9 @@ async def model_info(
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
 
-    deployment: Final = llm_router.get_deployment_by_model_group_name(resolved_model_id)
+    deployment: Final = llm_router.get_deployment_by_model_group_name(
+        resolved_model_id, user_api_key_auth=user_api_key_dict
+    )
     if deployment is None:
         raise HTTPException(
             status_code=404,
@@ -11495,7 +11497,9 @@ async def embeddings(
             # check if provider accept list of tokens as input - e.g. for langchain integration
             if llm_router is not None and data.get("model") in router_model_names:
                 # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
-                deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=data["model"])
+                deployment: Final = llm_router.get_deployment_by_model_group_name(
+                    model_group_name=data["model"], user_api_key_auth=user_api_key_dict
+                )
                 if deployment is not None:
                     litellm_params: Final = deployment.get("litellm_params", {}) or {}
                     litellm_model: Final = litellm_params.get("model", "")
@@ -11882,6 +11886,7 @@ async def audio_transcriptions(
             request_data=data,
             file=file,
             router_model_names=router_model_names,
+            user_api_key_dict=user_api_key_dict,
         )
 
         file_content: Final = await file.read()
