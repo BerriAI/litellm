@@ -15,10 +15,7 @@ from litellm.llms.chatgpt.common_utils import (
 def test_explicit_session_ids_win():
     assert get_chatgpt_session_id({"session_id": "s", "prompt_cache_key": "k"}) == "s"
     assert get_chatgpt_session_id({"litellm_session_id": "ls", "prompt_cache_key": "k"}) == "ls"
-    assert (
-        get_chatgpt_session_id({"metadata": {"session_id": "ms"}, "prompt_cache_key": "k"})
-        == "ms"
-    )
+    assert get_chatgpt_session_id({"metadata": {"session_id": "ms"}, "prompt_cache_key": "k"}) == "ms"
 
 
 def test_prompt_cache_key_becomes_session_id():

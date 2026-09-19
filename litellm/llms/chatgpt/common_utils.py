@@ -281,8 +281,7 @@ def get_chatgpt_session_id(litellm_params: object) -> str | None:
     # carry internal metadata under the latter. Generated ids are skipped,
     # not returned, so a caller-supplied stable prompt_cache_key still wins.
     generated: Final = any(
-        isinstance(params.get(name), dict)
-        and params[name].get(SESSION_ID_GENERATED_METADATA_KEY)
+        isinstance(params.get(name), dict) and params[name].get(SESSION_ID_GENERATED_METADATA_KEY)
         for name in ("metadata", "litellm_metadata")
     )
     if not generated:
