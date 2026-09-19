@@ -38,6 +38,14 @@ const SETTINGS: Setting[] = [
     stored_in_db: null,
     premium_field: false,
   },
+  {
+    field_name: "daily_spend_per_user_threshold",
+    field_description: "Daily spend threshold per user",
+    field_type: "Float",
+    field_value: 5.5,
+    stored_in_db: true,
+    premium_field: false,
+  },
 ];
 
 const renderForm = (
@@ -170,6 +178,19 @@ describe("DynamicForm change notifications", () => {
     expect(handleInputChange).toHaveBeenCalledWith("daily_report_frequency", 128);
   });
 
+  it("renders a Float field as a decimal-friendly number input and reports changes as numbers", async () => {
+    const user = userEvent.setup();
+    const { handleInputChange } = renderForm();
+
+    const input = screen.getByDisplayValue("5.5");
+    expect(input).toHaveAttribute("type", "number");
+    expect(input).toHaveAttribute("step", "any");
+
+    await user.type(input, "1");
+
+    expect(handleInputChange).toHaveBeenCalledWith("daily_spend_per_user_threshold", 5.51);
+  });
+
   it("reports a reset with the field name and its row index", async () => {
     const user = userEvent.setup();
     const { handleResetField } = renderForm();
@@ -216,7 +237,7 @@ describe("DynamicForm presentation", () => {
 
     expect(screen.getByText("daily_report_frequency")).toBeInTheDocument();
     expect(screen.getByText("How often the report runs")).toBeInTheDocument();
-    expect(screen.getByText("In DB")).toBeInTheDocument();
+    expect(screen.getAllByText("In DB")).toHaveLength(2);
     expect(screen.getByText("In Config")).toBeInTheDocument();
     expect(screen.getByText("Not Set")).toBeInTheDocument();
   });

@@ -148,7 +148,7 @@ make lint
 
 Individual linting commands:
 ```bash
-make format-check       # Check Black formatting
+make format-check       # Check ruff format formatting
 make lint-ruff          # Run Ruff linting
 make lint-basedpyright  # Run basedpyright type checking
 make check-circular-imports    # Check for circular imports
@@ -160,14 +160,14 @@ Apply formatting (auto-fixes issues):
 make format
 ```
 
-> **Black formatting is enforced in CI.** All PRs must pass the Black formatting check.
+> **Formatting is enforced in CI.** All PRs must pass the `ruff format --check` step.
 >
-> - **AI coding agents** (Claude Code, Copilot, Cursor, etc.): `AGENTS.md` and `CLAUDE.md` instruct agents to run `poetry run black .` before committing.
-> - **VS Code users**: Install the [Black Formatter extension](https://marketplace.visualstudio.com/items?itemName=ms-python.black-formatter) and enable format-on-save:
+> - **AI coding agents** (Claude Code, Copilot, Cursor, etc.): follow `AGENTS.md` and run `make format` before committing.
+> - **VS Code users**: Install the [Ruff extension](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff) and enable format-on-save:
 >   ```json
 >   {
 >     "[python]": {
->       "editor.defaultFormatter": "ms-python.black-formatter",
+>       "editor.defaultFormatter": "charliermarsh.ruff",
 >       "editor.formatOnSave": true
 >     }
 >   }
@@ -197,8 +197,8 @@ make help                       # Show all available commands
 make install-dev               # Install development dependencies
 make install-proxy-dev         # Install proxy development dependencies
 make install-test-deps         # Install the full local test environment
-make format                    # Apply Black code formatting
-make format-check              # Check Black formatting (matches CI)
+make format                    # Apply ruff format code formatting
+make format-check              # Check ruff format formatting (matches CI)
 make lint                      # Run all linting checks
 make test-unit                 # Run unit tests
 make test-integration          # Run integration tests
@@ -210,8 +210,7 @@ make test-unit-helm            # Run Helm unit tests
 LiteLLM follows the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
 
 Our automated quality checks include:
-- **Black** for consistent code formatting
-- **Ruff** for linting and code quality
+- **Ruff** for formatting, linting, and code quality
 - **basedpyright** for static type checking
 - **Circular import detection**
 - **Import safety validation**
@@ -315,10 +314,12 @@ Ensure the UI builds successfully before submitting your PR:
 npm run build
 ```
 
+Local lint and budget checks follow origin's current default branch. They refresh it from the remote instead of trusting cached `origin/HEAD`. For an intentional comparison against another branch or commit, use `make check BASE_REF=<ref>` or the standalone gate's `--base <ref>` option. An explicit ref can also be used offline once it has been fetched locally. Without an override, unavailable remote metadata stops the check
+
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
-2. **Create a PR**: Go to GitHub and open a pull request against [`litellm_internal_staging`](https://github.com/BerriAI/litellm/tree/litellm_internal_staging), which is the default base branch. Do not target `main`.
+2. **Create a PR**: Go to GitHub and open a pull request against the repository's current default branch. Run `python3 scripts/default_branch.py --branch` to check its name
 3. **Fill out the PR template**: Provide clear description of changes
 4. **Wait for review**: Maintainers will review and provide feedback
 5. **Address feedback**: Make requested changes and push updates

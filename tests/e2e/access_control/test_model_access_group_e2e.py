@@ -23,7 +23,7 @@ from access_control_client import (
     MODEL_ACCESS_DENIED_MARKER,
     TEAM_MODEL_ACCESS_DENIED_MARKER,
 )
-from e2e_config import unique_marker
+from e2e_config import settle_propagation, unique_marker
 from lifecycle import ResourceManager
 from models import (
     ChatResponse,
@@ -31,6 +31,7 @@ from models import (
     LiteLLMParamsBody,
     ModelInfoBody,
     ModelNewBody,
+    TeamInfoResponse,
 )
 
 pytestmark = pytest.mark.e2e
@@ -111,24 +112,6 @@ def _await_group_members(client: AccessControlClient, access_group: str, expecte
     )
 
 
-def _await_team_allowlist(client: AccessControlClient, grant_key: str, access_group: str) -> None:
-    """Registering a team-scoped deployment appends its public name to the team's
-    allow-list, and a wildcard sitting there directly would grant the model under test
-    on its own. Poll a denial until the message enumerates the allow-list the test
-    means to exercise: the group, and nothing else."""
-    allowlist: Final = f"models=['{access_group}']"
-    deadline = time.monotonic() + client.proxy.poll_timeout
-    body = ""
-    while time.monotonic() < deadline:
-        body = client.chat_status(
-            grant_key, UNCOVERED_OPENAI_MODEL, f"{PROMPT} {unique_marker()}", MAX_COMPLETION_TOKENS
-        ).body
-        if allowlist in body:
-            return
-        time.sleep(client.proxy.poll_interval)
-    pytest.fail(f"the team's allow-list never settled to {allowlist}; last denial read {body[:300]}")
-
-
 @pytest.fixture(scope="module")
 def grouped(client: AccessControlClient) -> Iterator[GroupedDeployments]:
     marker: Final = unique_marker()
@@ -172,9 +155,15 @@ def team_grant(client: AccessControlClient) -> Iterator[TeamGrant]:
         ),
         listed_for=key,
     )
-    client.set_team_models(team_id, team_alias, [access_group])
     try:
-        _await_team_allowlist(client, key, access_group)
+        client.set_team_models(team_id, team_alias, [access_group])
+        written_at: Final = time.monotonic()
+        _ = client.proxy.read_body_back_everywhere(
+            f"/team/info?team_id={team_id}",
+            TeamInfoResponse,
+            settled=lambda response: response.team_id == team_id and response.team_info.models == [access_group],
+        )
+        settle_propagation(written_at)
         yield TeamGrant(access_group=access_group, team_id=team_id, key=key)
     finally:
         client.proxy.delete_model(model_id)

@@ -184,6 +184,7 @@ LLM_CONFIG_NAMES: Final = (
     "VertexAIAnthropicConfig",
     "VertexAILlama3Config",
     "VertexAIAi21Config",
+    "VertexAIMistralConfig",
     "AmazonCohereChatConfig",
     "AmazonBedrockGlobalConfig",
     "AmazonAI21Config",
@@ -234,9 +235,11 @@ LLM_CONFIG_NAMES: Final = (
     "OpenAIResponsesAPIConfig",
     "AzureOpenAIResponsesAPIConfig",
     "AzureOpenAIOSeriesResponsesAPIConfig",
+    "AzureAIResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "HostedVLLMResponsesAPIConfig",
+    "FireworksAIResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
@@ -310,6 +313,8 @@ LLM_CONFIG_NAMES: Final = (
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
     "DashScopeChatConfig",
+    "QwenCloudChatConfig",
+    "QwenAIPlatformChatConfig",
     "ModelScopeChatConfig",
     "MoonshotChatConfig",
     "DockerModelRunnerChatConfig",
@@ -767,6 +772,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.vertex_ai.vertex_ai_partner_models.ai21.transformation",
         "VertexAIAi21Config",
     ),
+    "VertexAIMistralConfig": (
+        ".llms.vertex_ai.vertex_ai_partner_models.mistral.transformation",
+        "VertexAIMistralConfig",
+    ),
     "AmazonCohereChatConfig": (
         ".llms.bedrock.chat.invoke_handler",
         "AmazonCohereChatConfig",
@@ -943,6 +952,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.azure.responses.o_series_transformation",
         "AzureOpenAIOSeriesResponsesAPIConfig",
     ),
+    "AzureAIResponsesAPIConfig": (
+        ".llms.azure_ai.responses.transformation",
+        "AzureAIResponsesAPIConfig",
+    ),
     "XAIResponsesAPIConfig": (
         ".llms.xai.responses.transformation",
         "XAIResponsesAPIConfig",
@@ -954,6 +967,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "HostedVLLMResponsesAPIConfig": (
         ".llms.hosted_vllm.responses.transformation",
         "HostedVLLMResponsesAPIConfig",
+    ),
+    "FireworksAIResponsesAPIConfig": (
+        ".llms.fireworks_ai.responses.transformation",
+        "FireworksAIResponsesAPIConfig",
     ),
     "VolcEngineResponsesAPIConfig": (
         ".llms.volcengine.responses.transformation",
@@ -1171,6 +1188,14 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "DashScopeChatConfig": (
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
+    ),
+    "QwenCloudChatConfig": (
+        ".llms.dashscope.qwencloud",
+        "QwenCloudChatConfig",
+    ),
+    "QwenAIPlatformChatConfig": (
+        ".llms.dashscope.qwen_ai_platform",
+        "QwenAIPlatformChatConfig",
     ),
     "GDCGeminiConfig": (
         ".llms.gdc.chat.transformation",

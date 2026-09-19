@@ -79,7 +79,7 @@ Before publishing to the Terraform Registry:
 
 ## What a change needs
 
-1. **Land it in `BerriAI/litellm`.** Open a PR against `litellm_internal_staging` with the source change and a `CHANGELOG.md` entry under `[Unreleased]`. CI runs `gofmt`, `go vet`, build, tests and the endpoint-drift audit. A change that breaks existing configurations or state must say so in the changelog: the version number cannot signal it any more
+1. **Land it in `BerriAI/litellm`.** Open a PR against the repository's current default branch with the source change and a `CHANGELOG.md` entry under `[Unreleased]`. CI runs `gofmt`, `go vet`, build, tests and the endpoint-drift audit. A change that breaks existing configurations or state must say so in the changelog: the version number cannot signal it any more
 2. **Wait for the next LiteLLM release.** The nightly dev release carries it within a day; it reaches a stable version on the next stable cut
 3. **Verify** (optional): the version appears at https://registry.terraform.io/providers/BerriAI/litellm and https://github.com/BerriAI/terraform-provider-litellm/releases. If the tag is on the mirror but there is no release, the goreleaser run failed: https://github.com/BerriAI/terraform-provider-litellm/actions
 

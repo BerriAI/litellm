@@ -1,6 +1,6 @@
 name: Publish basedpyright base counts
 
-# Every commit on litellm_internal_staging is some branch's future merge-base.
+# Every commit on main or litellm_internal_staging can become a future merge-base.
 # Publishing its per-rule basedpyright counts as an artifact lets
 # scripts/type_check_gate.py download them in seconds instead of paying a
 # 60-110s second basedpyright pass on every fresh worktree or moved merge-base.
@@ -10,13 +10,13 @@ name: Publish basedpyright base counts
 on:
   push:
     branches:
+      - main
       - litellm_internal_staging
   workflow_dispatch:
     inputs:
       ref:
-        description: "Ref to compute and publish base counts for"
+        description: "Ref to compute and publish base counts for (defaults to the workflow run's commit)"
         required: false
-        default: litellm_internal_staging
 
 permissions:
   contents: read

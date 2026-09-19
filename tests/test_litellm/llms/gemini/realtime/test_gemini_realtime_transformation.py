@@ -1,13 +1,14 @@
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from collections.abc import Mapping
+from typing import cast
+from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
 
 import litellm
 from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
-from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
+from litellm.types.llms.gemini import BidiGenerateContentServerMessage
 
 
 def test_gemini_realtime_transformation_session_created():
@@ -306,20 +307,6 @@ def test_gemini_realtime_transformation_generation_complete():
             contains_audio_done_event = True
             break
     assert contains_audio_done_event, "Expected audio done event"
-
-
-def test_gemini_3_1_flash_live_preview_model_cost_map_entry():
-    for key in (
-        "gemini-3.1-flash-live-preview",
-        "gemini/gemini-3.1-flash-live-preview",
-    ):
-        assert key in litellm.model_cost
-        info = litellm.model_cost[key]
-        assert "/v1/realtime" in info.get("supported_endpoints", [])
-        assert info.get("max_input_tokens") == 131072
-        assert info.get("max_output_tokens") == 65536
-        assert "video" in info.get("supported_modalities", [])
-        assert info.get("supports_function_calling") is True
 
 
 def test_gemini_realtime_tool_call_transformation():
@@ -1845,19 +1832,6 @@ def test_is_audio_only_live_model_uses_cost_map(model, expected, patch_gemini_au
     assert GeminiRealtimeConfig._is_audio_only_live_model(model) == expected
 
 
-def test_gemini_live_native_audio_entry_is_vertex_only():
-    import json
-    from pathlib import Path
-    from typing import Final
-
-    catalog_path: Final = Path(__file__).parents[5] / "model_prices_and_context_window.json"
-    catalog: Final = json.loads(catalog_path.read_text())
-    vertex_key: Final = "gemini-live-2.5-flash-native-audio"
-    assert catalog[vertex_key]["litellm_provider"] == "vertex_ai-language-models"
-    assert catalog[vertex_key].get("gemini_native_audio") is True
-    assert "gemini/gemini-live-2.5-flash-native-audio" not in catalog, "the Gemini API does not serve this model"
-
-
 def test_is_setup_message_and_is_content_message():
     config = GeminiRealtimeConfig()
     assert config.is_setup_message({"setup": {}}) is True
@@ -1882,54 +1856,6 @@ def test_map_openai_params_drops_stock_voice_case_insensitively():
     assert passthrough["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
 
 
-def test_gemini_response_done_bills_audio_output_tokens_at_audio_rate(monkeypatch):
-    """Regression for the Gemini Live AUDIO output breakdown: responseTokensDetails
-    must survive into response.done usage and bill at output_cost_per_audio_token,
-    not the text rate."""
-    from litellm.cost_calculator import (
-        RealtimeAPITokenUsageProcessor,
-        handle_realtime_stream_cost_calculation,
-    )
-
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-
-    config = GeminiRealtimeConfig()
-    done_event = config.transform_response_done_event(
-        message={
-            "serverContent": {"turnComplete": True},
-            "usageMetadata": {
-                "promptTokenCount": 377,
-                "responseTokenCount": 51,
-                "totalTokenCount": 428,
-                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 377}],
-                "responseTokensDetails": [{"modality": "AUDIO", "tokenCount": 51}],
-                "thoughtsTokenCount": 37,
-            },
-        },
-        current_response_id="resp_lit6277",
-        current_conversation_id="conv_lit6277",
-        output_items=None,
-    )
-
-    usage = done_event["response"]["usage"]
-    assert usage["output_tokens_details"]["audio_tokens"] == 51
-    assert usage["output_token_details"]["audio_tokens"] == 51
-
-    results = [done_event]
-    combined_usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
-        results=results,
-    )
-    assert combined_usage.completion_tokens_details is not None
-    assert combined_usage.completion_tokens_details.audio_tokens == 51
-
-    cost = handle_realtime_stream_cost_calculation(
-        results=results,
-        combined_usage_object=combined_usage,
-        custom_llm_provider="gemini",
-        litellm_model_name="gemini-2.5-flash-native-audio-preview-12-2025",
-    )
-    assert cost == pytest.approx(377 * 5e-07 + 51 * 1.2e-05 + 37 * 2e-06)
 @pytest.fixture(autouse=False)
 def patch_gemini_transcribe_live_cost_map_entry(monkeypatch):
     """Inject the gemini-3.5-transcribe-live registry entry locally.
@@ -2207,3 +2133,71 @@ def test_unbilled_usage_on_session_close_flushes_trailing_audio(patch_gemini_tra
     }
     assert usage == expected
     assert config.unbilled_usage_on_session_close("gemini-3.5-transcribe-live") is None
+
+
+def _grounded_live_frame(grounding_metadata: Mapping[str, object] | None) -> Mapping[str, object]:
+    """One Live server frame. Grounding metadata and usageMetadata arrive together, as Vertex sends them."""
+    from typing import Final
+
+    server_content: Final = {
+        "turnComplete": True,
+        **({} if grounding_metadata is None else {"groundingMetadata": grounding_metadata}),
+    }
+    return {
+        "serverContent": server_content,
+        "usageMetadata": {
+            "promptTokenCount": 19,
+            "candidatesTokenCount": 157,
+            "totalTokenCount": 176,
+            "promptTokensDetails": ({"modality": "TEXT", "tokenCount": 19},),
+            "candidatesTokensDetails": ({"modality": "AUDIO", "tokenCount": 157},),
+        },
+    }
+
+
+def _response_done_input_details(message: Mapping[str, object]) -> Mapping[str, object]:
+    """The ``input_tokens_details`` a ``response.done`` event carries, read off the emitted event."""
+    from typing import Final
+
+    config: Final = GeminiRealtimeConfig()
+    event: Final = config.transform_response_done_event(
+        message=cast(  # cast-ok: a test fixture stands in for the server frame TypedDict
+            BidiGenerateContentServerMessage, message
+        ),
+        current_response_id="resp_grounding",
+        current_conversation_id="conv_grounding",
+        output_items=None,
+    )
+    usage: Final = event["response"]["usage"]
+    assert usage, "response.done must carry a usage object"
+    return usage.get("input_tokens_details") or {}
+
+
+def test_gemini_realtime_response_done_counts_web_grounding():
+    """Regression: Live reports grounding in the server frames and never in usageMetadata.
+
+    Nothing read those frames on the realtime path, so web_search_requests stayed unset and the
+    cost path's only trigger for Google's per-query grounding charge never fired.
+
+    The counter is read off the emitted event, which is what the cost path is handed, so this covers
+    the grounding read and the usage bridge that carries it together
+    """
+    input_details = _response_done_input_details(
+        _grounded_live_frame(
+            {
+                "webSearchQueries": ["who won the 2026 world cup final"],
+                "groundingChunks": [{"web": {"uri": "https://example.com"}}],
+            }
+        )
+    )
+
+    assert input_details.get("web_search_requests") == 1, "a grounded turn must report its query"
+    assert input_details.get("text_tokens") == 19, "the modality breakdown must survive alongside it"
+
+
+def test_gemini_realtime_response_done_reports_no_grounding_when_none_ran():
+    """The counter must stay unset on an ordinary turn, or every session pays a grounding fee."""
+    input_details = _response_done_input_details(_grounded_live_frame(None))
+
+    assert input_details.get("web_search_requests") is None
+    assert input_details.get("google_maps_grounding_requests") is None

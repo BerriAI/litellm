@@ -35,7 +35,44 @@ async function findKeyByAlias(page: PlaywrightPage, alias: string): Promise<Reco
   return body.keys.find((row) => row.key_alias === alias);
 }
 
+/** A member this test adds itself, so removing it costs the suite nothing on a retry or a re-run. */
+async function addRemovableMember(page: PlaywrightPage, registerForCleanup: string[]): Promise<string> {
+  const userId = `e2e-removable-${Date.now()}`;
+  // Claimed before the call: /user/new can persist the user and still answer non-2xx, and the id is
+  // ours either way, so registering it up front is what no failure path can skip.
+  registerForCleanup.push(userId);
+  const created = await page.request.post("/user/new", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: { user_id: userId, user_role: "internal_user", auto_create_key: false },
+  });
+  expect(created.ok(), `POST /user/new failed (${created.status()}): ${await created.text()}`).toBe(true);
+
+  const added = await page.request.post("/team/member_add", {
+    headers: { Authorization: `Bearer ${masterKey()}` },
+    data: { team_id: E2E_TEAM_CRUD_ID, member: { user_id: userId, role: "user" } },
+  });
+  expect(added.ok(), `POST /team/member_add failed (${added.status()}): ${await added.text()}`).toBe(true);
+  return userId;
+}
+
 test.describe("Team Admin", () => {
+  const createdMembers: string[] = [];
+
+  test.afterEach(async ({ page }) => {
+    // Runs on the failure path too, which a call at the end of the test body would not. Ids are
+    // claimed before the user is created, so the delete is attempted unconditionally and only its
+    // own 404 counts as never persisted; any other answer is a cleanup failure worth reporting
+    // rather than a reason to leave the user behind.
+    for (const userId of createdMembers.splice(0)) {
+      const deleted = await page.request.post("/user/delete", {
+        headers: { Authorization: `Bearer ${masterKey()}` },
+        data: { user_ids: [userId] },
+      });
+      const settled = deleted.ok() || deleted.status() === 404;
+      expect(settled, `POST /user/delete for ${userId} (${deleted.status()}): ${await deleted.text()}`).toBe(true);
+    }
+  });
+
   test.use({ storageState: TEAM_ADMIN_STORAGE_PATH });
 
   test("Team admin can see all team keys including internal user keys", async ({ page }) => {
@@ -95,6 +132,10 @@ test.describe("Team Admin", () => {
   });
 
   test("Team admin can remove a member from their team", async ({ page }) => {
+    // Removing the seeded member leaves nothing for the next attempt, so the retries CI runs with
+    // are guaranteed to fail and the suite cannot run twice against one database. Bring our own.
+    const memberId = await addRemovableMember(page, createdMembers);
+
     await navigateToPage(page, Page.Teams);
     await dismissFeedbackPopup(page);
 
@@ -102,9 +143,9 @@ test.describe("Team Admin", () => {
 
     await page.getByRole("tab", { name: "Members" }).click();
 
-    // Seeded members appear in the roster by user_id (members_with_roles has no
-    // email), so match the row on the user_id rather than the email.
-    const row = page.locator("tr", { hasText: "e2e-removable-member" }).first();
+    // Members appear in the roster by user_id (members_with_roles has no email), so match
+    // the row on the user_id rather than the email.
+    const row = page.locator("tr", { hasText: memberId }).first();
     await expect(row).toBeVisible({ timeout: 10_000 });
     await row.getByTestId("delete-member").click();
 
@@ -117,7 +158,7 @@ test.describe("Team Admin", () => {
     // Removing the wrong member is exactly what a success toast hides, so pin both halves.
     expect(remove.team_id, "delete targets the team being viewed").toBe(E2E_TEAM_CRUD_ID);
     expect([remove.user_id, remove.user_email], "delete identifies the member whose row was clicked").toContain(
-      "e2e-removable-member",
+      memberId,
     );
 
     await expect(page.getByText("Team member removed successfully").first()).toBeVisible({ timeout: 10_000 });
@@ -128,7 +169,7 @@ test.describe("Team Admin", () => {
         message: "removed member is still on the team",
         timeout: 15_000,
       })
-      .not.toContain("e2e-removable-member");
+      .not.toContain(memberId);
   });
 
   test("Team admin sees all team models in the Playground model dropdown", async ({ page, request }) => {

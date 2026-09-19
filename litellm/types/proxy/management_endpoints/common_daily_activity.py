@@ -32,6 +32,8 @@ class SpendMetrics(BaseModel):
     successful_requests: int = Field(default=0)
     failed_requests: int = Field(default=0)
     api_requests: int = Field(default=0)
+    total_response_time_ms: int = Field(default=0)
+    timed_requests: int = Field(default=0)
 
 
 class MetricBase(BaseModel):
@@ -43,6 +45,8 @@ class KeyMetadata(BaseModel):
 
     key_alias: str | None = None
     team_id: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
 
 
 class KeyMetricWithMetadata(MetricBase):
@@ -91,9 +95,21 @@ class DailySpendMetadata(BaseModel):
     total_prompt_caching_savings_spend: float = Field(default=0.0)
     total_gateway_injected_caching_savings_spend: float = Field(default=0.0)
     total_autorouter_savings_spend: float = Field(default=0.0)
+    total_response_time_ms: int = Field(default=0)
+    total_timed_requests: int = Field(default=0)
     page: int = Field(default=1)
     total_pages: int = Field(default=1)
     has_more: bool = Field(default=False)
+    api_key_limit: int | None = Field(
+        default=None,
+        description="When set, api_keys and every api_key_breakdown list at most this many keys, "
+        "ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+    )
+    total_api_keys: int | None = Field(
+        default=None,
+        description="Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key "
+        "lists are truncated to the highest-spend keys.",
+    )
 
 
 class SpendAnalyticsPaginatedResponse(BaseModel):
@@ -123,6 +139,8 @@ class LiteLLM_DailyUserSpend(BaseModel):
     api_requests: int = 0
     successful_requests: int = 0
     failed_requests: int = 0
+    total_response_time_ms: int = 0
+    timed_requests: int = 0
 
 
 class GroupedData(TypedDict):

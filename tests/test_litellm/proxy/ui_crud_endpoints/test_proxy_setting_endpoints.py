@@ -3006,6 +3006,128 @@ def test_update_mcp_semantic_filter_settings_requires_proxy_admin(monkeypatch):
         app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+class TestMcpToolSearchSettingsEndpoints:
+    """`litellm_settings.mcp_tool_search` drives the native `mcp_tool_search` virtual tool, so the UI must round-trip it."""
+
+    @staticmethod
+    def _override_auth(role: LitellmUserRoles):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="u", api_key="hashed", user_role=role
+        )
+
+    def test_get_returns_stored_values_and_field_schema(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        mock_proxy_config["config"]["litellm_settings"]["mcp_tool_search"] = {
+            "embedding_model": "text-embedding-3-small",
+            "core_tools": ["treasury-get_rates"],
+        }
+
+        resp = client.get("/get/mcp_tool_search_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"] == {
+            "embedding_model": "text-embedding-3-small",
+            "top_k": 5,
+            "similarity_threshold": 0.0,
+            "core_tools": ["treasury-get_rates"],
+        }
+        assert resp.json()["field_schema"]["properties"]["core_tools"]["type"] == "array"
+
+    def test_update_requires_proxy_admin(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.INTERNAL_USER)
+        try:
+            resp = client.patch("/update/mcp_tool_search_settings", json={"top_k": 3})
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 403
+
+    def test_update_persists_and_applies_in_memory(self, mock_proxy_config, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr(litellm, "mcp_tool_search", None)
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        payload = {
+            "embedding_model": "text-embedding-3-small",
+            "top_k": 3,
+            "similarity_threshold": 0.25,
+            "core_tools": ["treasury-get_rates"],
+        }
+        try:
+            resp = client.patch("/update/mcp_tool_search_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert mock_proxy_config["save_call_count"]() == 1
+        assert litellm.mcp_tool_search == payload
+        assert mock_proxy_config["config"]["litellm_settings"]["mcp_tool_search"] == payload
+
+    def test_update_rejects_out_of_range_top_k(self, mock_proxy_config, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        try:
+            resp = client.patch("/update/mcp_tool_search_settings", json={"top_k": 0})
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 422
+        assert mock_proxy_config["save_call_count"]() == 0
+
+
+def test_upload_logo_requires_proxy_admin(monkeypatch):
+    """Any authenticated key could previously write a file to the server's disk here."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    async def _internal_user_auth():
+        return UserAPIKeyAuth(
+            user_id="internal-user-1",
+            api_key="hashed-internal-key",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _internal_user_auth
+    try:
+        resp = client.post(
+            "/upload/logo",
+            files={"file": ("logo.png", b"\x89PNG\r\n\x1a\n" + b"x" * 32, "image/png")},
+        )
+        assert resp.status_code == 403
+        assert "proxy admin" in resp.json()["detail"].lower()
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_upload_logo_allows_proxy_admin(monkeypatch, tmp_path):
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="admin-1",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        resp = client.post(
+            "/upload/logo",
+            files={"file": ("logo.png", b"\x89PNG\r\n\x1a\n" + b"x" * 32, "image/png")},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "success"
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+        uploaded_path = resp.json().get("file_path")
+        if uploaded_path and os.path.exists(uploaded_path):
+            os.remove(uploaded_path)
+
+
 class TestPtuCostAttributionUISetting:
     """``enable_ptu_cost_attribution`` is derived from the environment on every GET.
 
@@ -3144,3 +3266,225 @@ class TestPtuCostAttributionUISetting:
         assert response.status_code == 400
         assert "enable_ptu_cost_attribution" in str(response.json()["detail"])
         assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+
+class TestTeamAdminEditableTeamFieldsSetting:
+    """team_admin_editable_team_fields: the proxy-wide allow-list update_team applies to team admins."""
+
+    def _as_proxy_admin(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        return mock_prisma
+
+    def test_patch_rejects_field_names_the_proxy_does_not_support(self, monkeypatch):
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        monkeypatch.setattr(
+            "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.SUPPORTED_TEAM_ADMIN_PERMISSIONS",
+            frozenset({"tpm_limit"}),
+        )
+
+        try:
+            response = client.patch(
+                "/update/ui_settings",
+                json={"team_admin_editable_team_fields": ["tpm_limit", "blocked", "organization_id"]},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 400
+        detail = response.json()["detail"]["error"]
+        assert "['blocked', 'organization_id']" in detail
+        assert "['tpm_limit']" in detail
+        assert not mock_prisma.db.litellm_uisettings.upsert.called
+
+    def test_patch_rejects_a_non_list_value(self, monkeypatch):
+        self._as_proxy_admin(monkeypatch)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": "tpm_limit"})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+
+    def test_patch_persists_and_syncs_the_list_to_general_settings(self, monkeypatch):
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        general_settings: dict = {"team_admin_editable_team_fields": []}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+        enabled = ["tpm_limit", "rpm_limit", "max_budget"]
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": enabled})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored["team_admin_editable_team_fields"] == enabled
+        assert general_settings["team_admin_editable_team_fields"] == enabled
+
+    def test_patch_accepts_the_projects_permission_and_project_endpoints_see_it(self, monkeypatch):
+        from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+            team_admin_may_manage_projects,
+        )
+
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        general_settings: dict = {}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        assert team_admin_may_manage_projects(general_settings) is False
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": ["projects"]})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored["team_admin_editable_team_fields"] == ["projects"]
+        assert team_admin_may_manage_projects(general_settings) is True
+
+    def test_patch_with_an_empty_list_turns_team_admin_editing_off_again(self, monkeypatch):
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        general_settings: dict = {"team_admin_editable_team_fields": ["tpm_limit"]}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": []})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored["team_admin_editable_team_fields"] == []
+        assert general_settings["team_admin_editable_team_fields"] == []
+
+    def test_get_reports_the_stored_list_and_advertises_supported_fields(self, mock_auth, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_db_record = MagicMock()
+        mock_db_record.ui_settings = {"team_admin_editable_team_fields": ["tpm_limit"]}
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=mock_db_record)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        general_settings: dict = {}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+
+        response = client.get("/get/ui_settings")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["values"]["team_admin_editable_team_fields"] == ["tpm_limit"]
+        assert general_settings["team_admin_editable_team_fields"] == ["tpm_limit"]
+        field_schema = data["field_schema"]["properties"]["team_admin_editable_team_fields"]
+        assert field_schema["type"] == "array"
+        assert field_schema["items"]["type"] == "string"
+        assert "tpm_limit" in field_schema["items"]["enum"]
+        assert "projects" in field_schema["items"]["enum"]
+
+
+class TestSyncUiSettingsToGeneralSettings:
+    """The DB re-read each pod runs on startup and on every config reload."""
+
+    def _sync(self):
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            sync_ui_settings_to_general_settings,
+        )
+
+        return sync_ui_settings_to_general_settings
+
+    @pytest.mark.asyncio
+    async def test_applies_runtime_flags_and_leaves_other_ui_settings_alone(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        general_settings: dict = {"allow_agents_for_team_admins": False}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        mock_prisma = MagicMock()
+        record = MagicMock()
+        record.ui_settings = json.dumps(
+            {
+                "allow_agents_for_team_admins": True,
+                "team_admin_editable_team_fields": ["tpm_limit"],
+                "enable_chat_ui": False,
+            }
+        )
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=record)
+
+        applied = await self._sync()(mock_prisma)
+
+        assert dict(applied) == {
+            "allow_agents_for_team_admins": True,
+            "team_admin_editable_team_fields": ["tpm_limit"],
+        }
+        assert general_settings["allow_agents_for_team_admins"] is True
+        assert general_settings["team_admin_editable_team_fields"] == ["tpm_limit"]
+        assert "enable_chat_ui" not in general_settings
+
+    @pytest.mark.asyncio
+    async def test_reads_a_row_the_prisma_client_already_deserialized(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        general_settings: dict = {}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        mock_prisma = MagicMock()
+        record = MagicMock()
+        record.ui_settings = {"team_admin_editable_team_fields": ["rpm_limit"]}
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=record)
+
+        await self._sync()(mock_prisma)
+
+        assert general_settings["team_admin_editable_team_fields"] == ["rpm_limit"]
+
+    @pytest.mark.asyncio
+    async def test_without_a_stored_row_general_settings_is_left_untouched(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        general_settings: dict = {"allow_agents_for_team_admins": True}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+
+        applied = await self._sync()(mock_prisma)
+
+        assert dict(applied) == {}
+        assert general_settings == {"allow_agents_for_team_admins": True}
+
+    def test_applied_runtime_flags_keep_the_ui_row_as_the_source(self, monkeypatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.config_resolvers import SettingsStore
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import apply_runtime_general_settings_flags
+
+        general_settings = SettingsStore("general_settings")
+        general_settings.load_yaml({})
+        monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+
+        apply_runtime_general_settings_flags({"forward_client_headers_to_llm_api": True})
+
+        assert general_settings["forward_client_headers_to_llm_api"] is True
+        assert general_settings.source("forward_client_headers_to_llm_api") == "db"
+
+    def test_applied_runtime_flags_cannot_override_the_config_file(self, monkeypatch):
+        from litellm.proxy import proxy_server
+        from litellm.proxy.config_resolvers import SettingsStore
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import apply_runtime_general_settings_flags
+
+        general_settings = SettingsStore("general_settings")
+        general_settings.load_yaml({"forward_client_headers_to_llm_api": False})
+        monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+
+        apply_runtime_general_settings_flags({"forward_client_headers_to_llm_api": True})
+
+        assert general_settings["forward_client_headers_to_llm_api"] is False
+        assert general_settings.source("forward_client_headers_to_llm_api") == "config"

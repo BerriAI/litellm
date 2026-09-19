@@ -3,12 +3,16 @@ import functools
 import inspect
 import re
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
-from litellm._logging import verbose_logger
-from litellm.constants import MAX_BASE64_LENGTH_FOR_LOGGING
+from litellm._logging import format_base64_size, verbose_logger
+from litellm.constants import (
+    BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS,
+    MAX_BASE64_LENGTH_FOR_LOGGING,
+)
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -37,9 +41,6 @@ import litellm
 Helper utils used for logging callbacks
 """
 
-_BYTES_PER_KIB: Final = 1024
-_BYTES_PER_MIB: Final = 1024 * 1024
-
 # Regex matching data-URI base64 content: "data:<mime>;base64,<payload>"
 # Captures: group(1)=mime_type, group(2)=base64_payload
 _DATA_URI_RE: Final = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
@@ -49,23 +50,13 @@ _DATA_URI_RE: Final = re.compile(r"data:([^;]+);base64,([A-Za-z0-9+/=]+)")
 _MAX_TRUNCATION_DEPTH: Final = 20
 
 
-def _format_base64_size(num_chars: int) -> str:
-    """Return a human-readable byte-size estimate from a base64 character count."""
-    num_bytes: Final = num_chars * 3 / 4
-    if num_bytes >= _BYTES_PER_MIB:
-        return f"{num_bytes / _BYTES_PER_MIB:.2f}MB"
-    if num_bytes >= _BYTES_PER_KIB:
-        return f"{num_bytes / _BYTES_PER_KIB:.1f}KB"
-    return f"{int(num_bytes)}B"
-
-
 def _base64_data_uri_replacer(match: re.Match) -> str:
     """Replace a single base64 data-URI match with a size placeholder if too long."""
     mime_type: Final = match.group(1)
     payload: Final = match.group(2)
     if len(payload) <= MAX_BASE64_LENGTH_FOR_LOGGING:
         return match.group(0)
-    size_str: Final = _format_base64_size(len(payload))
+    size_str: Final = format_base64_size(len(payload))
     return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
 
 
@@ -141,6 +132,39 @@ def truncate_base64_in_messages(
         return messages
 
 
+_StringTree = str | Sequence["_StringTree"] | Mapping[str, "_StringTree"] | None
+
+
+def _iter_string_leaves(value: _StringTree) -> Iterator[str]:
+    stack: Final[list[_StringTree]] = [value]  # mutable-ok: explicit stack, recursive functions are banned in litellm/
+    while stack:
+        match stack.pop():
+            case str() as text:
+                yield text
+            case Mapping() as mapping:
+                stack.extend(mapping.values())
+            case Sequence() as items:
+                stack.extend(items)
+            case None:
+                pass
+
+
+async def truncate_base64_in_messages_async(
+    messages: str | list | dict | None,  # mutable-ok: same contract as truncate_base64_in_messages
+) -> str | list | dict | None:  # mutable-ok: same contract as truncate_base64_in_messages
+    """
+    Same result as truncate_base64_in_messages, but payloads whose string content
+    reaches BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS are scanned in a worker
+    thread so the regex pass over multi-MB base64 images does not block the event loop.
+    """
+    if messages is None or MAX_BASE64_LENGTH_FOR_LOGGING <= 0:
+        return messages
+    total_chars: Final = sum(len(leaf) for leaf in _iter_string_leaves(messages))
+    if total_chars < BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS:
+        return truncate_base64_in_messages(messages)
+    return await asyncio.to_thread(truncate_base64_in_messages, messages)
+
+
 # Global service logger instance to avoid recreating it
 _service_logger = None
 
@@ -184,7 +208,7 @@ def _get_parent_otel_span_from_logging_obj(
 
 
 def convert_litellm_response_object_to_str(
-    response_obj: Any | LiteLLMModelResponse,
+    response_obj: object,
 ) -> str | None:
     """
     Get the string of the response object from LiteLLM
@@ -263,6 +287,20 @@ def _set_duration_in_model_call_details(
         duration_ms: Final = (end_time - start_time).total_seconds() * 1000
         if logging_obj and hasattr(logging_obj, "model_call_details"):
             logging_obj.model_call_details["llm_api_duration_ms"] = duration_ms
+            metadata: Final[dict[str, object]] = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
+            recorded: Final = metadata.get("llm_api_timing_windows")
+            earlier: Final[tuple[tuple[float, float], ...]] = tuple(
+                (float(window[0]), float(window[1]))
+                for window in (recorded if isinstance(recorded, (list, tuple)) else ())
+                if isinstance(window, (list, tuple))
+                and len(window) == 2
+                and isinstance(window[0], (int, float))
+                and isinstance(window[1], (int, float))
+            )
+            metadata["llm_api_timing_windows"] = (
+                *earlier,
+                (start_time.timestamp(), end_time.timestamp()),
+            )
         else:
             verbose_logger.debug("`logging_obj` not found - unable to track `llm_api_duration_ms")
     except Exception as e:

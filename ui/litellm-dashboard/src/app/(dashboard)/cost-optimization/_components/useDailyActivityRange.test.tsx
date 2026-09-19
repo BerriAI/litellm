@@ -4,12 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 const mockUsePaginatedDailyActivity = vi.fn();
 
 const mockCancel = vi.fn();
+let mockMetadata: Record<string, number> = {};
 
 vi.mock("@/app/(dashboard)/usage/_components/hooks/usePaginatedDailyActivity", () => ({
   usePaginatedDailyActivity: (args: unknown) => {
     mockUsePaginatedDailyActivity(args);
     return {
-      data: { results: [] },
+      data: { results: [], metadata: mockMetadata },
       loading: false,
       isFetchingMore: false,
       progress: { currentPage: 4, totalPages: 9 },
@@ -25,11 +26,19 @@ vi.mock("@/components/networking", () => ({
 }));
 
 import { userDailyActivityAggregatedCall } from "@/components/networking";
-import { useDailyActivityRange } from "./useDailyActivityRange";
+import { useActivityDateRange, useDailyActivityRange } from "./useDailyActivityRange";
 
 const argsOfLastCall = () => mockUsePaginatedDailyActivity.mock.calls.at(-1)?.[0].args as unknown[];
 
 describe("useDailyActivityRange", () => {
+  it("offers date-range state without starting a daily-activity query", () => {
+    const { result } = renderHook(() => useActivityDateRange());
+
+    expect(result.current.dateValue.from).toBeInstanceOf(Date);
+    expect(result.current.dateValue.to).toBeInstanceOf(Date);
+    expect(mockUsePaginatedDailyActivity).not.toHaveBeenCalled();
+  });
+
   it("queries every user's activity for an admin", () => {
     renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));
 
@@ -71,5 +80,19 @@ describe("useDailyActivityRange", () => {
     renderHook(() => useDailyActivityRange(null, "u1", "proxy_admin"));
 
     expect(mockUsePaginatedDailyActivity).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false }));
+  });
+
+  it("reports how many keys the proxy left out of the per-key lists", () => {
+    mockMetadata = { api_key_limit: 100, total_api_keys: 3000 };
+    const { result } = renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));
+
+    expect(result.current.apiKeyTruncation).toEqual({ limit: 100, total: 3000 });
+  });
+
+  it("reports no key truncation when every key fit under the proxy limit", () => {
+    mockMetadata = { api_key_limit: 100, total_api_keys: 100 };
+    const { result } = renderHook(() => useDailyActivityRange("test-token", "u1", "proxy_admin"));
+
+    expect(result.current.apiKeyTruncation).toBeUndefined();
   });
 });

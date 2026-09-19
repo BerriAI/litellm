@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
+import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import * as networking from "@/components/networking";
 import EntityUsage from "./EntityUsage";
 
@@ -58,6 +59,10 @@ vi.mock("./TopModelView", () => ({
       <span>{`top-models:${topModels.map((row) => `${row.key}=${row.spend}`).join("|")}`}</span>
     </div>
   ),
+}));
+
+vi.mock("./TeamUserSpendCard", () => ({
+  default: ({ teamIds }: { teamIds: string[] }) => <div>{`team-user-spend:${teamIds.join("|")}`}</div>,
 }));
 
 vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
@@ -460,6 +465,26 @@ describe("EntityUsage", () => {
     });
   });
 
+  it("feeds the per-user spend card every visible team except the dashboard team, only for teams", async () => {
+    const mockUseTeams = vi.mocked(useTeams);
+    const teamsResult = (teams: { team_id: string }[]) =>
+      ({ teams, setTeams: vi.fn() }) as unknown as ReturnType<typeof useTeams>;
+    mockUseTeams.mockReturnValue(
+      teamsResult([{ team_id: "team-alpha" }, { team_id: "litellm-dashboard" }, { team_id: "team-beta" }]),
+    );
+
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+    expect(await screen.findByText("team-user-spend:team-alpha|team-beta")).toBeInTheDocument();
+
+    cleanup();
+    mockUseTeams.mockReturnValue(teamsResult([]));
+    render(<EntityUsage {...defaultProps} entityType="tag" />);
+    await waitFor(() => {
+      expect(mockTagDailyActivityCall).toHaveBeenCalled();
+    });
+    expect(screen.queryByText(/^team-user-spend:/)).not.toBeInTheDocument();
+  });
+
   it("should render with organization entity type and call organization API", async () => {
     render(<EntityUsage {...defaultProps} entityType="organization" />);
 
@@ -542,6 +567,23 @@ describe("EntityUsage", () => {
     });
 
     expect(screen.getAllByText("Activity Metrics")[1]).toBeInTheDocument();
+  });
+
+  it("tells the team view how many keys the proxy left out of the per-key lists", async () => {
+    mockTeamDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      metadata: { ...mockSpendData.metadata, api_key_limit: 100, total_api_keys: 3000 },
+    });
+    render(<EntityUsage {...defaultProps} entityType="team" />);
+
+    await waitFor(() => {
+      expect(mockTeamDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Key Activity"));
+    });
+
+    expect(await screen.findByRole("note")).toHaveTextContent("Only the 100 highest-spend keys of 3,000 are loaded");
   });
 
   // An inactive tab panel is marked aria-selected="false" by one tab library and hidden by the

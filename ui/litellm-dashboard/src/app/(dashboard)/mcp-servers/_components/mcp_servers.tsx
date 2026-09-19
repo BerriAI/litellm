@@ -1,7 +1,8 @@
-import { isAdminRole } from "@/utils/roles";
-import { CircleHelp, Search } from "lucide-react";
+import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
+import { CircleHelp, Plug, Search } from "lucide-react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -22,6 +23,7 @@ import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPSer
 import { toast } from "@/lib/toast";
 import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
+import { MCPGatewaySessionsTab } from "./MCPGatewaySessionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import CreateMCPServer from "./CreateMCPServer";
 import ImportMCPServers from "./ImportMCPServers";
@@ -36,11 +38,14 @@ import type {
   Team,
 } from "@/components/mcp_tools/types";
 import MCPSemanticFilterSettings from "@/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
+import MCPToolSearchSettings from "@/components/Settings/AdminSettings/MCPToolSearchSettings/MCPToolSearchSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "@/components/mcp_tools/ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
 import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
+import { uiHref } from "@/utils/uiHref";
+import { cn } from "@/lib/cva.config";
 import UserEnvVarsModal from "./UserEnvVarsModal";
 import { listMCPUserEnvVarStatus } from "@/components/networking";
 
@@ -107,7 +112,7 @@ const readToolsOAuthServerId = (): string | null => {
   }
 };
 
-const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
+const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
@@ -482,7 +487,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             </div>
             <p className="mt-1 text-sm text-muted-foreground">Configure and manage your MCP servers</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
+              <Plug />
+              My Connections
+            </Link>
             {isAdminRole(userRole) && (
               <>
                 <Button className="shrink-0" variant="secondary" onClick={() => setImportVisible(true)}>
@@ -545,6 +554,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
               </TabsTrigger>
             )}
             {isAdminRole(userRole) && (
+              <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
+                Tool Search
+              </TabsTrigger>
+            )}
+            {isAdminRole(userRole) && (
               <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
                 Network Settings
               </TabsTrigger>
@@ -552,6 +566,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             {isAdminRole(userRole) && (
               <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
                 Submitted MCPs
+              </TabsTrigger>
+            )}
+            {isProxyAdminTierRole(userRole) && (
+              <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
+                Live Connections
               </TabsTrigger>
             )}
           </TabsList>
@@ -566,6 +585,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 accessToken={accessToken}
                 userID={userID}
                 userRole={userRole}
+                isViewOnly={isViewOnly}
                 availableAccessGroups={uniqueMcpAccessGroups}
                 initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
               />
@@ -727,6 +747,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             </TabsContent>
           )}
           {isAdminRole(userRole) && (
+            <TabsContent value="tool-search" keepMounted>
+              <MCPToolSearchSettings accessToken={accessToken} />
+            </TabsContent>
+          )}
+          {isAdminRole(userRole) && (
             <TabsContent value="network-settings" keepMounted>
               <MCPNetworkSettings accessToken={accessToken} />
             </TabsContent>
@@ -734,6 +759,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           {isAdminRole(userRole) && (
             <TabsContent value="submitted" keepMounted>
               <MCPSubmissionsTab accessToken={accessToken} />
+            </TabsContent>
+          )}
+          {isProxyAdminTierRole(userRole) && (
+            <TabsContent value="connections">
+              <MCPGatewaySessionsTab
+                accessToken={accessToken}
+                canTerminate={isProxyAdminRole(userRole) && !isViewOnly}
+              />
             </TabsContent>
           )}
         </Tabs>

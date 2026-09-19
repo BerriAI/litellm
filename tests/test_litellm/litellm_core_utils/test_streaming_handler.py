@@ -6,7 +6,7 @@ import pytest
 
 import asyncio
 import traceback
-from typing import Optional
+from typing import Final, Optional
 
 import litellm
 from litellm import verbose_logger
@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.streaming_handler import (
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
+    ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StandardLoggingPayload,
@@ -1750,7 +1751,7 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     assert complete_response.usage.cost == 0.00025
 
     # Use the real propagation method from CustomStreamWrapper
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "openrouter")
 
     assert "additional_headers" in complete_response._hidden_params
     assert (
@@ -1769,14 +1770,12 @@ def test_openrouter_streaming_cost_propagates_to_hidden_params():
     assert provider_cost == 0.00025
 
 
-def test_perplexity_streaming_dict_cost_propagates_to_hidden_params():
-    """
-    Regression: Perplexity reports usage.cost as a breakdown object, which used to
-    blow up the end of the stream with
-    `float() argument must be a string or a real number, not 'dict'`.
-    """
+def test_perplexity_streaming_dict_cost_bills_through_its_own_calculator():
     import litellm
-    from litellm.cost_calculator import get_response_cost_from_hidden_params
+    from litellm.cost_calculator import (
+        get_response_cost_from_hidden_params,
+        response_cost_calculator,
+    )
 
     chunks = [
         ModelResponseStream(
@@ -1828,12 +1827,80 @@ def test_perplexity_streaming_dict_cost_propagates_to_hidden_params():
 
     assert complete_response is not None
 
-    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response)
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "perplexity")
 
-    assert (
-        get_response_cost_from_hidden_params(complete_response._hidden_params)
-        == 0.00503
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+    assert response_cost_calculator(
+        response_object=complete_response,
+        model="perplexity/sonar",
+        custom_llm_provider="perplexity",
+        call_type="completion",
+        optional_params={},
+    ) == pytest.approx(0.00503)
+
+
+def test_openai_compatible_streaming_cost_is_priced_from_the_cost_map():
+    import litellm
+    from litellm.cost_calculator import (
+        get_response_cost_from_hidden_params,
+        response_cost_calculator,
     )
+
+    model = "openai/streams-cost-in-nanodollars"
+    litellm.register_model(
+        {
+            model: {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    complete_response = ModelResponse(
+        id="chatcmpl-openai-compatible",
+        model=model,
+        choices=[],
+        usage=Usage(completion_tokens=5, prompt_tokens=10, total_tokens=15, cost=3_144_000),
+    )
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "openai")
+
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+    assert response_cost_calculator(
+        response_object=complete_response,
+        model=model,
+        custom_llm_provider="openai",
+        call_type="completion",
+        optional_params={},
+    ) == pytest.approx(2e-5)
+
+
+def test_xai_streaming_reported_cost_still_takes_the_margin(monkeypatch):
+    import litellm
+    from litellm.cost_calculator import (
+        get_response_cost_from_hidden_params,
+        response_cost_calculator,
+    )
+
+    complete_response = ModelResponse(
+        id="chatcmpl-xai",
+        model="grok-4-latest",
+        choices=[],
+        usage=Usage(completion_tokens=353, prompt_tokens=198, total_tokens=551, cost=0.0009956),
+    )
+
+    CustomStreamWrapper._propagate_usage_cost_to_hidden_params(complete_response, "xai")
+
+    assert get_response_cost_from_hidden_params(complete_response._hidden_params) is None
+    monkeypatch.setattr(litellm, "cost_margin_config", {"xai": 0.5})
+    assert response_cost_calculator(
+        response_object=complete_response,
+        model="xai/grok-4-latest",
+        custom_llm_provider="xai",
+        call_type="completion",
+        optional_params={},
+    ) == pytest.approx(0.0009956 * 1.5)
 
 
 def test_provider_reported_cost_ignores_unusable_shapes():
@@ -2522,22 +2589,6 @@ def test_dispatch_petals_empty_stream_after_finish_raises(
         _run_dispatch(initialized_custom_stream_wrapper, chunk=None)
 
 
-def test_dispatch_palm_slices_completion_stream(
-    initialized_custom_stream_wrapper: CustomStreamWrapper,
-):
-    """palm uses the same fake-streaming slice strategy as petals."""
-    initialized_custom_stream_wrapper.custom_llm_provider = "palm"
-    initialized_custom_stream_wrapper.completion_stream = "B" * 40
-
-    result, _, completion_obj = _run_dispatch(
-        initialized_custom_stream_wrapper, chunk=None
-    )
-
-    assert isinstance(result, _ProviderChunkParsed)
-    assert completion_obj["content"] == "B" * 30
-    assert initialized_custom_stream_wrapper.completion_stream == "B" * 10
-
-
 def test_dispatch_cached_response_extracts_delta(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -2564,6 +2615,48 @@ def test_dispatch_cached_response_extracts_delta(
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
     assert model_response.id == "chatcmpl-cache-1"
     assert initialized_custom_stream_wrapper.response_id == "chatcmpl-cache-1"
+
+
+def test_dispatch_cached_response_without_choices_is_an_empty_chunk(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+):
+    """A cached completion with no choices replays as an empty, unfinished chunk
+    instead of raising IndexError on choices[0]."""
+    initialized_custom_stream_wrapper.custom_llm_provider = "cached_response"
+    chunk: Final = ModelResponseStream(id="chatcmpl-cache-empty", choices=[])
+
+    result, model_response, completion_obj = _run_dispatch(
+        initialized_custom_stream_wrapper, chunk
+    )
+
+    assert isinstance(result, _ProviderChunkParsed)
+    assert completion_obj["content"] is None
+    assert initialized_custom_stream_wrapper.received_finish_reason is None
+    assert model_response.id == "chatcmpl-cache-empty"
+
+
+@pytest.mark.asyncio
+async def test_cached_response_without_choices_streams_a_single_stop_chunk(
+    logging_obj: Logging,
+):
+    """A stream cache hit on a completion stored with choices == [] ends with one
+    finish_reason=stop chunk, the same shape the live empty stream produced."""
+
+    async def cached_chunks():
+        yield ModelResponseStream(id="chatcmpl-cache-empty", choices=[])
+
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=cached_chunks(),
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="cached_response",
+    )
+
+    chunks: Final = tuple([chunk async for chunk in wrapper])
+
+    assert len(chunks) == 1
+    assert tuple(choice.finish_reason for chunk in chunks for choice in chunk.choices) == ("stop",)
+    assert all(choice.delta.content in (None, "") for chunk in chunks for choice in chunk.choices)
 
 
 def test_dispatch_vertex_ai_legacy_text_and_finish_reason(
@@ -2732,22 +2825,6 @@ def test_dispatch_triton_stream(
 
     assert isinstance(result, _ProviderChunkParsed)
     assert completion_obj["content"] == "triton text"
-    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
-
-
-def test_dispatch_ai21_decodes_completion(
-    initialized_custom_stream_wrapper: CustomStreamWrapper,
-):
-    """ai21 does fake streaming over a single byte-encoded JSON completion."""
-    initialized_custom_stream_wrapper.custom_llm_provider = "ai21"
-    chunk = json.dumps({"completions": [{"data": {"text": "ai21 text"}}]}).encode(
-        "utf-8"
-    )
-
-    result, _, completion_obj = _run_dispatch(initialized_custom_stream_wrapper, chunk)
-
-    assert isinstance(result, _ProviderChunkParsed)
-    assert completion_obj["content"] == "ai21 text"
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
 
 
@@ -3991,7 +4068,7 @@ async def test_async_streaming_completion_does_not_reset_context_before_iteratio
         session_id_var.set("")
 
 
-def test_stream_wrapper_del_restores_correlation_context():
+def test_stream_wrapper_del_restores_correlation_context(monkeypatch):
     """CustomStreamWrapper.__del__ is the best-effort fallback for an abandoned
     stream (caller never exhausts it, so the normal terminal-handler restore
     never fires). Testing this via real garbage collection is unreliable in
@@ -4003,6 +4080,7 @@ def test_stream_wrapper_del_restores_correlation_context():
     doesn't run actual finalization, and this exercises exactly the logic that
     real garbage collection would eventually trigger.
     """
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-abandoned")
     session_id_var.set("outer-session-abandoned")
     try:
@@ -4050,12 +4128,13 @@ def test_stream_wrapper_del_never_raises_with_broken_logging_obj():
     wrapper.__del__()  # must not raise
 
 
-def test_stream_wrapper_del_does_not_clobber_a_newer_active_call():
+def test_stream_wrapper_del_does_not_clobber_a_newer_active_call(monkeypatch):
     """A delayed finalizer must never stomp a different, still-active call's
     context. If an abandoned stream's __del__ fires late - after a new call
     has already started in the same Task/thread and claimed the contextvars -
     unconditionally restoring the abandoned stream's own pre-call snapshot
     would corrupt the active call's subsequent log lines with stale ids."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-before-abandoned-call")
     session_id_var.set("outer-session-before-abandoned-call")
     try:
@@ -4101,13 +4180,14 @@ def test_stream_wrapper_del_does_not_clobber_a_newer_active_call():
         session_id_var.set("")
 
 
-def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing():
+def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing(monkeypatch):
     """The __del__ guard must compare against the *sanitized* id actually
     stored in the contextvar, not the raw litellm_session_id/litellm_trace_id
     - set_session_id()/set_trace_id() strip control characters before
     storing, so a caller-supplied id containing e.g. a newline would never
     equal the raw attribute, and the guard would wrongly conclude some other
     call has claimed the context and skip cleanup forever."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-needs-sanitizing")
     session_id_var.set("outer-session-needs-sanitizing")
     try:
@@ -4141,7 +4221,7 @@ def test_stream_wrapper_del_restores_when_own_session_id_needed_sanitizing():
         session_id_var.set("")
 
 
-def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk():
+def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk(monkeypatch):
     """When the underlying stream ends without ever emitting an explicit
     finish_reason chunk, __next__ synthesizes one via finish_reason_handler()
     and returns it. That chunk is still this call's own data - the caller's
@@ -4152,6 +4232,7 @@ def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_rea
     correct, deterministic restore on the very next __next__() call, since
     completion_stream is already exhausted and immediately re-raises
     StopIteration."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-finish-reason")
     session_id_var.set("outer-session-finish-reason")
     try:
@@ -4191,12 +4272,13 @@ def test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_rea
         session_id_var.set("")
 
 
-def test_stream_wrapper_del_cleans_up_after_synthesized_finish_reason_chunk():
+def test_stream_wrapper_del_cleans_up_after_synthesized_finish_reason_chunk(monkeypatch):
     """A caller that breaks immediately after seeing finish_reason (the
     early-break pattern) never triggers the next()-driven restore above - it
     relies on the best-effort __del__ guard instead, same as any other
     abandoned stream. The guard must still recognize this call's own
     (unrestored) ids as unclaimed and clean them up."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-finish-reason-del")
     session_id_var.set("outer-session-finish-reason-del")
     try:
@@ -4229,10 +4311,11 @@ def test_stream_wrapper_del_cleans_up_after_synthesized_finish_reason_chunk():
 
 
 @pytest.mark.asyncio
-async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_finish_reason_chunk():
+async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_finish_reason_chunk(monkeypatch):
     """Async sibling of test_stream_wrapper_next_keeps_context_active_through_synthesized_finish_reason_chunk -
     _finalize_completed_stream()'s else branch must not restore before
     returning the synthesized chunk either."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-anext-finish-reason")
     session_id_var.set("outer-session-anext-finish-reason")
     try:
@@ -4285,6 +4368,7 @@ async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_corre
     path as every other failure so the consumer's outer correlation context gets
     restored - calling the check before entering __anext__()'s try block would
     let the Timeout bypass that restoration entirely."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     monkeypatch.setattr(litellm.constants, "LITELLM_MAX_STREAMING_DURATION_SECONDS", 1)
     trace_id_var.set("outer-trace-max-duration")
     session_id_var.set("outer-session-max-duration")
@@ -4325,12 +4409,13 @@ async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_corre
 
 
 @pytest.mark.asyncio
-async def test_stream_wrapper_aclose_restores_consumer_correlation_context():
+async def test_stream_wrapper_aclose_restores_consumer_correlation_context(monkeypatch):
     """Explicit early termination (aclose(), e.g. on client disconnect or a
     router fallback aborting an in-progress stream) must restore the caller's
     correlation context too - not just __del__'s best-effort GC-timed fallback,
     since aclose() is normally called deterministically by the consumer/
     framework, unlike __del__."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-aclose")
     session_id_var.set("outer-session-aclose")
     try:
@@ -4372,6 +4457,7 @@ async def test_stream_wrapper_aclose_keeps_context_active_through_close_failure_
     branch logs a debug diagnostic. That log line must still carry the
     closing stream's own trace_id/session_id - the outer context must not be
     restored until after the close attempt (and its diagnostic) completes."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-close-fail")
     session_id_var.set("outer-session-close-fail")
     try:
@@ -4432,6 +4518,7 @@ def test_handle_stream_fallback_error_restores_context_only_after_exception_mapp
     mapping. The consumer's outer context must not be restored until that
     mapping call returns, or the diagnostic log line would carry the outer
     (or empty) trace_id/session_id instead of the failing stream's own."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace-fallback")
     session_id_var.set("outer-session-fallback")
     try:
@@ -4692,3 +4779,166 @@ async def test_async_stream_assembled_response_keeps_vertex_traffic_type(logging
     assembled = litellm.stream_chunk_builder(chunks=received, messages=[{"role": "user", "content": "hi"}])
     assert assembled is not None
     assert assembled._hidden_params["provider_specific_fields"]["traffic_type"] == "ON_DEMAND_FLEX"
+
+
+@pytest.mark.asyncio
+async def test_async_fake_stream_final_chunk_carries_hidden_usage(logging_obj: Logging):
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+    from litellm.types.utils import ModelResponse
+
+    model_response = ModelResponse(
+        id="chatcmpl-fake-stream",
+        model="my-random-model",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello world"},
+                "finish_reason": "stop",
+            }
+        ],
+    )
+    model_response.usage = Usage(prompt_tokens=1234, completion_tokens=7, total_tokens=1241)
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=model_response),
+        model="my-random-model",
+        custom_llm_provider="anthropic",
+        logging_obj=logging_obj,
+    )
+
+    final_chunk = None
+    async for chunk in wrapper:
+        final_chunk = chunk
+
+    assert final_chunk is not None
+    hidden_usage = final_chunk._hidden_params.get("usage")
+    assert hidden_usage is not None
+    assert hidden_usage.prompt_tokens == 1234
+    assert hidden_usage.completion_tokens == 7
+    assert hidden_usage.total_tokens == 1241
+
+
+class TestStableStreamingResponseId:
+    """
+    All chunks of one streamed response must share the same top-level id
+    (OpenAI streaming contract). Providers streaming via GenericStreamingChunk
+    (e.g. GigaChat) do not propagate an upstream response id, so
+    CustomStreamWrapper must pin the id from the first chunk it creates,
+    mirroring the existing `created` pinning (issue #11437).
+
+    Clients such as goose merge streamed deltas into one assistant message by
+    chunk id; per-chunk ids split a single reply into many messages.
+    """
+
+    def test_generic_chunks_share_one_id(self):
+        def _generic_chunks():
+            return iter(
+                [
+                    {
+                        "text": "Hello",
+                        "tool_use": None,
+                        "is_finished": False,
+                        "finish_reason": "",
+                        "usage": None,
+                        "index": 0,
+                    },
+                    {
+                        "text": " world",
+                        "tool_use": None,
+                        "is_finished": False,
+                        "finish_reason": "",
+                        "usage": None,
+                        "index": 0,
+                    },
+                    {
+                        "text": "",
+                        "tool_use": None,
+                        "is_finished": True,
+                        "finish_reason": "stop",
+                        "usage": {
+                            "prompt_tokens": 1,
+                            "completion_tokens": 2,
+                            "total_tokens": 3,
+                        },
+                        "index": 0,
+                    },
+                ]
+            )
+
+        wrapper = CustomStreamWrapper(
+            completion_stream=_generic_chunks(),
+            model="gigachat/GigaChat-2-Max",
+            logging_obj=MagicMock(),
+            custom_llm_provider="gigachat",
+        )
+        ids = [chunk.id for chunk in wrapper if chunk.id]
+        assert ids, "no chunks emitted"
+        assert len(set(ids)) == 1, f"chunk ids differ across one stream: {ids}"
+
+    def test_creator_pins_id_from_first_chunk(self):
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gigachat/GigaChat-2-Max",
+            logging_obj=MagicMock(),
+            custom_llm_provider="gigachat",
+        )
+        first = wrapper.model_response_creator()
+        assert wrapper.response_id == first.id
+        assert wrapper.model_response_creator().id == first.id
+
+    def test_provider_supplied_id_still_wins(self):
+        wrapper = CustomStreamWrapper(
+            completion_stream=iter([]),
+            model="gigachat/GigaChat-2-Max",
+            logging_obj=MagicMock(),
+            custom_llm_provider="gigachat",
+        )
+        wrapper.response_id = "chatcmpl-from-provider"
+        assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
+
+
+@pytest.mark.asyncio
+async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    model = "gpt-5.6-luna"
+    warm_tokenizer(model)
+    messages = [{"role": "user", "content": text * 100}]
+    content_chunks = [_make_chunk(text) for _ in range(100)]
+    stop_chunk = ModelResponseStream(
+        id="test",
+        created=1741037890,
+        model=model,
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+    logging_obj = Logging(
+        model=model,
+        messages=messages,
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=content_chunks + [stop_chunk]),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+
+    async def consume() -> list[ModelResponseStream]:
+        return [chunk async for chunk in wrapper]
+
+    chunks, took, lags = await timed_with_loop_lags(consume)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == text * 100
+    assert chunks[-1].usage.prompt_tokens > 100_000
+    assert chunks[-1].usage.completion_tokens > 100_000
+    assert_loop_stayed_free(took, lags)

@@ -61,11 +61,13 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import (
     BaseModel,
     ConfigDict,
     Discriminator,
     Field,
+    NonNegativeInt,
     PrivateAttr,
     SerializerFunctionWrapHandler,
     field_serializer,
@@ -88,6 +90,8 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
 )
+
+from .base import CachedTokensDetails
 
 FileContent = IO[bytes] | bytes | PathLike
 
@@ -325,6 +329,10 @@ class BatchGuardrailReport(BaseModel):
 
     modified_records: tuple[BatchGuardrailRecord, ...]
     """Every record that was redacted or dropped, in file order."""
+
+
+_JsonValue: TypeAlias = object
+"""Alias for ``object``, usable inside model bodies that declare a field named ``object``."""
 
 
 BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
@@ -627,7 +635,7 @@ class ChatCompletionReasoningItem(TypedDict, total=False):
     type: Required[Literal["reasoning"]]
     id: str
     encrypted_content: str | None
-    summary: list["ChatCompletionReasoningSummaryTextBlock"]
+    summary: ReadOnly[list[ChatCompletionReasoningSummaryTextBlock]]
 
 
 class WebSearchOptionsUserLocationApproximate(TypedDict, total=False):
@@ -984,6 +992,7 @@ class ChatCompletionToolParamFunctionChunk(TypedDict, total=False):
     description: str
     parameters: dict
     strict: bool
+    eager_input_streaming: ReadOnly[bool]
 
 
 class OpenAIChatCompletionToolParam(TypedDict):
@@ -994,6 +1003,7 @@ class OpenAIChatCompletionToolParam(TypedDict):
 class ChatCompletionToolParam(OpenAIChatCompletionToolParam, total=False):
     cache_control: ChatCompletionCachedContent
     allowed_callers: list[str]
+    eager_input_streaming: ReadOnly[bool]
 
 
 class Function(TypedDict, total=False):
@@ -1152,6 +1162,10 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "width",
+    "height",
+    "guidance",
+    "steps",
     "imageConfig",
 ]
 
@@ -1191,7 +1205,7 @@ class ShellToolParam(TypedDict, total=False):
     type: Required[Literal["shell"] | str]
     """The type of tool. Use ``\"shell\"``."""
 
-    environment: Required[dict[str, Any]]
+    environment: Required[dict[str, object]]
     """Environment config: ``type`` (e.g. ``\"container_auto\"``, ``\"container_reference\"``, ``\"local\"``), optional ``container_id``, ``network_policy``, ``domain_secrets``, ``skills``."""
 
 
@@ -1282,6 +1296,7 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: int | None = None
     cached_tokens: int = 0
+    cached_tokens_details: CachedTokensDetails | None = None
     text_tokens: int | None = None
 
     model_config = {"extra": "allow"}
@@ -1308,13 +1323,25 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
 
     @field_validator("cost", mode="before")
     @classmethod
-    def parse_cost(cls, v: Any) -> float | None:
+    def parse_cost(cls, v: object) -> object:
         """Normalise cost: accept either a float or a dict with a ``total_cost`` key."""
         if isinstance(v, dict):
             return v.get("total_cost")
         return v
 
     model_config = {"extra": "allow"}
+
+
+class WebSearchToolUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    num_requests: NonNegativeInt
+
+
+class ResponsesToolUsage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    web_search: WebSearchToolUsage | None = None
 
 
 ResponsesAPIStatus = Literal["completed", "failed", "in_progress", "cancelled", "queued", "incomplete"]
@@ -1341,6 +1368,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | OutputFunctionToolCall
             | OutputImageGenerationCall
             | ResponseFunctionToolCall
+            | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
         ]
     )
@@ -1545,6 +1573,9 @@ class ResponseFailedEvent(BaseLiteLLMOpenAIResponseObject):
 class ResponseIncompleteEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE]
     response: ResponsesAPIResponse
+
+
+ResponsesTerminalEvent: TypeAlias = ResponseCompletedEvent | ResponseIncompleteEvent | ResponseFailedEvent
 
 
 class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1805,7 +1836,7 @@ class ErrorEventError(BaseLiteLLMOpenAIResponseObject):
     type: str  # e.g., 'invalid_request_error'
     code: str  # e.g., 'context_length_exceeded'
     message: str
-    param: str | dict[str, Any] | None = None
+    param: str | dict[str, object] | None = None
 
 
 class ErrorEvent(BaseLiteLLMOpenAIResponseObject):
@@ -2168,6 +2199,53 @@ class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     item_id: ReadOnly[str]
 
 
+class OpenAIRealtimeErrorDetail(TypedDict):
+    type: ReadOnly[str]
+    message: ReadOnly[str]
+
+
+class OpenAIRealtimeErrorEvent(TypedDict):
+    type: ReadOnly[Literal["error"]]
+    error: ReadOnly[OpenAIRealtimeErrorDetail]
+
+
+class OpenAIRealtimeTranscriptionAudioFormat(TypedDict):
+    type: ReadOnly[Literal["audio/pcm"]]
+    rate: ReadOnly[int]
+
+
+class OpenAIRealtimeTranscriptionSettings(TypedDict):
+    model: ReadOnly[str]
+    language: NotRequired[ReadOnly[str]]
+
+
+class OpenAIRealtimeServerVadTurnDetection(TypedDict):
+    type: ReadOnly[Literal["server_vad"]]
+
+
+class OpenAIRealtimeTranscriptionAudioInput(TypedDict):
+    format: ReadOnly[OpenAIRealtimeTranscriptionAudioFormat]
+    transcription: ReadOnly[OpenAIRealtimeTranscriptionSettings]
+    turn_detection: ReadOnly[OpenAIRealtimeServerVadTurnDetection | None]
+
+
+class OpenAIRealtimeTranscriptionAudio(TypedDict):
+    input: ReadOnly[OpenAIRealtimeTranscriptionAudioInput]
+
+
+class OpenAIRealtimeTranscriptionSession(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[Literal["realtime.transcription_session"]]
+    type: ReadOnly[Literal["transcription"]]
+    audio: ReadOnly[OpenAIRealtimeTranscriptionAudio]
+
+
+class OpenAIRealtimeTranscriptionSessionCreated(TypedDict):
+    type: ReadOnly[Literal["session.created"]]
+    event_id: ReadOnly[str]
+    session: ReadOnly[OpenAIRealtimeTranscriptionSession]
+
+
 class OpenAIRealtimeInputAudioTranscriptionDelta(TypedDict):
     type: ReadOnly[Literal["conversation.item.input_audio_transcription.delta"]]
     event_id: ReadOnly[str]
@@ -2182,12 +2260,20 @@ class OpenAIRealtimeInputAudioTranscriptionCompleted(TypedDict):
     item_id: ReadOnly[str]
     content_index: ReadOnly[int]
     transcript: ReadOnly[str]
+    usage: NotRequired[ReadOnly[Mapping[str, object]]]
+
+
+class OpenAIRealtimeCachedTokensDetails(TypedDict, total=False):
+    text_tokens: ReadOnly[int]
+    audio_tokens: ReadOnly[int]
+    image_tokens: ReadOnly[int]
 
 
 class OpenAIRealtimeUsageTokenDetails(TypedDict):
     audio_tokens: ReadOnly[int]
     text_tokens: ReadOnly[int]
     cached_tokens: NotRequired[ReadOnly[int]]
+    cached_tokens_details: NotRequired[ReadOnly[OpenAIRealtimeCachedTokensDetails]]
 
 
 class OpenAIRealtimeResponseUsage(TypedDict):
@@ -2238,6 +2324,8 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeInputAudioBufferSpeechEvent
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
+    | OpenAIRealtimeTranscriptionSessionCreated
+    | OpenAIRealtimeErrorEvent
 )
 
 OpenAIRealtimeStreamList = list[OpenAIRealtimeEvents]
@@ -2418,7 +2506,7 @@ class OpenAIVideoObject(BaseModel):
     expires_at: int | None = None
     """Unix timestamp (seconds) for when the downloadable assets expire, if set."""
 
-    error: dict[str, Any] | None = None
+    error: dict[str, _JsonValue] | None = None
     """Error payload that explains why generation failed, if applicable."""
 
     progress: int | None = None
@@ -2436,15 +2524,15 @@ class OpenAIVideoObject(BaseModel):
     model: str | None = None
     """The video generation model that produced the job."""
 
-    _hidden_params: dict[str, Any] = {}
+    _hidden_params: dict[str, _JsonValue] = {}
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key, default=None) -> _JsonValue:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> _JsonValue:
         return getattr(self, key)
 
     def json(self, **kwargs):

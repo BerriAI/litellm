@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import HiddenParams
@@ -89,6 +89,49 @@ class MCPPublicServer(BaseModel):
     spec_path: str | None = None
     auth_type: MCPAuthType | None = None
     mcp_info: dict[str, Any] | None = None
+
+
+class MCPAllowedClient(BaseModel):
+    """One entry of `general_settings.mcp_allowed_clients`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    alias: str = Field(
+        min_length=1,
+        description="Human-readable name for this client application, shown in the dashboard and in gateway logs.",
+    )
+    value: str = Field(
+        min_length=1,
+        description="Exact value of the JWT claim named in litellm_jwtauth.mcp_client_id_jwt_field, or of the "
+        "mcp_client_id_header header, that identifies this client application. Matched case-sensitively.",
+    )
+
+
+class MCPToolSearchSettings(BaseModel):
+    """`litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools."""
+
+    model_config = ConfigDict(frozen=True)
+
+    embedding_model: str | None = Field(
+        default=None,
+        description="Embedding model from model_list used to rank tools by meaning. Unset keeps keyword matching.",
+    )
+    top_k: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description="Most ranked tools a search returns. A smaller top_k in the tool call wins. Core tools do not count.",
+    )
+    similarity_threshold: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Lowest cosine similarity a tool needs to appear in semantic results (0.0 = no cutoff).",
+    )
+    core_tools: tuple[str, ...] = Field(
+        default=(),
+        description="Tool names always returned first when the caller can access them, e.g. `my_server-get_rates`.",
+    )
 
 
 # OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).
@@ -408,3 +451,40 @@ class MCPPostCallResponseObject(BaseModel):
 
     mcp_tool_call_response: list[MCPTextContent | MCPImageContent | MCPEmbeddedResource]
     hidden_params: HiddenParams
+
+
+class MCPGatewaySession(BaseModel):
+    """One live stateful Streamable HTTP session held by this proxy worker."""
+
+    session_id_prefix: str
+    client_name: str | None = None
+    client_version: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
+    key_alias: str | None = None
+    team_id: str | None = None
+    team_alias: str | None = None
+    client_ip: str | None = None
+    idle_seconds: float
+    in_flight_requests: int
+
+
+class MCPGatewaySessionGroupCount(BaseModel):
+    label: str | None = None
+    count: int
+
+
+class MCPGatewaySessionsResponse(BaseModel):
+    worker_pid: int
+    total_sessions: int
+    by_client: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
+    by_user: list[MCPGatewaySessionGroupCount] = Field(default_factory=list)
+    sessions: list[MCPGatewaySession] = Field(default_factory=list)
+
+
+class MCPGatewaySessionsTerminateResponse(BaseModel):
+    """Stateful sessions an administrator force-closed on this proxy worker."""
+
+    worker_pid: int
+    terminated_sessions: int
+    sessions: list[MCPGatewaySession] = Field(default_factory=list)

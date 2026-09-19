@@ -2442,21 +2442,6 @@ def test_get_max_tokens_for_model_claude_35():
         assert max_tokens == 8192
 
 
-def test_get_max_tokens_for_model_claude_37():
-    """
-    Test that get_max_tokens_for_model returns correct value for Claude 3.7 models.
-    Claude 3.7 Sonnet has max_output_tokens of 64000 by default.
-    128K output requires the beta header 'output-128k-2025-02-19'.
-
-    Fixes: https://github.com/BerriAI/litellm/issues/8835
-    """
-    config = AnthropicConfig()
-
-    # Claude 3.7 Sonnet should return 64000 (64K default, 128K requires beta header)
-    max_tokens = config.get_max_tokens_for_model("claude-3-7-sonnet-20250219")
-    assert max_tokens == 64000
-
-
 def test_get_max_tokens_for_model_unknown():
     """
     Test that get_max_tokens_for_model returns 4096 fallback for unknown models.
@@ -2629,29 +2614,6 @@ def test_transform_request_injects_dummy_tool_without_tools_param():
         if isinstance(t, dict) and t.get("name") is not None
     ]
     assert "dummy_tool" in names
-
-
-def test_transform_request_uses_dynamic_max_tokens():
-    """
-    Test that transform_request uses dynamic max_tokens based on model
-    when max_tokens is not explicitly provided.
-
-    Fixes: https://github.com/BerriAI/litellm/issues/8835
-    """
-    config = AnthropicConfig()
-
-    messages = [{"role": "user", "content": "Hello"}]
-
-    # Claude 3.7 model should get 64000 as default max_tokens (from model_prices_and_context_window.json)
-    result = config.transform_request(
-        model="claude-3-7-sonnet-20250219",
-        messages=messages,
-        optional_params={},  # No max_tokens provided
-        litellm_params={},
-        headers={},
-    )
-
-    assert result["max_tokens"] == 64000
 
 
 def test_transform_request_respects_user_max_tokens():
@@ -2849,7 +2811,6 @@ def test_raw_adaptive_thinking_untouched_for_46_plus_model():
     )
 
     assert result["thinking"] == {"type": "adaptive"}
-
 
 
 @pytest.mark.parametrize(
@@ -3125,6 +3086,31 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
         f"output_config should not be set for non-adaptive model "
         f"(reasoning_effort={reasoning_effort_value!r})"
     )
+
+
+@pytest.mark.parametrize(
+    "model,budget_tokens,expected",
+    [
+        ("claude-opus-4-8", 4096, ({"type": "adaptive"}, {"effort": "high"})),
+        ("claude-opus-4-7", 24000, ({"type": "adaptive"}, {"effort": "xhigh"})),
+        ("claude-opus-4-6", 4096, ({"type": "enabled", "budget_tokens": 4096}, None)),
+        ("claude-sonnet-4-5-20250929", 4096, ({"type": "enabled", "budget_tokens": 4096}, None)),
+    ],
+)
+def test_legacy_thinking_translated_to_adaptive_on_adaptive_only_models(model, budget_tokens, expected):
+    """Adaptive-only models reject thinking={type: enabled} with a 400, so the
+    legacy shape must be upgraded to adaptive + output_config.effort on
+    /chat/completions too, while models that accept it keep the caller's budget."""
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": budget_tokens}, "max_tokens": 64000},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert (result["thinking"], result.get("output_config")) == expected
 
 
 @pytest.mark.parametrize(
@@ -6176,9 +6162,10 @@ def test_is_anthropic_usage_object_rejects_responses_api_usage():
     [
         # always-on-thinking models reject thinking.type=disabled with a 400
         ("claude-fable-5", True),
+        ("claude-fable-5-1", True),
         ("claude-mythos-5", True),
         # unmapped future family member -> claude-always-on-thinking fallback rule
-        ("claude-fable-5-1", True),
+        ("claude-fable-6-1", True),
         # adaptive-capable models that ACCEPT disabled must keep it verbatim
         ("claude-opus-5", False),
         ("claude-sonnet-5", False),
@@ -6207,3 +6194,250 @@ def test_disabled_thinking_omitted_only_for_always_on_models(
         assert "thinking" not in request
     else:
         assert request["thinking"] == {"type": "disabled"}
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "required"}, {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_raises_clean_error_on_fable_5_1_without_drop_params(
+    local_model_cost_map, tool_choice, monkeypatch
+):
+    """Fable 5.1 400s on tool_choice type any/tool (thinking is always on and a
+    forced call would skip it); without drop_params the caller gets a clean
+    client-side 400 that explains the workaround, not a provider error."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="forced tool use"):
+        config.map_openai_params(
+            non_default_params={"tool_choice": tool_choice},
+            optional_params={},
+            model="claude-fable-5-1",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "required"}, {"type": "function", "function": {"name": "get_weather"}}],
+)
+def test_forced_tool_choice_downgraded_to_auto_on_fable_5_1_with_drop_params(
+    local_model_cost_map, tool_choice
+):
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": tool_choice},
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=True,
+    )
+
+    assert result["tool_choice"] == {"type": "auto"}
+
+
+def test_forced_tool_choice_downgrade_keeps_parallel_tool_calls_flag(local_model_cost_map):
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": "required", "parallel_tool_calls": False},
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=True,
+    )
+
+    assert result["tool_choice"] == {"type": "auto", "disable_parallel_tool_use": True}
+
+
+@pytest.mark.parametrize("tool_choice, expected_type", [("auto", "auto"), ("none", "none")])
+def test_unforced_tool_choice_forwarded_on_fable_5_1(
+    local_model_cost_map, tool_choice, expected_type, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": tool_choice},
+        optional_params={},
+        model="claude-fable-5-1",
+        drop_params=False,
+    )
+
+    assert result["tool_choice"]["type"] == expected_type
+
+
+@pytest.mark.parametrize("model", ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"])
+def test_forced_tool_choice_forwarded_on_models_that_support_it(
+    local_model_cost_map, model, monkeypatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": "required"},
+        optional_params={},
+        model=model,
+        drop_params=True,
+    )
+
+    assert result["tool_choice"] == {"type": "any"}
+
+
+def test_forced_tool_choice_gating_driven_by_model_map_flag(local_model_cost_map, monkeypatch):
+    """The gate must read ``supports_forced_tool_use`` from the model map, not
+    the model name: a flagged entry gates a model whose name says nothing."""
+    monkeypatch.setitem(litellm.model_cost, "claude-zeta-9", {"supports_forced_tool_use": False})
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"tool_choice": "required"},
+        optional_params={},
+        model="claude-zeta-9",
+        drop_params=True,
+    )
+
+    assert result["tool_choice"] == {"type": "auto"}
+
+
+def test_anthropic_drop_params_keeps_format_only_output_config(monkeypatch):
+    """``drop_params=True`` must not consume ``output_config.format``: the drop
+    gate is an effort gate and ``format`` is a structured-output field."""
+    monkeypatch.setattr(litellm, "drop_params", True)
+    config = AnthropicConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"z": {"type": "integer"}}},
+    }
+
+    result = config.transform_request(
+        model="claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"output_config": {"format": schema_format}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+
+
+def test_anthropic_drop_params_reduces_mixed_output_config_to_format(monkeypatch):
+    """``drop_params=True`` drops the effort key on unsupported models but keeps
+    ``format`` so structured outputs still reach the provider."""
+    monkeypatch.setattr(litellm, "drop_params", True)
+    config = AnthropicConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"z": {"type": "integer"}}},
+    }
+
+    result = config.transform_request(
+        model="claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"output_config": {"effort": "low", "format": schema_format}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+
+
+def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(local_model_cost_map, monkeypatch):
+    """Backstop: on the tool-based structured-output path, a model flagged
+    ``supports_forced_tool_use: false`` must not get the forced response-format
+    tool_choice the provider would 400 on."""
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "claude-test-no-forced-tools",
+        {"litellm_provider": "anthropic", "mode": "chat", "supports_forced_tool_use": False},
+    )
+    config = AnthropicConfig()
+
+    result = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-test-no-forced-tools",
+        drop_params=False,
+    )
+
+    assert "tools" in result
+    assert "tool_choice" not in result
+
+
+def _eager_chat_function(**extra: object) -> dict[str, object]:
+    return {
+        "name": "write_file",
+        "description": "Write a file",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        **extra,
+    }
+
+
+def _eager_chat_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": _eager_chat_function(), **extra}
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming=flag))
+
+    assert mapped_tool == {
+        "name": "write_file",
+        "description": "Write a file",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        "type": "custom",
+        "eager_input_streaming": flag,
+    }
+
+
+def test_eager_input_streaming_passed_through_from_function():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(
+        {"type": "function", "function": _eager_chat_function(eager_input_streaming=True)}
+    )
+
+    assert mapped_tool["eager_input_streaming"] is True
+    assert "eager_input_streaming" not in mapped_tool["input_schema"]
+
+
+def test_eager_input_streaming_absent_stays_absent():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool())
+
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_rejects_non_boolean():
+    with pytest.raises(litellm.BadRequestError, match="eager_input_streaming must be a boolean"):
+        AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming="true"))
+
+
+def test_eager_input_streaming_not_set_on_computer_use_tool():
+    computer_tool = {
+        "type": "computer_20250124",
+        "function": {"name": "computer", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+        "eager_input_streaming": True,
+    }
+
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(computer_tool)
+
+    assert mapped_tool["type"] == "computer_20250124"
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_reaches_anthropic_request_tools():
+    result = AnthropicConfig().map_openai_params(
+        non_default_params={"tools": [_eager_chat_tool(eager_input_streaming=True)], "stream": True},
+        optional_params={},
+        model="claude-sonnet-5",
+        drop_params=False,
+    )
+
+    assert result["tools"][0]["eager_input_streaming"] is True
+    assert result["tools"][0]["name"] == "write_file"

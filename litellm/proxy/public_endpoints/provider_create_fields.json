@@ -587,6 +587,24 @@
     "default_model_placeholder": "azure_ai/command-r-plus"
   },
   {
+    "provider": "Azure_Speech",
+    "provider_display_name": "Azure AI Speech",
+    "litellm_provider": "azure_speech",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Azure AI Speech Subscription Key",
+        "placeholder": null,
+        "tooltip": "The Ocp-Apim-Subscription-Key for your Azure AI Speech resource. The proxy injects it on every /azure_speech/* pass-through request. Region and API base come from AZURE_SPEECH_REGION / AZURE_SPEECH_API_BASE",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "azure_speech/short-audio"
+  },
+  {
     "provider": "AZURE_TEXT",
     "provider_display_name": "Azure Text",
     "litellm_provider": "azure_text",
@@ -687,6 +705,13 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "CHATGPT",
+    "provider_display_name": "ChatGPT Subscription",
+    "litellm_provider": "chatgpt",
+    "credential_fields": [],
+    "default_model_placeholder": "chatgpt/gpt-5.4"
   },
   {
     "provider": "CLARIFAI",
@@ -982,6 +1007,62 @@
         "field_type": "text",
         "options": null,
         "default_value": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      }
+    ],
+    "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "QwenCloud",
+    "provider_display_name": "QwenCloud",
+    "litellm_provider": "qwencloud",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "QwenCloud API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "tooltip": "The base URL for QwenCloud. Defaults to https://dashscope-intl.aliyuncs.com/compatible-mode/v1 if not specified.",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      }
+    ],
+    "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "Qwen_AI_Platform",
+    "provider_display_name": "Qwen AI Platform",
+    "litellm_provider": "qwen_ai_platform",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Qwen AI Platform API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "tooltip": "The base URL for Qwen AI Platform. Defaults to https://dashscope.aliyuncs.com/compatible-mode/v1 if not specified.",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://dashscope.aliyuncs.com/compatible-mode/v1"
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
