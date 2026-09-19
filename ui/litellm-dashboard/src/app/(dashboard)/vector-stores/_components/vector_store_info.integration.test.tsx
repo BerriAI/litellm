@@ -1,7 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { renderWithProviders } from "@/../tests/test-utils";
 import { credentialListCall, vectorStoreInfoCall, vectorStoreUpdateCall } from "@/components/networking";
 import { toast } from "@/lib/toast";
 
@@ -31,15 +33,13 @@ const serverRecord = {
   litellm_credential_name: "bedrock-prod",
 };
 
-const renderView = (editVectorStore: boolean) =>
-  render(
-    <VectorStoreInfoView
-      vectorStoreId="vs-1"
-      onClose={vi.fn()}
-      accessToken="sk-test"
-      is_admin={true}
-      editVectorStore={editVectorStore}
-    />,
+const renderView = (startInEditMode: boolean, onUrlUpdate?: OnUrlUpdateFunction) =>
+  renderWithProviders(
+    <VectorStoreInfoView vectorStoreId="vs-1" onClose={vi.fn()} accessToken="sk-test" is_admin={true} />,
+    {
+      searchParams: startInEditMode ? "?vector_store=vs-1&edit=true" : "?vector_store=vs-1",
+      onUrlUpdate,
+    },
   );
 
 const savedPayload = () => mockUpdate.mock.calls[0][1];
@@ -156,5 +156,18 @@ describe("VectorStoreInfoView save payload", () => {
 
     expect(await screen.findByText("Please input a vector store ID")).toBeInTheDocument();
     expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it("leaves edit mode and clears edit from the URL after a successful save", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderView(true, onUrlUpdate);
+
+    await user.click(await screen.findByRole("button", { name: "Save Changes" }));
+
+    await vi.waitFor(() => expect(mockUpdate).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.has("edit")).toBe(false));
+    expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("vector_store")).toBe("vs-1");
+    expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
   });
 });
