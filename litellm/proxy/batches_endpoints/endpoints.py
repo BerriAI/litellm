@@ -1093,6 +1093,17 @@ async def cancel_batch(
             proxy_config=proxy_config,
         )
 
+        unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
+        if unified_model_id is not None:
+            resolved_unified_model: Final = (
+                llm_router.resolve_model_name_from_model_id(unified_model_id) if llm_router is not None else None
+            )
+            await authorize_model_for_key(
+                model_id=resolved_unified_model or unified_model_id,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
+
         # SCENARIO 1: Batch ID is encoded with model info
         if model_from_id is not None:
             credentials: Final = await get_authorized_credentials_for_model(
@@ -1143,11 +1154,6 @@ async def cancel_batch(
                     status_code=400,
                     detail={"error": "Invalid LiteLLM managed batch ID. Missing model_id."},
                 )
-            await authorize_model_for_key(
-                model_id=llm_router.resolve_model_name_from_model_id(model_id_from_batch) or model_id_from_batch,
-                llm_router=llm_router,
-                user_api_key_dict=user_api_key_dict,
-            )
             data["model"] = model_id_from_batch
             data["batch_id"] = get_batch_id_from_unified_batch_id(unified_batch_id)
             response = await llm_router.acancel_batch(**data)

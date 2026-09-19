@@ -3220,3 +3220,16 @@ async def test_cancel__unified_batch_id_rejects_key_without_model_grant(cancel_h
 
     assert exc_info.value.code == "403"
     cancel_harness.router_acancel.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cancel__executed_batch_rejects_key_without_model_grant(cancel_harness, executed_runner):
+    runner, factory = executed_runner
+
+    with pytest.raises(ProxyException) as exc_info:
+        await call_cancel(cancel_harness, EXECUTED_BATCH_B64, user=_key_restricted_to("vertex-model"))
+
+    assert exc_info.value.code == "403"
+    factory.assert_not_called()
+    runner.cancel.assert_not_called()
+    cancel_harness.router_acancel.assert_not_called()
