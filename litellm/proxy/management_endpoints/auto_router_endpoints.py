@@ -345,6 +345,14 @@ async def _authorize_models_this_test_can_call(
             code=status.HTTP_400_BAD_REQUEST,
         ) from e
 
+    if config.classifier_type == "jev" and user_api_key_dict.budget_throttle_pct is not None:
+        raise ProxyException(
+            message="Budget has been exceeded! JEV Test Routing requires available budget.",
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+
 
 @router.post(
     "/auto_router/validate_complexity_router_config",
