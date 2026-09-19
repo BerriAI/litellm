@@ -1,7 +1,6 @@
 use litellm_core::{Error, audio_transcription, chat_completions, messages, responses};
-use litellm_llms::{
-    base_llm::ocr::error::Error as OcrError, custom_httpx::transport::Error as TransportError,
-};
+use litellm_http::transport::Error as TransportError;
+use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
@@ -59,6 +58,7 @@ pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
             audio_transcription::Error::InvalidProvider(_)
             | audio_transcription::Error::InvalidRequest(_)
             | audio_transcription::Error::Headers(_)
+            | audio_transcription::Error::Http(_)
             | audio_transcription::Error::InvalidType { .. }
             | audio_transcription::Error::MissingField(_)
             | audio_transcription::Error::Aws(_) => true,
@@ -69,6 +69,7 @@ pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
             chat_completions::Error::InvalidProvider(_)
             | chat_completions::Error::InvalidRequest(_)
             | chat_completions::Error::Headers(_)
+            | chat_completions::Error::Http(_)
             | chat_completions::Error::InvalidType { .. }
             | chat_completions::Error::MissingField(_)
             | chat_completions::Error::Aws(_) => true,
@@ -106,6 +107,7 @@ pub(crate) fn chat_completions_error_to_pyerr(error: chat_completions::Error) ->
         | Error::InvalidType { .. }
         | Error::MissingField(_)
         | Error::Headers(_)
+        | Error::Http(_)
         | Error::Transport(TransportError::Connect(_)) => {
             RustBridgeDeclined::new_err(error.to_string())
         }

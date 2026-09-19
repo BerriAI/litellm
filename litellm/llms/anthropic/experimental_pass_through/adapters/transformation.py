@@ -384,7 +384,7 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and (self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)):
+        if cache_control and model and self.target_consumes_cache_control(model):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -676,6 +676,10 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         model_lower: Final = model.lower()
         return "arn:" in model_lower and ":bedrock:" in model_lower
+
+    @classmethod
+    def target_consumes_cache_control(cls, model: str) -> bool:
+        return cls.is_anthropic_claude_model(model) or cls.is_bedrock_arn_model(model) or "gemini" in model.lower()
 
     @staticmethod
     def translate_thinking_for_model(

@@ -9,7 +9,7 @@ if sys.version_info < (3, 11):  # BaseExceptionGroup is a builtin only from 3.11
 
 import httpx
 import pytest
-from mcp import McpError
+from mcp import MCPError
 from mcp.types import ErrorData
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
@@ -45,7 +45,7 @@ def test_upstream_json_rpc_error_code_is_never_read_as_an_http_status():
     to answer with application code 408. Classifying that number as a gateway timeout would report
     a 504 the gateway never caused. A client timeout reaches here already expressed as a
     ``TimeoutError``, so this taxonomy never has to read the code to tell them apart."""
-    upstream_error = McpError(ErrorData(code=int(httpx.codes.REQUEST_TIMEOUT), message="re-authenticate and retry"))
+    upstream_error = MCPError(code=int(httpx.codes.REQUEST_TIMEOUT), message="re-authenticate and retry")
     assert classify_list_exception(upstream_error).tag != "timeout"
     assert list_fault_http_status(classify_list_exception(upstream_error)) != 504
 

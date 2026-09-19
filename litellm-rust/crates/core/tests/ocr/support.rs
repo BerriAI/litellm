@@ -2,9 +2,10 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use litellm_host::event::WireRequest;
-use litellm_llms::{
-    base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse},
-    custom_httpx::llm_http_handler::{CallHooks, OcrClient},
+use litellm_llms::base_llm::ocr::{
+    error::Error,
+    handler::{CallHooks, OcrClient},
+    transformation::LiteLLMOcrResponse,
 };
 use serde_json::{Value, json};
 use tokio::{
