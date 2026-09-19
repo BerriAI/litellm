@@ -331,3 +331,19 @@ async def test_save_email_settings_still_writes_when_the_config_file_is_silent()
     assert len(upserts) == 1
     written = json.loads(upserts[0]["data"]["create"]["param_value"])
     assert written["email_settings"] == {EmailEvent.new_user_invitation.value: False}
+
+
+@pytest.mark.asyncio
+async def test_reset_event_settings_surfaces_the_config_owned_refusal(mock_user_api_key_auth):
+    upserts = []
+    client = _prisma_recording_upserts(upserts)
+    proxy_config = _proxy_config_owning({"email_settings": {EmailEvent.new_user_invitation.value: True}})
+
+    with mock.patch("litellm.proxy.proxy_server.prisma_client", client):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+            with pytest.raises(HTTPException) as refused:
+                await reset_event_settings(user_api_key_dict=mock_user_api_key_auth)
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail["keys"] == ["email_settings"]
+    assert upserts == []
