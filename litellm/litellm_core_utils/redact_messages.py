@@ -138,6 +138,8 @@ def _redact_responses_api_output(output_items):
 
         if hasattr(output_item, "type") and output_item.type == "function_call" and hasattr(output_item, "arguments"):
             output_item.arguments = REDACTED_BY_LITELLM
+        if hasattr(output_item, "type") and output_item.type == "custom_tool_call" and hasattr(output_item, "input"):
+            output_item.input = REDACTED_BY_LITELLM
 
 
 def _redact_responses_api_output_dict(output_items, redacted_str: str):
@@ -161,6 +163,8 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
 
         if output_item.get("type") == "function_call" and "arguments" in output_item:
             output_item["arguments"] = redacted_str
+        if output_item.get("type") == "custom_tool_call" and "input" in output_item:
+            output_item["input"] = redacted_str
 
 
 def redacted_standard_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
