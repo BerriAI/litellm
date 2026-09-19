@@ -33,10 +33,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.llms.s3_vectors.vector_stores.transformation import (
-    S3_VECTORS_STORE_ID_ERROR,
-    split_s3_vectors_store_id,
-)
+from litellm.llms.s3_vectors.vector_stores.transformation import s3_vectors_ingest_target
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 
 if TYPE_CHECKING:
@@ -64,22 +61,6 @@ class S3VectorsQueryMatch(TypedDict, total=False):
 
 class S3VectorsQueryResponse(TypedDict, total=False):
     vectors: Sequence[S3VectorsQueryMatch]
-
-
-def _non_empty_str(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
-
-
-def s3_vectors_ingest_target(vector_store_config: Mapping[str, object]) -> tuple[str, str | None]:
-    explicit_bucket_name: Final = _non_empty_str(vector_store_config.get("vector_bucket_name"))
-    explicit_index_name: Final = _non_empty_str(vector_store_config.get("index_name"))
-    vector_store_id: Final = _non_empty_str(vector_store_config.get("vector_store_id"))
-    if vector_store_id is None:
-        if explicit_bucket_name is None:
-            raise ValueError(S3_VECTORS_STORE_ID_ERROR)
-        return explicit_bucket_name, explicit_index_name
-    derived_bucket_name, derived_index_name = split_s3_vectors_store_id(vector_store_id, explicit_bucket_name)
-    return explicit_bucket_name or derived_bucket_name, explicit_index_name or derived_index_name
 
 
 class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
