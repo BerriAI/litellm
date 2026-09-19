@@ -1,6 +1,6 @@
 use litellm_auth_aws::{
     bedrock_model_id_and_region,
-    constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE},
+    constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
     resolve_bedrock_region,
 };
 use litellm_core_utils::{
@@ -17,8 +17,8 @@ use litellm_types::{
 use serde_json::{Map, Value, json};
 
 use crate::base_llm::chat::transformation::{
-    BaseConfig, ChatCompletionsAuth, Error, ProviderChatRequestData, ProviderChatResponseData,
-    Unsupported, unsupported_message, unsupported_param,
+    BaseConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth, Unsupported,
+    unsupported_message, unsupported_param,
 };
 
 /// Converse parameter names, post `map_openai_params`, that the Rust path can
@@ -186,7 +186,7 @@ impl BaseConfig for AmazonConverseConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error> {
+    ) -> Result<RequestAuth, Error> {
         // Python reads `api_key` as the Bedrock bearer token and consults the
         // env only when the caller passed none, so a caller-supplied empty key
         // falls through to SigV4 without reaching for the environment. An
@@ -199,11 +199,12 @@ impl BaseConfig for AmazonConverseConfig {
         }
         .filter(|token| !token.is_empty());
         if let Some(token) = bearer {
-            return Ok(ChatCompletionsAuth::Bearer { token });
+            return Ok(RequestAuth::Bearer { token });
         }
         let (_, model_region) = bedrock_model_id_and_region(model);
-        Ok(ChatCompletionsAuth::AwsSigV4 {
+        Ok(RequestAuth::AwsSigV4 {
             region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
+            service: BEDROCK_SERVICE,
         })
     }
 

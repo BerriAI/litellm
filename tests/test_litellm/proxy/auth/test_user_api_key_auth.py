@@ -25,6 +25,7 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
+    LiteLLM_OrganizationTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
@@ -35,6 +36,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import (
+    OrganizationNotFoundError,
     TeamNotFoundError,
     UserNotFoundError,
     get_key_object,
@@ -5981,6 +5983,152 @@ async def test_centralized_common_checks_backfills_org_id_from_team(key_org_id, 
         mock_checks.assert_awaited_once()
         assert token.org_id == expected_org_id
         assert org_id_seen_by_common_checks == [expected_org_id]
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "key_org_id,team_id,team_org_id,existing_alias,existing_rpm,lookup_mode,allow_db_unavailable,expect_lookup_error,expected_org_id,expected_alias,expected_limits",
+    [
+        (None, "t1", "org-from-team", None, None, "success", False, False, "org-from-team", "acme-org", (12.5, 700, 7)),
+        ("org-jwt", None, None, None, None, "success", False, False, "org-jwt", "acme-org", (12.5, 700, 7)),
+        ("org-pinned", None, None, "preset", None, "success", False, False, "org-pinned", "preset", (None, None, None)),
+        ("org-view", None, None, None, 3, "success", False, False, "org-view", None, (None, None, 3)),
+        ("org-missing", None, None, None, None, "missing", False, False, "org-missing", None, (None, None, None)),
+        ("org-db-failure-allowed", None, None, None, None, "db_failure", True, False, "org-db-failure-allowed", None, (None, None, None)),
+        ("org-db-failure-denied", None, None, None, None, "db_failure", False, True, "org-db-failure-denied", None, (None, None, None)),
+        ("org-bad-row", None, None, None, None, "bad_row", False, False, "org-bad-row", None, (None, None, None)),
+        ("org-nobudget", None, None, None, None, "no_budget", False, False, "org-nobudget", "acme-org", (None, None, None)),
+    ],
+)
+async def test_centralized_common_checks_inherits_org_identity(
+    key_org_id: str | None,
+    team_id: str | None,
+    team_org_id: str | None,
+    existing_alias: str | None,
+    existing_rpm: int | None,
+    lookup_mode: str,
+    allow_db_unavailable: bool,
+    expect_lookup_error: bool,
+    expected_org_id: str | None,
+    expected_alias: str | None,
+    expected_limits: tuple[float | None, int | None, int | None],
+) -> None:
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    token = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="u",
+        team_id=team_id,
+        org_id=key_org_id,
+        organization_alias=existing_alias,
+        organization_rpm_limit=existing_rpm,
+    )
+    request = Request(scope={"type": "http"})
+    request._url = URL(url="/chat/completions")
+
+    fetched_team = (
+        LiteLLM_TeamTableCachedObj(team_id="t1", organization_id=team_org_id) if team_id is not None else None
+    )
+    organization = LiteLLM_OrganizationTable(
+        organization_id=expected_org_id,
+        organization_alias="acme-org",
+        budget_id="budget-id",
+        metadata={"model_rpm_limit": {"gpt-4o": 2}},
+        models=[],
+        created_by="test",
+        updated_by="test",
+        litellm_budget_table=(
+            None
+            if lookup_mode == "no_budget"
+            else LiteLLM_BudgetTable(budget_id="budget-id", max_budget=12.5, tpm_limit=700, rpm_limit=7)
+        ),
+    )
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    attrs["prisma_client"] = MagicMock()
+    attrs["general_settings"] = {"allow_requests_on_db_unavailable": allow_db_unavailable}
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(  # test-quality-ok: centralized auth calls this module helper directly; no dependency injection seam exists
+                "litellm.proxy.auth.user_api_key_auth.get_team_object",
+                new_callable=AsyncMock,
+                return_value=fetched_team,
+            ) as mock_get_team_object,
+            patch(  # test-quality-ok: centralized auth calls this module helper directly; no dependency injection seam exists
+                "litellm.proxy.auth.auth_checks.get_org_object",
+                new_callable=AsyncMock,
+                return_value=organization,
+            ) as mock_get_org_object,
+            patch(  # test-quality-ok: capture downstream token state without invoking unrelated common checks
+                "litellm.proxy.auth.user_api_key_auth.common_checks",
+                new_callable=AsyncMock,
+            ) as mock_checks,
+        ):
+            if lookup_mode == "missing":
+                mock_get_org_object.side_effect = OrganizationNotFoundError("x")
+            elif lookup_mode == "db_failure":
+                mock_get_org_object.side_effect = ConnectionRefusedError("db unavailable")
+            elif lookup_mode == "bad_row":
+                mock_get_org_object.side_effect = ValueError("row failed validation")
+
+            if expect_lookup_error:
+                with pytest.raises(ConnectionRefusedError, match="db unavailable"):
+                    await _run_centralized_common_checks(
+                        user_api_key_auth_obj=token,
+                        request=request,
+                        request_data={"model": "gpt-4o"},
+                        route="/chat/completions",
+                    )
+            else:
+                await _run_centralized_common_checks(
+                    user_api_key_auth_obj=token,
+                    request=request,
+                    request_data={"model": "gpt-4o"},
+                    route="/chat/completions",
+                )
+
+        assert token.org_id == expected_org_id
+        if expect_lookup_error:
+            mock_checks.assert_not_awaited()
+            assert token.organization_alias is None
+            assert token.organization_max_budget is None
+            assert token.organization_tpm_limit is None
+            assert token.organization_rpm_limit is None
+            return
+
+        mock_checks.assert_awaited_once()
+        assert token.organization_alias == expected_alias
+        assert (
+            token.organization_max_budget,
+            token.organization_tpm_limit,
+            token.organization_rpm_limit,
+        ) == expected_limits
+        checked_token = mock_checks.await_args.kwargs["valid_token"]
+        assert checked_token.org_id == expected_org_id
+        assert checked_token.organization_alias == expected_alias
+        if team_id is None:
+            mock_get_team_object.assert_not_awaited()
+        else:
+            mock_get_team_object.assert_awaited_once()
+        if existing_alias is not None or existing_rpm is not None:
+            mock_get_org_object.assert_not_awaited()
+            assert token.organization_metadata is None
+        else:
+            mock_get_org_object.assert_awaited_once()
+            assert mock_get_org_object.await_args.kwargs["org_id"] == expected_org_id
+            assert mock_get_org_object.await_args.kwargs["include_budget_table"] is True
+            if lookup_mode not in {"missing", "db_failure", "bad_row"}:
+                assert token.organization_metadata == {"model_rpm_limit": {"gpt-4o": 2}}
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
