@@ -4825,6 +4825,9 @@ async def team_info(
                 prisma_client=prisma_client,
                 team_info_response_object=_team_info,
             )
+        active_default_budget_id: Final = (
+            team_member_budget_id if _team_info.team_member_budget_table is not None else None
+        )
 
         # Resolve resources inherited from access groups
         resolved_team_info: Final = await _resolve_team_access_group_resources(_team_info)
@@ -4856,7 +4859,7 @@ async def team_info(
                     MappingProxyType(
                         {
                             **tm.model_dump(),
-                            "budget_source": _member_budget_source(tm.budget_id, team_member_budget_id),
+                            "budget_source": _member_budget_source(tm.budget_id, active_default_budget_id),
                         }
                     )
                 )
