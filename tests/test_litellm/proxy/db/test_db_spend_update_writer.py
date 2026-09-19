@@ -3427,6 +3427,42 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
 
 
 @pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_reports_each_completed_table():
+    db_writer = DBSpendUpdateWriter()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(MagicMock()))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.call_details = {}
+    on_table_committed = MagicMock()
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+        db_spend_update_transactions=_empty_spend_transactions(
+            org_member_list_transactions={},
+            project_list_transactions={},
+            model_access_group_list_transactions={},
+        ),
+        on_table_committed=on_table_committed,
+    )
+
+    assert on_table_committed.call_args_list == [
+        call("user_list_transactions"),
+        call("end_user_list_transactions"),
+        call("key_list_transactions"),
+        call("team_list_transactions"),
+        call("team_member_list_transactions"),
+        call("org_list_transactions"),
+        call("org_member_list_transactions"),
+        call("project_list_transactions"),
+        call("tag_list_transactions"),
+        call("model_access_group_list_transactions"),
+        call("agent_list_transactions"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_daily_transaction_internal_call_keeps_spend_but_not_request_counts():
     """Internal sub-calls (auto-router classifier, shadow eval's shadow and judge) bill
     spend and tokens to the key but are not requests the caller made: api_requests,
