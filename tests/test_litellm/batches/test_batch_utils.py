@@ -1957,6 +1957,19 @@ def test_ocr_rows_keep_the_published_page_rate_when_the_deployment_prices_only_a
     assert result.cost == pytest.approx(4 * 0.002 + 4 * 0.01)
 
 
+def test_ocr_rows_keep_the_deployment_page_rate_when_the_unmapped_model_has_no_annotation_price(monkeypatch):
+    def _unmapped(model, custom_llm_provider=None):
+        raise Exception(f"This model isn't mapped yet: {model}")
+
+    monkeypatch.setattr(litellm, "get_model_info", _unmapped)
+    result = bu._aggregate_batch_cost_usage_models(
+        entries=[_ocr_row(4, annotation_pages=4, model="my-private-ocr-model")],
+        custom_llm_provider="mistral",
+        model_info={"ocr_cost_per_page_batches": 0.001},
+    )
+    assert result.cost == pytest.approx(4 * 0.001 + 4 * 0.001)
+
+
 def test_ocr_rows_bill_the_deployment_sync_page_rate_over_the_published_batch_rate(monkeypatch):
     monkeypatch.setattr(
         litellm, "get_model_info", lambda model, custom_llm_provider=None: pytest.fail("cost map must not be consulted")

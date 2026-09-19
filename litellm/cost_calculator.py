@@ -2151,11 +2151,11 @@ def ocr_batch_cost(
     )
     if needs_published_pricing and published is None:
         verbose_logger.warning(
-            "OCR batch cost: model=%s custom_llm_provider=%s has no pricing entry; returning 0.0 cost.",
+            "OCR batch cost: model=%s custom_llm_provider=%s has no pricing entry; "
+            "billing only the per-page families the deployment prices.",
             _single_log_line(model),
             _single_log_line(custom_llm_provider),
         )
-        return 0.0, 0.0
 
     page_rate: Final = (
         deployment_page_rate
