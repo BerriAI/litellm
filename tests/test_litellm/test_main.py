@@ -1321,13 +1321,6 @@ _FOUNDRY_FUNCTION_TOOL: Final = ({"type": "function", "function": {"name": "get_
     ],
 )
 def test_responses_api_bridge_check_azure_ai_foundry_gpt_5_4_plus_tools_routes_to_responses(api_base, reasoning_effort):
-    """
-    An azure_ai deployment of a gpt-5.4+ model on a Foundry OpenAI v1 host is the same Azure OpenAI
-    backend the azure provider bridges: its chat surface rejects function tools whenever reasoning is
-    on, and for gpt-6-astra it rejects reasoning_effort "none" too, so the Responses route on the same
-    endpoint is the only way to serve the request. Regression guard: the gate used to bridge only the
-    openai and azure providers, so these requests died at Foundry's /models/chat/completions.
-    """
     from litellm.main import responses_api_bridge_check
 
     model_info, model = responses_api_bridge_check(
@@ -1354,11 +1347,6 @@ def test_responses_api_bridge_check_azure_ai_foundry_gpt_5_4_plus_tools_routes_t
 def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_stays_chat(
     model_name, api_base, reasoning_effort
 ):
-    """
-    The azure_ai bridge fires only where the Foundry Responses config is selectable: a serverless
-    host, a non-OpenAI model, and claude-on-Foundry have no Responses route to bridge to, and an
-    explicit reasoning_effort "none" keeps the request chat-servable on the same terms as azure.
-    """
     from litellm.main import responses_api_bridge_check
 
     model_info, model = responses_api_bridge_check(
@@ -1595,11 +1583,6 @@ _FOUNDRY_RESPONSES_FUNCTION_CALL_BODY: Final = {
 def test_completion_bridges_azure_ai_foundry_gpt_5_4_plus_function_tools_to_responses(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
-    """
-    The bridged azure_ai call is posted to <base>/openai/v1/responses with the tool in Responses
-    shape and Foundry's api-key header, never to <base>/models/chat/completions, and comes back as a
-    chat completion carrying the function call.
-    """
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     responses_route: Final = respx_mock.post(f"{_FOUNDRY_API_BASE}/openai/v1/responses").respond(
         json=_FOUNDRY_RESPONSES_FUNCTION_CALL_BODY
