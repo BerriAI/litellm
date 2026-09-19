@@ -474,6 +474,37 @@ async def test_route_request_with_router_settings_override_preserves_existing():
     assert call_kwargs["timeout"] == 30
 
 
+@pytest.mark.asyncio
+async def test_route_request_with_router_settings_override_ignores_null_values():
+    """A key/team router_settings entry of null means "not configured" and must not
+    be forwarded to the Router: `fallbacks=None` in kwargs shadows Router.fallbacks
+    and silently disables the globally configured fallback chain for the request."""
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "router_settings_override": {
+            "fallbacks": None,  # UI form-save of a blank field
+            "num_retries": None,
+            "timeout": None,
+            "routing_strategy": "simple-shuffle",  # actually configured
+        },
+    }
+
+    llm_router = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs = llm_router.acompletion.call_args[1]
+    # Null overrides must not appear at all -> Router keeps its own defaults.
+    assert "fallbacks" not in call_kwargs
+    assert "num_retries" not in call_kwargs
+    assert "timeout" not in call_kwargs
+    # Configured values still merge.
+    assert call_kwargs["routing_strategy"] == "simple-shuffle"
+
+
 def test_gated_mock_params_cover_mock_router_testing_params():
     """``GATED_MOCK_PARAM_NAMES`` is hardcoded to avoid a cyclic import
     against ``litellm.types.router``. This test guards against drift — if a
