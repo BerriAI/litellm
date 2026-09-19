@@ -2134,3 +2134,54 @@ async def test_v3_a_completion_prompt_that_cannot_be_rendered_is_relayed_as_sent
     payload = _posted_payload(g)
     assert payload["prompt"] == prompt
     assert "messages" not in payload
+
+
+@pytest.mark.asyncio
+async def test_v3_openai_format_conversations_that_share_a_system_prompt_get_their_own_sessions():
+    """An OpenAI chat body carries its system prompt as messages[0]. The derived session must
+    seed on that preamble plus the first user turn, so two conversations behind one
+    system prompt are two sessions and a replayed conversation stays one."""
+
+    async def session_for(messages):
+        g = _make_guardrail(api_key=V3_KEY)
+        g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+        body = {"input": messages} if isinstance(messages, str) else {"messages": messages}
+        data = _v3_request_data(metadata={"user_api_key_end_user_id": "alice.chen@example.com"}, **body)
+        if isinstance(messages, str):
+            data.pop("messages")
+        data["proxy_server_request"] = {"headers": {}}
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data=data, input_type="request", logging_obj=_logging_obj()
+        )
+        return _posted_payload(g)["session_id"]
+
+    system = {"role": "system", "content": "You are the refunds assistant."}
+    refund = await session_for([system, {"role": "user", "content": "Refund order 12345"}])
+    refund_again = await session_for(
+        [
+            system,
+            {"role": "user", "content": "Refund order 12345"},
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": "Thanks"},
+        ]
+    )
+    cancel = await session_for([system, {"role": "user", "content": "Cancel my subscription"}])
+    developer = await session_for(
+        [
+            {"role": "developer", "content": "You are the refunds assistant."},
+            {"role": "user", "content": "Refund order 12345"},
+        ]
+    )
+    other_preamble = await session_for(
+        [
+            {"role": "system", "content": "You are the billing assistant."},
+            {"role": "user", "content": "Refund order 12345"},
+        ]
+    )
+    responses_input = await session_for("Refund order 12345")
+
+    assert refund == refund_again and refund.startswith("litellm-")
+    assert refund != cancel
+    assert refund != other_preamble
+    assert developer == refund and developer != other_preamble
+    assert responses_input.startswith("litellm-")

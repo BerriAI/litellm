@@ -669,27 +669,50 @@ def _v3_session_id(
     return V3_DERIVED_SESSION_PREFIX + hashlib.md5(seed.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
+_V3_PREAMBLE_ROLES: Final = frozenset({"system", "developer"})
+
+
+def _v3_message_text(message: object) -> str:
+    content: Final = message.get("content") if isinstance(message, Mapping) else None
+    if isinstance(content, str):
+        return content
+    if isinstance(content, (list, tuple)) and content and isinstance(content[0], Mapping):
+        return str(content[0].get("text") or "")
+    return ""
+
+
+def _v3_messages(request_body: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    messages: Final = request_body.get("messages") or request_body.get("input")
+    if isinstance(messages, (list, tuple)):
+        return tuple(message for message in messages if isinstance(message, Mapping))
+    return ()
+
+
 def _v3_system_text(request_body: Mapping[str, object]) -> str | None:
+    """The preamble, wherever the API puts it: Anthropic's `system`, the Responses API's
+    `instructions`, or the leading system or developer message of an OpenAI chat body."""
     system: Final = request_body.get("system")
     if isinstance(system, str):
         return system
     if system is not None:
         return json.dumps(system, default=str)
     instructions: Final = request_body.get("instructions")
-    return instructions if isinstance(instructions, str) else None
+    if isinstance(instructions, str):
+        return instructions
+    preamble: Final = next((m for m in _v3_messages(request_body) if m.get("role") in _V3_PREAMBLE_ROLES), None)
+    return _v3_message_text(preamble) if preamble is not None else None
 
 
 def _v3_first_message_text(request_body: Mapping[str, object]) -> str:
-    messages: Final = request_body.get("messages") or request_body.get("input")
-    if isinstance(messages, (list, tuple)) and messages and isinstance(messages[0], Mapping):
-        content: Final = messages[0].get("content")
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list) and content and isinstance(content[0], Mapping):
-            return str(content[0].get("text") or "")
-        return ""
-    prompt: Final = request_body.get("prompt")
-    return prompt if isinstance(prompt, str) else ""
+    """What the user first said: the first `user` message, never the system prompt that an
+    OpenAI chat body carries as `messages[0]`, else a Responses `input` string, else `prompt`."""
+    first_user: Final = next((m for m in _v3_messages(request_body) if m.get("role") == "user"), None)
+    if first_user is not None:
+        return _v3_message_text(first_user)
+    plain: Final = (
+        request_body.get("input") if isinstance(request_body.get("input"), str) else request_body.get("prompt")
+    )
+    return plain if isinstance(plain, str) else ""
 
 
 def _v3_user(envelope: StraikerWebhookRequest) -> str | None:
