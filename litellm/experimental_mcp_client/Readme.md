@@ -12,4 +12,6 @@ Code sharing the gateway's Python environment must support SDK2. Its Python API 
 
 Upgrade SDK1-dependent libraries before installing them alongside `litellm[mcp]` or `litellm[proxy]`, or keep those clients in a separate environment and connect over the network. For example, `langchain-mcp-adapters==0.2.1` uses SDK1 Python APIs and is tested as a separate legacy client, not as a shared SDK2 dependency
 
+The shared unit-test workflow runs the MCP integration suite once, with SDK2 in the gateway environment and an isolated SDK1 peer. Keep the SDK1 list/call compatibility test while SDK1 clients are supported; remove it when that support is explicitly retired and the client migration is documented
+
 See the official [SDK migration guide](https://py.sdk.modelcontextprotocol.io/migration/) for Python API changes
