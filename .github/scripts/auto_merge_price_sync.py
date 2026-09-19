@@ -86,9 +86,7 @@ def _is_bot_login(login: str) -> bool:
 
 
 def latest_check_runs(check_runs: Sequence[CheckRun]) -> tuple[CheckRun, ...]:
-    latest_by_name: Final[dict[str, CheckRun]] = {}
-    for run in sorted(check_runs, key=lambda run: run.id):
-        latest_by_name[run.name] = run
+    latest_by_name: Final = {run.name: run for run in sorted(check_runs, key=lambda run: run.id)}
     return tuple(latest_by_name.values())
 
 

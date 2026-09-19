@@ -160,6 +160,19 @@ def test_latest_check_run_failure_holds_despite_older_success() -> None:
     )
 
 
+def test_check_runs_parser_reads_ids_so_rerun_supersedes_cancelled(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload: Final = [
+        {"id": 7, "name": "build", "status": "completed", "conclusion": "success"},
+        {"id": 2, "name": "build", "status": "completed", "conclusion": "cancelled"},
+        {"name": "lint", "status": "completed", "conclusion": "success"},
+    ]
+    monkeypatch.setattr(merger, "_paginate", lambda token, path, key=None: payload)
+    parsed: Final = merger._check_runs("token", "owner/repo", "abc")
+    assert tuple(run.id for run in parsed) == (7, 2, 0)
+    latest: Final = merger.latest_check_runs(parsed)
+    assert tuple((run.name, run.conclusion) for run in latest) == (("lint", "success"), ("build", "success"))
+
+
 def test_own_check_run_is_ignored() -> None:
     verdict: Final = _evaluate(
         _inputs(
