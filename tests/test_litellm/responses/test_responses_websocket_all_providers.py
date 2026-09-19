@@ -2973,7 +2973,6 @@ def _wrapped_reasoning_item():
 
 
 class TestNativeWebSocketEncryptedContentAffinity:
-    """The native relay must restore and wrap ids the same way the HTTP /v1/responses path does."""
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("nested", [False, True])
