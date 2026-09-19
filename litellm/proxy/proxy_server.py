@@ -15862,17 +15862,20 @@ async def alerting_settings(
 
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
-            field_value: Any
-            _stored_in_db: bool | None
-            if field_name in alerting_args_dict:
-                field_value = alerting_args_dict[field_name]
-                _stored_in_db = True
-            elif field_name in config_alerting_args:
-                field_value = config_alerting_args[field_name]
-                _stored_in_db = False
-            else:
-                field_value = None
-                _stored_in_db = None
+            field_value: Final[Any] = (
+                alerting_args_dict[field_name]
+                if field_name in alerting_args_dict
+                else config_alerting_args[field_name]
+                if field_name in config_alerting_args
+                else None
+            )
+            _stored_in_db: Final[bool | None] = (
+                True
+                if field_name in alerting_args_dict
+                else False
+                if field_name in config_alerting_args
+                else None
+            )
 
             _response_obj = ConfigList(
                 field_name=field_name,
