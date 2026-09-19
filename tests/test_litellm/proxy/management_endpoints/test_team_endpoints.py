@@ -13737,12 +13737,16 @@ class _UntouchableRoster(Sequence[Member]):
         raise AssertionError("the roster was read while audit logging is off")
 
 
-def test_membership_audit_scheduling_skips_the_roster_entirely_when_audit_logging_is_off(monkeypatch):
-    """Regression: the before/after rosters were serialized on every membership change, even
-    when audit logs are not stored."""
-    from litellm.proxy.management_endpoints.team_endpoints import _schedule_team_membership_audit_log
+class _UntouchableUsers(Sequence[LiteLLM_UserTable]):
+    def __getitem__(self, index):
+        raise AssertionError("the created users were read while audit logging is off")
 
-    monkeypatch.setattr("litellm.store_audit_logs", False)
+    def __len__(self) -> int:
+        raise AssertionError("the created users were read while audit logging is off")
+
+
+def _schedule_membership_audit_with_untouchable_roster() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _schedule_team_membership_audit_log
 
     _schedule_team_membership_audit_log(
         team_id="team-quiet",
@@ -13752,6 +13756,75 @@ def test_membership_audit_scheduling_skips_the_roster_entirely_when_audit_loggin
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"),
         litellm_proxy_admin_name="admin",
     )
+
+
+def _schedule_member_add_audit_with_untouchable_roster() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _schedule_team_member_add_audit_logs
+
+    _schedule_team_member_add_audit_logs(
+        team_id="team-quiet",
+        team_alias="quiet",
+        updated_users=_UntouchableUsers(),
+        existing_user_ids=frozenset(),
+        before_members=_UntouchableRoster(),
+        after_members=_UntouchableRoster(),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"),
+        litellm_proxy_admin_name="admin",
+    )
+
+
+@pytest.mark.parametrize(
+    "schedule",
+    [_schedule_membership_audit_with_untouchable_roster, _schedule_member_add_audit_with_untouchable_roster],
+)
+def test_membership_audit_scheduling_skips_the_roster_entirely_when_audit_logging_is_off(monkeypatch, schedule):
+    """Regression: the before/after rosters were serialized on every membership change, even
+    when audit logs are not stored."""
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+    schedule()
+
+
+@pytest.mark.asyncio
+async def test_member_add_audit_reports_only_the_users_it_created_plus_the_roster_change(monkeypatch):
+    from litellm.proxy.management_endpoints.team_endpoints import _schedule_team_member_add_audit_logs
+
+    audit_logger = _wire_audit_log_callback(monkeypatch)
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_auditlog.create = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    before = (Member(user_id="alice", role="admin"),)
+    after = (*before, Member(user_id="bob", role="user"), Member(user_id="carol", role="user"))
+
+    _schedule_team_member_add_audit_logs(
+        team_id="team-add-audit",
+        team_alias="add-audit",
+        updated_users=[
+            LiteLLM_UserTable(user_id="bob", user_email="bob@example.com", teams=["team-add-audit"]),
+            LiteLLM_UserTable(user_id="carol", teams=["team-add-audit"]),
+        ],
+        existing_user_ids=frozenset({"bob"}),
+        before_members=before,
+        after_members=after,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-1"),
+        litellm_proxy_admin_name="admin",
+    )
+    await _settle_audit_log_tasks()
+
+    created_users = [
+        p
+        for p in audit_logger.payloads
+        if p["table_name"] == LitellmTableNames.USER_TABLE_NAME and p["action"] == "created"
+    ]
+    assert [p["object_id"] for p in created_users] == ["carol"], "only the user this request created is audited"
+    assert json.loads(created_users[0]["updated_values"])["teams"] == ["team-add-audit"]
+
+    [roster_event] = _team_roster_events(audit_logger, "updated")
+    assert roster_event["object_id"] == "team-add-audit"
+    assert _roster_user_roles(roster_event["before_value"]) == {"alice": "admin"}
+    assert _roster_user_roles(roster_event["updated_values"]) == {"alice": "admin", "bob": "user", "carol": "user"}
+    assert _roster_team_alias(roster_event["updated_values"]) == "add-audit"
 
 
 @pytest.mark.asyncio
