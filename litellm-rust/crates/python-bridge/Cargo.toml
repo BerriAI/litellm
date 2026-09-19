@@ -20,6 +20,7 @@ bytes.workspace = true
 litellm-auth.workspace = true
 litellm-callbacks-legacy.workspace = true
 litellm-core.workspace = true
+litellm-core-utils.workspace = true
 litellm-auth-gcp.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true

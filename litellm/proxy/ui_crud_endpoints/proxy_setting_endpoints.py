@@ -3,7 +3,7 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
     Final,
@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
@@ -489,6 +490,21 @@ async def get_allowed_ips():
     return {"data": _allowed_ip}
 
 
+def _store_allowed_ips(general_settings: MutableMapping[str, object], allowed_ips: Sequence[str]) -> None:
+    try:
+        general_settings["allowed_ips"] = list(allowed_ips)  # mutable-ok: compared against the file's own list
+    except ConfigOwnedKeyError as owned:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException serializes its detail as json
+                "error": str(owned),
+                "keys": (owned.key,),
+                "section": owned.section,
+                "stored_database_value_ignored": owned.shadows_db_value,
+            },
+        ) from owned
+
+
 @router.post(
     "/add/allowed_ip",
     tags=["Budget & Spend Tracking"],
@@ -509,12 +525,10 @@ async def add_allowed_ip(
     if prisma_client is None:
         raise Exception("No DB Connected")
 
-    _allowed_ips: Final[list] = general_settings.get("allowed_ips", [])
-    if ip_address.ip not in _allowed_ips:
-        _allowed_ips.append(ip_address.ip)
-        general_settings["allowed_ips"] = _allowed_ips
-    else:
+    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or ()
+    if ip_address.ip in _allowed_ips:
         raise HTTPException(status_code=400, detail="IP address already exists")
+    _store_allowed_ips(general_settings, (*_allowed_ips, ip_address.ip))
 
     if store_model_in_db is not True:
         raise HTTPException(
@@ -568,12 +582,10 @@ async def delete_allowed_ip(
         proxy_config,
     )
 
-    _allowed_ips: Final[list] = general_settings.get("allowed_ips", [])
-    if ip_address.ip in _allowed_ips:
-        _allowed_ips.remove(ip_address.ip)
-        general_settings["allowed_ips"] = _allowed_ips
-    else:
+    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or ()
+    if ip_address.ip not in _allowed_ips:
         raise HTTPException(status_code=404, detail="IP address not found")
+    _store_allowed_ips(general_settings, tuple(ip for ip in _allowed_ips if ip != ip_address.ip))
 
     # Load existing config
     config: Final = await proxy_config.get_config()
