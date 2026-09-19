@@ -58,7 +58,7 @@ describe("UpgradeBannerView", () => {
 
   it("shows the latest version, the stat line, and the current version when behind", () => {
     render(<UpgradeBannerView currentVersion="1.102.0" latestRelease={RELEASE} />);
-    const alert = screen.getByRole("alert");
+    const alert = screen.getByRole("status");
     expect(alert).toHaveTextContent("The latest version is v1.103.0: 12 new features, 30 fixes, and 8 other updates");
     expect(alert).toHaveTextContent("Your current version is v1.102.0");
     expect(screen.getByRole("link", { name: "v1.103.0" })).toHaveAttribute("href", RELEASE.release_url);
@@ -67,7 +67,7 @@ describe("UpgradeBannerView", () => {
   it("dismissing hides the banner and keeps it hidden on remount for the same release", () => {
     const { unmount } = render(<UpgradeBannerView currentVersion="1.102.0" latestRelease={RELEASE} />);
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
     unmount();
 
     const { container } = render(<UpgradeBannerView currentVersion="1.102.0" latestRelease={RELEASE} />);
@@ -80,7 +80,7 @@ describe("UpgradeBannerView", () => {
     unmount();
 
     render(<UpgradeBannerView currentVersion="1.102.0" latestRelease={{ ...RELEASE, version: "1.104.0" }} />);
-    expect(screen.getByRole("alert")).toHaveTextContent("The latest version is v1.104.0");
+    expect(screen.getByRole("status")).toHaveTextContent("The latest version is v1.104.0");
   });
 });
 
@@ -89,18 +89,34 @@ describe("UpgradeBanner", () => {
     localStorage.clear();
   });
 
+  afterEach(() => {
+    localStorage.clear();
+  });
+
   it("feeds both hooks the access token and renders from their data", () => {
-    vi.mocked(useHealthReadinessDetails).mockReturnValue({ data: { litellm_version: "1.102.0" } } as any);
-    vi.mocked(useLatestReleaseInfo).mockReturnValue({ data: RELEASE } as any);
+    const healthReadinessResult = {
+      data: { litellm_version: "1.102.0" },
+    } as Partial<ReturnType<typeof useHealthReadinessDetails>> as ReturnType<typeof useHealthReadinessDetails>;
+    const latestReleaseResult = { data: RELEASE } as Partial<ReturnType<typeof useLatestReleaseInfo>> as ReturnType<
+      typeof useLatestReleaseInfo
+    >;
+    vi.mocked(useHealthReadinessDetails).mockReturnValue(healthReadinessResult);
+    vi.mocked(useLatestReleaseInfo).mockReturnValue(latestReleaseResult);
     render(<UpgradeBanner accessToken="token" />);
     expect(useHealthReadinessDetails).toHaveBeenCalledWith("token");
     expect(useLatestReleaseInfo).toHaveBeenCalledWith("token");
-    expect(screen.getByRole("alert")).toHaveTextContent("The latest version is v1.103.0");
+    expect(screen.getByRole("status")).toHaveTextContent("The latest version is v1.103.0");
   });
 
   it("renders nothing when the release endpoint returns null", () => {
-    vi.mocked(useHealthReadinessDetails).mockReturnValue({ data: { litellm_version: "1.102.0" } } as any);
-    vi.mocked(useLatestReleaseInfo).mockReturnValue({ data: null } as any);
+    const healthReadinessResult = {
+      data: { litellm_version: "1.102.0" },
+    } as Partial<ReturnType<typeof useHealthReadinessDetails>> as ReturnType<typeof useHealthReadinessDetails>;
+    const latestReleaseResult = { data: null } as Partial<ReturnType<typeof useLatestReleaseInfo>> as ReturnType<
+      typeof useLatestReleaseInfo
+    >;
+    vi.mocked(useHealthReadinessDetails).mockReturnValue(healthReadinessResult);
+    vi.mocked(useLatestReleaseInfo).mockReturnValue(latestReleaseResult);
     const { container } = render(<UpgradeBanner accessToken="token" />);
     expect(container).toBeEmptyDOMElement();
   });

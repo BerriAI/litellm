@@ -1,3 +1,4 @@
+import asyncio
 import json
 import time
 from typing import Final
@@ -19,6 +20,7 @@ from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     LatestReleaseUnavailable,
     _default_cache,
     _default_client,
+    _default_fetch_lock,
     count_release_bullets,
     get_latest_release_info,
 )
@@ -48,7 +50,7 @@ EXPECTED_INFO: Final = {
     "version": "1.102.0",
     "new_features": 2,
     "bug_fixes": 2,
-    "other_updates": 2,
+    "other_updates": 4,
     "release_url": SAMPLE_RELEASE["html_url"],
 }
 
@@ -81,6 +83,7 @@ def _override_dependencies(client: _RecordingClient, cache: InMemoryCache, role:
     app.dependency_overrides[user_api_key_auth] = auth
     app.dependency_overrides[_default_client] = lambda: client
     app.dependency_overrides[_default_cache] = lambda: cache
+    app.dependency_overrides[_default_fetch_lock] = lambda: asyncio.Lock()
 
 
 @pytest.fixture
@@ -89,6 +92,7 @@ def http_client():
     app.dependency_overrides.pop(user_api_key_auth, None)
     app.dependency_overrides.pop(_default_client, None)
     app.dependency_overrides.pop(_default_cache, None)
+    app.dependency_overrides.pop(_default_fetch_lock, None)
 
 
 class TestCountReleaseBullets:
@@ -96,11 +100,21 @@ class TestCountReleaseBullets:
         counts = count_release_bullets(SAMPLE_BODY)
         assert counts["new_features"] == 2
         assert counts["bug_fixes"] == 2
-        assert counts["other_updates"] == 2
+        assert counts["other_updates"] == 4
+
+    def test_unprefixed_bullets_count_as_other_updates(self):
+        counts = count_release_bullets("* Litellm dev 09 08 2026 by @f in https://x/pull/7\n")
+        assert (counts["new_features"], counts["bug_fixes"], counts["other_updates"]) == (0, 0, 1)
 
     def test_ignores_non_bullet_lines_and_contributor_entries(self):
         assert (
-            sum(count_release_bullets("## What's Changed\n\n* @x made their first contribution in url\n").values()) == 0
+            sum(
+                count_release_bullets(
+                    "## What's Changed\n\n* @x made their first contribution in url\n"
+                    "\n**Full Changelog**: https://github.com/BerriAI/litellm/compare/v1...v2\n"
+                ).values()
+            )
+            == 0
         )
 
     def test_empty_body_yields_zero_counts(self):
@@ -112,7 +126,7 @@ class TestGetLatestReleaseInfo:
     @pytest.mark.asyncio
     async def test_fetches_and_parses_github_release(self):
         client = _RecordingClient([_github_response()])
-        result = await get_latest_release_info(client=client, cache=_fresh_cache())
+        result = await get_latest_release_info(client=client, cache=_fresh_cache(), fetch_lock=asyncio.Lock())
         assert isinstance(result, LatestReleaseInfo)
         assert result.model_dump() == EXPECTED_INFO
         assert client.calls == [(LATEST_RELEASE_URL, 5)]
@@ -121,15 +135,18 @@ class TestGetLatestReleaseInfo:
     async def test_second_call_within_ttl_does_not_refetch(self):
         client = _RecordingClient([_github_response()])
         cache = _fresh_cache()
-        first = await get_latest_release_info(client=client, cache=cache)
-        second = await get_latest_release_info(client=client, cache=cache)
+        fetch_lock = asyncio.Lock()
+        first = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
+        second = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
         assert first == second
         assert len(client.calls) == 1
 
     @pytest.mark.asyncio
     async def test_success_is_cached_for_the_full_ttl(self):
         cache = _fresh_cache()
-        await get_latest_release_info(client=_RecordingClient([_github_response()]), cache=cache)
+        await get_latest_release_info(
+            client=_RecordingClient([_github_response()]), cache=cache, fetch_lock=asyncio.Lock()
+        )
         remaining = await cache.async_get_ttl(LATEST_RELEASE_CACHE_KEY) - time.time()
         assert LATEST_RELEASE_CACHE_TTL_SECONDS - 5 < remaining <= LATEST_RELEASE_CACHE_TTL_SECONDS
 
@@ -137,8 +154,9 @@ class TestGetLatestReleaseInfo:
     async def test_failure_is_cached_briefly_so_github_is_not_hammered(self):
         client = _RecordingClient([httpx.ConnectError("boom")])
         cache = _fresh_cache()
-        first = await get_latest_release_info(client=client, cache=cache)
-        second = await get_latest_release_info(client=client, cache=cache)
+        fetch_lock = asyncio.Lock()
+        first = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
+        second = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
         assert isinstance(first, LatestReleaseUnavailable)
         assert first == second
         assert len(client.calls) == 1
@@ -159,8 +177,59 @@ class TestGetLatestReleaseInfo:
         ids=["rate_limited", "server_error", "missing_fields", "not_json"],
     )
     async def test_bad_github_responses_are_unavailable(self, response: httpx.Response):
-        result = await get_latest_release_info(client=_RecordingClient([response]), cache=_fresh_cache())
+        result = await get_latest_release_info(
+            client=_RecordingClient([response]), cache=_fresh_cache(), fetch_lock=asyncio.Lock()
+        )
         assert isinstance(result, LatestReleaseUnavailable)
+
+    @pytest.mark.asyncio
+    async def test_concurrent_misses_share_one_fetch(self):
+        event = asyncio.Event()
+
+        class _BlockingClient(_RecordingClient):
+            async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
+                self.calls.append((url, timeout))
+                await event.wait()
+                return _github_response()
+
+        client = _BlockingClient([])
+        cache = _fresh_cache()
+        fetch_lock = asyncio.Lock()
+        tasks = [
+            asyncio.create_task(get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock))
+            for _ in range(5)
+        ]
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        event.set()
+        results = await asyncio.gather(*tasks)
+        expected: Final = LatestReleaseInfo.model_validate(EXPECTED_INFO)
+        assert results == [expected] * 5
+        assert len(client.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_failure_under_lock_is_also_coalesced(self):
+        event = asyncio.Event()
+
+        class _FailingBlockingClient(_RecordingClient):
+            async def get(self, url: str, *, timeout: float | None = None) -> httpx.Response:
+                self.calls.append((url, timeout))
+                await event.wait()
+                raise httpx.ConnectError("boom")
+
+        client = _FailingBlockingClient([])
+        cache = _fresh_cache()
+        fetch_lock = asyncio.Lock()
+        tasks = [
+            asyncio.create_task(get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock))
+            for _ in range(5)
+        ]
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        event.set()
+        results = await asyncio.gather(*tasks)
+        assert all(isinstance(result, LatestReleaseUnavailable) for result in results)
+        assert len(client.calls) == 1
 
 
 class TestLatestReleaseInfoEndpoint:
