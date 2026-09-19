@@ -2438,13 +2438,13 @@ AGENTIC_MESSAGES = [
 
 async def _wire_and_result(
     guardrail: HeadroomGuardrail,
-    messages: list,
-    returned: list | None = None,
+    messages: list[dict[str, object]],
+    returned: list[dict[str, object]] | None = None,
     compress: bool = False,
-    request_data: dict | None = None,
+    request_data: dict[str, object] | None = None,
 ):
     inputs = GenericGuardrailAPIInputs(texts=["x"], structured_messages=json.loads(json.dumps(messages)))
-    sent: dict = {}
+    sent: dict[str, list[dict[str, object]]] = {}
 
     def _echo(**kwargs):
         sent["messages"] = kwargs["json"]["messages"]
@@ -2582,14 +2582,6 @@ async def test_mid_history_cache_control_row_is_never_sent_for_compression(guard
     assert result["structured_messages"][3] == cached_row
 
 
-# ---------------------------------------------------------------------------
-# LIT-8202: implicit prefix caching. Requests without a cache_control marker
-# (OpenAI-family, xAI, bedrock_mantle/openai.*) have no explicit breakpoint, so
-# the leading rows are frozen by count instead: re-compressing them with
-# position-dependent output would change the prefix bytes every turn and turn
-# every would-be cache read into a cache write.
-# ---------------------------------------------------------------------------
-
 IMPLICIT_CACHE_TURN_ONE = [
     {"role": "system", "content": "You are a helpful assistant. " + "S" * 5000},
     {"role": "user", "content": "U1 " + "Q" * 5000},
@@ -2651,7 +2643,6 @@ async def test_leading_prefix_is_byte_identical_across_turns_without_cache_contr
         assert "U1 " not in wire_json
         assert "F1 " not in wire_json
 
-    # Negative control: compression still runs on rows past the frozen prefix.
     assert IMPLICIT_CACHE_TURN_ONE[12] in wire_one
     assert IMPLICIT_CACHE_TURN_ONE[12] in wire_two
     assert IMPLICIT_CACHE_TURN_ONE[14] in wire_two
