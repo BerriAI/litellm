@@ -2,32 +2,34 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+from collections.abc import Mapping
 import json
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
 from queue import SimpleQueue
+import struct
 from typing import Final, cast
+import zlib
 
 import httpx
 import uvicorn
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
-from integration._support.scripted_shapes import (
-    RenderedResponse,
-    Scenario,
-    ScenarioDeleted,
-    ScenarioRegistered,
-    ScenarioStore,
-    render,
+from integration.cost_calculation.cost_tracking_case import (
+    EventStreamResponse,
+    JsonResponse,
+    SseResponse,
+    StoredResponse,
 )
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+CASES_FILE: Final = Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_tracking_cases.json"
 INTERNAL_FIELDS: Final = frozenset(
     {
         "litellm_params",
@@ -54,6 +56,53 @@ class Observation:
     path: str
     authorization: str
     body: dict[str, JsonValue]
+
+
+class _ScenarioRegistration(BaseModel):
+    scenario_id: str
+    response: StoredResponse
+
+
+def _aws_str_header(name: str, value: str) -> bytes:
+    name_bytes: Final = name.encode()
+    value_bytes: Final = value.encode()
+    return (
+        struct.pack("!B", len(name_bytes))
+        + name_bytes
+        + struct.pack("!B", 7)
+        + struct.pack("!H", len(value_bytes))
+        + value_bytes
+    )
+
+
+def _aws_event_frame(event_type: str, payload: Mapping[str, JsonValue], scenario_id: str) -> bytes:
+    payload_bytes: Final = json.dumps(payload, separators=(",", ":")).replace(
+        "$REQUEST_ID", scenario_id
+    ).encode()
+    headers_bytes: Final = (
+        _aws_str_header(":event-type", event_type)
+        + _aws_str_header(":content-type", "application/json")
+        + _aws_str_header(":message-type", "event")
+    )
+    total_length: Final = 12 + len(headers_bytes) + len(payload_bytes) + 4
+    prelude: Final = struct.pack("!II", total_length, len(headers_bytes))
+    prelude_crc: Final = struct.pack("!I", zlib.crc32(prelude) & 0xFFFFFFFF)
+    message: Final = prelude + prelude_crc + headers_bytes + payload_bytes
+    return message + struct.pack("!I", zlib.crc32(message) & 0xFFFFFFFF)
+
+
+class ScenarioStore:
+    def __init__(self) -> None:
+        self._scenarios: dict[str, StoredResponse] = {}
+
+    def put(self, scenario_id: str, response: StoredResponse) -> None:
+        self._scenarios[scenario_id] = response
+
+    def drop(self, scenario_id: str) -> bool:
+        return self._scenarios.pop(scenario_id, None) is not None
+
+    def get(self, scenario_id: str) -> StoredResponse | None:
+        return self._scenarios.get(scenario_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +140,7 @@ class Provider:
         return await chat_completions(request)
 
     async def script(self, request: Request) -> Response:
-        name: Final = request.path_params["model"]
+        name: Final = cast(str, request.path_params["model"])
         if request.method in {"DELETE", "GET"} and name not in self.scripts:
             return JSONResponse({"error": "Script not found"}, status_code=404)
         if request.method == "GET":
@@ -118,71 +167,60 @@ class Provider:
 
     async def register_scenario(self, request: Request) -> Response:
         try:
-            scenario: Final = Scenario.model_validate_json(await request.body())
+            registration: Final = _ScenarioRegistration.model_validate_json(await request.body())
         except ValidationError as exc:
-            return self._render(
-                RenderedResponse(400, "application/json", json.dumps({"error": str(exc)}).encode("utf-8"))
-            )
-        self.scenario_store.put(scenario)
-        return self._render(
-            RenderedResponse(
-                200,
-                "application/json",
-                json.dumps({"scenario_id": scenario.scenario_id}).encode("utf-8"),
-            )
-        )
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        self.scenario_store.put(registration.scenario_id, registration.response)
+        return JSONResponse({"scenario_id": registration.scenario_id})
 
     async def delete_scenario(self, request: Request) -> Response:
         scenario_id: Final = cast(str, request.path_params["scenario_id"])
         deleted: Final = self.scenario_store.drop(scenario_id)
-        return self._render(
-            RenderedResponse(
-                200 if deleted else 404,
-                "application/json",
-                json.dumps({"deleted": deleted}).encode("utf-8"),
-            )
-        )
+        return JSONResponse({"deleted": deleted}, status_code=200 if deleted else 404)
 
     async def cost_map(self, _request: Request) -> Response:
-        return self._render(
-            RenderedResponse(
-                200,
-                "application/json",
-                (Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_map.json").read_bytes(),
-            )
-        )
+        cases_file: Final = JSON_OBJECT.validate_json(CASES_FILE.read_bytes())
+        return JSONResponse(cases_file["cost_map"])
 
     async def oauth_token(self, _request: Request) -> Response:
-        return self._render(
-            RenderedResponse(
-                200,
-                "application/json",
-                json.dumps(
-                    {
-                        "access_token": "scripted-token",
-                        "token_type": "Bearer",
-                        "expires_in": 3600,
-                    }
-                ).encode("utf-8"),
-            )
+        return JSONResponse(
+            {
+                "access_token": "scripted-token",
+                "token_type": "Bearer",
+                "expires_in": 3600,
+            }
         )
 
     async def scripted(self, request: Request) -> Response:
-        rendered: Final = render(
-            self.scenario_store,
-            request.method,
-            request.url.path,
-            await request.body(),
-        )
-        return self._render(rendered)
+        segments: Final = tuple(segment for segment in cast(str, request.path_params["path"]).split("/") if segment)
+        if not segments:
+            return JSONResponse({"error": "Unknown scenario"}, status_code=404)
+        scenario_id: Final = segments[0].split(":", 1)[0]
+        response: Final = self.scenario_store.get(scenario_id)
+        if response is None:
+            return JSONResponse({"error": "Unknown scenario"}, status_code=404)
+        return self._response(response, scenario_id)
 
     @staticmethod
-    def _render(rendered: RenderedResponse) -> Response:
-        return Response(
-            content=rendered.body,
-            status_code=rendered.status_code,
-            media_type=rendered.content_type,
-        )
+    def _response(response: StoredResponse, scenario_id: str) -> Response:
+        match response:
+            case JsonResponse():
+                return Response(
+                    content=json.dumps(response.body, separators=(",", ":")).replace(
+                        "$REQUEST_ID", scenario_id
+                    ).encode(),
+                    media_type=response.content_type,
+                )
+            case SseResponse():
+                stream_body: Final = ("\n\n".join(response.frames) + "\n\n").replace(
+                    "$REQUEST_ID", scenario_id
+                )
+                return Response(content=stream_body.encode(), media_type=response.content_type)
+            case EventStreamResponse():
+                event_body: Final = b"".join(
+                    _aws_event_frame(event.event_type, event.payload, scenario_id) for event in response.events
+                )
+                return Response(content=event_body, media_type=response.content_type)
 
     def app(self) -> Starlette:
         return Starlette(
@@ -198,7 +236,7 @@ class Provider:
                 Route("/v1/completions", completions, methods=["POST"]),
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
-                Route("/{scenario_id}/{tail:path}", self.scripted, methods=["POST"]),
+                Route("/{path:path}", self.scripted, methods=["POST"]),
             ]
         )
 
@@ -215,17 +253,16 @@ class ScenarioHandle:
         return f"{self.control_url}/{self.scenario_id}"
 
 
-def register_scenario(scenario: Scenario) -> ScenarioHandle:
-    response: Final = httpx.post(
+def register_scenario(scenario_id: str, response: StoredResponse) -> ScenarioHandle:
+    http_response: Final = httpx.post(
         f"{CONTROL_URL}/__scenarios",
-        json=scenario.model_dump(mode="json"),
+        json={"scenario_id": scenario_id, "response": response.model_dump(mode="json")},
         trust_env=False,
         timeout=15,
     )
-    response.raise_for_status()
-    result: Final = ScenarioRegistered.model_validate_json(response.content)
+    http_response.raise_for_status()
     return ScenarioHandle(
-        scenario_id=result.scenario_id,
+        scenario_id=scenario_id,
         control_url=CONTROL_URL,
     )
 
@@ -237,7 +274,6 @@ def delete_scenario(handle: ScenarioHandle) -> None:
         timeout=15,
     )
     response.raise_for_status()
-    ScenarioDeleted.model_validate_json(response.content)
 
 
 def main() -> None:
