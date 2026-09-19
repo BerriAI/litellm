@@ -11,10 +11,10 @@ import json
 import sys
 import types
 
-for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_next'):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_v1_python'):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-module = sys.modules['litellm.rust_bridge.callbacks_next']
+module = sys.modules['litellm.rust_bridge.callbacks_v1_python']
 contract = json.loads(python_contract)
 
 def contracted(name, fake):

@@ -3,17 +3,17 @@ use litellm_host_python::{RouteHost, run_call};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use crate::adapter::NextLifecycle;
+use crate::adapter::V1PythonLifecycle;
 use crate::registry::snapshot;
 
 #[derive(Clone, Copy, Debug)]
-pub struct NextSurface {
+pub struct V1PythonSurface {
     pub call_type: &'static str,
 }
 
-pub fn run_next_call<H, M>(
+pub fn run_v1_python_call<H, M>(
     py: Python<'_>,
-    surface: NextSurface,
+    surface: V1PythonSurface,
     kwargs: &Bound<'_, PyDict>,
     machine: M,
     route: H,
@@ -29,7 +29,7 @@ where
         py,
         machine,
         route,
-        Box::new(NextLifecycle::new(surface, subscribers, asynchronous)),
+        Box::new(V1PythonLifecycle::new(surface, subscribers, asynchronous)),
         arguments,
         asynchronous,
     )

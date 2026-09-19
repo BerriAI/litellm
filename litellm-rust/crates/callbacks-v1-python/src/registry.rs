@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 
+use litellm_callbacks_v1::{EventKind, ExecutionMode, HandlerSelection, SCHEMA_V1, select_handler};
 use pyo3::exceptions::PyValueError;
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 
-use crate::envelope::{EventKind, SCHEMA_V1};
-use crate::next_python::NextPython;
+use crate::python::V1Python;
 
 pub enum Handler {
     Sync(Py<PyAny>),
@@ -20,20 +20,6 @@ pub struct Subscriber {
     pub intercept: Option<Handler>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Kind {
-    Sync,
-    Async,
-}
-
-pub(crate) fn select(asynchronous: bool, has_sync: bool, has_async: bool) -> Option<Kind> {
-    match (asynchronous, has_sync, has_async) {
-        (true, _, true) => Some(Kind::Async),
-        (_, true, _) => Some(Kind::Sync),
-        _ => None,
-    }
-}
-
 fn selected_handler(
     subscriber: &Bound<'_, PyAny>,
     asynchronous: bool,
@@ -42,20 +28,24 @@ fn selected_handler(
 ) -> PyResult<Option<Handler>> {
     let sync = subscriber.getattr(sync_name)?;
     let asynchronous_handler = subscriber.getattr(async_name)?;
-    let kind = select(
-        asynchronous,
+    let selection = select_handler(
+        if asynchronous {
+            ExecutionMode::Async
+        } else {
+            ExecutionMode::Sync
+        },
         !sync.is_none(),
         !asynchronous_handler.is_none(),
     );
-    Ok(match kind {
-        Some(Kind::Sync) => Some(Handler::Sync(sync.unbind())),
-        Some(Kind::Async) => Some(Handler::Async(asynchronous_handler.unbind())),
-        None => None,
+    Ok(match selection {
+        HandlerSelection::Sync => Some(Handler::Sync(sync.unbind())),
+        HandlerSelection::Async => Some(Handler::Async(asynchronous_handler.unbind())),
+        HandlerSelection::Skip => None,
     })
 }
 
 pub fn snapshot(py: Python<'_>, asynchronous: bool) -> PyResult<Vec<Subscriber>> {
-    NextPython::Snapshot
+    V1Python::Snapshot
         .call(py, ())?
         .try_iter()?
         .map(|item| {
@@ -102,29 +92,5 @@ impl Handler {
 
     pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(self.object())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use rstest::rstest;
-
-    use super::*;
-
-    #[rstest]
-    #[case(true, true, true, Some(Kind::Async))]
-    #[case(true, false, true, Some(Kind::Async))]
-    #[case(true, true, false, Some(Kind::Sync))]
-    #[case(false, true, true, Some(Kind::Sync))]
-    #[case(false, true, false, Some(Kind::Sync))]
-    #[case(false, false, true, None)]
-    #[case(false, false, false, None)]
-    fn handler_selection_never_selects_async_for_sync_calls(
-        #[case] asynchronous: bool,
-        #[case] has_sync: bool,
-        #[case] has_async: bool,
-        #[case] expected: Option<Kind>,
-    ) {
-        assert_eq!(select(asynchronous, has_sync, has_async), expected);
     }
 }

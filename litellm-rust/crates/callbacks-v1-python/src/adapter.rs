@@ -1,3 +1,6 @@
+use litellm_callbacks_v1::{
+    CallFacts, Envelope, ErrorFacts, Event, RequestFacts, SCHEMA_V1, Sequencer, WirePatch, apply,
+};
 use litellm_host::event::{MachineEvent, RequestContext, Timing, WireRequest};
 use litellm_host_python::{
     LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, missing_state, to_py,
@@ -8,10 +11,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyString};
 use serde_json::{Map, Value};
 
-use crate::call::NextSurface;
-use crate::envelope::{CallFacts, Envelope, ErrorFacts, Event, RequestFacts, Sequencer};
-use crate::next_python::NextPython;
-use crate::patch::{WirePatch, apply};
+use crate::call::V1PythonSurface;
+use crate::python::V1Python;
 use crate::registry::{Handler, Subscriber};
 
 enum Then {
@@ -35,8 +36,8 @@ enum Pending {
     },
 }
 
-pub struct NextLifecycle {
-    surface: NextSurface,
+pub struct V1PythonLifecycle {
+    surface: V1PythonSurface,
     subscribers: Vec<Subscriber>,
     asynchronous: bool,
     start_time: f64,
@@ -67,8 +68,8 @@ impl Then {
     }
 }
 
-impl NextLifecycle {
-    pub fn new(surface: NextSurface, subscribers: Vec<Subscriber>, asynchronous: bool) -> Self {
+impl V1PythonLifecycle {
+    pub fn new(surface: V1PythonSurface, subscribers: Vec<Subscriber>, asynchronous: bool) -> Self {
         Self {
             surface,
             subscribers,
@@ -96,7 +97,7 @@ impl NextLifecycle {
         error: PyErr,
     ) -> PyResult<()> {
         let event: &'static str = envelope.event.kind().into();
-        match NextPython::Report.call(py, (name, event, error.value(py))) {
+        match V1Python::Report.call(py, (name, event, error.value(py))) {
             Err(report_error) if is_cancellation(py, &report_error) => Err(report_error),
             _ => Ok(()),
         }
@@ -178,7 +179,7 @@ impl NextLifecycle {
 
     fn interceptor_at(&self, py: Python<'_>, index: usize) -> Option<(String, bool, Py<PyAny>)> {
         let subscriber = &self.subscribers[index];
-        if subscriber.schema != crate::envelope::SCHEMA_V1 {
+        if subscriber.schema != SCHEMA_V1 {
             return None;
         }
         subscriber.intercept.as_ref().map(|handler| {
@@ -254,7 +255,7 @@ impl NextLifecycle {
         {
             return value.extract();
         }
-        NextPython::NewCallId.call(py, ())?.extract()
+        V1Python::NewCallId.call(py, ())?.extract()
     }
 
     fn error_facts(py: Python<'_>, error: &PyErr) -> PyResult<ErrorFacts> {
@@ -274,7 +275,7 @@ impl NextLifecycle {
     }
 }
 
-impl PythonLifecycle for NextLifecycle {
+impl PythonLifecycle for V1PythonLifecycle {
     fn begin(
         &mut self,
         py: Python<'_>,
@@ -324,7 +325,7 @@ impl PythonLifecycle for NextLifecycle {
                 self.observe(py, envelope, 0, Then::Done)
             }
             LifecycleEvent::Succeeded { timing, response } => {
-                let projection = NextPython::ProjectResponse.call(py, (response,));
+                let projection = V1Python::ProjectResponse.call(py, (response,));
                 let (response, response_error) = match projection {
                     Ok(value) => match from_py::<Value>(&value) {
                         Ok(response) => (response, None),

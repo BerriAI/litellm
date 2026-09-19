@@ -11,7 +11,7 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::{LegacyLogging, LegacySurface};
+use crate::{LegacyPythonLifecycle, LegacyPythonSurface};
 
 pub struct PublicCall {
     args: Py<PyTuple>,
@@ -65,9 +65,9 @@ impl PublicCall {
 
 /// Runs one native call under the legacy `Logging` contract: the route host projects from
 /// the keyword view the contract prepares, and the contract observes the call.
-pub fn run_legacy_call<H, M>(
+pub fn run_legacy_python_call<H, M>(
     py: Python<'_>,
-    surface: LegacySurface,
+    surface: LegacyPythonSurface,
     call: PublicCall,
     machine: M,
     route: H,
@@ -82,7 +82,7 @@ where
         py,
         machine,
         route,
-        Box::new(LegacyLogging::new(py, surface, call, asynchronous)),
+        Box::new(LegacyPythonLifecycle::new(py, surface, call, asynchronous)),
         arguments,
         asynchronous,
     )

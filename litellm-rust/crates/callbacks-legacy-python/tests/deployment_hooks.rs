@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rstest::rstest;
 
-use super::LegacyLogging;
+use super::LegacyPythonLifecycle;
 use crate::test_support::{legacy_call, local, namespace, run};
 
 const CALL: &CStr = c"
@@ -24,7 +24,7 @@ fn begin<'py>(
     py: Python<'py>,
     locals: &Bound<'py, PyDict>,
     asynchronous: bool,
-) -> (LegacyLogging, LifecycleStep) {
+) -> (LegacyPythonLifecycle, LifecycleStep) {
     let mut logging = legacy_call(py, locals, asynchronous);
     let kwargs = local(locals, "kwargs")
         .cast_into::<PyDict>()

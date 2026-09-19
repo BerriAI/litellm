@@ -2,7 +2,7 @@ mod host;
 
 use host::MessagesRouteHost;
 use litellm_callbacks_legacy_python::{
-    LegacySurface, PassThroughStream, PublicCall, run_legacy_call,
+    LegacyPythonSurface, PassThroughStream, PublicCall, run_legacy_python_call,
 };
 use litellm_core::messages::route::{messages_machine, supports};
 use pyo3::{
@@ -12,7 +12,7 @@ use pyo3::{
 
 use crate::errors::RustBridgeDeclined;
 
-const SURFACE: LegacySurface = LegacySurface {
+const SURFACE: LegacyPythonSurface = LegacyPythonSurface {
     call_type: "anthropic_messages",
     input_description: "Messages",
     stream: Some(PassThroughStream {
@@ -40,7 +40,7 @@ fn run_messages(
             "the Rust Messages route does not serve this provider",
         ));
     }
-    run_legacy_call(
+    run_legacy_python_call(
         py,
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,

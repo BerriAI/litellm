@@ -8,11 +8,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{Value, json};
 
-use crate::adapter::NextLifecycle;
-use crate::call::NextSurface;
-use crate::envelope::{EventKind, SCHEMA_V1};
+use crate::adapter::V1PythonLifecycle;
+use crate::call::V1PythonSurface;
 use crate::registry::{Handler, Subscriber};
 use crate::test_support::{local, namespace};
+use litellm_callbacks_v1::{EventKind, SCHEMA_V1};
 
 const TIMING: Timing = Timing {
     start_time: 10.0,
@@ -45,11 +45,15 @@ fn subscriber(
     }
 }
 
-fn lifecycle(subscribers: Vec<Subscriber>, asynchronous: bool) -> NextLifecycle {
-    NextLifecycle::new(NextSurface { call_type: "ocr" }, subscribers, asynchronous)
+fn lifecycle(subscribers: Vec<Subscriber>, asynchronous: bool) -> V1PythonLifecycle {
+    V1PythonLifecycle::new(
+        V1PythonSurface { call_type: "ocr" },
+        subscribers,
+        asynchronous,
+    )
 }
 
-fn started(adapter: &mut NextLifecycle, py: Python<'_>) {
+fn started(adapter: &mut V1PythonLifecycle, py: Python<'_>) {
     assert!(matches!(
         adapter
             .emit(py, LifecycleEvent::Started { start_time: 10.0 })
@@ -254,7 +258,7 @@ def record(event):
             ["call.started"]
         );
         let reports = py
-            .import("litellm.rust_bridge.callbacks_next")
+            .import("litellm.rust_bridge.callbacks_v1_python")
             .unwrap()
             .getattr("reports")
             .unwrap();

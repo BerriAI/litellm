@@ -26,7 +26,7 @@ use crate::{
 
 /// What the legacy contract needs to know about the route it is logging.
 #[derive(Clone, Copy, Debug)]
-pub struct LegacySurface {
+pub struct LegacyPythonSurface {
     pub call_type: &'static str,
     /// What `Logging.pre_call` is told the input was.
     pub input_description: &'static str,
@@ -59,8 +59,8 @@ enum Pending {
     AsyncFailure,
 }
 
-pub struct LegacyLogging {
-    surface: LegacySurface,
+pub struct LegacyPythonLifecycle {
+    surface: LegacyPythonSurface,
     call: PublicCall,
     logger: Option<PythonLogger>,
     start: Py<PyAny>,
@@ -84,10 +84,10 @@ fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
     !error.is_instance_of::<PyException>(py)
 }
 
-impl LegacyLogging {
+impl LegacyPythonLifecycle {
     pub fn new(
         py: Python<'_>,
-        surface: LegacySurface,
+        surface: LegacyPythonSurface,
         call: PublicCall,
         asynchronous: bool,
     ) -> Self {
@@ -283,7 +283,7 @@ impl LegacyLogging {
     }
 }
 
-impl PythonLifecycle for LegacyLogging {
+impl PythonLifecycle for LegacyPythonLifecycle {
     fn begin(
         &mut self,
         py: Python<'_>,

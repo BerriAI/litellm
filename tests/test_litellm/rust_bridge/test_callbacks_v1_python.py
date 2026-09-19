@@ -7,11 +7,11 @@ from typing import Final, cast
 import pytest
 from pydantic import BaseModel, TypeAdapter
 
-from litellm.rust_bridge import callbacks_next as callbacks
+from litellm.rust_bridge import callbacks_v1_python as callbacks
 
 ROOT: Final = Path(__file__).parents[3]
-CONTRACT_PATH: Final = ROOT / "litellm-rust/crates/callbacks-next/python_contract.json"
-GOLDEN_PATH: Final = ROOT / "litellm-rust/crates/callbacks-next/golden/v1"
+CONTRACT_PATH: Final = ROOT / "litellm-rust/crates/callbacks-v1-python/python_contract.json"
+GOLDEN_PATH: Final = ROOT / "litellm-rust/crates/callbacks-v1/golden/v1"
 
 
 def _clear_registry() -> None:
