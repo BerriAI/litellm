@@ -14572,40 +14572,52 @@ async def test_reset_team_member_budget_fn_forbidden_for_non_admin(monkeypatch):
     mock_prisma_client.db.litellm_teammembership.update.assert_not_awaited()
 
 
+async def _team_info_budget_sources(
+    team_row: LiteLLM_TeamTable,
+    memberships: list[LiteLLM_TeamMembership],
+    default_budget_row: LiteLLM_BudgetTable | None,
+) -> dict[str, str]:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=default_budget_row)
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.object(  # test-quality-ok: membership lookup is a module-level DB query with no injection point
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=memberships)
+        ),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id=team_row.team_id,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    return {tm.user_id: tm.budget_source for tm in response["team_memberships"]}
+
+
 @pytest.mark.asyncio
 async def test_team_info_reports_whether_each_member_follows_the_team_default_budget():
     """/team/info must tell the caller which members still follow the team's shared member budget
     and which carry their own row, since budget_id alone only means something to a reader who
     also knows the team's team_member_budget_id."""
-    from fastapi import Request
-
-    from litellm.proxy.management_endpoints import team_endpoints
-
-    team_row = _team_with_default_budget("team-1", "team-default-b")
-    memberships = [
-        LiteLLM_TeamMembership(user_id="inherits", team_id="team-1", budget_id="team-default-b"),
-        LiteLLM_TeamMembership(user_id="customized", team_id="team-1", budget_id="own-b"),
-        LiteLLM_TeamMembership(user_id="unlinked", team_id="team-1", budget_id=None),
-    ]
-
-    mock_prisma = MagicMock()
-    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
-    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(
-        return_value=LiteLLM_BudgetTable(budget_id="team-default-b", max_budget=100.0)
+    sources = await _team_info_budget_sources(
+        team_row=_team_with_default_budget("team-1", "team-default-b"),
+        memberships=[
+            LiteLLM_TeamMembership(user_id="inherits", team_id="team-1", budget_id="team-default-b"),
+            LiteLLM_TeamMembership(user_id="customized", team_id="team-1", budget_id="own-b"),
+            LiteLLM_TeamMembership(user_id="unlinked", team_id="team-1", budget_id=None),
+        ],
+        default_budget_row=LiteLLM_BudgetTable(budget_id="team-default-b", max_budget=100.0),
     )
-    mock_prisma.get_data = AsyncMock(return_value=[])
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch.object(team_endpoints, "get_all_team_memberships", AsyncMock(return_value=memberships)),
-    ):
-        response = await team_endpoints.team_info(
-            http_request=MagicMock(spec=Request),
-            team_id="team-1",
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-        )
-
-    assert {tm.user_id: tm.budget_source for tm in response["team_memberships"]} == {
+    assert sources == {
         "inherits": "team_default",
         "customized": "custom",
         "unlinked": "team_default",
@@ -14617,30 +14629,36 @@ async def test_team_info_reports_no_budget_source_when_team_has_no_default():
     """A team that never set team_member_budget has nothing for members to inherit, so an
     unlinked member is 'none' rather than 'team_default', while a member with their own row is
     still 'custom'."""
-    from fastapi import Request
+    sources = await _team_info_budget_sources(
+        team_row=LiteLLM_TeamTable(team_id="team-1"),
+        memberships=[
+            LiteLLM_TeamMembership(user_id="customized", team_id="team-1", budget_id="own-b"),
+            LiteLLM_TeamMembership(user_id="unlinked", team_id="team-1", budget_id=None),
+        ],
+        default_budget_row=None,
+    )
 
-    from litellm.proxy.management_endpoints import team_endpoints
+    assert sources == {
+        "customized": "custom",
+        "unlinked": "none",
+    }
 
-    memberships = [
-        LiteLLM_TeamMembership(user_id="customized", team_id="team-1", budget_id="own-b"),
-        LiteLLM_TeamMembership(user_id="unlinked", team_id="team-1", budget_id=None),
-    ]
 
-    mock_prisma = MagicMock()
-    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=LiteLLM_TeamTable(team_id="team-1"))
-    mock_prisma.get_data = AsyncMock(return_value=[])
+@pytest.mark.asyncio
+async def test_team_info_reports_no_budget_source_when_team_default_row_was_deleted():
+    """If the budget row named by team_member_budget_id was removed via /budget/delete, nothing is
+    enforced for unlinked members any more, so /team/info must not keep advertising a team default
+    that no longer exists."""
+    sources = await _team_info_budget_sources(
+        team_row=_team_with_default_budget("team-1", "deleted-b"),
+        memberships=[
+            LiteLLM_TeamMembership(user_id="customized", team_id="team-1", budget_id="own-b"),
+            LiteLLM_TeamMembership(user_id="unlinked", team_id="team-1", budget_id=None),
+        ],
+        default_budget_row=None,
+    )
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch.object(team_endpoints, "get_all_team_memberships", AsyncMock(return_value=memberships)),
-    ):
-        response = await team_endpoints.team_info(
-            http_request=MagicMock(spec=Request),
-            team_id="team-1",
-            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
-        )
-
-    assert {tm.user_id: tm.budget_source for tm in response["team_memberships"]} == {
+    assert sources == {
         "customized": "custom",
         "unlinked": "none",
     }
