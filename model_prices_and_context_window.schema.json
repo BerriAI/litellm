@@ -431,6 +431,7 @@
             "chat",
             "completion",
             "embedding",
+            "evaluation",
             "guardrail",
             "image_edit",
             "image_generation",

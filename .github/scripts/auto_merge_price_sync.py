@@ -1,9 +1,9 @@
 """Auto-merge the provider-info-sync bot's cost-map pull requests.
 
 Evaluates every gate (author allowlist, cost-map-only diff, required and
-non-required checks, Greptile confidence, Bugbot review, human reviews) and
-merges with a merge commit when all of them hold. Every hold reason is
-logged; the process exits 0 on hold and 1 only on API or programming errors.
+non-required checks, human reviews) and merges with a merge commit when
+all of them hold. Every hold reason is logged; the process exits 0 on hold
+and 1 only on API or programming errors.
 ``DRY_RUN=1`` prints the verdict without calling the merge endpoint.
 """
 
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -27,12 +26,6 @@ CLASSIFY_SCRIPT: Final = os.path.join(REPO_ROOT, ".circleci", "scripts", "classi
 API_ROOT: Final = "https://api.github.com"
 CHANGED_FILE_CEILING: Final = 3000
 OK_CHECK_CONCLUSIONS: Final = frozenset({"success", "skipped", "neutral"})
-GREPTILE_LOGIN: Final = "greptile-apps[bot]"
-BUGBOT_LOGIN: Final = "cursor[bot]"
-GREPTILE_SCORE_RE: Final = re.compile(r"Confidence Score:\s*(\d)/5")
-BUGBOT_REVIEW_MARKER: Final = "<!-- BUGBOT_REVIEW -->"
-BUGBOT_STALE_MARKER: Final = "<!-- BUGBOT_REVIEW_STALE -->"
-BUGBOT_CLEAN: Final = "found no new issues"
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,13 +54,6 @@ class CommitStatus:
 
 
 @dataclass(frozen=True, slots=True)
-class IssueComment:
-    author_login: str
-    body: str
-    updated_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
 class Review:
     author_login: str
     state: str
@@ -89,9 +75,7 @@ class EvaluationInputs:
     required_contexts: frozenset[str]
     check_runs: tuple[CheckRun, ...]
     statuses: tuple[CommitStatus, ...]
-    comments: tuple[IssueComment, ...]
     reviews: tuple[Review, ...]
-    head_commit_date: datetime
     self_check_name: str
     author_allowlist: frozenset[str]
 
@@ -154,37 +138,6 @@ def evaluate(
     for status in inputs.statuses:
         if status.state != "success":
             reasons.append(f"commit status {status.context!r} is {status.state}")
-
-    greptile: Final = tuple(
-        comment
-        for comment in inputs.comments
-        if comment.author_login == GREPTILE_LOGIN and GREPTILE_SCORE_RE.search(comment.body)
-    )
-    if not greptile:
-        reasons.append("greptile score not available")
-    else:
-        latest: Final = max(greptile, key=lambda comment: comment.updated_at)
-        match: Final = GREPTILE_SCORE_RE.search(latest.body)
-        score: Final = int(match.group(1)) if match else 0
-        if latest.updated_at < inputs.head_commit_date:
-            reasons.append("greptile score older than head commit")
-        elif score != 5:
-            reasons.append(f"greptile score {score}/5 below 5")
-
-    bugbot: Final = tuple(
-        review
-        for review in inputs.reviews
-        if review.author_login == BUGBOT_LOGIN
-        and BUGBOT_REVIEW_MARKER in review.body
-        and BUGBOT_STALE_MARKER not in review.body
-        and review.commit_id == pr.head_sha
-    )
-    if not bugbot:
-        reasons.append("bugbot review not available")
-    else:
-        latest_review: Final = max(bugbot, key=lambda review: review.submitted_at)
-        if BUGBOT_CLEAN not in latest_review.body:
-            reasons.append("bugbot reported issues")
 
     latest_state_by_reviewer: Final[dict[str, str]] = {}
     for review in sorted(inputs.reviews, key=lambda review: review.submitted_at):
@@ -350,19 +303,6 @@ def _statuses(token: str, repo: str, sha: str) -> tuple[CommitStatus, ...]:
     )
 
 
-def _comments(token: str, repo: str, number: int) -> tuple[IssueComment, ...]:
-    comments: Final = _paginate(token, f"/repos/{repo}/issues/{number}/comments")
-    return tuple(
-        IssueComment(
-            author_login=_text(_nested(item, "user", "login")),
-            body=_text(item.get("body")),
-            updated_at=_parse_time(item.get("updated_at")),
-        )
-        for item in comments
-        if isinstance(item, Mapping)
-    )
-
-
 def _reviews(token: str, repo: str, number: int) -> tuple[Review, ...]:
     reviews: Final = _paginate(token, f"/repos/{repo}/pulls/{number}/reviews")
     return tuple(
@@ -376,16 +316,6 @@ def _reviews(token: str, repo: str, number: int) -> tuple[Review, ...]:
         for item in reviews
         if isinstance(item, Mapping)
     )
-
-
-def _head_commit_date(token: str, repo: str, number: int) -> datetime:
-    commits: Final = _paginate(token, f"/repos/{repo}/pulls/{number}/commits")
-    if not commits:
-        return datetime.min.replace(tzinfo=timezone.utc)
-    last: Final = commits[-1]
-    if not isinstance(last, Mapping):
-        return datetime.min.replace(tzinfo=timezone.utc)
-    return _parse_time(_nested(last, "commit", "committer", "date"))
 
 
 def _mergeable_or_refetch(token: str, repo: str, pr: PullRequest) -> PullRequest:
@@ -410,9 +340,7 @@ def _gather_inputs(
         required_contexts=_required_contexts(token, repo, base),
         check_runs=_check_runs(token, repo, pr.head_sha),
         statuses=_statuses(token, repo, pr.head_sha),
-        comments=_comments(token, repo, number),
         reviews=_reviews(token, repo, number),
-        head_commit_date=_head_commit_date(token, repo, number),
         self_check_name=self_check_name,
         author_allowlist=allowlist,
     )

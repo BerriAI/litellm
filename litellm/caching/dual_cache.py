@@ -521,6 +521,18 @@ class DualCache(BaseCache):
         if self.redis_cache is not None:
             await self.redis_cache.async_delete_cache(key)
 
+    async def async_delete_cache_keys(self, keys: Sequence[str]) -> None:
+        """Batch twin of ``async_delete_cache``, chunked because Redis takes the
+        whole list as one DELETE command."""
+        if not keys:
+            return
+        for key in keys:
+            self.in_memory_cache.delete_cache(key)
+        if self.redis_cache is None:
+            return
+        for start in range(0, len(keys), DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE):
+            await self.redis_cache.delete_cache_keys(keys[start : start + DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE])
+
     async def async_get_ttl(self, key: str) -> int | None:
         """
         Get the remaining TTL of a key in in-memory cache or redis

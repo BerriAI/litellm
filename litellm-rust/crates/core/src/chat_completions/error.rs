@@ -1,3 +1,5 @@
+use litellm_llms::base_llm::chat::transformation::Error as LlmError;
+
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     #[error("expected {expected}, got {actual}")]
@@ -18,9 +20,22 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
-    Transport(#[from] crate::transport::Error),
+    Transport(#[from] litellm_llms::custom_httpx::transport::Error),
     #[error(transparent)]
-    Headers(#[from] crate::http_utils::HeaderError),
+    Headers(#[from] litellm_llms::custom_httpx::http_handler::HeaderError),
     #[error(transparent)]
     Aws(#[from] litellm_auth_aws::Error),
+}
+
+impl From<LlmError> for Error {
+    fn from(error: LlmError) -> Self {
+        match error {
+            LlmError::InvalidType { expected, actual } => Self::InvalidType { expected, actual },
+            LlmError::MissingField(field) => Self::MissingField(field),
+            LlmError::InvalidRequest(message) => Self::InvalidRequest(message),
+            LlmError::InvalidResponse(message) => Self::InvalidResponse(message),
+            LlmError::Unsupported(reason) => Self::Unsupported(reason),
+            LlmError::Auth(error) => Self::Auth(error),
+        }
+    }
 }

@@ -9,23 +9,34 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
-bytes = "1"
 litellm-core = { path = "crates/core" }
+litellm-host = { path = "crates/host" }
+litellm-callbacks-legacy = { path = "crates/callbacks-legacy" }
 litellm-framing = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
+litellm-http = { path = "crates/http" }
+litellm-llms = { path = "crates/llms" }
+litellm-types = { path = "crates/types" }
+litellm-core-utils = { path = "crates/core-utils" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-token-counter = { path = "crates/token-counter" }
-litellm-python-interop = { path = "crates/python-interop" }
+litellm-host-python = { path = "crates/host-python" }
+
+bytes = "1"
+http = "1"
+hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy"] }
+proptest = "1.7.0"
 pyo3 = "0.29.2"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 pythonize = "0.29.0"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls", "http2", "stream"] }
 rstest = "0.26.1"
+rstest_reuse = "0.7.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
 serde = { version = "1.0", features = ["derive"] }
@@ -41,8 +52,10 @@ base64 = "0.22"
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
+webpki-roots = "1"
 time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
+fancy-regex = "0.19.2"
 veil = "0.3.0"
 
 [profile.release]
