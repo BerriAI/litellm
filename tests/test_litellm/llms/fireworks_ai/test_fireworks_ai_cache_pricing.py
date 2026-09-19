@@ -48,3 +48,18 @@ def test_off_peak_window_without_its_own_input_rate_reuses_the_standard_derived_
     derived = with_default_cache_read_rate(model_info)
 
     assert derived["off_peak_pricing"]["cache_read_input_token_cost"] == derived["cache_read_input_token_cost"]
+
+
+def test_string_rates_from_config_are_coerced_before_the_discount_is_applied() -> None:
+    model_info: ModelInfo = {
+        "input_cost_per_token": "2e-6",
+        "off_peak_pricing": {
+            "hours_utc": "14:00-00:00",
+            "input_cost_per_token": "1e-6",
+        },
+    }
+
+    derived = with_default_cache_read_rate(model_info)
+
+    assert derived["cache_read_input_token_cost"] == pytest.approx(1e-6)
+    assert derived["off_peak_pricing"]["cache_read_input_token_cost"] == pytest.approx(5e-7)
