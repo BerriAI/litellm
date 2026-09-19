@@ -6,6 +6,7 @@ This allows the same policy to be attached to multiple scopes.
 """
 
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -28,6 +29,30 @@ if TYPE_CHECKING:
 class PolicyAttachmentMatch(TypedDict):
     policy_name: str
     matched_via: str
+
+
+def _attachment_specificity(attachment: PolicyAttachment) -> tuple[int, int]:
+    if attachment.is_global():
+        return (0, 0)
+
+    dims: Final = tuple(
+        specificity
+        for values, specificity in (
+            (attachment.teams, 1),
+            (attachment.keys, 2),
+            (attachment.tags, 3),
+            (attachment.models, 4),
+        )
+        if values
+    )
+    return (max(dims, default=0), len(dims))
+
+
+def _attachment_sort_key(attachment: PolicyAttachment) -> tuple[int, int, int, int]:
+    specificity: Final = _attachment_specificity(attachment)
+    if attachment.priority is not None:
+        return (0, attachment.priority, *specificity)
+    return (1, 0, *specificity)
 
 
 class AttachmentRegistry:
@@ -93,6 +118,7 @@ class AttachmentRegistry:
             keys=attachment_data.get("keys"),
             models=attachment_data.get("models"),
             tags=attachment_data.get("tags"),
+            priority=attachment_data.get("priority"),
         )
 
     def get_attached_policies(self, context: PolicyMatchContext) -> list[str]:
@@ -116,31 +142,29 @@ class AttachmentRegistry:
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
-        results: Final[list[PolicyAttachmentMatch]] = []
-        seen_policies: Final[set[str]] = set()
+        matching_attachments: Final = sorted(
+            (
+                attachment
+                for attachment in self._attachments
+                if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
+            ),
+            key=_attachment_sort_key,
+        )
+        broadest_attachment_by_policy: Final = MappingProxyType(
+            {attachment.policy: attachment for attachment in reversed(matching_attachments)}
+        )
+        unique_attachments: Final = tuple(
+            broadest_attachment_by_policy[policy_name]
+            for policy_name in dict.fromkeys(attachment.policy for attachment in matching_attachments)
+        )
 
-        for attachment in self._attachments:
-            scope = attachment.to_policy_scope()
-            if PolicyMatcher.scope_matches(scope=scope, context=context):
-                if attachment.policy not in seen_policies:
-                    seen_policies.add(attachment.policy)
-                    matched_via = self._describe_match_reason(attachment, context)
-                    results.append(
-                        {
-                            "policy_name": attachment.policy,
-                            "matched_via": matched_via,
-                        }
-                    )
-                    verbose_proxy_logger.debug(
-                        "Attachment matched: policy=%s, matched_via=%s, context=(team=%s, key=%s, model=%s)",
-                        attachment.policy,
-                        matched_via,
-                        context.team_alias,
-                        context.key_alias,
-                        context.model,
-                    )
-
-        return results
+        return [
+            {
+                "policy_name": attachment.policy,
+                "matched_via": self._describe_match_reason(attachment, context),
+            }
+            for attachment in unique_attachments
+        ]
 
     @staticmethod
     def _describe_match_reason(attachment: PolicyAttachment, context: PolicyMatchContext) -> str:
@@ -299,6 +323,7 @@ class AttachmentRegistry:
                     "keys": attachment_request.keys or [],
                     "models": attachment_request.models or [],
                     "tags": attachment_request.tags or [],
+                    "priority": attachment_request.priority,
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
                     "created_by": created_by,
@@ -314,6 +339,7 @@ class AttachmentRegistry:
                 keys=attachment_request.keys,
                 models=attachment_request.models,
                 tags=attachment_request.tags,
+                priority=attachment_request.priority,
             )
             self.add_attachment(attachment)
 
@@ -325,6 +351,7 @@ class AttachmentRegistry:
                 keys=created_attachment.keys or [],
                 models=created_attachment.models or [],
                 tags=created_attachment.tags or [],
+                priority=created_attachment.priority,
                 created_at=created_attachment.created_at,
                 updated_at=created_attachment.updated_at,
                 created_by=created_attachment.created_by,
@@ -401,6 +428,7 @@ class AttachmentRegistry:
                 keys=attachment.keys or [],
                 models=attachment.models or [],
                 tags=attachment.tags or [],
+                priority=attachment.priority,
                 created_at=attachment.created_at,
                 updated_at=attachment.updated_at,
                 created_by=attachment.created_by,
@@ -439,6 +467,7 @@ class AttachmentRegistry:
                     keys=a.keys or [],
                     models=a.models or [],
                     tags=a.tags or [],
+                    priority=a.priority,
                     created_at=a.created_at,
                     updated_at=a.updated_at,
                     created_by=a.created_by,
@@ -472,6 +501,7 @@ class AttachmentRegistry:
                     keys=attachment_response.keys if attachment_response.keys else None,
                     models=(attachment_response.models if attachment_response.models else None),
                     tags=attachment_response.tags if attachment_response.tags else None,
+                    priority=attachment_response.priority,
                 )
                 for attachment_response in attachments
             ]

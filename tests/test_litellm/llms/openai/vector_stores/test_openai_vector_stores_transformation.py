@@ -7,11 +7,8 @@ from litellm.types.vector_stores import (
 
 
 class TestOpenAIVectorStoreAPIConfig:
-
     @pytest.mark.parametrize("metadata", [{}, None])
-    def test_transform_create_vector_store_request_with_metadata_empty_or_none(
-        self, metadata
-    ):
+    def test_transform_create_vector_store_request_with_metadata_empty_or_none(self, metadata):
         """
         Test transform_create_vector_store_request when metadata is None or empty dict.
         """
@@ -24,9 +21,7 @@ class TestOpenAIVectorStoreAPIConfig:
             "metadata": metadata,
         }
 
-        url, request_body = config.transform_create_vector_store_request(
-            vector_store_create_params, api_base
-        )
+        url, request_body = config.transform_create_vector_store_request(vector_store_create_params, api_base)
 
         assert url == api_base
         assert request_body["name"] == "test-vector-store"
@@ -50,9 +45,7 @@ class TestOpenAIVectorStoreAPIConfig:
             "metadata": large_metadata,
         }
 
-        url, request_body = config.transform_create_vector_store_request(
-            vector_store_create_params, api_base
-        )
+        url, request_body = config.transform_create_vector_store_request(vector_store_create_params, api_base)
 
         assert url == api_base
         assert request_body["name"] == "test-vector-store"
@@ -77,8 +70,19 @@ class TestOpenAIVectorStoreAPIConfig:
             litellm_params={},
         )
 
-        assert (
-            url
-            == "https://api.openai.com/v1/vector_stores/..%2F..%2Ffiles%3Fx%3D1%23frag/search"
-        )
+        assert url == "https://api.openai.com/v1/vector_stores/..%2F..%2Ffiles%3Fx%3D1%23frag/search"
         assert request_body["query"] == "hello"
+
+    def test_transform_search_vector_store_request_preserves_query_string(self):
+        config = OpenAIVectorStoreConfig()
+
+        url, _ = config.transform_search_vector_store_request(
+            vector_store_id="vs_1",
+            query="hello",
+            vector_store_search_optional_params={},
+            api_base="https://x.openai.azure.com/openai/vector_stores?api-version=2024-10-21",
+            litellm_logging_obj=None,
+            litellm_params={},
+        )
+
+        assert url == "https://x.openai.azure.com/openai/vector_stores/vs_1/search?api-version=2024-10-21"

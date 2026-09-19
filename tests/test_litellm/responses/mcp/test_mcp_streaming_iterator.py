@@ -127,10 +127,12 @@ async def test_second_round_tool_call_is_executed_and_reaches_final_text(monkeyp
         ]
     )
 
+    iterator.original_request_params["litellm_metadata"] = {"guardrails": ["block-all"]}
     chunks = [chunk async for chunk in iterator]
 
     # Both rounds' tool calls were actually executed, not just streamed unexecuted.
     assert call_tool.call_count == 2
+    assert all(call.kwargs["guardrail_context"]["metadata"]["guardrails"] == ("block-all",) for call in call_tool.call_args_list)
     assert iterator.tool_call_round == 2
 
     # The stream reached round 3 and produced the final text response instead

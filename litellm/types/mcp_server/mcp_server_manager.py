@@ -155,11 +155,9 @@ class MCPServer(BaseModel):
     access_groups: list[str] | None = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
-    # Explicit opt-in to upstream-delegated authentication for ``oauth2``
-    # servers. When ``auth_type == oauth2`` and this is ``True``, MCP requests
-    # bypass LiteLLM API-key/SSO auth (and the pre-emptive 401) so the client
-    # completes PKCE directly with the upstream MCP server. See
-    # ``MCPRequestHandler._target_servers_delegate_auth_to_upstream``.
+    # Legacy opt-in to upstream-delegated authentication for ``oauth2``
+    # servers. LiteLLM admission still applies; use ``oauth_delegate`` for the
+    # supported client-forwarded OAuth flow.
     #
     # Honored only for ``auth_type == oauth2``; ignored for any other
     # ``auth_type``. OAuth pass-through for non-oauth2 servers

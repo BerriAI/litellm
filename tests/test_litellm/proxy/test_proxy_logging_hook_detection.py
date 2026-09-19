@@ -1,4 +1,5 @@
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.caching import DualCache
@@ -7,6 +8,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.utils import CallTypesLiteral
 
 
 def test_has_post_call_response_headers_callbacks_ignores_empty_callbacks(
@@ -73,7 +75,7 @@ async def test_post_call_response_headers_hook_returns_early_without_callbacks(
 
 def test_callback_capabilities_skips_default_custom_logger(monkeypatch):
     """
-    Internal proxy hooks (e.g. _PROXY_MaxBudgetLimiter, ManagedFiles) inherit
+    Internal proxy hooks (e.g. _PROXY_CacheControlCheck, ManagedFiles) inherit
     the default ``async_post_call_streaming_iterator_hook`` body.  The
     capability scanner must NOT report them as iterator overrides — wrapping
     the chunk stream through every no-op layer was responsible for ~10x
@@ -601,6 +603,96 @@ async def test_during_call_hook_keeps_native_moderation_hook_when_opted_out(monk
 
     assert opted_out.native_hooks_ran == ["during_call"]
     assert routed.native_hooks_ran == []
+
+
+class _RejectsInModeration(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.moderated: list[str] = []
+
+    async def async_moderation_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        call_type: CallTypesLiteral,
+    ) -> None:
+        self.moderated.append(call_type)
+        raise HTTPException(status_code=400, detail={"error": "rejected"})
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_custom_logger_moderation_override(monkeypatch):
+    moderator = _RejectsInModeration()
+    monkeypatch.setattr(litellm, "callbacks", [CustomLogger(), moderator])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert moderator.moderated == ["acompletion"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_skips_custom_logger_moderation_without_auth(monkeypatch):
+    moderator = _RejectsInModeration()
+    monkeypatch.setattr(litellm, "callbacks", [moderator])
+    data = {"messages": [{"role": "user", "content": "hi"}]}
+
+    result = await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+        data=data,
+        user_api_key_dict=None,
+        call_type="acompletion",
+    )
+
+    assert result == data
+    assert moderator.moderated == []
+
+
+class _InheritsModerationOverride(_RejectsInModeration):
+    pass
+
+
+class _V1PreCallGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="v1-pre-call")
+        self.moderation_check = "pre_call"
+
+
+@pytest.mark.asyncio
+@pytest.mark.filterwarnings("error::RuntimeWarning")
+async def test_during_call_hook_runs_moderation_override_after_v1_pre_call_guardrail(monkeypatch):
+    moderator = _RejectsInModeration()
+    monkeypatch.setattr(litellm, "callbacks", [_V1PreCallGuardrail(), moderator])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert moderator.moderated == ["acompletion"]
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_runs_moderation_override_inherited_from_parent(monkeypatch):
+    moderator = _InheritsModerationOverride()
+    monkeypatch.setattr(litellm, "callbacks", [moderator])
+
+    with pytest.raises(HTTPException) as exc_info:
+        await ProxyLogging(user_api_key_cache=DualCache()).during_call_hook(
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234"),
+            call_type="acompletion",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert moderator.moderated == ["acompletion"]
 
 
 @pytest.mark.asyncio

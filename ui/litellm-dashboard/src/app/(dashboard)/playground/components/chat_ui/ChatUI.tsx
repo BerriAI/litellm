@@ -9,6 +9,7 @@ import {
   Info,
   Key,
   Link2,
+  ListPlus,
   Loader2,
   Settings,
   Shield,
@@ -40,6 +41,8 @@ import { makeAnthropicMessagesRequest } from "../../llm_calls/anthropic_messages
 import { makeOpenAIAudioSpeechRequest } from "../../llm_calls/audio_speech";
 import { makeOpenAIAudioTranscriptionRequest } from "../../llm_calls/audio_transcriptions";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
+import { customHeadersFromPairs, parseStoredHeaderPairs } from "@/components/llm_calls/request_headers";
+import KeyValueInput, { type KeyValuePair } from "@/components/key_value_input";
 import { makeOpenAIEmbeddingsRequest } from "../../llm_calls/embeddings_api";
 import { Agent, fetchAvailableAgents } from "../../llm_calls/fetch_agents";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
@@ -196,17 +199,17 @@ const ChatUI: React.FC<ChatUIProps> = ({
     () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
   const [inputMessage, setInputMessage] = useState("");
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(simplified ? fixedModel : undefined);
+  const [selectedModel, setSelectedModel] = useState<string | null | undefined>(simplified ? fixedModel : null);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [modelLoadError, setModelLoadError] = useState(false);
   const [agentInfo, setAgentInfo] = useState<Agent[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState<string | undefined>(undefined);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
   const debouncedSetSelectedModel = useDebouncedCallback((value: string) => setSelectedModel(value), {
     wait: CUSTOM_MODEL_DEBOUNCE_WAIT_MS,
   });
-  const [endpointType, setEndpointType] = useState<string>(
+  const [endpointType, setEndpointType] = useState<string | null>(
     () => sessionStorage.getItem("endpointType") || EndpointType.CHAT,
   );
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -220,6 +223,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
       return [];
     }
   });
+  const [customHeaderPairs, setCustomHeaderPairs] = useState<readonly KeyValuePair[]>(() =>
+    parseStoredHeaderPairs(getSecureItem("customHeaders")),
+  );
+  const customHeaders = useMemo(() => customHeadersFromPairs(customHeaderPairs), [customHeaderPairs]);
   const [selectedVoice, setSelectedVoice] = useState<OpenAIVoice>(() => {
     const saved = sessionStorage.getItem("selectedVoice");
     if (!saved) return "alloy";
@@ -327,7 +334,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   useEffect(() => {
-    if (isGetCodeModalVisible) {
+    if (isGetCodeModalVisible && endpointType !== null) {
       const code = generateCodeSnippet({
         apiKeySource,
         accessToken,
@@ -342,10 +349,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
         mcpServers,
         mcpServerToolRestrictions,
         endpointType,
-        selectedModel,
+        selectedModel: selectedModel ?? undefined,
         selectedSdk,
         selectedVoice,
         proxySettings,
+        customHeaders,
       });
       setGeneratedCode(code);
     }
@@ -367,16 +375,19 @@ const ChatUI: React.FC<ChatUIProps> = ({
     endpointType,
     selectedModel,
     proxySettings,
+    customHeaders,
   ]);
 
   useEffect(() => {
     try {
       setSecureItem("apiKeySource", JSON.stringify(apiKeySource));
       setSecureItem("apiKey", apiKey);
+      setSecureItem("customHeaders", JSON.stringify(customHeaderPairs));
     } catch {
       // Storage full or unavailable — non-critical, skip persisting.
     }
-    sessionStorage.setItem("endpointType", endpointType);
+    if (endpointType === null) sessionStorage.removeItem("endpointType");
+    else sessionStorage.setItem("endpointType", endpointType);
     sessionStorage.setItem("selectedTags", JSON.stringify(selectedTags));
     sessionStorage.setItem("selectedVectorStores", JSON.stringify(selectedVectorStores));
     sessionStorage.setItem("selectedGuardrails", JSON.stringify(selectedGuardrails));
@@ -409,6 +420,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     mcpServerToolRestrictions,
     selectedVoice,
     streamingEnabled,
+    customHeaderPairs,
   ]);
 
   useEffect(() => {
@@ -493,7 +505,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
         setAgentInfo(agents);
         // Clear selection if current agent not in list
         if (selectedAgent && !agents.some((a) => a.agent_name === selectedAgent)) {
-          setSelectedAgent(undefined);
+          setSelectedAgent(null);
         }
       } catch (error) {
         console.error("Error fetching agents:", error);
@@ -616,10 +628,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setUploadedAudio(file);
   };
 
-  const handleEndpointChange = (value: string) => {
+  const handleEndpointChange = (value: string | null) => {
     setEndpointType(value);
-    setSelectedModel(undefined);
-    setSelectedAgent(undefined);
+    setGeneratedCode("");
+    setSelectedModel(null);
+    setSelectedAgent(null);
     setShowCustomModelInput(false);
     setSelectedMCPDirectTool(undefined);
     if (value === EndpointType.MCP) {
@@ -710,6 +723,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
   };
 
   const handleSendMessage = async () => {
+    if (endpointType === null) {
+      toast.fromError("Please select an endpoint before sending a request");
+      return;
+    }
+
     if (inputMessage.trim() === "" && endpointType !== EndpointType.TRANSCRIPTION && endpointType !== EndpointType.MCP)
       return;
 
@@ -914,6 +932,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mockTestFallbacks,
             mcpToolsets,
             streamingEnabled,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -925,6 +944,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedTags,
             signal,
             customProxyBaseUrl || undefined,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.SPEECH) {
           // For audio speech
@@ -939,6 +959,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             undefined, // responseFormat
             undefined, // speed
             customProxyBaseUrl || undefined,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.IMAGE_EDITS) {
           // For image edits
@@ -952,6 +973,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               selectedTags,
               signal,
               customProxyBaseUrl || undefined,
+              customHeaders,
             );
           }
         } else if (endpointType === EndpointType.RESPONSES) {
@@ -997,6 +1019,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpToolsets,
             streamingEnabled,
             updateTotalLatency,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [
@@ -1026,6 +1049,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             mcpServerToolRestrictions,
             mcpToolsets,
             streamingEnabled,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
           await makeOpenAIEmbeddingsRequest(
@@ -1035,6 +1059,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             effectiveApiKey,
             selectedTags,
             customProxyBaseUrl || undefined,
+            customHeaders,
           );
         } else if (endpointType === EndpointType.TRANSCRIPTION) {
           // For audio transcriptions
@@ -1051,6 +1076,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               undefined, // responseFormat
               undefined, // temperature
               customProxyBaseUrl || undefined,
+              customHeaders,
             );
           }
         } else if (endpointType === EndpointType.INTERACTIONS) {
@@ -1062,6 +1088,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedTags,
             signal,
             customProxyBaseUrl || undefined,
+            undefined,
+            customHeaders,
           );
         }
       }
@@ -1079,13 +1107,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
           resolvedServerId = toolEntry?.server_id ?? rawSelected;
         }
         if (resolvedServerId && !resolvedServerId.startsWith("toolset:") && selectedMCPDirectTool) {
-          const result = await callMCPTool(
-            effectiveApiKey,
-            resolvedServerId,
-            selectedMCPDirectTool,
-            mcpToolArguments,
-            selectedGuardrails.length > 0 ? { guardrails: selectedGuardrails } : undefined,
-          );
+          const result = await callMCPTool(effectiveApiKey, resolvedServerId, selectedMCPDirectTool, mcpToolArguments, {
+            ...(selectedGuardrails.length > 0 ? { guardrails: selectedGuardrails } : {}),
+            customHeaders,
+          });
           const resultText =
             result?.content?.length > 0
               ? JSON.stringify(
@@ -1111,6 +1136,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
           updateA2AMetadata,
           customProxyBaseUrl || undefined,
           selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
+          customHeaders,
         );
       }
     } catch (error) {
@@ -1152,7 +1178,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     toast.success("Chat history cleared.");
   };
 
-  const onModelChange = (value: string) => {
+  const onModelChange = (value: string | null) => {
     setSelectedModel(value);
     setShowCustomModelInput(value === "custom");
 
@@ -1210,6 +1236,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               : "Describe the image you want to generate...";
 
   const sendDisabled =
+    endpointType === null ||
     isLoading ||
     (endpointType === EndpointType.MCP
       ? !(selectedMCPServers.length === 1 && selectedMCPServers[0] !== "__all__" && selectedMCPDirectTool)
@@ -1476,6 +1503,18 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     accessToken={accessToken || ""}
                   />
                 </div>
+
+                {endpointType !== EndpointType.REALTIME && (
+                  <div>
+                    <label className="mb-2 flex items-center text-sm font-medium text-foreground">
+                      <ListPlus className="mr-2 size-4" aria-hidden="true" /> Custom Headers
+                    </label>
+                    <KeyValueInput value={customHeaderPairs} onChange={setCustomHeaderPairs} />
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      Sent with every playground request, e.g. provider-specific headers like anthropic-beta.
+                    </p>
+                  </div>
+                )}
 
                 <div>
                   <div className="mb-2 flex items-center gap-1 text-sm font-medium text-foreground">

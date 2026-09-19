@@ -184,6 +184,7 @@ LLM_CONFIG_NAMES: Final = (
     "VertexAIAnthropicConfig",
     "VertexAILlama3Config",
     "VertexAIAi21Config",
+    "VertexAIMistralConfig",
     "AmazonCohereChatConfig",
     "AmazonBedrockGlobalConfig",
     "AmazonAI21Config",
@@ -235,6 +236,7 @@ LLM_CONFIG_NAMES: Final = (
     "OpenAIResponsesAPIConfig",
     "AzureOpenAIResponsesAPIConfig",
     "AzureOpenAIOSeriesResponsesAPIConfig",
+    "AzureAIResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "HostedVLLMResponsesAPIConfig",
@@ -771,6 +773,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         ".llms.vertex_ai.vertex_ai_partner_models.ai21.transformation",
         "VertexAIAi21Config",
     ),
+    "VertexAIMistralConfig": (
+        ".llms.vertex_ai.vertex_ai_partner_models.mistral.transformation",
+        "VertexAIMistralConfig",
+    ),
     "AmazonCohereChatConfig": (
         ".llms.bedrock.chat.invoke_handler",
         "AmazonCohereChatConfig",
@@ -950,6 +956,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "AzureOpenAIOSeriesResponsesAPIConfig": (
         ".llms.azure.responses.o_series_transformation",
         "AzureOpenAIOSeriesResponsesAPIConfig",
+    ),
+    "AzureAIResponsesAPIConfig": (
+        ".llms.azure_ai.responses.transformation",
+        "AzureAIResponsesAPIConfig",
     ),
     "XAIResponsesAPIConfig": (
         ".llms.xai.responses.transformation",

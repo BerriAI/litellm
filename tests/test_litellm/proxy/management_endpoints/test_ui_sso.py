@@ -8334,6 +8334,7 @@ async def _render_legacy_login_page(env_overrides, general_settings):
             "GOOGLE_CLIENT_ID",
             "GENERIC_CLIENT_ID",
             "LITELLM_HIDE_DEFAULT_CREDENTIALS_HINT",
+            "UI_PASSWORD",
         ):
             os.environ.pop(var, None)
         os.environ.update(env_overrides)
@@ -8384,6 +8385,20 @@ async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
     assert response.status_code == 200
     assert "Default Credentials" not in body
     assert "MASTER_KEY" not in body
+
+
+@pytest.mark.asyncio
+async def test_legacy_login_page_hides_credentials_hint_when_ui_password_set():
+    response = await _render_legacy_login_page(
+        env_overrides={"UI_PASSWORD": "s3cret-pass"},
+        general_settings={},
+    )
+
+    body = response.body.decode()
+    assert response.status_code == 200
+    assert "Default Credentials" not in body
+    assert "MASTER_KEY" not in body
+    assert 'name="username"' in body
 
 
 @pytest.mark.asyncio

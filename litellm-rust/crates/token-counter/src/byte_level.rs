@@ -12,7 +12,7 @@ use tokenizers::pre_tokenizers::PreTokenizerWrapper;
 use tokenizers::{Model, Tokenizer};
 use unicode_normalization_alignments::{IsNormalized, UnicodeNormalization, is_nfkc_quick};
 
-use super::unicode_classes::UnicodeClasses;
+use super::unicode_classes::{Class, UnicodeClasses, class, run_len};
 
 const CONTRACTIONS: [&str; 7] = ["'s", "'t", "'re", "'ve", "'m", "'ll", "'d"];
 
@@ -110,27 +110,6 @@ fn mapped_len(piece: &str) -> usize {
             .count()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Class {
-    Letter,
-    Number,
-    Space,
-    Other,
-}
-
-fn class(character: char, unicode_classes: &UnicodeClasses) -> Class {
-    match character {
-        'A'..='Z' | 'a'..='z' => Class::Letter,
-        '0'..='9' => Class::Number,
-        '\t'..='\r' | ' ' => Class::Space,
-        _ if character.is_ascii() => Class::Other,
-        _ if unicode_classes.is_letter(character) => Class::Letter,
-        _ if unicode_classes.is_number(character) => Class::Number,
-        _ if unicode_classes.is_space(character) => Class::Space,
-        _ => Class::Other,
-    }
-}
-
 /// The regex matches every character, so the pieces tile the text.
 fn pieces<'a>(
     text: &'a str,
@@ -167,12 +146,6 @@ fn piece_len(text: &str, first: char, unicode_classes: &UnicodeClasses) -> usize
         None | Some(Class::Space) => space_run_len(text, unicode_classes),
         Some(run_class) => 1 + run_len(after_space, run_class, unicode_classes),
     }
-}
-
-fn run_len(text: &str, run_class: Class, unicode_classes: &UnicodeClasses) -> usize {
-    text.char_indices()
-        .find(|(_, character)| class(*character, unicode_classes) != run_class)
-        .map_or(text.len(), |(index, _)| index)
 }
 
 /// `\s+(?!\S)|\s+`: whitespace followed by a non-space leaves its last
