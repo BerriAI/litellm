@@ -2380,11 +2380,11 @@ class TestListPromptsAndResourcesRestAPI:
         server.available_on_public_internet = True
         return server
 
-    def _grant(self, monkeypatch, server: MCPServer, allowed: list[str]) -> None:
-        async def fake_contexts(user_api_key_auth):
+    def _grant(self, monkeypatch: pytest.MonkeyPatch, server: MCPServer, allowed: list[str]) -> None:
+        async def fake_contexts(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
             return [user_api_key_auth]
 
-        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+        async def fake_get_allowed_mcp_servers(*args: object, **kwargs: object) -> list[str]:
             return allowed
 
         monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
@@ -2408,7 +2408,7 @@ class TestListPromptsAndResourcesRestAPI:
         )
 
     @pytest.mark.parametrize("route_name", ["list_prompts_rest_api", "list_resources_rest_api"])
-    async def test_rejects_server_outside_caller_grant(self, monkeypatch, route_name):
+    async def test_rejects_server_outside_caller_grant(self, monkeypatch: pytest.MonkeyPatch, route_name: str) -> None:
         server = self._stub_server()
         self._grant(monkeypatch, server, allowed=["some-other-server"])
         upstream = AsyncMock()
@@ -2426,7 +2426,7 @@ class TestListPromptsAndResourcesRestAPI:
         assert exc_info.value.detail["error"] == "access_denied"
         upstream.assert_not_awaited()
 
-    async def test_lists_prompts_with_upstream_names_and_server_credential(self, monkeypatch):
+    async def test_lists_prompts_with_upstream_names_and_server_credential(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from mcp.types import Prompt, PromptArgument
 
         server = self._stub_server()
@@ -2460,7 +2460,7 @@ class TestListPromptsAndResourcesRestAPI:
         assert call.kwargs["raw_headers"]["x-mcp-catalog-authorization"] == "Bearer per-server-token"
         assert call.kwargs["user_api_key_auth"].user_id == "user-123"
 
-    async def test_lists_resources_and_templates_for_allowed_server(self, monkeypatch):
+    async def test_lists_resources_and_templates_for_allowed_server(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from mcp.types import Resource, ResourceTemplate
 
         server = self._stub_server()
@@ -2496,8 +2496,8 @@ class TestListPromptsAndResourcesRestAPI:
         ],
     )
     async def test_upstream_fault_relays_truthful_status_instead_of_empty_success(
-        self, monkeypatch, route_name, manager_method, catalog
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, route_name: str, manager_method: str, catalog: str
+    ) -> None:
         """A broken upstream must answer like /mcp-rest/tools/list does (a gateway status), not as
         an empty catalog the dashboard would render as "this server has no prompts"."""
         from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError
@@ -2526,7 +2526,7 @@ class TestListPromptsAndResourcesRestAPI:
         }
         assert failing.await_args.kwargs["raise_on_error"] is True
 
-    async def test_upstream_auth_challenge_is_relayed_for_catalog_routes(self, monkeypatch):
+    async def test_upstream_auth_challenge_is_relayed_for_catalog_routes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 
         server = self._stub_server()
@@ -2550,7 +2550,7 @@ class TestListPromptsAndResourcesRestAPI:
         assert exc_info.value.headers is not None
         assert "www-authenticate" in {key.lower() for key in exc_info.value.headers}
 
-    def test_openapi_keeps_prompt_management_and_mcp_prompt_contracts_distinct(self):
+    def test_openapi_keeps_prompt_management_and_mcp_prompt_contracts_distinct(self) -> None:
         """The catalog response reuses the MCP SDK prompt type, which shares its class name with the
         prompt-management request model, so the two must land as separate OpenAPI components:
         POST /prompts still requires prompt_id + litellm_params while the catalog item requires name."""

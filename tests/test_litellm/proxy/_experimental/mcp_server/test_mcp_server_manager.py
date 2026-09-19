@@ -3940,7 +3940,9 @@ class TestMCPServerManager:
             ("get_resource_templates_from_server", "list_resource_templates"),
         ],
     )
-    async def test_catalog_fetch_failure_is_swallowed_unless_raise_on_error(self, manager_method, client_method):
+    async def test_catalog_fetch_failure_is_swallowed_unless_raise_on_error(
+        self, manager_method: str, client_method: str
+    ) -> None:
         """Catalog fetches stay best-effort for the MCP protocol aggregate (empty list) but a
         single-server caller that opts in gets the classified fault instead of empty-success."""
         manager = MCPServerManager()
@@ -3970,7 +3972,9 @@ class TestMCPServerManager:
         ["get_prompts_from_server", "get_resources_from_server", "get_resource_templates_from_server"],
     )
     @pytest.mark.parametrize("challenge_carrier", ["resolver_http_exception", "upstream_auth_error"])
-    async def test_catalog_fetch_relays_auth_challenge_like_tools(self, manager_method, challenge_carrier):
+    async def test_catalog_fetch_relays_auth_challenge_like_tools(
+        self, manager_method: str, challenge_carrier: str
+    ) -> None:
         """An auth challenge raised while building the client (a v2 resolver HTTPException 401) or by
         the upstream itself must reach a single-server caller as MCPUpstreamAuthError with the
         WWW-Authenticate intact, exactly as the tools listing relays it, not as a bare fault."""
@@ -4006,7 +4010,9 @@ class TestMCPServerManager:
             ("get_resource_templates_from_server", "list_resource_templates"),
         ],
     )
-    async def test_catalog_fetch_prepares_upstream_headers_like_tools(self, manager_method, client_method, monkeypatch):
+    async def test_catalog_fetch_prepares_upstream_headers_like_tools(
+        self, manager_method: str, client_method: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Prompt and resource listings must reach the upstream with the same credentials the tools
         listing sends: ``${NAME}`` static headers interpolated from the server's env vars and the
         MCPJWTSigner token injected when nothing else carries an Authorization."""
@@ -4040,8 +4046,8 @@ class TestMCPServerManager:
         mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
         upstream_headers: list[dict[str, str] | None] = []
 
-        async def create_client(**kwargs):
-            upstream_headers.append(kwargs["extra_headers"])
+        async def create_client(*, extra_headers: dict[str, str] | None, **_: object) -> AsyncMock:
+            upstream_headers.append(extra_headers)
             return mock_client
 
         with patch.object(manager, "_create_mcp_client", create_client):
