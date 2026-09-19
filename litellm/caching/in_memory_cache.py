@@ -103,7 +103,7 @@ class InMemoryCache(BaseCache):
         self.cache_dict.pop(key, None)
         self.ttl_dict.pop(key, None)
 
-    def evict_cache(self):
+    def evict_cache(self, *, reserve_space: bool = True) -> None:
         """
         Eviction policy:
         1. First, remove expired items from ttl_dict and cache_dict
@@ -134,7 +134,7 @@ class InMemoryCache(BaseCache):
                 break
 
         # Step 2: Evict if cache is still full
-        while len(self.cache_dict) >= self.max_size_in_memory:
+        while len(self.cache_dict) > self.max_size_in_memory - int(reserve_space):
             expiration_time, key = heapq.heappop(self.expiration_heap)
             # Skip if key was removed or updated
             if self.ttl_dict.get(key) == expiration_time:
@@ -163,9 +163,12 @@ class InMemoryCache(BaseCache):
         # Always prune expired/outdated heap roots before inserting.
         # This keeps expiration_heap bounded even when the live cache stays
         # below max_size_in_memory and keys are reinserted after TTL expiry.
-        self.evict_cache()
+        self.evict_cache(reserve_space=key not in self.cache_dict)
         if not self.check_value_size(value):
             return
+
+        if key not in self.cache_dict and len(self.cache_dict) >= self.max_size_in_memory:
+            self.evict_cache()
 
         self.cache_dict[key] = value
         if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
