@@ -607,6 +607,7 @@ async def acompletion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=kwargs.get("api_base") or base_url,
+            litellm_params=GenericLiteLLMParams(chatgpt_auth_file=kwargs.get("chatgpt_auth_file")),
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks

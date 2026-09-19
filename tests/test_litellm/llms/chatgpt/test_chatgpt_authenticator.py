@@ -5,6 +5,7 @@ from unittest.mock import mock_open, patch
 
 import pytest
 
+import litellm
 from litellm.llms.chatgpt.authenticator import (
     Authenticator,
     get_cached_authenticator,
@@ -145,3 +146,43 @@ class TestChatGPTMultiAccountAuthenticator:
         assert get_chatgpt_auth_file({"chatgpt_auth_file": "/a/auth.json"}) == "/a/auth.json"
         assert get_chatgpt_auth_file(GenericLiteLLMParams()) is None
         assert get_chatgpt_auth_file(GenericLiteLLMParams(chatgpt_auth_file="/b/auth.json")) == "/b/auth.json"
+
+
+class TestChatGPTAuthFileEarlyProviderDetection:
+    @staticmethod
+    def _no_device_login(self):
+        raise AssertionError("device login must not run")
+
+    async def test_completion_threads_chatgpt_auth_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "default"))
+        monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+        auth_file = tmp_path / "account-a" / "auth.json"
+        auth_file.parent.mkdir(parents=True)
+        _write_auth_record(auth_file, "token-a", "acct-a")
+        monkeypatch.setattr(Authenticator, "_login_device_code", self._no_device_login)
+
+        response = await litellm.acompletion(
+            model="chatgpt/gpt-5.4",
+            messages=[{"role": "user", "content": "hi"}],
+            chatgpt_auth_file=str(auth_file),
+            mock_response="ok",
+        )
+
+        assert response is not None
+
+    def test_responses_threads_chatgpt_auth_file(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path / "default"))
+        monkeypatch.delenv("CHATGPT_AUTH_FILE", raising=False)
+        auth_file = tmp_path / "account-a" / "auth.json"
+        auth_file.parent.mkdir(parents=True)
+        _write_auth_record(auth_file, "token-a", "acct-a")
+        monkeypatch.setattr(Authenticator, "_login_device_code", self._no_device_login)
+
+        response = litellm.responses(
+            model="chatgpt/gpt-5.4",
+            input="hi",
+            chatgpt_auth_file=str(auth_file),
+            mock_response="ok",
+        )
+
+        assert response is not None
