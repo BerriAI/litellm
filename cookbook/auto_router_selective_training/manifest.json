@@ -1,0 +1,18 @@
+{
+  "selection_sha256": "1a7c9241c72c299c8b27fd8171881f94fda069fb7191ac6bc3a2eab9de811853",
+  "models_sha256": "03c3f39894e155d6024053e65858e56f67ff2f0996d441b8a3375f2702ee8be2",
+  "training_tasks": 160,
+  "validation_tasks": 64,
+  "held_out_tasks": 125,
+  "held_out_status": "complete",
+  "current_model_pair": [
+    "openai/gpt-5.6-luna",
+    "openai/gpt-5.6-sol"
+  ],
+  "judge_effort": "low",
+  "solver_effort": "high",
+  "diagnostic_upfront_profiles": 12,
+  "diagnostic_profiles_sha256": "ae456bc65e0873ab22dd9009975db61d327e115a6fdd49266c1db313a8bc6b4f",
+  "primary_results_sha256": "e91ec5578d496ad37c1e8cf5760882042f4b7768bd3c2ff5d65d92f19df7a12c",
+  "final_results_sha256": "b724f5607b532e1d8b354c95129f5f6d95514926ca5000e9a93a9104b13a844d"
+}

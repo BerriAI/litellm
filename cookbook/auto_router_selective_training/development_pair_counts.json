@@ -1,0 +1,62 @@
+{
+  "train": {
+    "lcb": {
+      "tasks": 50,
+      "both_fail": 14,
+      "sol_only": 9,
+      "luna_only": 3,
+      "both_solve": 24
+    },
+    "mbpp": {
+      "tasks": 80,
+      "both_fail": 7,
+      "sol_only": 2,
+      "luna_only": 3,
+      "both_solve": 68
+    },
+    "swe": {
+      "tasks": 25,
+      "both_fail": 5,
+      "sol_only": 1,
+      "luna_only": 0,
+      "both_solve": 19
+    },
+    "terminal": {
+      "tasks": 5,
+      "both_fail": 0,
+      "sol_only": 1,
+      "luna_only": 0,
+      "both_solve": 4
+    }
+  },
+  "validation": {
+    "lcb": {
+      "tasks": 20,
+      "both_fail": 2,
+      "sol_only": 6,
+      "luna_only": 2,
+      "both_solve": 10
+    },
+    "mbpp": {
+      "tasks": 29,
+      "both_fail": 4,
+      "sol_only": 2,
+      "luna_only": 2,
+      "both_solve": 21
+    },
+    "swe": {
+      "tasks": 10,
+      "both_fail": 1,
+      "sol_only": 1,
+      "luna_only": 1,
+      "both_solve": 7
+    },
+    "terminal": {
+      "tasks": 5,
+      "both_fail": 2,
+      "sol_only": 0,
+      "luna_only": 1,
+      "both_solve": 2
+    }
+  }
+}
