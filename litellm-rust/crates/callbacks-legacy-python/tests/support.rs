@@ -198,6 +198,7 @@ pub(crate) fn legacy_call(
             call_type: "test",
             input_description: "test input",
             stream: None,
+            updates_logging_before_preparation: false,
         },
         call,
         asynchronous,

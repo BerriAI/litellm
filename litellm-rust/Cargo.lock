@@ -2085,6 +2085,7 @@ version = "0.1.0"
 dependencies = [
  "fancy-regex",
  "litellm-types",
+ "percent-encoding",
  "rstest",
  "serde",
  "serde_json",
@@ -2170,6 +2171,7 @@ dependencies = [
  "litellm-host",
  "litellm-http",
  "litellm-types",
+ "percent-encoding",
  "reqwest 0.12.28",
  "rstest",
  "serde",

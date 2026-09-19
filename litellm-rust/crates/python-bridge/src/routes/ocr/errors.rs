@@ -26,6 +26,14 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                     .ok();
                 error
             }
+            Error::InvalidProvider(provider) => {
+                let error = core_error_to_pyerr(Error::InvalidProvider(provider.clone()).into());
+                error
+                    .value(py)
+                    .setattr("ocr_invalid_provider", provider)
+                    .ok();
+                error
+            }
             Error::FileRead { path, source } if source.kind() == std::io::ErrorKind::NotFound => {
                 PyFileNotFoundError::new_err(format!("File not found: {}", path.display()))
             }
