@@ -1253,10 +1253,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         Process output streaming response by applying guardrails to text content.
 
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
-        With ``deliver_ended_stream_rewrites``, an ended stream whose guardrail rewrote the text gets the rewrite
-        written back across the buffered chunks (full rewritten text in the first ``text_delta``, the rest blanked);
-        a rewrite on a stream that never reported a ``stop_reason`` has no write-back and is reported as
-        undeliverable, so the pipeline executor discards it and releases the original chunks.
+        With ``deliver_ended_stream_rewrites``, a stream whose guardrail rewrote the text gets the rewrite
+        written back across the buffered chunks (full rewritten text in the first ``text_delta``, the rest blanked),
+        whether or not the stream ever reported a ``stop_reason``.
         """
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
@@ -1354,9 +1353,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             raise
         unended_texts: Final = _guardrailed_inputs.get("texts")
         if deliver_ended_stream_rewrites and unended_texts and tuple(unended_texts) != (string_so_far,):
-            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
-            raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
+            self._write_ended_stream_text_rewrite(responses_so_far, unended_texts[0])
         return responses_so_far
 
     def _prepare_request_data(
