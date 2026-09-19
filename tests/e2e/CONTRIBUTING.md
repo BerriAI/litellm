@@ -248,3 +248,49 @@ The semantic header set is `content-type`, `accept`, `anthropic-version`, `anthr
 Excluded transport and telemetry headers are `host`, `content-length`, `connection`, `accept-encoding`, `user-agent`, `traceparent`, `tracestate`, `x-request-id`, `x-client-request-id` and `x-stainless-*`. Inbound transfer-encoding is unsupported; send JSON with content-length framing. The destination represents host identity and the relay carries original body bytes. Replay does not verify credentials, SDK timeout/retry behavior, transport performance, model availability or stateful remote IDs. Live relay uses original request bytes and header values, never the stored identity
 
 Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the existing legacy harness files with `--noconftest -o pythonpath=tests/e2e`; they need only synthetic HTTP providers and temporary fixture storage
+
+
+## MCP OAuth happy path
+
+`test_mcp_oauth_happy_path_e2e.py` runs one shared scenario with four variants:
+aggregate gateway SSO and explicitly configured per-server JWT, each directly
+against Linear and through the live provider edge. The edge forwards to real
+Linear without replay and compares the forwarded bearer to the encrypted
+canonical user/server credential. This observes the forwarding boundary, not
+Linear's internal logs. Direct variants independently exercise discovery
+
+Use the existing database preparation, Prisma generation and Keycloak setup.
+Build and stage the dashboard from the tested checkout as in the UI runner.
+Provide `DATABASE_URL`, `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, `LITELLM_LICENSE`,
+and the `E2E_KEYCLOAK_*` settings. Capture a test-account Linear login using
+`mcp/linear_session_capture.py` and set `E2E_LINEAR_STORAGE_STATE` to that private
+file. The test workspace must contain a team. Do not publish browser state or
+raw test/proxy output
+
+```bash
+E2E_MCP_OAUTH_LIVE=1 E2E_FIXTURE_MODE=live E2E_PROVIDER_CACHE=0 \
+  uv run --no-sync pytest tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py \
+  --rootdir=. --reruns 0
+```
+
+The test starts and restarts its own source-built proxy on a free loopback port,
+retaining its database and SSO client but no Redis or process-local cache. It
+does not restart an existing proxy or clear shared databases. Gateway login,
+consent, immediate list/call and post-restart reconnect must all succeed. The
+aggregate client never injects a gateway header; the explicitly labeled JWT
+variant configures `x-litellm-api-key` for the first consent and reconnects with
+only its gateway JWT after restart
+
+`.github/workflows/test-mcp-oauth-e2e.yml` runs the four cases in the protected
+`e2e-changed` environment. Provision `E2E_LINEAR_STORAGE_STATE_B64` as a secret
+there and retain the existing E2E license/AWS role configuration. A missing or
+expired session fails the job; collection, deselection and skips are not passes.
+The generic changed-test job excludes this file because it requires an owned
+proxy and consent UI. No LLM call is needed
+
+Coverage remains limited to authorization-code OAuth over HTTP. M2M, OBO,
+PKCE passthrough, static/BYOK, ID-JAG, forwarding, SigV4 and stdio are outside this
+scenario; consult the registry and LIT-3559 for their existing coverage and gaps.
+LIT-4506 owns broader isolation/failure regressions. LIT-7737 retains ownership
+of dependency/Python compatibility and its matrix; this test reuses its delivered
+environment and does not change dependency constraints or compatibility gates
