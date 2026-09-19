@@ -34,20 +34,20 @@ export const describeRelease = ({ new_features, bug_fixes, other_updates }: Late
   ].join(", ");
 
 export const UpgradeBannerView: React.FC<UpgradeBannerViewProps> = ({ currentVersion, latestRelease }) => {
-  const [locallyDismissed, setLocallyDismissed] = useState(false);
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
 
   if (!currentVersion || !latestRelease || !isNewerVersion(currentVersion, latestRelease.version)) {
     return null;
   }
 
   const dismissKey = `${DISMISS_KEY_PREFIX}${latestRelease.version}`;
-  if (locallyDismissed || getLocalStorageItem(dismissKey) === "true") {
+  if (dismissedVersion === latestRelease.version || getLocalStorageItem(dismissKey) === "true") {
     return null;
   }
 
   const handleClose = () => {
     setLocalStorageItem(dismissKey, "true");
-    setLocallyDismissed(true);
+    setDismissedVersion(latestRelease.version);
   };
 
   return (

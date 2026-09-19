@@ -82,6 +82,14 @@ describe("UpgradeBannerView", () => {
     render(<UpgradeBannerView currentVersion="1.102.0" latestRelease={{ ...RELEASE, version: "1.104.0" }} />);
     expect(screen.getByRole("status")).toHaveTextContent("The latest version is v1.104.0");
   });
+
+  it("shows a newer release after the current one was dismissed without remounting", () => {
+    const { rerender } = render(<UpgradeBannerView currentVersion="1.102.0" latestRelease={RELEASE} />);
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    rerender(<UpgradeBannerView currentVersion="1.102.0" latestRelease={{ ...RELEASE, version: "1.104.0" }} />);
+    expect(screen.getByRole("status")).toHaveTextContent("The latest version is v1.104.0");
+  });
 });
 
 describe("UpgradeBanner", () => {
