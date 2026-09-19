@@ -89,24 +89,18 @@ def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | 
 
 _TTL_PATTERN: Final = re.compile(r"^([0-9]*\.?[0-9]+)([smh])$")
 _TTL_UNIT_SECONDS: Final = MappingProxyType({"s": 1, "m": 60, "h": 3600})
+_PROTOBUF_DURATION_MAX_SECONDS: Final = 315_576_000_000
 
 
 def _normalize_ttl_to_seconds(ttl: object) -> str | None:
-    """
-    Gemini's cachedContents API only takes a TTL as "<seconds>s", while Anthropic clients
-    (Claude Code among them) send the minute and hour units the Anthropic API defines, "5m"
-    and "1h". Returns the Gemini form for any of the three units, or None for a missing,
-    non-positive, or unparseable value so the cache falls back to Gemini's default TTL.
-    """
     if not isinstance(ttl, str):
         return None
     match: Final = _TTL_PATTERN.match(ttl)
     if match is None:
         return None
-    value: Final = float(match.group(1))
-    if value <= 0:
+    seconds: Final = round(float(match.group(1)) * _TTL_UNIT_SECONDS[match.group(2)], 9)
+    if not 0 < seconds <= _PROTOBUF_DURATION_MAX_SECONDS:
         return None
-    seconds: Final = round(value * _TTL_UNIT_SECONDS[match.group(2)], 9)
     return f"{seconds:.9f}".rstrip("0").rstrip(".") + "s"
 
 

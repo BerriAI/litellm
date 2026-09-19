@@ -2102,11 +2102,7 @@ def test_should_add_cache_control_for_anthropic_model():
 
 
 def test_should_not_add_cache_control_for_non_anthropic_model():
-    """Should not add cache_control for providers that reject an explicit cache_control field.
-
-    OpenAI/Azure do prompt caching implicitly and 400 on an unexpected
-    cache_control field, so it must not be forwarded to them.
-    """
+    """Should not add cache_control for non-Anthropic models."""
     adapter = LiteLLMAnthropicMessagesAdapter()
     cache_control = {"type": "ephemeral"}
 
@@ -2122,13 +2118,6 @@ def test_should_not_add_cache_control_for_non_anthropic_model():
 
 
 def test_should_add_cache_control_for_gemini_model():
-    """Should add cache_control for Gemini / Vertex Gemini targets.
-
-    These consume anthropic-style cache_control blocks via the Gemini context
-    caching path, so /v1/messages requests (e.g. Claude Code) routed to a
-    Gemini model must keep it. Regression for the adapter dropping the field
-    before it reaches the Gemini transformation.
-    """
     adapter = LiteLLMAnthropicMessagesAdapter()
     cache_control = {"type": "ephemeral", "ttl": "1h"}
 
@@ -2146,7 +2135,6 @@ def test_should_add_cache_control_for_gemini_model():
 
 
 def test_cache_control_preserved_in_text_content_for_gemini():
-    """cache_control must survive message translation for a Gemini target."""
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",

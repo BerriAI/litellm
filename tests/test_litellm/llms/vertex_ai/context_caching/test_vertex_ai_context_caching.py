@@ -1399,11 +1399,6 @@ class TestContextCachingEndpoints:
     def test_check_and_create_cache_skips_between_default_and_gemini_2_5_pro_minimum(
         self, local_model_cost_map
     ):
-        """Gemini 2.5 Pro needs 2048 cached tokens, twice the provider-agnostic default.
-
-        Content between the two used to reach Google's cachedContents endpoint and 400
-        with "Cached content is too small".
-        """
         model = "gemini-2.5-pro"
         self._token_check_patcher.stop()
 
