@@ -100,7 +100,11 @@ def _to_mistral_purpose(purpose: str) -> MistralFilePurpose:
     only run when the caller says ``purpose=batch``."""
     mistral_purpose: Final = _MISTRAL_PURPOSE_BY_OPENAI.get(purpose)
     if mistral_purpose is None:
-        raise ValueError(f"Mistral does not support purpose={purpose!r}. Use one of: {_SUPPORTED_PURPOSES}")
+        raise mistral_error(
+            f"Mistral does not support purpose={purpose!r}. Use one of: {_SUPPORTED_PURPOSES}",
+            status_code=400,
+            headers=httpx.Headers(),
+        )
     return mistral_purpose
 
 
