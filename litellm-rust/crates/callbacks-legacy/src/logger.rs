@@ -8,7 +8,7 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::python::{DeploymentHooks, Wrapper};
+use crate::legacy_python::{DeploymentHooks, Wrapper};
 
 /// The `Logging` instance one call fans out through.
 pub(crate) struct PythonLogger {

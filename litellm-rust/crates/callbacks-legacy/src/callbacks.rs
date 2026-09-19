@@ -7,7 +7,7 @@ use litellm_host_python::to_py;
 use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 
 use crate::logger::PythonLogger;
-use crate::python::{Logging, Wrapper};
+use crate::legacy_python::{Logging, Wrapper};
 
 impl PythonLogger {
     /// `Logging.update_from_kwargs`: what the logger is told about the request it is

@@ -6,7 +6,7 @@ use pyo3::{
     types::{PyDict, PyList},
 };
 
-use crate::python::Wrapper;
+use crate::legacy_python::Wrapper;
 
 struct CredentialEntry<'py>(Bound<'py, PyAny>);
 
