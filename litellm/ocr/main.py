@@ -25,6 +25,7 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
     parse_ocr_request_format,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CustomPricingLiteLLMParams
@@ -50,6 +51,11 @@ class _PreparedOCRRequest:
     litellm_params: dict[str, object]
     effective_timeout: float | httpx.Timeout
     litellm_logging_obj: LiteLLMLoggingObj
+
+
+def _supplied_client(kwargs: Mapping[str, object]) -> HTTPHandler | AsyncHTTPHandler | None:
+    candidate: Final = kwargs.get("client")
+    return candidate if isinstance(candidate, (HTTPHandler, AsyncHTTPHandler)) else None
 
 
 def _prepare_ocr_request(
@@ -238,6 +244,7 @@ async def aocr(
             api_key=prepared.api_key,
             api_base=prepared.api_base,
             custom_llm_provider=prepared.custom_llm_provider,
+            client=_supplied_client(kwargs),
             aocr=True,
             headers=prepared.extra_headers,
             provider_config=prepared.provider_config,
@@ -404,6 +411,7 @@ def ocr(
             api_key=prepared.api_key,
             api_base=prepared.api_base,
             custom_llm_provider=prepared.custom_llm_provider,
+            client=_supplied_client(kwargs),
             aocr=_is_async,
             headers=prepared.extra_headers,
             provider_config=prepared.provider_config,
