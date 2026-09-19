@@ -644,9 +644,16 @@ class LLMCachingHandler:
 
         idx = 0
         final_data_list: Final = []
-        for item in _caching_handler_response.final_embedding_cached_response.data:
+        for position, item in enumerate(_caching_handler_response.final_embedding_cached_response.data):
             if item is None and embedding_response.data is not None:
-                final_data_list.append(embedding_response.data[idx])
+                api_item = embedding_response.data[idx]
+                final_data_list.append(
+                    Embedding(
+                        embedding=api_item["embedding"],
+                        index=position,
+                        object="embedding",
+                    )
+                )
                 idx += 1
             else:
                 final_data_list.append(item)
