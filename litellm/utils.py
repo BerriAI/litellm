@@ -8110,6 +8110,7 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 
 def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
+    model: str = "",
 ) -> dict | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
@@ -8125,12 +8126,19 @@ def validate_chat_completion_tool_choice(
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
-            raise Exception(
-                f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"
+            raise BadRequestError(
+                message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
+                model=model,
+                llm_provider="",
             )
         return tool_choice
-    raise Exception(
-        f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
+    raise BadRequestError(
+        message=(
+            f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. "
+            "Please ensure tool_choice follows the OpenAI tool_choice spec"
+        ),
+        model=model,
+        llm_provider="",
     )
 
 
