@@ -610,6 +610,44 @@ async def test_vector_store_file_list_authorizes_model_query_param_before_creden
 
 
 @pytest.mark.asyncio
+async def test_vector_store_file_list_model_query_param_enforces_project_model_grant():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.auth.auth_checks import ProxyException
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, project_cache_key
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "team-openai"}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.model_group_alias = {}
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="team_id:team-123",
+        value=LiteLLM_TeamTableCachedObj(team_id="team-123", models=["team-openai"]),
+    )
+    await cache.async_set_cache(
+        key=project_cache_key("proj-1"),
+        value=LiteLLM_ProjectTableCachedObj(project_id="proj-1", models=["other-deployment"]),
+    )
+    user_api_key_dict = UserAPIKeyAuth(team_id="team-123", team_models=["team-openai"], project_id="proj-1")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: proxy_server global, no seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: proxy_server global, no seam
+    ):
+        with pytest.raises(ProxyException):
+            await _update_request_data_with_model_routing_hint(
+                data={"vector_store_id": "vs_123"},
+                request=request,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+    llm_router.get_deployment_credentials_with_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_update_request_data_with_litellm_managed_vector_store_registry():
     """
     Test that _update_request_data_with_litellm_managed_vector_store_registry

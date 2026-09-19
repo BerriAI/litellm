@@ -5,7 +5,6 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import _can_object_call_model, can_key_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -14,6 +13,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_query,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    authorize_model_for_key,
     get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
@@ -212,26 +212,7 @@ async def _authorize_model_routing_hint(
 ) -> None:
     if user_api_key_dict is None:
         return
-
-    key_models: Final = getattr(user_api_key_dict, "models", None)
-    if not (isinstance(key_models, list) and "all-team-models" in key_models):
-        await can_key_call_model(
-            model=model,
-            llm_model_list=None,
-            valid_token=user_api_key_dict,
-            llm_router=llm_router,
-        )
-
-    team_models: Final = getattr(user_api_key_dict, "team_models", None)
-    if isinstance(team_models, list) and len(team_models) > 0:
-        _can_object_call_model(
-            model=model,
-            llm_router=llm_router,
-            models=team_models,
-            team_model_aliases=user_api_key_dict.team_model_aliases,
-            team_id=user_api_key_dict.team_id,
-            object_type="team",
-        )
+    await authorize_model_for_key(model_id=model, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
 
 
 async def _update_request_data_with_model_routing_hint(
