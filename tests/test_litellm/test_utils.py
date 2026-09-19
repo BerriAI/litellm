@@ -186,8 +186,8 @@ def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "expected_key"),
     [
-        ("gpt-5.6-luna-2026-07-09", "openai", "gpt-5.6-luna"),
-        ("gpt-5.6-luna-2026-07-09", "azure", "azure/gpt-5.6-luna"),
+        ("gpt-5.6-luna-2099-01-01", "openai", "gpt-5.6-luna"),
+        ("gpt-5.6-luna-2099-01-01", "azure", "azure/gpt-5.6-luna"),
     ],
 )
 def test_get_model_info_falls_back_from_dated_snapshot_to_undated_entry(
