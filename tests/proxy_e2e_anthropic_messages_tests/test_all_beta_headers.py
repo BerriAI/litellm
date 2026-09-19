@@ -8,7 +8,13 @@ import aiohttp
 import json
 
 
-def get_all_supported_anthropic_beta_headers(provider: str):
+BETA_HEADERS_NOT_IMPLEMENTED_BY_MODEL = {
+    "bedrock-claude-opus-4.5": frozenset({"thinking-binding-controls-2026-08-01"}),
+    "bedrock-converse-claude-sonnet-4.5": frozenset({"thinking-binding-controls-2026-08-01"}),
+}
+
+
+def get_all_supported_anthropic_beta_headers(provider: str, model_name: str | None = None):
     config_path = (
         Path(__file__).resolve().parents[2]
         / "litellm"
@@ -19,12 +25,14 @@ def get_all_supported_anthropic_beta_headers(provider: str):
         config = json.load(f)
 
     anthropic_mapping = config.get(provider, {})
+    not_implemented = BETA_HEADERS_NOT_IMPLEMENTED_BY_MODEL.get(
+        model_name or "", frozenset()
+    )
 
-    # Only include headers that have a non-null mapping value
     return [
         header_name
         for header_name, provider_value in anthropic_mapping.items()
-        if provider_value is not None
+        if provider_value is not None and header_name not in not_implemented
     ]
 
 
@@ -112,7 +120,7 @@ async def test_bedrock_invoke_messages_with_all_beta_headers(model_name, provide
     """
     print(f"Testing v1/messages for model={model_name}, provider={provider_name}")
 
-    beta_headers = get_all_supported_anthropic_beta_headers(provider_name)
+    beta_headers = get_all_supported_anthropic_beta_headers(provider_name, model_name)
 
     headers = {
         "Authorization": "Bearer sk-1234",
@@ -162,3 +170,29 @@ async def test_bedrock_invoke_messages_with_all_beta_headers(model_name, provide
             print(f"   Model: {response_json['model']}")
             print(f"   Input tokens: {usage['input_tokens']}")
             print(f"   Output tokens: {usage['output_tokens']}")
+
+
+def _parametrized_model_names():
+    model_names = set()
+    for test_fn in (
+        test_anthropic_messages_with_all_beta_headers,
+        test_bedrock_invoke_messages_with_all_beta_headers,
+    ):
+        for mark in getattr(test_fn, "pytestmark", []):
+            if mark.name == "parametrize":
+                model_names.update(case[0] for case in mark.args[1])
+    return model_names
+
+
+def test_beta_headers_not_implemented_by_model_stays_in_sync():
+    assert set(BETA_HEADERS_NOT_IMPLEMENTED_BY_MODEL) <= _parametrized_model_names()
+
+    for model_name, excluded in BETA_HEADERS_NOT_IMPLEMENTED_BY_MODEL.items():
+        assert excluded
+        provider_name = "bedrock_converse" if "converse" in model_name else "bedrock"
+        sent = get_all_supported_anthropic_beta_headers(provider_name, model_name)
+        assert sent
+        assert not excluded.intersection(sent)
+        assert excluded.issubset(
+            get_all_supported_anthropic_beta_headers(provider_name)
+        )
