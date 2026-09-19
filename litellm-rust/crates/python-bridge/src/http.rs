@@ -24,6 +24,7 @@ pub(crate) fn call_config(
     asynchronous: bool,
 ) -> PyResult<HttpClientConfig> {
     decline_live_clients(kwargs)?;
+    decline_custom_url_policy(&PythonSettings::UrlPolicy.read(py)?)?;
     let configured = settings(&PythonSettings::Http.read(py)?)?
         .with_environment(&|name| std::env::var(name).ok());
     let settings = for_call(configured, call_ssl_verify(kwargs)?, asynchronous)
@@ -61,6 +62,23 @@ pub(crate) fn decline_live_clients(kwargs: &Bound<'_, PyDict>) -> PyResult<()> {
         }
     }
     Ok(())
+}
+
+#[derive(FromPyObject)]
+struct PythonUrlPolicy {
+    user_url_validation: bool,
+    user_url_allowed_hosts: Vec<String>,
+}
+
+fn decline_custom_url_policy(value: &Bound<'_, PyAny>) -> PyResult<()> {
+    match value.extract::<PythonUrlPolicy>() {
+        Ok(policy) if policy.user_url_validation && policy.user_url_allowed_hosts.is_empty() => {
+            Ok(())
+        }
+        Ok(_) | Err(_) => Err(RustBridgeDeclined::new_err(
+            "litellm.user_url_validation / user_url_allowed_hosts are applied by the Python route",
+        )),
+    }
 }
 
 #[derive(FromPyObject)]
@@ -242,6 +260,37 @@ user_agent='litellm/9.9.9',
             let error = settings(&python_settings(py, "ssl_verify=object()")).unwrap_err();
             assert!(error.is_instance_of::<RustBridgeDeclined>(py));
             assert!(error.value(py).to_string().contains("litellm.ssl_verify"));
+        });
+    }
+
+    fn url_policy<'py>(py: Python<'py>, fields: &str) -> Bound<'py, PyAny> {
+        let source = std::ffi::CString::new(format!(
+            "import types\npolicy = types.SimpleNamespace({fields})"
+        ))
+        .unwrap();
+        let locals = PyDict::new(py);
+        py.run(&source, Some(&locals), Some(&locals)).unwrap();
+        locals.get_item("policy").unwrap().unwrap()
+    }
+
+    #[test]
+    fn default_url_policy_stays_on_the_rust_route() {
+        Python::initialize();
+        Python::attach(|py| {
+            let policy = url_policy(py, "user_url_validation=True, user_url_allowed_hosts=[]");
+            decline_custom_url_policy(&policy).unwrap();
+        });
+    }
+
+    #[rstest]
+    #[case::validation_off("user_url_validation=False, user_url_allowed_hosts=[]")]
+    #[case::allowlist("user_url_validation=True, user_url_allowed_hosts=['docs.internal']")]
+    #[case::mistyped("user_url_validation=True, user_url_allowed_hosts=None")]
+    fn custom_url_policy_declines_so_python_applies_it(#[case] fields: &str) {
+        Python::initialize();
+        Python::attach(|py| {
+            let error = decline_custom_url_policy(&url_policy(py, fields)).unwrap_err();
+            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
         });
     }
 
