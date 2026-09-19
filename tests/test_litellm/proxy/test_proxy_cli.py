@@ -139,6 +139,35 @@ class TestProxyInitializationHelpers:
             )
             assert args["timeout_worker_healthcheck"] == 15
 
+    @staticmethod
+    def _uvicorn_access_info_enabled(args: dict) -> bool:
+        import logging
+
+        loggers = tuple(logging.getLogger(n) for n in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"))
+        saved = tuple((lg, lg.handlers[:], lg.level, lg.propagate) for lg in loggers)
+        try:
+            uvicorn.Config(**args).configure_logging()
+            return logging.getLogger("uvicorn.access").isEnabledFor(logging.INFO)
+        finally:
+            for lg, handlers, level, propagate in saved:
+                lg.handlers[:] = handlers
+                lg.setLevel(level)
+                lg.propagate = propagate
+
+    def test_litellm_log_error_silences_uvicorn_info_lines(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOG", "ERROR")
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_config" not in args
+        assert self._uvicorn_access_info_enabled(args) is False
+
+    def test_unset_litellm_log_keeps_uvicorn_default_info_lines(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_LOG", raising=False)
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_level" not in args
+        assert self._uvicorn_access_info_enabled(args) is True
+
     def test_installed_uvicorn_supports_worker_flags(self):
         params = inspect.signature(uvicorn.Config.__init__).parameters
         assert "timeout_worker_healthcheck" in params

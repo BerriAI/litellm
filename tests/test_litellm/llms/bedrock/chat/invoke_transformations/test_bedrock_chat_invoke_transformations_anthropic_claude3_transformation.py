@@ -1,6 +1,7 @@
 import asyncio
 import json
 import uuid
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -814,3 +815,103 @@ async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sourc
         "type": "document",
         "source": {"type": "base64", "media_type": "application/pdf", "data": async_only_image_fetch.base64_png},
     } in captured["body"]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    "model, expected_betas",
+    [
+        pytest.param("us.anthropic.claude-opus-4-8", ["tool-search-tool-2025-10-19"], id="opus_4_8"),
+        pytest.param("us.anthropic.claude-opus-5", ["tool-search-tool-2025-10-19"], id="opus_5"),
+        pytest.param("us.anthropic.claude-sonnet-5", ["tool-search-tool-2025-10-19"], id="sonnet_5"),
+        pytest.param("us.anthropic.claude-haiku-4-5-20251001-v1:0", ["tool-search-tool-2025-10-19"], id="haiku_4_5"),
+        pytest.param("us.anthropic.claude-opus-4-1-20250805-v1:0", None, id="opus_4_1_unsupported"),
+    ],
+)
+def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
+    local_model_cost_map, local_beta_headers_config, model, expected_betas
+):
+    """LIT-5851: the chat Invoke path used to add the ``tool-search-tool-2025-10-19``
+    beta whenever the id contained ``opus-4``, so Opus 5 and Sonnet 5 lost it, Haiku
+    4.5 never had it, and Opus 4.1 got it without support. The gate now follows the
+    model map's ``supports_tool_search`` flag, shared with the messages path."""
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Add 2 and 3"}],
+        optional_params={
+            "max_tokens": 64,
+            "tools": [
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add_numbers",
+                        "description": "Add two integers",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                            "required": ["a", "b"],
+                        },
+                    },
+                },
+            ],
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("anthropic_beta") == expected_betas
+
+
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
+EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+
+
+def _chat_invoke_request_with_tools(
+    tools: list[dict[str, object]], headers: dict[str, str] | None = None
+) -> dict[str, object]:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 64, "stream": True, "tools": tools},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    return config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "write a big file"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers or {},
+    )
+
+
+def _eager_openai_tool(name: str, **extra: object) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": EAGER_TOOL_SCHEMA}, **extra}
+
+
+def test_bedrock_chat_invoke_eager_input_streaming_tool_adds_beta_and_strips_key():
+    result = _chat_invoke_request_with_tools(
+        [_eager_openai_tool("write_file", eager_input_streaming=True), _eager_openai_tool("read_file")]
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+    assert [tool["name"] for tool in result["tools"]] == ["write_file", "read_file"]
+    assert all("eager_input_streaming" not in tool for tool in result["tools"])
+    assert result["tools"][0]["input_schema"] == EAGER_TOOL_SCHEMA
+
+
+def test_bedrock_chat_invoke_eager_input_streaming_false_strips_key_without_beta():
+    result = _chat_invoke_request_with_tools([_eager_openai_tool("write_file", eager_input_streaming=False)])
+
+    assert "anthropic_beta" not in result
+    assert "eager_input_streaming" not in result["tools"][0]
+
+
+def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_client_header():
+    result = _chat_invoke_request_with_tools(
+        [_eager_openai_tool("write_file", eager_input_streaming=True)],
+        headers={"anthropic-beta": FINE_GRAINED_TOOL_STREAMING_BETA},
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]

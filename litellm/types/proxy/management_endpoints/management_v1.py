@@ -65,6 +65,12 @@ class ListLinks(BaseModel):
     last: str
 
 
+class ResourceResponse(BaseModel, Generic[TOut]):
+    """Envelope for a single resource or an action's result: `{data: ...}`, no `meta` or `links`."""
+
+    data: TOut
+
+
 class ListResponse(BaseModel, Generic[TOut]):
     """Rows stay flat: JSON:API's `{type, id, attributes}` wrapper is a deliberate deviation, so every
     dashboard column accessor would otherwise have to go through `.attributes`."""
