@@ -6078,6 +6078,93 @@ async def test_router_unknown_model_error_message_renders_model_name_literally()
     assert "          " not in message  # no padding run from an expanded format field
 
 
+def test_get_credential_deployment_is_the_deployment_credentials_resolve_to():
+    """Regression: a batch retrieved with credentials resolved by model name was priced
+    without its deployment id, so per-deployment pricing never applied. The deployment
+    behind the credentials must be reachable by name and by id, carrying its model_info."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mistral-ocr",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "sk-ocr"},
+                "model_info": {"id": "ocr-dep", "ocr_cost_per_page_batches": 0.0123},
+            }
+        ]
+    )
+
+    by_name = router.get_credential_deployment(model_id="mistral-ocr")
+    by_id = router.get_credential_deployment(model_id="ocr-dep")
+
+    assert by_name is not None and by_id is not None
+    assert by_name.model_info.id == by_id.model_info.id == "ocr-dep"
+    assert by_name.model_info.model_dump()["ocr_cost_per_page_batches"] == 0.0123
+    assert router.get_deployment_credentials_with_provider(model_id="mistral-ocr")["api_key"] == "sk-ocr"
+    assert router.get_credential_deployment(model_id="no-such-model") is None
+
+
+def test_get_credential_deployment_skips_a_paused_deployment():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "paused-ocr",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "sk-ocr"},
+                "model_info": {"id": "paused-dep", "blocked": True},
+            }
+        ]
+    )
+
+    assert router.get_credential_deployment(model_id="paused-ocr") is None
+    assert router.get_credential_deployment(model_id="paused-dep") is None
+
+
+def test_get_team_public_name_deployment_only_resolves_the_owning_team():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mistral/mistral-ocr-latest",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "sk-team-a"},
+                "model_info": {"id": "team-a-ocr", "team_id": "team-a", "team_public_model_name": "ocr"},
+            }
+        ]
+    )
+
+    owning_team = router._get_team_public_name_deployment(model_id="ocr", team_id="team-a")
+
+    assert owning_team is not None and owning_team.model_info.id == "team-a-ocr"
+    assert router._get_team_public_name_deployment(model_id="ocr", team_id="team-b") is None
+    assert router._get_team_public_name_deployment(model_id="ocr", team_id=None) is None
+    assert router.get_credential_deployment(model_id="ocr", team_id="team-a").model_info.id == "team-a-ocr"
+    assert router.get_credential_deployment(model_id="ocr", team_id="team-b") is None
+
+
+def test_get_wildcard_deployment_usable_by_team_prefers_the_team_pattern():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mistral/*",
+                "litellm_params": {"model": "mistral/*", "api_key": "sk-shared"},
+                "model_info": {"id": "shared-wildcard"},
+            },
+            {
+                "model_name": "mistral/*",
+                "litellm_params": {"model": "mistral/*", "api_key": "sk-team-a"},
+                "model_info": {"id": "team-a-wildcard", "team_id": "team-a", "team_public_model_name": "mistral/*"},
+            },
+        ]
+    )
+    ocr = "mistral/mistral-ocr-latest"
+
+    team_match = router._get_wildcard_deployment_usable_by_team(model_id=ocr, team_id="team-a")
+    other_team_match = router._get_wildcard_deployment_usable_by_team(model_id=ocr, team_id="team-b")
+    anonymous_match = router._get_wildcard_deployment_usable_by_team(model_id=ocr, team_id=None)
+
+    assert team_match is not None and team_match.model_info.id == "team-a-wildcard"
+    assert other_team_match is not None and other_team_match.model_info.id == "shared-wildcard"
+    assert anonymous_match is not None and anonymous_match.model_info.id == "shared-wildcard"
+    assert router._get_wildcard_deployment_usable_by_team(model_id="openai/gpt-5.6", team_id="team-a") is None
+    assert router.get_credential_deployment(model_id=ocr, team_id="team-b").model_info.id == "shared-wildcard"
+
+
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
     """
     Test that get_deployment_credentials_with_provider correctly copies
