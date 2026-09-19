@@ -4,6 +4,7 @@ Tests PII detection and masking for different message formats
 """
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
@@ -18,7 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, Message, ModelResponse, ModelResponseStream
 from litellm.exceptions import BlockedPiiEntityError
 
 
@@ -2262,7 +2263,83 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
         assert any("mixed stream detected" in msg for msg in warning_messages)
         assert any("unknown event objects" in msg for msg in warning_messages)
 
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_masks_email_split_across_chunks():
+    """
+    Regression test for PII split across streaming chunk boundaries.
 
+    The complete sensitive value is "user@example.com", but the upstream
+    stream delivers it as "user@exa" + "mple.com". The streaming guardrail
+    must evaluate the reconstructed response rather than each chunk
+    independently.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    analyzed_texts = []
+
+    async def mock_check_pii(
+        text,
+        output_parse_pii,
+        presidio_config,
+        request_data,
+    ):
+        analyzed_texts.append(text)
+        return text.replace("user@example.com", "<EMAIL_ADDRESS>")
+
+    guardrail.check_pii = mock_check_pii
+
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-split-1",
+            choices=[
+                Choices(
+                    index=0,
+                    delta=Message(content="Please contact user@exa"),
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+        ModelResponseStream(
+            id="chatcmpl-split-2",
+            choices=[
+                Choices(
+                    index=0,
+                    delta=Message(content="mple.com for support."),
+                )
+            ],
+            created=2,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+    ]
+
+    async def mock_stream():
+        for chunk in chunks:
+            yield chunk
+
+    received = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        )
+    ]
+
+    reconstructed = "".join(
+        chunk.choices[0].delta.content or ""
+        for chunk in received
+        if isinstance(chunk, ModelResponseStream)
+    )
+
+    assert analyzed_texts == ["Please contact user@example.com for support."]
+    assert "<EMAIL_ADDRESS>" in reconstructed
+    assert "user@example.com" not in reconstructed
 # ---------------------------------------------------------------------------
 # Fix 4: apply_guardrail unmask path for input_type="response"
 # ---------------------------------------------------------------------------

@@ -27,9 +27,10 @@ from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterato
     BaseAnthropicMessagesStreamingIterator,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import Usage
+from litellm.types.utils import Choices, Message, ModelResponseStream, Usage
 
 
 @pytest.fixture(autouse=True)
@@ -375,6 +376,81 @@ async def test_async_post_call_streaming_iterator_hook_with_override_chains_call
     ):
         out.append(ch)
     assert out == ["a*", "b*"]
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_streaming_iterator_hook_presidio_output_masking_keeps_split_pii_buffered(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    """
+    Regression test for #41611: output PII split across SSE chunks must be
+    evaluated by Presidio's native streaming iterator as a reconstructed
+    response, rather than by the unified per-chunk guardrail path.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+    )
+
+    analyzed_texts: list[str] = []
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        analyzed_texts.append(text)
+        return text.replace("user@example.com", "<EMAIL_ADDRESS>")
+
+    guardrail.check_pii = mock_check_pii
+
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-proxy-split-1",
+            choices=[
+                Choices(
+                    index=0,
+                    delta=Message(content="Please contact user@exa"),
+                )
+            ],
+            created=1,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+        ModelResponseStream(
+            id="chatcmpl-proxy-split-2",
+            choices=[
+                Choices(
+                    index=0,
+                    delta=Message(content="mple.com for support."),
+                )
+            ],
+            created=2,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+        ),
+    ]
+
+    async def upstream():
+        for chunk in chunks:
+            yield chunk
+
+    received = [
+        chunk
+        async for chunk in proxy_logging.async_post_call_streaming_iterator_hook(
+            response=upstream(),
+            user_api_key_dict=make_user_api_key_auth(),
+            request_data={},
+        )
+    ]
+
+    reconstructed = "".join(
+        chunk.choices[0].delta.content or ""
+        for chunk in received
+        if isinstance(chunk, ModelResponseStream)
+    )
+
+    assert analyzed_texts == ["Please contact user@example.com for support."]
+    assert "<EMAIL_ADDRESS>" in reconstructed
+    assert "user@example.com" not in reconstructed
 
 
 @pytest.mark.asyncio

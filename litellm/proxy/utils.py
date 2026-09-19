@@ -3727,6 +3727,7 @@ class ProxyLogging:
                     and resolved_callback.uses_apply_guardrail_interface()
                     and getattr(resolved_callback, "use_native_lifecycle_hooks", False) is not True
                     and not resolved_callback.mask_response_content
+                    and not getattr(resolved_callback, "apply_to_output", False)
                 )
                 else kind
             )
