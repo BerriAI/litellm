@@ -9724,6 +9724,21 @@ class TestJwtScopeMcpGrants:
         assert tools == expected, "a key's unified access group grant keeps every tool on its servers"
         resolve_groups.assert_awaited_once_with(auth)
 
+    async def test_direct_key_server_grant_skips_the_unified_access_group_lookup(self):
+        auth = _jwt_auth(
+            "litellm.mcp.beta_add",
+            _BETA_ADD_SCOPE,
+            api_key="sk-h",
+            access_group_ids=["grp"],
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["math_beta"]),
+        )
+        with patch.object(  # test-quality-ok: the DB-backed loader must stay untouched when the key grants directly
+            MCPRequestHandler, "_get_key_access_group_mcp_server_extras", new_callable=AsyncMock
+        ) as resolve_groups:
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+        assert tools is None
+        resolve_groups.assert_not_awaited()
+
     async def test_key_grant_on_another_server_does_not_widen_a_scope_tool_allowlist(self):
         auth = _jwt_auth(
             "litellm.mcp.beta_add",

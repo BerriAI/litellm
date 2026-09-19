@@ -2385,12 +2385,14 @@ class MCPRequestHandler:
             if key_obj_perm and key_obj_perm.mcp_access_groups
             else ()
         )
+        if server_id in (*direct_servers, *tag_group_servers):
+            return (None,)
         unified_group_servers: Final = (
             await MCPRequestHandler._get_key_access_group_mcp_server_extras(user_api_key_auth)
             if user_api_key_auth.access_group_ids
             else ()
         )
-        return (None,) if server_id in (*direct_servers, *tag_group_servers, *unified_group_servers) else ()
+        return (None,) if server_id in unified_group_servers else ()
 
     @staticmethod
     def _merge_additive_tool_grants(
