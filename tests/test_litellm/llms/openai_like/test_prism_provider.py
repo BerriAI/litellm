@@ -51,8 +51,14 @@ def test_prism_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPat
     assert api_base == "https://prism.internal.example/v1"
 
 
+PRISM_CATALOG_SNAPSHOT = (
+    "per GET https://api.prisminference.com/v1/models on 2026-09-19; "
+    "a mismatch means the catalog moved, not that cost tracking broke"
+)
+
+
 @pytest.mark.parametrize(
-    ("model", "input_cost", "output_cost", "supports_vision"),
+    ("model", "usd_per_million_input", "usd_per_million_output", "supports_vision"),
     [
         ("prism/deepseek-v4.1-flash", 0.17, 0.63, True),
         ("prism/deepseek-v4-flash", 0.17, 0.21, False),
@@ -60,8 +66,8 @@ def test_prism_provider_keeps_explicit_credentials(monkeypatch: pytest.MonkeyPat
 )
 def test_prism_model_cost_and_capabilities(
     model: str,
-    input_cost: float,
-    output_cost: float,
+    usd_per_million_input: float,
+    usd_per_million_output: float,
     supports_vision: bool,
 ):
     from litellm.cost_calculator import cost_per_token
@@ -74,16 +80,29 @@ def test_prism_model_cost_and_capabilities(
     )
     model_info = litellm.get_model_info(model)
 
-    assert prompt_cost == pytest.approx(input_cost)
-    assert completion_cost == pytest.approx(output_cost)
-    assert model_info["cache_read_input_token_cost"] == pytest.approx(7e-08)
-    assert model_info["max_input_tokens"] == 1_000_000
-    assert model_info["max_output_tokens"] == 384_000
+    assert prompt_cost == pytest.approx(model_info["input_cost_per_token"] * 1_000_000)
+    assert completion_cost == pytest.approx(model_info["output_cost_per_token"] * 1_000_000)
+    assert (prompt_cost, completion_cost) == pytest.approx(
+        (usd_per_million_input, usd_per_million_output)
+    ), PRISM_CATALOG_SNAPSHOT
+    assert 0 < model_info["cache_read_input_token_cost"] < model_info["input_cost_per_token"]
+    assert model_info["max_tokens"] == model_info["max_output_tokens"] <= model_info["max_input_tokens"]
     assert model_info["supports_function_calling"] is True
     assert model_info["supports_native_streaming"] is True
     assert model_info["supports_reasoning"] is True
     assert model_info["supports_response_schema"] is True
-    assert litellm.supports_vision(model) is supports_vision
+    assert litellm.supports_vision(model) is model_info["supports_vision"]
+    assert model_info["supports_vision"] is supports_vision, PRISM_CATALOG_SNAPSHOT
+
+
+def test_prism_backup_registry_mirrors_cost_map():
+    package_root = Path(litellm.__file__).parent
+    cost_map = json.loads((package_root.parent / "model_prices_and_context_window.json").read_text())
+    backup = json.loads((package_root / "model_prices_and_context_window_backup.json").read_text())
+    prism_entries = {name: entry for name, entry in cost_map.items() if name.startswith("prism/")}
+
+    assert set(prism_entries) == {"prism/deepseek-v4.1-flash", "prism/deepseek-v4-flash"}
+    assert prism_entries == {name: backup[name] for name in prism_entries}
 
 
 def test_prism_is_available_in_add_model_form():
