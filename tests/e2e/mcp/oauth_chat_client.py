@@ -337,6 +337,8 @@ class ChatMcpClient:
                         base_url,
                     )
                 )
+            except AssertionError:
+                raise
             except Exception as exc:  # noqa: BLE001 - retried to the deadline; the last error surfaces below
                 last_error = exc
                 time.sleep(self.proxy.poll_interval)

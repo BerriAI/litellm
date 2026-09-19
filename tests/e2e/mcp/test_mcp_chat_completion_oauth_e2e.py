@@ -27,8 +27,13 @@ from __future__ import annotations
 import os
 
 import pytest
-
-from e2e_config import CHEAP_ANTHROPIC_MODEL, LINEAR_MCP_URL, LINEAR_STORAGE_STATE, unique_marker
+from e2e_config import (
+    CHEAP_ANTHROPIC_MODEL,
+    LINEAR_MCP_URL,
+    LINEAR_READONLY_TOOL,
+    LINEAR_STORAGE_STATE,
+    unique_marker,
+)
 from e2e_http import AuthHeaders
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, KeyGenerateBody, McpChatTool, McpServerCreateBody, ObjectPermission
@@ -50,10 +55,6 @@ pytestmark = [
     ),
 ]
 
-# Pinned from a live dance during verification (never guessed); the gateway
-# prefixes every upstream tool name with the server alias. list_teams is a
-# read-only Linear tool that takes no arguments and returns the caller's teams.
-LINEAR_READONLY_TOOL = "list_teams"
 LINEAR_PROMPT = "Use the list_teams tool to list my Linear teams, then reply with the name of one of them."
 
 
