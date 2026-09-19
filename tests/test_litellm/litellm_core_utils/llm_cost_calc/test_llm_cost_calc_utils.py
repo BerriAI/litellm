@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime, timezone
 
 import pytest
@@ -15,6 +16,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _is_off_peak,
     _is_within_off_peak_window,
     apply_off_peak_pricing,
+    apply_provider_cache_read_default,
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_billed_token_rates,
@@ -94,6 +96,38 @@ def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_re
 
     assert prompt_cost == pytest.approx(12928 * 2.4e-7)
     assert completion_cost == pytest.approx(380 * 9.7e-7)
+
+
+def test_apply_provider_cache_read_default_preserves_identity_and_input_data() -> None:
+    openai_info: ModelInfo = {"input_cost_per_token": 2e-6}
+    explicit_fireworks_info: ModelInfo = {
+        "input_cost_per_token": 2e-6,
+        "cache_read_input_token_cost": 1e-6,
+    }
+    fireworks_info: ModelInfo = {
+        "input_cost_per_token": 2e-6,
+        "off_peak_pricing": {
+            "hours_utc": "14:00-00:00",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 3e-6,
+        },
+    }
+    original_fireworks_info: ModelInfo = deepcopy(fireworks_info)
+
+    assert apply_provider_cache_read_default(openai_info, "openai") is openai_info
+    assert apply_provider_cache_read_default(explicit_fireworks_info, "fireworks_ai") is explicit_fireworks_info
+
+    processed_fireworks_info = apply_provider_cache_read_default(fireworks_info, "fireworks_ai")
+
+    assert fireworks_info == original_fireworks_info
+    assert processed_fireworks_info is not fireworks_info
+    assert processed_fireworks_info["cache_read_input_token_cost"] == pytest.approx(2e-6 * 0.5)
+    assert processed_fireworks_info["off_peak_pricing"] == {
+        "hours_utc": "14:00-00:00",
+        "input_cost_per_token": 1e-6,
+        "output_cost_per_token": 3e-6,
+        "cache_read_input_token_cost": 1e-6 * 0.5,
+    }
 
 
 def test_generic_cost_per_token_prefers_audio_per_second_rate() -> None:
@@ -239,9 +273,7 @@ def test_reasoning_tokens_no_price_set(_local_model_cost_map):
         model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
         10,
     )
-    print(f"completion_cost: {completion_cost}")
     expected_completion_cost = model_cost_map["output_cost_per_token"] * usage.completion_tokens
-    print(f"expected_completion_cost: {expected_completion_cost}")
     assert round(completion_cost, 10) == round(
         expected_completion_cost,
         10,
