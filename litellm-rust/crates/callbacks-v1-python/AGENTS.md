@@ -24,4 +24,4 @@
   - `V1PythonLifecycle::subscribed` is the only constructor callers get; it returns `None` for an empty snapshot, so an unobserved call builds no envelope and projects no response
   - This lifecycle may run after another one in a `LifecycleChain`; it observes the arguments and the wire as that one left them and never assumes it is alone
 - `close` is idempotent; `traverse` visits every retained Python edge and calls no Python
-- This crate has none of `callbacks-legacy-python`'s obligations and must not grow them; shared behaviour belongs to `PythonLifecycle`, not to either adapter
+- This crate has none of `callbacks-legacy`'s obligations and must not grow them; shared behaviour belongs to `PythonLifecycle`, not to either adapter

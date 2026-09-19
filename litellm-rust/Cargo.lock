@@ -2030,7 +2030,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-callbacks-legacy-python"
+name = "litellm-callbacks-legacy"
 version = "0.1.0"
 dependencies = [
  "litellm-auth",
@@ -2221,7 +2221,7 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-auth-gcp",
- "litellm-callbacks-legacy-python",
+ "litellm-callbacks-legacy",
  "litellm-callbacks-v1-python",
  "litellm-core",
  "litellm-core-utils",
