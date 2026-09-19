@@ -4,6 +4,7 @@ import os
 import httpx
 import pytest
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -455,6 +456,34 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
     )
 
     assert optional_params["tool_choice"] == {"auto": {}}
+
+
+@pytest.mark.parametrize(
+    "model, param, value, expected_max_tokens",
+    [
+        ("us.openai.gpt-6-astra", "max_tokens", 1, 16),
+        ("us.openai.gpt-6-astra", "max_completion_tokens", 1, 16),
+        ("us.openai.gpt-6-astra", "max_tokens", 64, 64),
+        ("us.xai.grok-4.6", "max_tokens", 1, 16),
+        ("global.xai.grok-4.6", "max_completion_tokens", 1, 16),
+        ("us.xai.grok-4.6", "max_tokens", 32, 32),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "max_tokens", 1, 1),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.openai.gpt-6-astra", "max_tokens", 1, 16),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.xai.grok-4.6", "max_tokens", 1, 16),
+        ("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz", "max_tokens", 1, 1),
+    ],
+)
+def test_map_openai_params_enforces_minimum_max_tokens_for_openai_compat_models(
+    model: str, param: str, value: int, expected_max_tokens: int
+):
+    optional_params = AmazonConverseConfig().map_openai_params(
+        non_default_params={param: value},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["maxTokens"] == expected_max_tokens
 
 
 @pytest.mark.parametrize(
@@ -7400,3 +7429,111 @@ def test_transform_response_honors_json_mode_kwarg_when_optional_params_lack_it(
     )
     assert result.choices[0].message.tool_calls is None
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "population": 2100000}
+
+
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
+EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+
+
+def _eager_openai_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": {"name": "write_file", "parameters": EAGER_TOOL_SCHEMA}, **extra}
+
+
+def _eager_openai_function_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": {"name": "write_file", "parameters": EAGER_TOOL_SCHEMA, **extra}}
+
+
+def _eager_anthropic_tool(**extra: object) -> dict[str, object]:
+    return {"name": "write_file", "input_schema": EAGER_TOOL_SCHEMA, **extra}
+
+
+def _converse_request(
+    model: str, tools: list[dict[str, object]], headers: dict[str, object] | None = None
+) -> dict[str, object]:
+    return AmazonConverseConfig()._transform_request_helper(
+        model=model,
+        system_content_blocks=[],
+        optional_params={"tools": tools},
+        messages=[{"role": "user", "content": "write a big file"}],
+        headers=headers,
+    )
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        _eager_openai_tool(eager_input_streaming=True),
+        _eager_openai_function_tool(eager_input_streaming=True),
+        _eager_anthropic_tool(eager_input_streaming=True),
+    ],
+    ids=["openai_top_level", "openai_under_function", "anthropic_shape"],
+)
+def test_eager_input_streaming_tool_adds_fine_grained_tool_streaming_beta(tool):
+    data = _converse_request("us.anthropic.claude-sonnet-4-5-20250929-v1:0", [tool])
+
+    assert data["additionalModelRequestFields"]["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+    tool_spec = data["toolConfig"]["tools"][0]["toolSpec"]
+    assert tool_spec["name"] == "write_file"
+    assert "eager_input_streaming" not in tool_spec
+    assert "eager_input_streaming" not in tool_spec["inputSchema"]["json"]
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        _eager_openai_tool(eager_input_streaming=False),
+        _eager_openai_function_tool(eager_input_streaming=False),
+        _eager_anthropic_tool(eager_input_streaming=False),
+        _eager_openai_tool(),
+    ],
+    ids=["openai_false", "function_false", "anthropic_false", "absent"],
+)
+def test_eager_input_streaming_false_or_absent_adds_no_beta(tool):
+    data = _converse_request("us.anthropic.claude-sonnet-4-5-20250929-v1:0", [tool])
+
+    assert "anthropic_beta" not in data.get("additionalModelRequestFields", {})
+    assert "eager_input_streaming" not in data["toolConfig"]["tools"][0]["toolSpec"]
+
+
+def test_eager_input_streaming_beta_only_on_anthropic_models():
+    data = _converse_request("amazon.nova-pro-v1:0", [_eager_openai_tool(eager_input_streaming=True)])
+
+    assert "anthropic_beta" not in data.get("additionalModelRequestFields", {})
+    assert data["toolConfig"]["tools"][0]["toolSpec"]["name"] == "write_file"
+
+
+def test_eager_input_streaming_beta_not_duplicated_with_client_header():
+    data = _converse_request(
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        [_eager_openai_tool(eager_input_streaming=True)],
+        headers={"anthropic-beta": f"{FINE_GRAINED_TOOL_STREAMING_BETA},interleaved-thinking-2025-05-14"},
+    )
+
+    assert data["additionalModelRequestFields"]["anthropic_beta"] == [
+        FINE_GRAINED_TOOL_STREAMING_BETA,
+        "interleaved-thinking-2025-05-14",
+    ]
+
+
+def test_eager_input_streaming_beta_never_written_back_into_client_header_list():
+    headers = {"anthropic-beta": ["interleaved-thinking-2025-05-14"]}
+
+    data = _converse_request(
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        [_eager_openai_tool(eager_input_streaming=True)],
+        headers=headers,
+    )
+
+    assert data["additionalModelRequestFields"]["anthropic_beta"] == [
+        "interleaved-thinking-2025-05-14",
+        FINE_GRAINED_TOOL_STREAMING_BETA,
+    ]
+    assert headers == {"anthropic-beta": ["interleaved-thinking-2025-05-14"]}
+
+
+def test_eager_input_streaming_non_boolean_is_a_bad_request():
+    with pytest.raises(litellm.BadRequestError, match="eager_input_streaming must be a boolean"):
+        _converse_request(
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            [_eager_openai_tool(eager_input_streaming="true")],
+        )

@@ -54,6 +54,7 @@ if TYPE_CHECKING:
         PresidioGuardrailCallback,
         ResponsesBackendWebSocket,
         ResponsesClientWebSocket,
+        ResponsesWebSocketRequestDefaults,
     )
     from litellm.types.router import LiteLLM_Params
 
@@ -211,18 +212,21 @@ def _error_event_fields(error_obj: object) -> tuple[str, str | None, str | None]
         raw_code = None
     message: Final = str(raw_message) if raw_message is not None else "Response API in-stream error"
     error_type: Final = raw_type if isinstance(raw_type, str) else None
-    code: Final = raw_code if isinstance(raw_code, str) else None
+    code: Final = str(raw_code) if isinstance(raw_code, (str, int)) and not isinstance(raw_code, bool) else None
     return message, error_type, code
+
+
+def _status_code_for_error_field(field: str) -> int | None:
+    if field.isdecimal() and 400 <= int(field) <= 599:
+        return int(field)
+    return _ERROR_CODE_HTTP_STATUS.get(field)
 
 
 def _status_code_for_error_fields(error_type: str | None, error_code: str | None) -> int:
     fields: Final = tuple(field for field in (error_code, error_type) if field is not None)
     if any(field.startswith("rate_limit") or field == "insufficient_quota" for field in fields):
         return 429
-    return next(
-        (_ERROR_CODE_HTTP_STATUS[field] for field in fields if field in _ERROR_CODE_HTTP_STATUS),
-        500,
-    )
+    return next((status for status in map(_status_code_for_error_field, fields) if status is not None), 500)
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
@@ -1717,6 +1721,7 @@ class ResponsesWebSocketStreaming:
         output_guardrail_callbacks: list[PresidioGuardrailCallback] | None = None,
         quota_callbacks: Sequence[ProjectQuotaCallback] | None = None,
         authorized_model: str | None = None,
+        request_defaults: ResponsesWebSocketRequestDefaults | None = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1732,6 +1737,7 @@ class ResponsesWebSocketStreaming:
         # Model name authorized at connection time; enforced on every
         # response.create frame to prevent deployment-substitution attacks.
         self.authorized_model: str | None = authorized_model
+        self.request_defaults: ResponsesWebSocketRequestDefaults | None = request_defaults
 
     def _should_store_event(self, event_obj: _MutableJsonObject) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1874,12 +1880,23 @@ class ResponsesWebSocketStreaming:
             modified = True
         return modified
 
+    def _with_request_defaults(self, msg_obj: dict[str, object]) -> dict[str, object]:
+        if self.request_defaults is None:
+            return msg_obj
+        nested: Final = msg_obj.get("response")
+        if _is_json_object(nested):
+            return {**msg_obj, "response": self.request_defaults.merged_into(nested)}
+        return {**self.request_defaults.merged_into(msg_obj), "type": msg_obj["type"]}
+
     async def _mask_response_create(self, message: str) -> str:
         """
-        Enforce the authorized model and apply Presidio PII masking to a
-        ``response.create`` message before it is forwarded to the upstream
-        provider.
+        Merge deployment defaults, enforce the authorized model, and apply
+        Presidio PII masking to a ``response.create`` message before it is
+        forwarded to the upstream provider.
 
+        - Fills the deployment's ``litellm_params`` request defaults into the
+          frame the way the HTTP ``/v1/responses`` path does: client-set keys
+          win, ``extra_body`` entries override.
         - Overwrites any ``model`` field with the connection-authorized model
           to prevent deployment-substitution attacks (always applied).
         - Walks the ``input`` and ``instructions`` fields, calls ``check_pii``
@@ -1889,23 +1906,26 @@ class ResponsesWebSocketStreaming:
         Non-``response.create`` messages are returned unchanged.
         """
         try:
-            msg_obj: Final = _load_json_object(message)
+            parsed: Final = _load_json_object(message)
         except (json.JSONDecodeError, TypeError):
             return message
 
-        if msg_obj.get("type") != "response.create":
+        if parsed.get("type") != "response.create":
             return message
+
+        msg_obj: Final = self._with_request_defaults(parsed)
+        defaults_applied: Final = msg_obj != parsed
 
         # Always enforce the authorized model, even when PII masking is off.
         model_modified: Final = self._enforce_authorized_model(msg_obj)
 
         if not self.guardrail_callbacks:
-            return json.dumps(msg_obj) if model_modified else message
+            return json.dumps(msg_obj) if model_modified or defaults_applied else message
 
         if "metadata" not in self.request_data:
             self.request_data["metadata"] = {}
 
-        modified = model_modified
+        modified = model_modified or defaults_applied
         guardrail_cbs: Final[tuple[PresidioGuardrailCallback, ...]] = tuple(self.guardrail_callbacks)
         for cb in guardrail_cbs:
             presidio_config = cb.get_presidio_settings_from_request_data(self.request_data)
@@ -2589,8 +2609,7 @@ class ManagedResponsesWebSocketHandler:
         if "litellm_metadata" not in call_kwargs:
             call_kwargs["litellm_metadata"] = {}
         call_kwargs["litellm_metadata"]["proxy_server_request"] = proxy_server_request
-        call_kwargs.setdefault("litellm_params", {})
-        call_kwargs["litellm_params"]["proxy_server_request"] = proxy_server_request
+        call_kwargs["proxy_server_request"] = proxy_server_request
 
     async def _stream_and_forward(self, model: str, call_kwargs: dict[str, Any]) -> _MutableJsonObject | None:
         """
