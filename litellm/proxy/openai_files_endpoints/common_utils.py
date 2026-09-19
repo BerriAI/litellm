@@ -18,6 +18,7 @@ from typing import (
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.proxy._types import ProxyException
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
@@ -372,9 +373,8 @@ def get_credentials_for_model(
     credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
 
     if credentials is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"Model '{model_id}' not found in model_list. Please check your config.yaml."},
+        raise ProxyModelNotFoundError(
+            route=operation_context, model_name=model_id, retryable_with_model_read_through=False
         )
 
     return credentials
@@ -610,7 +610,7 @@ def handle_model_based_routing(
         credentials = get_credentials_for_model(
             llm_router=llm_router,
             model_id=model_from_id,
-            operation_context=f"file operation (file created with model '{model_from_id}')",
+            operation_context="file operation (file created with model)",
         )
         original_file_id: Final = get_original_file_id(file_id)
         return True, model_from_id, original_file_id, credentials
