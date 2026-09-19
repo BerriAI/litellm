@@ -214,6 +214,10 @@ def _message_has_cache_control(message: Mapping[str, object]) -> bool:
     return False
 
 
+def has_cache_control_breakpoint(messages: Sequence[Mapping[str, object]]) -> bool:
+    return any(_message_has_cache_control(message) for message in messages)
+
+
 def _cached_prefix_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
     last_breakpoint: Final = max(
         (index for index, msg in enumerate(messages) if _message_has_cache_control(msg)),
@@ -222,13 +226,17 @@ def _cached_prefix_indices(messages: Sequence[Mapping[str, object]]) -> tuple[in
     return tuple(range(last_breakpoint + 1))
 
 
-def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
+def get_protected_indices(
+    messages: Sequence[Mapping[str, object]],
+    frozen_prefix_count: int = 0,
+) -> tuple[int, ...]:
     """
     Return indices of messages that must never be compressed:
     - All system messages
     - The last user message
     - The last assistant message
     - Every message up to and including the last one carrying an Anthropic cache_control breakpoint
+    - The first `frozen_prefix_count` messages, the stable prefix an implicit-caching provider keys its cache on
 
     The last user message is what the model is being asked to act on right now,
     so compressing it replaces the live instruction with a marker. Compression
@@ -240,7 +248,12 @@ def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int
     system_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
     last_user: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
     assistant_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")
-    return tuple(dict.fromkeys(system_indices + last_user + assistant_indices[-1:] + _cached_prefix_indices(messages)))
+    frozen_prefix: Final = tuple(range(min(max(frozen_prefix_count, 0), len(messages))))
+    return tuple(
+        dict.fromkeys(
+            system_indices + last_user + assistant_indices[-1:] + _cached_prefix_indices(messages) + frozen_prefix
+        )
+    )
 
 
 def _combine_scores(

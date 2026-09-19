@@ -189,6 +189,34 @@ def test_content_that_is_not_a_list_of_mappings_is_not_treated_as_cache_control(
     assert sorted(get_protected_indices(messages)) == [0, 2]
 
 
+def test_frozen_prefix_rows_are_protected():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "tool", "tool_call_id": "t1", "content": "old tool output"},
+        {"role": "assistant", "content": "ack"},
+        {"role": "user", "content": "live instruction"},
+    ]
+
+    protected = sorted(get_protected_indices(messages, frozen_prefix_count=3))
+
+    assert protected == [0, 1, 2, 4, 5]
+    # frozen_prefix_count=0 must leave the default policy untouched
+    assert sorted(get_protected_indices(messages)) == [0, 4, 5]
+
+
+def test_frozen_prefix_count_clamped_to_message_count():
+    messages = [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "tool", "tool_call_id": "t1", "content": "old tool output"},
+        {"role": "user", "content": "live instruction"},
+    ]
+
+    assert sorted(get_protected_indices(messages, frozen_prefix_count=100)) == [0, 1, 2, 3]
+
+
 def test_compress_keeps_part_level_cache_control_row_verbatim():
     stale_log = {"role": "user", "content": [{"type": "text", "text": "stale log line " * 2000}]}
     pinned = {
