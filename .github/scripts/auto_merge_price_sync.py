@@ -45,6 +45,7 @@ class CheckRun:
     name: str
     status: str
     conclusion: str | None
+    id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +83,13 @@ class EvaluationInputs:
 
 def _is_bot_login(login: str) -> bool:
     return login.lower().endswith("[bot]")
+
+
+def latest_check_runs(check_runs: Sequence[CheckRun]) -> tuple[CheckRun, ...]:
+    latest_by_name: Final[dict[str, CheckRun]] = {}
+    for run in sorted(check_runs, key=lambda run: run.id):
+        latest_by_name[run.name] = run
+    return tuple(latest_by_name.values())
 
 
 def _classify(changed_files: Sequence[str]) -> str:
@@ -125,12 +133,13 @@ def evaluate(
         if decision != "run":
             reasons.append("changed files outside the cost-map-only set")
 
-    green_runs: Final = frozenset(run.name for run in inputs.check_runs if run.conclusion in OK_CHECK_CONCLUSIONS)
+    check_runs: Final = latest_check_runs(inputs.check_runs)
+    green_runs: Final = frozenset(run.name for run in check_runs if run.conclusion in OK_CHECK_CONCLUSIONS)
     green_statuses: Final = frozenset(status.context for status in inputs.statuses if status.state == "success")
     for context in sorted(inputs.required_contexts):
         if context not in green_runs and context not in green_statuses:
             reasons.append(f"required check {context!r} not green")
-    for run in inputs.check_runs:
+    for run in check_runs:
         if run.name == inputs.self_check_name:
             continue
         if run.status != "completed" or run.conclusion not in OK_CHECK_CONCLUSIONS:
@@ -288,6 +297,7 @@ def _check_runs(token: str, repo: str, sha: str) -> tuple[CheckRun, ...]:
             name=_text(item.get("name")),
             status=_text(item.get("status")),
             conclusion=item.get("conclusion") if isinstance(item.get("conclusion"), str) else None,
+            id=item.get("id") if isinstance(item.get("id"), int) else 0,
         )
         for item in runs
         if isinstance(item, Mapping)

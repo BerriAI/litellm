@@ -136,6 +136,30 @@ def test_in_progress_check_run_holds() -> None:
     )
 
 
+def test_superseded_cancelled_check_run_merges() -> None:
+    verdict: Final = _evaluate(
+        _inputs(
+            check_runs=(
+                merger.CheckRun(name="build", status="completed", conclusion="success", id=3),
+                merger.CheckRun(name="build", status="completed", conclusion="cancelled", id=1),
+            )
+        )
+    )
+    assert verdict.merge
+
+
+def test_latest_check_run_failure_holds_despite_older_success() -> None:
+    _holds(
+        _inputs(
+            check_runs=(
+                merger.CheckRun(name="build", status="completed", conclusion="success", id=1),
+                merger.CheckRun(name="build", status="completed", conclusion="failure", id=2),
+            )
+        ),
+        "check run 'build' is completed/failure",
+    )
+
+
 def test_own_check_run_is_ignored() -> None:
     verdict: Final = _evaluate(
         _inputs(
