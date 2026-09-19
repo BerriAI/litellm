@@ -752,11 +752,12 @@ describe("daily activity api_key filter", () => {
   const originalFetch = global.fetch;
 
   const captureFetch = () => {
-    const mockFetch = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify({ results: [], metadata: {} }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+    const mockFetch = vi.fn<typeof fetch>().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ results: [], metadata: {} }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
     );
     global.fetch = mockFetch;
     return mockFetch;
@@ -770,6 +771,24 @@ describe("daily activity api_key filter", () => {
   afterEach(() => {
     global.fetch = originalFetch;
   });
+
+  it.each([false, true])(
+    "serializes the current UTC day opt-in (%s) on both user activity routes",
+    async (includeCurrentUtcDay) => {
+      const mockFetch = captureFetch();
+
+      await Networking.userDailyActivityCall("sk-key", start, end, 1, "user-123", includeCurrentUtcDay);
+      await Networking.userDailyActivityAggregatedCall("sk-key", start, end, "user-123", includeCurrentUtcDay);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      for (const [input] of mockFetch.mock.calls) {
+        const url = new URL(String(input), "http://localhost");
+        expect(url.searchParams.get("include_current_utc_day")).toBe(includeCurrentUtcDay ? "true" : null);
+        expect(url.searchParams.get("user_id")).toBe("user-123");
+        expect(url.searchParams.get("timezone")).toBe(String(new Date().getTimezoneOffset()));
+      }
+    },
+  );
 
   it("sends the key hash as api_key from the paginated caller", async () => {
     const mockFetch = captureFetch();
