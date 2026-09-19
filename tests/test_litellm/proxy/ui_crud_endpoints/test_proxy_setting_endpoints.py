@@ -3244,6 +3244,32 @@ class TestWebSearchInterceptionSettingsEndpoints:
         assert resp.status_code == 200, resp.text
         reapply.assert_awaited_once()
 
+    def test_get_reports_no_database_instead_of_empty_settings(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 500, resp.text
+        assert "Database not connected" in resp.json()["detail"]["error"]
+
+    def test_update_still_saves_when_the_live_reinit_fails(self, mock_proxy_config, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config.init_websearch_interception_settings_in_db",
+            AsyncMock(side_effect=RuntimeError("callback blew up")),
+        )
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        try:
+            resp = client.patch("/update/websearch_interception_settings", json={"enabled": True})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert mock_proxy_config["save_call_count"]() == 1
+
     def test_update_rejects_zero_max_agentic_loops(self, mock_proxy_config, monkeypatch):
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
         self._override_auth(LitellmUserRoles.PROXY_ADMIN)
