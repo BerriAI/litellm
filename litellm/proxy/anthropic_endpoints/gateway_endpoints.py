@@ -18,6 +18,7 @@ import hashlib
 import json
 import secrets
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final
 
@@ -32,13 +33,16 @@ from litellm.constants import (
     CLI_SSO_SESSION_TTL_SECONDS,
     LITELLM_CLI_SOURCE_IDENTIFIER,
 )
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
 from litellm.proxy.anthropic_endpoints.endpoints import anthropic_response, count_tokens
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _safe_set_request_parsed_body
+from litellm.proxy.management_endpoints.ui_sso import CliSsoTeamDetail
 
 GATEWAY_PREFIX: Final = "/claude_code_gateway"
 _DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 _REFRESH_TOKEN_GRANT: Final = "refresh_token"
+_DEVICE_CODE_SEPARATOR: Final = "."
 _DEVICE_POLL_INTERVAL_SECONDS: Final = 5
 _SECONDS_PER_HOUR: Final = 3600
 _MANAGED_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -48,10 +52,17 @@ _POST_ONLY: Final = ["POST"]  # mutable-ok: FastAPI's add_api_route only accepts
 
 class _GatewaySessionData(BaseModel):
     user_id: str
-    user_role: str | None
+    user_role: LitellmUserRoles
     models: list[str] = Field(default_factory=list)
     teams: tuple[str, ...] = ()
     team_details: object | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _GatewayLogin:
+    user_info: LiteLLM_UserTable
+    team_id: str | None
+    team: CliSsoTeamDetail
 
 
 class _OAuthErrorBody(BaseModel):
@@ -70,7 +81,7 @@ class _DeviceAuthorizationBody(BaseModel):
     device_code: str
     user_code: str
     verification_uri: str
-    verification_uri_complete: str
+    verification_uri_complete: str | None = None
     expires_in: int
     interval: int
 
@@ -111,15 +122,11 @@ def _managed_settings() -> dict[str, object] | None:
     return _MANAGED_SETTINGS_ADAPTER.validate_python(settings)
 
 
-def _oauth_error(*, status_code: int, error: str, description: str | None = None) -> "_OAuthError":
-    return _OAuthError(status_code=status_code, error=error, description=description)
-
-
-class _OAuthError(Exception):
-    def __init__(self, *, status_code: int, error: str, description: str | None) -> None:
-        self.status_code = status_code
-        self.error = error
-        self.description = description
+@dataclass(frozen=True, slots=True)
+class _OAuthError:
+    status_code: int
+    error: str
+    description: str | None = None
 
 
 def _oauth_error_response(err: _OAuthError) -> JSONResponse:
@@ -153,7 +160,7 @@ router.add_api_route(
 @router.get("/.well-known/oauth-authorization-server", include_in_schema=False)
 async def oauth_authorization_server(request: Request) -> JSONResponse:
     if not _is_gateway_enabled():
-        return _oauth_error_response(_oauth_error(status_code=404, error="not_found"))
+        return _oauth_error_response(_OAuthError(status_code=404, error="not_found"))
 
     from litellm.proxy.utils import get_custom_url
 
@@ -175,6 +182,7 @@ async def device_authorization(request: Request) -> JSONResponse:
 
     from litellm.proxy.management_endpoints.ui_sso import (
         _check_cli_sso_start_rate_limit,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
+        _cli_sso_verification_uri_complete_enabled,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
         _generate_cli_sso_user_code,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
         _hash_cli_sso_secret,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
         _normalize_cli_sso_user_code,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
@@ -184,7 +192,7 @@ async def device_authorization(request: Request) -> JSONResponse:
     from litellm.proxy.utils import get_custom_url
 
     if not _is_gateway_enabled():
-        return _oauth_error_response(_oauth_error(status_code=404, error="not_found"))
+        return _oauth_error_response(_OAuthError(status_code=404, error="not_found"))
 
     _check_cli_sso_start_rate_limit(
         request=request,
@@ -192,50 +200,51 @@ async def device_authorization(request: Request) -> JSONResponse:
         use_x_forwarded_for=bool(_general_settings().get("use_x_forwarded_for", False)),
     )
 
-    device_code: Final = f"cli-{secrets.token_urlsafe(24)}"
+    login_id: Final = f"cli-{secrets.token_urlsafe(24)}"
+    poll_secret: Final = secrets.token_urlsafe(32)
     user_code: Final = _generate_cli_sso_user_code()
     flow: Final = {  # mutable-ok: the shared CLI SSO cache entry is a dict the browser leg mutates
-        "poll_secret_hash": _hash_cli_sso_secret(device_code),
+        "poll_secret_hash": _hash_cli_sso_secret(poll_secret),
         "user_code_hash": _hash_cli_sso_secret(_normalize_cli_sso_user_code(user_code)),
         "sso_complete": False,
         "user_code_verified": False,
         "session_data": None,
     }
-    _set_cli_sso_flow(login_id=device_code, cache=cli_sso_session_cache, flow=flow)
+    _set_cli_sso_flow(login_id=login_id, cache=cli_sso_session_cache, flow=flow)
 
     request_base_url: Final = str(request.base_url)
     verification_uri: Final = get_custom_url(request_base_url=request_base_url, route="sso/key/generate")
-    query: Final = MappingProxyType({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": device_code})
+    query: Final = MappingProxyType({"source": LITELLM_CLI_SOURCE_IDENTIFIER, "key": login_id})
     body: Final = _DeviceAuthorizationBody(
-        device_code=device_code,
+        device_code=f"{login_id}{_DEVICE_CODE_SEPARATOR}{poll_secret}",
         user_code=user_code,
         verification_uri=f"{verification_uri}?{urlencode(query)}",
         verification_uri_complete=(
             f"{verification_uri}?{urlencode(MappingProxyType({**query, 'user_code': user_code}))}"
+            if _cli_sso_verification_uri_complete_enabled()
+            else None
         ),
         expires_in=CLI_SSO_SESSION_TTL_SECONDS,
         interval=_DEVICE_POLL_INTERVAL_SECONDS,
     )
-    return JSONResponse(content=body.model_dump())
+    return JSONResponse(content=body.model_dump(exclude_none=True))
 
 
-def _mint_access_token_from_flow(flow: Mapping[str, object]) -> str:
-    from litellm.proxy._types import LiteLLM_UserTable
-    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+def _validate_login(flow: Mapping[str, object]) -> _GatewayLogin | _OAuthError:
     from litellm.proxy.management_endpoints.ui_sso import selected_cli_sso_team_detail
 
     try:
         session_data: Final = _GatewaySessionData.model_validate(flow.get("session_data"))
     except ValidationError as err:
         verbose_proxy_logger.warning("Claude Code gateway login session is malformed: %s", err)
-        raise _oauth_error(
+        return _OAuthError(
             status_code=400, error="invalid_grant", description="The login session is malformed; sign in again"
-        ) from err
+        )
 
     team_id: Final = session_data.teams[0] if session_data.teams else None
     selected_team: Final = selected_cli_sso_team_detail(team_details=session_data.team_details, team_id=team_id)
     if selected_team is None:
-        raise _oauth_error(
+        return _OAuthError(
             status_code=400,
             error="invalid_grant",
             description=f"Could not resolve the model grants for team {team_id}; sign in again",
@@ -243,26 +252,32 @@ def _mint_access_token_from_flow(flow: Mapping[str, object]) -> str:
 
     user_info: Final = LiteLLM_UserTable(
         user_id=session_data.user_id,
-        user_role=session_data.user_role,
+        user_role=session_data.user_role.value,
         models=session_data.models,
     )
+    return _GatewayLogin(user_info=user_info, team_id=team_id, team=selected_team)
+
+
+def _mint_access_token(login: _GatewayLogin) -> str:
+    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
     return ExperimentalUIJWTToken.get_cli_jwt_auth_token(
-        user_info=user_info,
-        team_id=team_id,
-        team_alias=selected_team.team_alias,
-        team_models=selected_team.team_models,
-        team_model_aliases=selected_team.team_model_aliases,
+        user_info=login.user_info,
+        team_id=login.team_id,
+        team_alias=login.team.team_alias,
+        team_models=login.team.team_models,
+        team_model_aliases=login.team.team_model_aliases,
         max_budget=None,
     )
 
 
-async def _claim_device_code(device_code: str, cache: DualCache) -> bool:
+async def _claim_device_code(login_id: str, cache: DualCache) -> bool:
     from litellm.proxy.management_endpoints.ui_sso import (
         _get_cli_sso_flow_cache_key,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
     )
 
     claims: Final = await cache.async_increment_cache(
-        key=f"{_get_cli_sso_flow_cache_key(device_code)}:claimed",
+        key=f"{_get_cli_sso_flow_cache_key(login_id)}:claimed",
         value=1,
         ttl=CLI_SSO_SESSION_TTL_SECONDS,
     )
@@ -275,39 +290,45 @@ async def _handle_device_code_grant(device_code: str | None) -> JSONResponse:
     from litellm.proxy.management_endpoints.ui_sso import (
         _get_cli_sso_flow_cache_key,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
         _get_cli_sso_flow_or_raise,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
+        _verify_cli_sso_poll_secret,  # pyright: ignore[reportPrivateUsage]  # shared device-flow helper
     )
     from litellm.proxy.proxy_server import cli_sso_session_cache
 
     if not device_code:
         return _oauth_error_response(
-            _oauth_error(status_code=400, error="invalid_request", description="device_code is required")
+            _OAuthError(status_code=400, error="invalid_request", description="device_code is required")
         )
 
+    login_id, _, poll_secret = device_code.partition(_DEVICE_CODE_SEPARATOR)
     try:
-        flow: Final = _get_cli_sso_flow_or_raise(login_id=device_code, cache=cli_sso_session_cache)
+        flow: Final = _get_cli_sso_flow_or_raise(login_id=login_id, cache=cli_sso_session_cache)
     except HTTPException:
-        return _oauth_error_response(_oauth_error(status_code=400, error="expired_token"))
+        return _oauth_error_response(_OAuthError(status_code=400, error="expired_token"))
+
+    if not _verify_cli_sso_poll_secret(flow, poll_secret):
+        return _oauth_error_response(_OAuthError(status_code=400, error="expired_token"))
 
     if not flow.get("sso_complete") or not flow.get("user_code_verified"):
-        return _oauth_error_response(_oauth_error(status_code=400, error="authorization_pending"))
+        return _oauth_error_response(_OAuthError(status_code=400, error="authorization_pending"))
 
-    if not await _claim_device_code(device_code, cli_sso_session_cache):
-        return _oauth_error_response(_oauth_error(status_code=400, error="expired_token"))
+    login: Final = _validate_login(flow)
+    if isinstance(login, _OAuthError):
+        return _oauth_error_response(login)
 
-    await cli_sso_session_cache.async_delete_cache(key=_get_cli_sso_flow_cache_key(device_code))
-    try:
-        access_token: Final = _mint_access_token_from_flow(flow)
-    except _OAuthError as err:
-        return _oauth_error_response(err)
+    if not await _claim_device_code(login_id, cli_sso_session_cache):
+        return _oauth_error_response(_OAuthError(status_code=400, error="expired_token"))
 
-    body: Final = _AccessTokenBody(access_token=access_token, expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR)
+    await cli_sso_session_cache.async_delete_cache(key=_get_cli_sso_flow_cache_key(login_id))
+    body: Final = _AccessTokenBody(
+        access_token=_mint_access_token(login), expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR
+    )
     return JSONResponse(content=body.model_dump())
 
 
 @router.post("/oauth/token", include_in_schema=False)
 async def oauth_token(request: Request) -> JSONResponse:
     if not _is_gateway_enabled():
-        return _oauth_error_response(_oauth_error(status_code=404, error="not_found"))
+        return _oauth_error_response(_OAuthError(status_code=404, error="not_found"))
 
     form: Final = await request.form()
     grant_type: Final = form.get("grant_type")
@@ -318,7 +339,7 @@ async def oauth_token(request: Request) -> JSONResponse:
 
     if grant_type == _REFRESH_TOKEN_GRANT:
         return _oauth_error_response(
-            _oauth_error(
+            _OAuthError(
                 status_code=401,
                 error="invalid_grant",
                 description="This gateway does not issue refresh tokens; sign in again",
@@ -326,7 +347,7 @@ async def oauth_token(request: Request) -> JSONResponse:
         )
 
     return _oauth_error_response(
-        _oauth_error(
+        _OAuthError(
             status_code=400, error="unsupported_grant_type", description=f"Unsupported grant_type: {grant_type}"
         )
     )

@@ -20,11 +20,18 @@ from fastapi.testclient import TestClient
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import ProxyException
 from litellm.proxy.anthropic_endpoints import gateway_endpoints
-from litellm.proxy.management_endpoints.ui_sso import _get_cli_sso_flow_cache_key, _set_cli_sso_flow
+from litellm.proxy.management_endpoints.ui_sso import (
+    _get_cli_sso_flow_cache_key,
+    _hash_cli_sso_secret,
+    _set_cli_sso_flow,
+)
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 
 _DEVICE_CODE_GRANT: Final = "urn:ietf:params:oauth:grant-type:device_code"
 _MASTER_KEY: Final = "sk-master-key"
+_SHARED_LOGIN_ID: Final = "cli-shared-login-code"
+_SHARED_POLL_SECRET: Final = "shared-poll-secret"
+_SHARED_DEVICE_CODE: Final = f"{_SHARED_LOGIN_ID}.{_SHARED_POLL_SECRET}"
 _MINT: Final = "litellm.proxy.auth.auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token"
 _PROTOBUF_BODY: Final = b"\x0a\x05hello\x12\x03{{{"
 _COMPLETED_SESSION: Final = MappingProxyType(
@@ -100,10 +107,12 @@ def _gateway_env(
     managed_settings: Mapping[str, object] | None = None,
     cache: DualCache | None = None,
     real_auth: bool = False,
+    extra_settings: Mapping[str, object] = MappingProxyType({}),
 ) -> Iterator[tuple[TestClient, DualCache]]:
     general_settings: Final = {
         "enable_claude_code_gateway": enabled,
         **({} if managed_settings is None else {"claude_code_gateway_managed_settings": dict(managed_settings)}),
+        **extra_settings,
     }
     session_cache: Final = cache or DualCache(default_in_memory_ttl=600)
 
@@ -147,7 +156,7 @@ def _request_token(client: TestClient, device_code: str) -> httpx.Response:
 
 def _completed_flow(session_data: Mapping[str, object] = _COMPLETED_SESSION) -> dict[str, object]:
     return {
-        "poll_secret_hash": "unused",
+        "poll_secret_hash": _hash_cli_sso_secret(_SHARED_POLL_SECRET),
         "user_code_hash": "unused",
         "sso_complete": True,
         "user_code_verified": True,
@@ -155,13 +164,18 @@ def _completed_flow(session_data: Mapping[str, object] = _COMPLETED_SESSION) -> 
     }
 
 
+def _login_id(device_code: str) -> str:
+    return device_code.partition(".")[0]
+
+
 def _complete_flow(
     cache: DualCache, device_code: str, session_data: Mapping[str, object] = _COMPLETED_SESSION
 ) -> None:
-    key: Final = _get_cli_sso_flow_cache_key(device_code)
+    key: Final = _get_cli_sso_flow_cache_key(_login_id(device_code))
     flow: Final = cache.get_cache(key=key)
     assert isinstance(flow, dict)
-    cache.set_cache(key=key, value={**flow, **_completed_flow(session_data)}, ttl=600)
+    completed: Final = {**flow, **_completed_flow(session_data), "poll_secret_hash": flow["poll_secret_hash"]}
+    cache.set_cache(key=key, value=completed, ttl=600)
 
 
 def test_discovery_shape():
@@ -194,18 +208,35 @@ def test_device_authorization_returns_rfc8628_shape_and_persists_flow():
         assert resp.status_code == 200
         body = resp.json()
         device_code = body["device_code"]
-        assert device_code.startswith("cli-")
+        login_id, separator, poll_secret = device_code.partition(".")
+        assert login_id.startswith("cli-")
+        assert separator == "."
+        assert len(poll_secret) >= 32
         assert body["user_code"]
         assert body["expires_in"] == 600
         assert body["interval"] == 5
-        # verification_uri_complete carries the user_code; the short uri does not.
-        assert f"user_code={body['user_code']}" in body["verification_uri_complete"]
-        assert "user_code=" not in body["verification_uri"]
-        assert f"key={device_code}" in body["verification_uri"]
-        # The device flow is stored under the device_code so the browser SSO leg can complete it.
-        stored = cache.get_cache(key=_get_cli_sso_flow_cache_key(device_code))
+        assert "verification_uri_complete" not in body
+        assert body["verification_uri"].endswith(f"/sso/key/generate?source=litellm-cli&key={login_id}")
+        assert poll_secret not in body["verification_uri"]
+        stored = cache.get_cache(key=_get_cli_sso_flow_cache_key(login_id))
         assert isinstance(stored, dict)
         assert stored["sso_complete"] is False
+        assert stored["poll_secret_hash"] == _hash_cli_sso_secret(poll_secret)
+        assert cache.get_cache(key=_get_cli_sso_flow_cache_key(device_code)) is None
+
+
+@pytest.mark.parametrize("opted_in", [True, False])
+def test_verification_uri_complete_carries_the_user_code_only_when_the_operator_opts_in(opted_in: bool):
+    with _gateway_env(extra_settings={"allow_cli_sso_verification_uri_complete": opted_in}) as (client, _):
+        body = client.post("/claude_code_gateway/oauth/device_authorization").json()
+    login_id = _login_id(body["device_code"])
+    if not opted_in:
+        assert "verification_uri_complete" not in body
+        return
+    assert body["verification_uri_complete"].endswith(
+        f"/sso/key/generate?source=litellm-cli&key={login_id}&user_code={body['user_code']}"
+    )
+    assert "user_code=" not in body["verification_uri"]
 
 
 def test_token_authorization_pending_before_browser_completes():
@@ -213,6 +244,22 @@ def test_token_authorization_pending_before_browser_completes():
         resp = _request_token(client, _start_device_flow(client))
     assert resp.status_code == 400
     assert resp.json()["error"] == "authorization_pending"
+
+
+@pytest.mark.parametrize("tamper", ["login_id_only", "wrong_secret"])
+def test_token_refuses_the_browser_login_id_without_the_client_secret(tamper: str):
+    with _gateway_env() as (client, cache):
+        device_code = _start_device_flow(client)
+        _complete_flow(cache, device_code)
+        login_id = _login_id(device_code)
+        presented = login_id if tamper == "login_id_only" else f"{login_id}.not-the-secret"
+        with patch(_MINT, return_value="sk-session") as mint:
+            resp = _request_token(client, presented)
+            assert resp.status_code == 400
+            assert resp.json()["error"] == "expired_token"
+            mint.assert_not_called()
+            with_secret = _request_token(client, device_code)
+    assert with_secret.status_code == 200
 
 
 def test_token_success_mints_bearer_and_is_single_use():
@@ -251,14 +298,25 @@ def test_token_teamless_user_mints_without_a_team():
     assert mint.call_args.kwargs["team_models"] == ()
 
 
-def test_token_malformed_session_is_invalid_grant():
+@pytest.mark.parametrize(
+    "session_data",
+    [
+        {"user_role": "internal_user"},
+        {**_COMPLETED_SESSION, "user_role": None},
+        {**_COMPLETED_SESSION, "user_role": "not-a-role"},
+    ],
+    ids=["missing_user_id", "no_role", "unknown_role"],
+)
+def test_token_malformed_session_is_invalid_grant_and_does_not_consume_the_login(session_data: Mapping[str, object]):
     with _gateway_env() as (client, cache):
         device_code = _start_device_flow(client)
-        _complete_flow(cache, device_code, session_data={"user_role": "internal_user"})
+        _complete_flow(cache, device_code, session_data=session_data)
         with patch(_MINT) as mint:
             resp = _request_token(client, device_code)
+            again = _request_token(client, device_code)
     assert resp.status_code == 400
     assert resp.json()["error"] == "invalid_grant"
+    assert again.json()["error"] == "invalid_grant"
     mint.assert_not_called()
 
 
@@ -275,25 +333,24 @@ def test_token_unknown_team_grants_is_invalid_grant():
 
 def test_token_mints_on_a_replica_that_did_not_start_the_login():
     redis: Final = _SharedRedisFake()
-    device_code: Final = "cli-shared-login-code"
-    _set_cli_sso_flow(login_id=device_code, cache=_replica(redis), flow=_completed_flow())
+    _set_cli_sso_flow(login_id=_SHARED_LOGIN_ID, cache=_replica(redis), flow=_completed_flow())
 
     with _gateway_env(cache=_replica(redis)) as (client, _), patch(_MINT, return_value="sk-session") as mint:
-        resp = _request_token(client, device_code)
+        resp = _request_token(client, _SHARED_DEVICE_CODE)
     assert resp.status_code == 200
     assert resp.json()["access_token"] == "sk-session"
     assert mint.call_args.kwargs["team_id"] == "team-a"
+    assert mint.call_args.kwargs["user_info"].user_role == "internal_user"
 
 
 def test_token_refuses_a_device_code_another_replica_already_claimed():
     redis: Final = _SharedRedisFake()
     replica_a: Final = _replica(redis)
-    device_code: Final = "cli-shared-login-code"
-    _set_cli_sso_flow(login_id=device_code, cache=replica_a, flow=_completed_flow())
-    assert asyncio.run(gateway_endpoints._claim_device_code(device_code, replica_a)) is True
+    _set_cli_sso_flow(login_id=_SHARED_LOGIN_ID, cache=replica_a, flow=_completed_flow())
+    assert asyncio.run(gateway_endpoints._claim_device_code(_SHARED_LOGIN_ID, replica_a)) is True
 
     with _gateway_env(cache=_replica(redis)) as (client, _), patch(_MINT) as mint:
-        resp = _request_token(client, device_code)
+        resp = _request_token(client, _SHARED_DEVICE_CODE)
     assert resp.status_code == 400
     assert resp.json()["error"] == "expired_token"
     mint.assert_not_called()
