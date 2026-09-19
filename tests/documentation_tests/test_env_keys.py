@@ -57,8 +57,20 @@ EXCLUDED_TERMINAL_VARS = {
     "ALACRITTY_SOCKET",
 }
 
+# Guardrail integrations whose settings docs live in the separate
+# BerriAI/litellm-docs repository, so they cannot be added in the same commit
+# that introduces the integration here. Drop the entry once the docs land.
+EXCLUDED_PENDING_DOCS_VARS = {
+    "THIRDLAW_API_BASE",
+    "THIRDLAW_API_KEY",
+}
+
 EXCLUDED_KEYS = frozenset(
-    EXCLUDED_TERMINAL_VARS | EXCLUDED_GUARD_ONLY_VARS | EXCLUDED_ROLLOUT_FLAGS | EXCLUDED_INTERNAL_TUNING_VARS
+    EXCLUDED_TERMINAL_VARS
+    | EXCLUDED_GUARD_ONLY_VARS
+    | EXCLUDED_ROLLOUT_FLAGS
+    | EXCLUDED_INTERNAL_TUNING_VARS
+    | EXCLUDED_PENDING_DOCS_VARS
 )
 
 # Directories to skip (dependencies, venvs, caches) - only scan litellm source
