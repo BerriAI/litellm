@@ -1,8 +1,8 @@
 use litellm_auth::InputSource;
-use litellm_llms::base_llm::ocr::transformation::OcrResponseFormat;
+use litellm_llms::base_llm::ocr::{settings::OcrSettings, transformation::OcrResponseFormat};
 use serde_json::{Value, json};
 
-use super::test_support::{MockResponse, mock_server, perform_ocr, wire_request};
+use super::test_support::{MockResponse, mock_server, ocr_client, perform_ocr, wire_request};
 
 fn request_body(request: &str) -> Value {
     serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap()
@@ -46,6 +46,27 @@ async fn facade_executes_vertex_mistral_with_resolved_project_and_location() {
             "extract_footer":true
         })
     );
+}
+
+#[tokio::test]
+async fn configured_project_and_location_apply_when_the_call_sets_neither() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let client = ocr_client().with_settings(OcrSettings {
+        vertex_project: Some("configured-project".into()),
+        vertex_location: Some("europe-west4".into()),
+        ..OcrSettings::default()
+    });
+
+    crate::ocr::client::perform(
+        &client,
+        wire_request("vertex_ai/mistral-ocr-maas", &base, json!({})),
+    )
+    .await
+    .unwrap();
+    server.await.unwrap();
+    assert!(seen.lock().unwrap()[0].starts_with(
+        "POST /v1/projects/configured-project/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict "
+    ));
 }
 
 #[tokio::test]

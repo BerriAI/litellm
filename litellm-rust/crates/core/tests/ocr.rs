@@ -6,16 +6,15 @@ use litellm_host::{
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
 };
-use litellm_http::{HttpClientPool, HttpSettings, Resolution};
-use litellm_llms::{
-    base_llm::ocr::{
-        error::Error as OcrError,
-        transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
-    },
-    custom_httpx::{
-        llm_http_handler::OcrClient,
-        media::{PublicDnsResolver, UrlPolicy},
-    },
+use litellm_http::{
+    HttpClientPool, HttpSettings, Resolution,
+    media::{PublicDnsResolver, UrlPolicy},
+};
+use litellm_llms::base_llm::ocr::{
+    error::Error as OcrError,
+    handler::OcrClient,
+    settings::OcrSettings,
+    transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -175,6 +174,43 @@ async fn facade_retains_native_response_when_requested() {
     );
 }
 
+#[rstest]
+#[case::plain_key(&[("MISTRAL_API_KEY", "plain")], "plain")]
+#[case::azure_key_wins(&[("MISTRAL_AZURE_API_KEY", "azure"), ("MISTRAL_API_KEY", "plain")], "azure")]
+#[case::empty_azure_key_falls_through(&[("MISTRAL_AZURE_API_KEY", ""), ("MISTRAL_API_KEY", "plain")], "plain")]
+#[tokio::test]
+async fn mistral_env_fallbacks_follow_python_through_the_injected_secret_source(
+    #[case] secrets: &'static [(&'static str, &'static str)],
+    #[case] expected_key: &str,
+) {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let secret_base = base.clone();
+    let client = ocr_client().with_secrets(Arc::new(move |name: &str| match name {
+        "MISTRAL_AZURE_API_BASE" => Some(secret_base.clone()),
+        "MISTRAL_API_BASE" => Some("http://127.0.0.1:9/never-read".into()),
+        _ => secrets
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| value.to_string()),
+    }));
+    let request = decode_request(OcrWireRequest {
+        model: "mistral/model".into(),
+        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        api_key: None,
+        api_base: None,
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: Default::default(),
+        input_sources: Default::default(),
+        timeout_seconds: Some(2.0),
+    })
+    .unwrap();
+
+    crate::ocr::client::perform(&client, request).await.unwrap();
+    server.await.unwrap();
+    assert!(seen.lock().unwrap()[0].contains(&format!("authorization: Bearer {expected_key}")));
+}
+
 #[tokio::test]
 async fn ocr_client_uses_the_injected_http_pool_configuration() {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
@@ -187,6 +223,8 @@ async fn ocr_client_uses_the_injected_http_pool_configuration() {
         &Resolution::from(&settings).config,
         UrlPolicy::default(),
         VertexAuth::default(),
+        OcrSettings::default(),
+        Arc::new(litellm_core_utils::settings::ProcessEnvironment),
     )
     .unwrap();
     crate::ocr::client::perform(&client, wire_request("mistral/model", &base, json!({})))
@@ -624,7 +662,7 @@ async fn read_bounded_response(response: Vec<u8>, limit: usize) -> Result<bytes:
         .unwrap();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        litellm_llms::custom_httpx::llm_http_handler::read_response_bytes(response, limit),
+        litellm_llms::base_llm::ocr::handler::read_response_bytes(response, limit),
     )
     .await;
     server.abort();
@@ -676,10 +714,7 @@ async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_dra
         .await
         .unwrap_err();
     match error {
-        OcrError::Transport(litellm_llms::custom_httpx::transport::Error::Http {
-            status,
-            body,
-        }) => {
+        OcrError::Transport(litellm_http::transport::Error::Http { status, body }) => {
             assert_eq!(status, 429);
             assert_eq!(body, prefix);
         }
