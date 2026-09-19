@@ -1999,6 +1999,51 @@ class RedisCache(BaseCache):
             log_redis_failure(verbose_logger, logging.ERROR, "LiteLLM Redis Cache RPUSH: - Got exception from REDIS", e)
             raise e
 
+    @_redis_circuit_breaker_guard
+    async def async_rpush_and_trim(
+        self,
+        key: str,
+        values: Sequence[str | bytes | int | float],
+        max_len: int,
+    ) -> int:
+        """Append values and keep only the newest ``max_len`` entries in one MULTI/EXEC.
+
+        Returns the list length right after the push, so callers can tell how many
+        of the oldest entries the trim dropped.
+        """
+        _redis_client: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+        start_time: Final = time.time()
+        try:
+            async with _redis_client.pipeline(transaction=True) as pipe:
+                pipe.rpush(namespaced_key, *values)
+                pipe.ltrim(namespaced_key, -max_len, -1)
+                results: Final = await pipe.execute()
+            for r in results:
+                if isinstance(r, Exception):
+                    raise r
+            asyncio.create_task(
+                self.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    call_type=f"async_rpush_and_trim <- {_get_call_stack_info()}",
+                )
+            )
+            return int(results[0])
+        except Exception as e:
+            asyncio.create_task(
+                self.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    error=e,
+                    call_type=f"async_rpush_and_trim <- {_get_call_stack_info()}",
+                )
+            )
+            log_redis_failure(
+                verbose_logger, logging.ERROR, "LiteLLM Redis Cache RPUSH+LTRIM: - Got exception from REDIS", e
+            )
+            raise e
+
     async def _pipeline_rpush_helper(
         self,
         pipe: pipeline,
