@@ -204,15 +204,27 @@ fn validate_location(location: &str) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
 
+    use rstest::rstest;
+
     use super::VertexAiOcrConfig;
 
-    #[test]
-    fn endpoint_uses_location_project_and_model() {
+    /// The hosts `get_vertex_base_url` in `litellm/llms/vertex_ai/common_utils.py` picks.
+    #[rstest]
+    #[case::regional("europe-west4", "https://europe-west4-aiplatform.googleapis.com")]
+    #[case::global("global", "https://aiplatform.googleapis.com")]
+    #[case::multi_region_us("us", "https://aiplatform.us.rep.googleapis.com")]
+    #[case::multi_region_eu("eu", "https://aiplatform.eu.rep.googleapis.com")]
+    fn endpoint_uses_the_location_host_project_and_model(
+        #[case] location: &str,
+        #[case] host: &str,
+    ) {
         assert_eq!(
             VertexAiOcrConfig
-                .build_ocr_url(None, "proj-1", "europe-west4", "mistral-ocr-maas")
+                .build_ocr_url(None, "proj-1", location, "mistral-ocr-maas")
                 .unwrap(),
-            "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
+            format!(
+                "{host}/v1/projects/proj-1/locations/{location}/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
+            )
         );
     }
 
