@@ -102,6 +102,17 @@ pub enum Error {
     Headers(#[from] crate::custom_httpx::http_handler::HeaderError),
 }
 
+impl From<litellm_host::machine::MachineFault> for Error {
+    fn from(fault: litellm_host::machine::MachineFault) -> Self {
+        use litellm_host::machine::MachineFault;
+        Self::InvalidRequest(match fault {
+            MachineFault::Abandoned => "OCR host driver was abandoned".into(),
+            MachineFault::Protocol(message) => format!("OCR {message}"),
+            MachineFault::Mismatch => "invalid OCR host operation result".into(),
+        })
+    }
+}
+
 impl From<litellm_core_utils::call_arguments::ArgumentError> for Error {
     fn from(error: litellm_core_utils::call_arguments::ArgumentError) -> Self {
         Self::RequestField {
