@@ -15,6 +15,10 @@ pub struct EnvironmentProxies {
 
 impl EnvironmentProxies {
     pub fn from_environment(env: &impl Lookup) -> Self {
+        Self::resolve(env, cfg!(windows))
+    }
+
+    fn resolve(env: &impl Lookup, names_ignore_case: bool) -> Self {
         let lowercase_first = |upper: Option<&str>, lower: &str| {
             env.get(lower)
                 .or_else(|| upper.and_then(|name| env.truthy(name)))
@@ -23,7 +27,11 @@ impl EnvironmentProxies {
         let is_cgi = env.get("REQUEST_METHOD").is_some();
         Self {
             all: lowercase_first(Some("ALL_PROXY"), "all_proxy"),
-            http: lowercase_first((!is_cgi).then_some("HTTP_PROXY"), "http_proxy"),
+            http: if is_cgi && names_ignore_case {
+                String::new()
+            } else {
+                lowercase_first((!is_cgi).then_some("HTTP_PROXY"), "http_proxy")
+            },
             https: lowercase_first(Some("HTTPS_PROXY"), "https_proxy"),
             no: lowercase_first(Some("NO_PROXY"), "no_proxy"),
         }
@@ -108,6 +116,22 @@ mod tests {
             EnvironmentProxies::from_environment(&env_of(env)),
             EnvironmentProxies::from_environment(&env_of(equivalent))
         );
+    }
+
+    #[test]
+    fn cgi_drops_http_proxy_entirely_where_variable_names_ignore_case() {
+        let windows_env = |name: &str| match name.to_ascii_uppercase().as_str() {
+            "REQUEST_METHOD" => Some("GET".to_string()),
+            "HTTP_PROXY" => Some("http://attacker:3128".to_string()),
+            "HTTPS_PROXY" => Some("http://proxy:3128".to_string()),
+            _ => None,
+        };
+        let proxies = EnvironmentProxies::resolve(&windows_env, true);
+        assert!(!proxies.matcher()(&url("http://api.test/")));
+        assert!(proxies.matcher()(&url("https://api.test/")));
+        assert!(EnvironmentProxies::resolve(&windows_env, false).matcher()(
+            &url("http://api.test/")
+        ));
     }
 
     #[test]
