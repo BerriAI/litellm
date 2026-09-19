@@ -5,15 +5,17 @@ const MODULE: &str = "litellm.rust_bridge.settings";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PythonSettings {
     Http,
+    UrlPolicy,
 }
 
 impl PythonSettings {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 1] = [Self::Http];
+    pub(crate) const ALL: [Self; 2] = [Self::Http, Self::UrlPolicy];
 
     pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Http => "http_settings",
+            Self::UrlPolicy => "url_policy",
         }
     }
 

@@ -15,7 +15,20 @@ CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/python-b
 def test_the_rust_contract_matches_the_returned_fields() -> None:
     contract: Final = TypeAdapter(dict[str, list[str]]).validate_json(CONTRACT_PATH.read_text())
 
-    assert contract == {"http_settings": [field.name for field in dataclasses.fields(settings.http_settings())]}
+    assert contract == {
+        "http_settings": [field.name for field in dataclasses.fields(settings.http_settings())],
+        "url_policy": [field.name for field in dataclasses.fields(settings.url_policy())],
+    }
+
+
+def test_url_policy_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", ["docs.internal:8443"])
+
+    assert settings.url_policy() == settings.UrlPolicy(
+        user_url_validation=False,
+        user_url_allowed_hosts=["docs.internal:8443"],
+    )
 
 
 def test_http_settings_reads_the_litellm_globals(monkeypatch: pytest.MonkeyPatch) -> None:

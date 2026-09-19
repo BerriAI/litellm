@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 
@@ -15,6 +16,21 @@ class HttpSettings:
     disable_aiohttp_trust_env: bool
     disable_aiohttp_transport: bool
     user_agent: str
+
+
+@dataclass(frozen=True, slots=True)
+class UrlPolicy:
+    user_url_validation: bool
+    user_url_allowed_hosts: Sequence[str]
+
+
+def url_policy() -> UrlPolicy:
+    import litellm
+
+    return UrlPolicy(
+        user_url_validation=litellm.user_url_validation,
+        user_url_allowed_hosts=litellm.user_url_allowed_hosts,
+    )
 
 
 def http_settings() -> HttpSettings:
