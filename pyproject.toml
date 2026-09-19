@@ -329,9 +329,6 @@ litellm-enterprise = { workspace = true }
 [tool.uv.workspace]
 members = ["enterprise", "litellm-proxy-extras"]
 
-[tool.isort]
-profile = "black"
-
 [tool.commitizen]
 version = "1.103.0"
 version_files = [
