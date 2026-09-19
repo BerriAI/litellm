@@ -320,6 +320,12 @@ _OAuthDiscoveryOutcome: TypeAlias = _OAuthDiscoveryResolved | _OAuthDiscoveryFai
 
 
 @dataclass(frozen=True, slots=True)
+class _ListHeaders:
+    upstream: dict[str, str] | None
+    signed_for_user: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _OAuthDiscoverySlot:
     server_id: str
     generation: int
@@ -4403,7 +4409,7 @@ class MCPServerManager:
             client = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=list_headers,
+                extra_headers=list_headers.upstream,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
@@ -4482,7 +4488,7 @@ class MCPServerManager:
         mcp_auth_header: str | dict[str, str] | None,
         extra_headers: dict[str, str] | None,
         raw_headers: dict[str, str] | None,
-    ) -> dict[str, str] | None:
+    ) -> _ListHeaders:
         """Listing stays best-effort on missing per-user env vars, and the JWT signer never overrides an
         Authorization already supplied by static headers, a per-user auth header, or extra_headers."""
         resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
@@ -4498,7 +4504,7 @@ class MCPServerManager:
             or None
         )
         if user_api_key_auth is None or server.spec_path:
-            return headers
+            return _ListHeaders(headers, signed_for_user=False)
 
         from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
             get_mcp_jwt_signer,
@@ -4512,12 +4518,15 @@ class MCPServerManager:
             isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
         )
         if get_mcp_jwt_signer() is None or has_static_authorization or mcp_auth_header or has_extra_authorization:
-            return headers
-        return await inject_mcp_jwt_headers_for_upstream(
-            user_api_key_dict=user_api_key_auth,
-            extra_headers=headers,
-            raw_headers=raw_headers,
-            for_list_tools=True,
+            return _ListHeaders(headers, signed_for_user=False)
+        return _ListHeaders(
+            await inject_mcp_jwt_headers_for_upstream(
+                user_api_key_dict=user_api_key_auth,
+                extra_headers=headers,
+                raw_headers=raw_headers,
+                for_list_tools=True,
+            ),
+            signed_for_user=True,
         )
 
     def _invalidate_discovery_lists(self, server_id: str) -> None:
@@ -4534,9 +4543,12 @@ class MCPServerManager:
         stdio_env: dict[str, str] | None,
         subject_token: str | None,
         credential_fingerprint: str | None = None,
+        *,
+        signed_for_user: bool = False,
     ) -> _DiscoveryKey:
         per_user: Final = (
-            server.requires_per_user_auth
+            signed_for_user
+            or server.requires_per_user_auth
             or self._references_per_user_env_var(server)
             or server.delegate_auth_to_upstream
             or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
@@ -4578,14 +4590,21 @@ class MCPServerManager:
             client: Final = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=headers,
+                extra_headers=headers.upstream,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+                server,
+                user_api_key_auth,
+                mcp_auth_header,
+                extra_headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+                signed_for_user=headers.signed_for_user,
             )
 
             async def fetch() -> list[Prompt]:
@@ -4622,14 +4641,21 @@ class MCPServerManager:
             client: Final = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=headers,
+                extra_headers=headers.upstream,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+                server,
+                user_api_key_auth,
+                mcp_auth_header,
+                extra_headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+                signed_for_user=headers.signed_for_user,
             )
 
             async def fetch() -> list[Resource]:
@@ -4666,14 +4692,21 @@ class MCPServerManager:
             client: Final = await self._create_mcp_client(
                 server=server,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=headers,
+                extra_headers=headers.upstream,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
-                server, user_api_key_auth, mcp_auth_header, headers, stdio_env, subject_token, credential_fingerprint
+                server,
+                user_api_key_auth,
+                mcp_auth_header,
+                extra_headers,
+                stdio_env,
+                subject_token,
+                credential_fingerprint,
+                signed_for_user=headers.signed_for_user,
             )
 
             async def fetch() -> list[ResourceTemplate]:

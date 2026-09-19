@@ -4073,6 +4073,59 @@ class TestMCPServerManager:
         assert claims["scope"] == "mcp:tools/list"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("manager_method", "client_method"),
+        [
+            ("get_prompts_from_server", "list_prompts"),
+            ("get_resources_from_server", "list_resources"),
+            ("get_resource_templates_from_server", "list_resource_templates"),
+        ],
+    )
+    async def test_catalog_discovery_cache_survives_jwt_signer_and_isolates_users(
+        self, manager_method: str, client_method: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The MCPJWTSigner mints a fresh token on every listing, so the token itself must not be part of
+        the discovery cache key; the user it was signed for must be, since the upstream sees that identity."""
+        from types import SimpleNamespace
+
+        import litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer as jwt_signer_module
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import MCPJWTSigner
+
+        monkeypatch.setattr(jwt_signer_module, "_mcp_jwt_signer_instance", None)
+        signer_clock = iter(range(1_700_000_000, 1_700_000_100))
+        monkeypatch.setattr(jwt_signer_module, "time", SimpleNamespace(time=lambda: next(signer_clock)))
+        MCPJWTSigner(
+            guardrail_name="catalog-jwt-signer",
+            event_hook="pre_mcp_call",
+            default_on=True,
+            issuer="https://litellm.example.com",
+            audience="mcp",
+        )
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-1",
+            name="alias-server",
+            alias="alias-server",
+            server_name="alias-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+        )
+        mock_client = AsyncMock()
+        upstream_call = AsyncMock(return_value=[])
+        setattr(mock_client, client_method, upstream_call)
+        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+        alice = UserAPIKeyAuth(api_key="sk-alice", user_id="alice")
+        bob = UserAPIKeyAuth(api_key="sk-bob", user_id="bob")
+
+        with patch.object(manager, "_create_mcp_client", AsyncMock(return_value=mock_client)):
+            await getattr(manager, manager_method)(server, user_api_key_auth=alice)
+            await getattr(manager, manager_method)(server, user_api_key_auth=alice)
+            assert upstream_call.await_count == 1
+            await getattr(manager, manager_method)(server, user_api_key_auth=bob)
+            assert upstream_call.await_count == 2
+
+    @pytest.mark.asyncio
     async def test_read_resource_from_server_success(self):
         manager = MCPServerManager()
 
