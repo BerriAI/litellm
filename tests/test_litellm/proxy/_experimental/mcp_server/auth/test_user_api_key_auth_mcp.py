@@ -9633,6 +9633,29 @@ class TestJwtScopeMcpGrants:
             tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
         assert sorted(tools) == ["add", "multiply"], "scope tool grants union with the caller's own key grants"
 
+    async def test_scope_tool_allowlist_narrows_its_own_server_grant(self):
+        with _jwt_scope_mappings(
+            {
+                "scope": "litellm.mcp.beta_add",
+                "mcp_servers": ["math_beta"],
+                "mcp_tool_permissions": {"math_beta": ["add"]},
+            }
+        ):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", _jwt_auth("litellm.mcp.beta_add"))
+        assert tools == ["add"], "one mapping naming a server and a tool allowlist behaves like a key with both"
+
+    async def test_key_server_untouched_by_scopes_keeps_every_tool(self):
+        auth = _jwt_auth(
+            "litellm.mcp.alpha",
+            api_key="sk-h",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["math_beta"]),
+        )
+        with _jwt_scope_mappings(_ALPHA_SCOPE):
+            tools = await MCPRequestHandler.get_allowed_tools_for_server("math_beta", auth)
+            can_multiply = await MCPRequestHandler.is_tool_allowed_for_server("multiply", "math_beta", auth)
+        assert tools is None, "scope mappings that never mention a server must not turn it into an empty allowlist"
+        assert can_multiply is True
+
     async def test_key_opt_out_of_all_servers_beats_scope_grants(self):
         auth = _jwt_auth(
             "litellm.mcp.alpha",
