@@ -315,13 +315,12 @@ async def _handle_device_code_grant(device_code: str | None) -> JSONResponse:
     if isinstance(login, _OAuthError):
         return _oauth_error_response(login)
 
+    access_token: Final = _mint_access_token(login)
     if not await _claim_device_code(login_id, cli_sso_session_cache):
         return _oauth_error_response(_OAuthError(status_code=400, error="expired_token"))
 
     await cli_sso_session_cache.async_delete_cache(key=_get_cli_sso_flow_cache_key(login_id))
-    body: Final = _AccessTokenBody(
-        access_token=_mint_access_token(login), expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR
-    )
+    body: Final = _AccessTokenBody(access_token=access_token, expires_in=CLI_JWT_EXPIRATION_HOURS * _SECONDS_PER_HOUR)
     return JSONResponse(content=body.model_dump())
 
 

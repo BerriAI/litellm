@@ -320,6 +320,18 @@ def test_token_malformed_session_is_invalid_grant_and_does_not_consume_the_login
     mint.assert_not_called()
 
 
+def test_token_mint_failure_leaves_the_login_unconsumed():
+    with _gateway_env() as (client, cache):
+        device_code = _start_device_flow(client)
+        _complete_flow(cache, device_code)
+        with patch(_MINT, side_effect=RuntimeError("signing key unavailable")), pytest.raises(RuntimeError):
+            _request_token(client, device_code)
+        with patch(_MINT, return_value="sk-session"):
+            retry = _request_token(client, device_code)
+    assert retry.status_code == 200
+    assert retry.json()["access_token"] == "sk-session"
+
+
 def test_token_unknown_team_grants_is_invalid_grant():
     with _gateway_env() as (client, cache):
         device_code = _start_device_flow(client)
@@ -349,11 +361,10 @@ def test_token_refuses_a_device_code_another_replica_already_claimed():
     _set_cli_sso_flow(login_id=_SHARED_LOGIN_ID, cache=replica_a, flow=_completed_flow())
     assert asyncio.run(gateway_endpoints._claim_device_code(_SHARED_LOGIN_ID, replica_a)) is True
 
-    with _gateway_env(cache=_replica(redis)) as (client, _), patch(_MINT) as mint:
+    with _gateway_env(cache=_replica(redis)) as (client, _), patch(_MINT, return_value="sk-session"):
         resp = _request_token(client, _SHARED_DEVICE_CODE)
     assert resp.status_code == 400
-    assert resp.json()["error"] == "expired_token"
-    mint.assert_not_called()
+    assert resp.json() == {"error": "expired_token"}
 
 
 def test_token_unknown_device_code_is_expired_token():
