@@ -33,6 +33,7 @@ from litellm.types.integrations.anthropic_cache_control_hook import (
     CacheControlMessageInjectionPoint,
 )
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_TOOL_SEARCH_TOOL_TYPES,
     AllAnthropicToolsValues,
     AnthropicSystemMessageContent,
 )
@@ -125,6 +126,10 @@ def _tool_carries_cache_breakpoint(tool: object) -> bool:
     return _carries_cache_breakpoint(tool) or (
         isinstance(tool, dict) and _carries_cache_breakpoint(tool.get("function"))
     )
+
+
+def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
+    return isinstance(tool, dict) and tool.get("type") in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 
 
 def _accepts_prompt_cache_breakpoint(block: object) -> bool:
@@ -303,9 +308,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """Client breakpoints outside messages and system that the provider cap still counts.
 
         A tool carries its mark at the top level (Anthropic shape) or under ``function``
-        (OpenAI shape); the Anthropic chat transform forwards both. A top-level
-        ``cache_control`` is Anthropic's automatic caching, which places one breakpoint
-        of its own on top of the explicit ones.
+        (OpenAI shape). A top-level ``cache_control`` is Anthropic's automatic caching,
+        which places one breakpoint of its own on top of the explicit ones. Callers
+        pass only the tools whose mark reaches the provider on their path.
         """
         automatic_blocks: Final = 1 if cache_control is not None else 0
         tool_blocks: Final = sum(1 for tool in tools if _tool_carries_cache_breakpoint(tool)) if tools else 0
@@ -786,10 +791,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         configured: Final = non_default_params.get("cache_control_injection_points")
         if configured:
+            tools_keeping_marks: Final = tuple(
+                tool for tool in tools or () if not _chat_transform_drops_tool_cache_control(tool)
+            )
             non_default_params["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_for_prompt_hook(
                 configured,
                 AnthropicCacheControlHook.count_external_cache_breakpoints(
-                    tools, non_default_params.get("cache_control")
+                    tools_keeping_marks, non_default_params.get("cache_control")
                 ),
                 model,
                 custom_llm_provider,

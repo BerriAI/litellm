@@ -2114,6 +2114,16 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
     UNMARKED_TOOL = {"type": "function", "function": {"name": "t", "parameters": {}}}
     MARKED_V1_TOOL = {"name": "t", "input_schema": {}, "cache_control": {"type": "ephemeral"}}
     UNMARKED_V1_TOOL = {"name": "t", "input_schema": {}}
+    MARKED_TOOL_SEARCH_REGEX = {
+        "type": "tool_search_tool_regex_20251119",
+        "name": "tool_search",
+        "cache_control": {"type": "ephemeral"},
+    }
+    MARKED_TOOL_SEARCH_BM25 = {
+        "type": "tool_search_tool_bm25_20251119",
+        "name": "tool_search",
+        "cache_control": {"type": "ephemeral"},
+    }
 
     @staticmethod
     def _marked_user_turns(count):
@@ -2199,6 +2209,17 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         processed = self._chat(params, copy.deepcopy(messages))
         assert _count_cache_control(processed) == 3 + injected
 
+    @pytest.mark.parametrize("tool", [MARKED_TOOL_SEARCH_REGEX, MARKED_TOOL_SEARCH_BM25], ids=["regex", "bm25"])
+    def test_chat_cap_ignores_marked_tool_search_tools(self, tool):
+        """The chat transform strips cache_control from tool-search tools before the
+        request leaves, so a client mark there never reaches the provider's cap and
+        must not cost the configured point its fourth slot."""
+        messages = [{"role": "system", "content": "sys"}, *self._marked_user_turns(3)]
+        params = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
+        self._seed(params, copy.deepcopy(messages), tools=[tool])
+        processed = self._chat(params, copy.deepcopy(messages))
+        assert _count_cache_control(processed) == 4
+
     @pytest.mark.parametrize("marked_turns,injected", [(2, 1), (3, 0)])
     def test_chat_root_cache_control_reserves_a_slot(self, marked_turns, injected):
         """Anthropic's automatic caching (a top-level ``cache_control``) places one
@@ -2261,9 +2282,11 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         "tool,expected_system",
         [
             (MARKED_V1_TOOL, "sys"),
+            (MARKED_TOOL_SEARCH_REGEX, "sys"),
+            (MARKED_TOOL_SEARCH_BM25, "sys"),
             (UNMARKED_V1_TOOL, [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]),
         ],
-        ids=["marked", "unmarked"],
+        ids=["marked", "marked_tool_search_regex", "marked_tool_search_bm25", "unmarked"],
     )
     def test_v1_messages_cap_counts_client_marked_tools(self, tool, expected_system):
         kwargs = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED)}
