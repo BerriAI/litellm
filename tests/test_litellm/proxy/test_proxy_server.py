@@ -1628,6 +1628,83 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_resolved_key
 
 
+def _boot_with_general_settings(monkeypatch, tmp_path, general_settings):
+    import yaml
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"general_settings": general_settings}))
+    for name in ("LITELLM_MASTER_KEY", "LITELLM_DANGEROUSLY_ALLOW_UNSAFE_PROXY", "WORKER_CONFIG", "DATABASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    announced = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.announce_on_stderr_at_exit", announced.append)
+    return config_path, announced
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings",
+    [{"master_key": "sk-1234"}, {"master_key": ""}, {"master_key": None}, {}],
+    ids=["publicly-known", "empty", "yaml-null", "no-general-settings"],
+)
+async def test_proxy_startup_refuses_an_unsafe_master_key_before_connecting_to_the_database(
+    monkeypatch, tmp_path, general_settings
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert len(announced) == 1
+    assert "LITELLM_MASTER_KEY=sk-$(openssl rand -hex 32)" in announced[0]
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-1234"})
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert str(config_path) in announced[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override", ["yaml", "env"])
+async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monkeypatch, tmp_path, override):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    general_settings = {
+        "master_key": "sk-1234",
+        **({"dangerously_allow_unsafe_proxy": True} if override == "yaml" else {}),
+    }
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
+    if override == "env":
+        monkeypatch.setenv("LITELLM_DANGEROUSLY_ALLOW_UNSAFE_PROXY", "true")
+
+    async with proxy_startup_event(FastAPI()):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == "sk-1234"
+
+    assert announced == []
+
+
 def test_team_info_masking():
     """
     Test that sensitive team information is properly masked

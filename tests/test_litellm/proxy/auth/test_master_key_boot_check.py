@@ -1,0 +1,221 @@
+import re
+import shutil
+import subprocess
+from collections.abc import Mapping
+from pathlib import Path
+
+import pytest
+
+from litellm.proxy.auth.master_key_boot_check import (
+    GENERATE_MASTER_KEY_COMMAND,
+    MASTER_KEY_ENV_VAR,
+    ROTATION_DOCS_URL,
+    UNSAFE_PROXY_OVERRIDE_ENV_VAR,
+    UNSAFE_PROXY_OVERRIDE_SETTING,
+    ConfigFileSource,
+    EnvironmentSource,
+    MasterKeyBootVerdict,
+    SafeMasterKey,
+    UnsafeMasterKeyAllowed,
+    UnsafeMasterKeyError,
+    UnsafeMasterKeyReason,
+    UnsafeMasterKeyRefused,
+    enforce_master_key_boot_verdict,
+    master_key_boot_verdict,
+    render_refusal,
+)
+
+
+def _verdict(
+    master_key: str | None,
+    general_settings: Mapping[str, object] | None = None,
+    *,
+    environment_master_key: str | None = None,
+    config_file_path: str | None = None,
+    override_env_is_on: bool = False,
+    salt_key_is_set: bool = False,
+    database_is_configured: bool = False,
+) -> MasterKeyBootVerdict:
+    return master_key_boot_verdict(
+        master_key=master_key,
+        environment_master_key=environment_master_key,
+        general_settings=general_settings or {},
+        config_file_path=config_file_path,
+        override_env_is_on=override_env_is_on,
+        salt_key_is_set=salt_key_is_set,
+        database_is_configured=database_is_configured,
+    )
+
+
+@pytest.mark.parametrize(
+    ("master_key", "reason"),
+    [
+        (None, UnsafeMasterKeyReason.NOT_SET),
+        ("", UnsafeMasterKeyReason.EMPTY),
+        (" \t\n", UnsafeMasterKeyReason.EMPTY),
+        ("sk-1234", UnsafeMasterKeyReason.PUBLICLY_KNOWN),
+        ("  sk-1234\n", UnsafeMasterKeyReason.PUBLICLY_KNOWN),
+    ],
+)
+def test_unsafe_master_keys_are_refused_with_their_reason(master_key: str | None, reason: UnsafeMasterKeyReason):
+    verdict = _verdict(master_key)
+
+    assert isinstance(verdict, UnsafeMasterKeyRefused)
+    assert verdict.reason is reason
+
+
+@pytest.mark.parametrize("master_key", ["sk-12345", "sk-1234567890", "1234", "sk-qa-9f2c1e7a44b0d3"])
+def test_keys_that_only_resemble_the_known_default_are_safe(master_key: str):
+    assert _verdict(master_key) == SafeMasterKey()
+
+
+@pytest.mark.parametrize("master_key", [None, "", "sk-1234"])
+def test_either_override_lets_an_unsafe_key_through(master_key: str | None):
+    from_env = _verdict(master_key, override_env_is_on=True)
+    from_yaml = _verdict(master_key, {UNSAFE_PROXY_OVERRIDE_SETTING: True})
+
+    assert isinstance(from_env, UnsafeMasterKeyAllowed)
+    assert from_env == from_yaml
+
+
+def test_override_switched_off_in_yaml_still_refuses():
+    assert isinstance(_verdict("sk-1234", {UNSAFE_PROXY_OVERRIDE_SETTING: False}), UnsafeMasterKeyRefused)
+
+
+def test_yaml_master_key_is_the_source_even_when_it_resolved_to_nothing():
+    verdict = _verdict(None, {"master_key": None}, config_file_path="/app/config.yaml")
+
+    assert isinstance(verdict, UnsafeMasterKeyRefused)
+    assert verdict.source == ConfigFileSource(config_file_path="/app/config.yaml")
+
+
+def test_yaml_master_key_is_the_source_when_it_differs_from_the_environment():
+    verdict = _verdict(
+        "sk-1234",
+        {"master_key": "sk-1234"},
+        environment_master_key="sk-qa-9f2c1e7a44b0d3",
+        config_file_path="/app/config.yaml",
+    )
+
+    assert isinstance(verdict, UnsafeMasterKeyRefused)
+    assert verdict.source == ConfigFileSource(config_file_path="/app/config.yaml")
+
+
+@pytest.mark.parametrize("unsafe_key", ["sk-1234", ""])
+def test_environment_is_the_source_when_yaml_only_relays_the_environment_variable(unsafe_key: str):
+    verdict = _verdict(
+        unsafe_key,
+        {"master_key": unsafe_key},
+        environment_master_key=unsafe_key,
+        config_file_path="/app/config.yaml",
+    )
+
+    assert isinstance(verdict, UnsafeMasterKeyRefused)
+    assert verdict.source == EnvironmentSource()
+
+
+def test_environment_is_the_source_when_yaml_does_not_set_a_master_key():
+    verdict = _verdict("sk-1234", {"database_url": "postgresql://db"}, config_file_path="/app/config.yaml")
+
+    assert isinstance(verdict, UnsafeMasterKeyRefused)
+    assert verdict.source == EnvironmentSource()
+
+
+@pytest.mark.parametrize(
+    ("master_key", "salt_key_is_set", "database_is_configured", "needs_rotation"),
+    [
+        ("sk-1234", False, True, True),
+        ("sk-1234", True, True, False),
+        ("sk-1234", False, False, False),
+        (None, False, True, False),
+        ("", False, True, False),
+    ],
+)
+def test_rotation_is_only_needed_when_the_known_key_encrypts_a_database(
+    master_key: str | None, salt_key_is_set: bool, database_is_configured: bool, needs_rotation: bool
+):
+    verdict = _verdict(master_key, salt_key_is_set=salt_key_is_set, database_is_configured=database_is_configured)
+
+    assert isinstance(verdict, UnsafeMasterKeyRefused)
+    assert verdict.stored_credentials_need_rotation is needs_rotation
+
+
+def _refusal(
+    reason: UnsafeMasterKeyReason = UnsafeMasterKeyReason.PUBLICLY_KNOWN,
+    source: ConfigFileSource | EnvironmentSource = EnvironmentSource(),
+    stored_credentials_need_rotation: bool = False,
+) -> UnsafeMasterKeyRefused:
+    return UnsafeMasterKeyRefused(
+        reason=reason, source=source, stored_credentials_need_rotation=stored_credentials_need_rotation
+    )
+
+
+def test_config_refusal_names_the_file_and_tells_it_to_read_the_environment():
+    text = render_refusal(_refusal(source=ConfigFileSource(config_file_path="/app/config.yaml")))
+
+    assert "general_settings.master_key in /app/config.yaml" in text
+    assert f"master_key: os.environ/{MASTER_KEY_ENV_VAR}" in text
+    assert GENERATE_MASTER_KEY_COMMAND in text
+
+
+def test_environment_refusal_gives_the_command_without_a_config_step():
+    text = render_refusal(_refusal(source=EnvironmentSource()))
+
+    assert f"the {MASTER_KEY_ENV_VAR} environment variable" in text
+    assert GENERATE_MASTER_KEY_COMMAND in text
+    assert "os.environ/" not in text
+
+
+def test_unset_key_refusal_says_nothing_supplied_one():
+    text = render_refusal(_refusal(reason=UnsafeMasterKeyReason.NOT_SET, source=EnvironmentSource()))
+
+    assert "Neither general_settings.master_key nor" in text
+
+
+def test_rotation_warning_appears_only_when_needed():
+    with_rotation = render_refusal(_refusal(stored_credentials_need_rotation=True))
+    without_rotation = render_refusal(_refusal(stored_credentials_need_rotation=False))
+
+    assert ROTATION_DOCS_URL in with_rotation
+    assert ROTATION_DOCS_URL not in without_rotation
+
+
+@pytest.mark.parametrize("stored_credentials_need_rotation", [True, False])
+def test_override_hint_is_the_last_paragraph(stored_credentials_need_rotation: bool):
+    text = render_refusal(_refusal(stored_credentials_need_rotation=stored_credentials_need_rotation))
+    last_paragraph = text.split("\n\n")[-1]
+
+    assert UNSAFE_PROXY_OVERRIDE_ENV_VAR in last_paragraph
+    assert f"general_settings.{UNSAFE_PROXY_OVERRIDE_SETTING}" in last_paragraph
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="the printed command shells out to openssl")
+def test_printed_command_saves_a_key_the_boot_check_accepts(tmp_path: Path):
+    completed = subprocess.run(
+        ["bash", "-c", GENERATE_MASTER_KEY_COMMAND], cwd=tmp_path, capture_output=True, text=True, check=True
+    )
+
+    saved = (tmp_path / ".env").read_text()
+    match = re.fullmatch(rf"{MASTER_KEY_ENV_VAR}=(sk-[0-9a-f]{{64}})\n", saved)
+    assert match is not None
+    assert completed.stdout == saved
+    assert _verdict(match.group(1)) == SafeMasterKey()
+
+
+def test_refusal_announces_the_fix_and_aborts_the_boot():
+    announced: list[str] = []
+    refusal = _refusal(source=ConfigFileSource(config_file_path="/app/config.yaml"))
+
+    with pytest.raises(UnsafeMasterKeyError, match="refused to start"):
+        enforce_master_key_boot_verdict(refusal, announce=announced.append)
+
+    assert [message.strip() for message in announced] == [render_refusal(refusal)]
+
+
+@pytest.mark.parametrize("verdict", [SafeMasterKey(), UnsafeMasterKeyAllowed(reason=UnsafeMasterKeyReason.NOT_SET)])
+def test_safe_and_overridden_keys_boot_without_announcing(verdict: MasterKeyBootVerdict):
+    announced: list[str] = []
+
+    enforce_master_key_boot_verdict(verdict, announce=announced.append)
+
+    assert announced == []
