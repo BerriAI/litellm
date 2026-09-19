@@ -1121,7 +1121,6 @@ if MCP_AVAILABLE:
         error: MCPServerListError, server: MCPServer, catalog: Literal["prompts", "resources"]
     ) -> HTTPException:
         fault: Final = classify_list_exception(error)
-        verbose_logger.info("Listing %s from %s failed with a %s fault", catalog, server.name, fault.tag)
         return HTTPException(
             status_code=list_fault_http_status(fault),
             detail={
