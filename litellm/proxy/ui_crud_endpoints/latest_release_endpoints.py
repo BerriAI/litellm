@@ -1,3 +1,4 @@
+import asyncio
 import re
 from collections import Counter
 from collections.abc import Awaitable, Mapping
@@ -21,7 +22,8 @@ LATEST_RELEASE_CACHE_TTL_SECONDS: Final = 60 * 60
 LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS: Final = 5 * 60
 LATEST_RELEASE_CACHE_KEY: Final = "latest_release_info"
 
-_RELEASE_BULLET_PATTERN: Final = re.compile(r"^\*\s+([A-Za-z]+)(\([^)]*\))?!?:\s")
+_RELEASE_BULLET_PATTERN: Final = re.compile(r"^\*\s+(?:([A-Za-z]+)(?:\([^)]*\))?!?:\s)?\S")
+_NEW_CONTRIBUTOR_PATTERN: Final = re.compile(r"^\*\s+@\S+ made their first contribution\b")
 
 _Bucket = Literal["new_features", "bug_fixes", "other_updates"]
 _PREFIX_BUCKETS: Final[Mapping[str, _Bucket]] = MappingProxyType({"feat": "new_features", "fix": "bug_fixes"})
@@ -51,6 +53,7 @@ class _AsyncGetClient(Protocol):
 
 
 _latest_release_cache: Final = InMemoryCache(max_size_in_memory=1, default_ttl=LATEST_RELEASE_CACHE_TTL_SECONDS)
+_latest_release_fetch_lock: Final = asyncio.Lock()
 
 
 def _default_client() -> _AsyncGetClient:
@@ -64,16 +67,23 @@ def _default_cache() -> InMemoryCache:
     return _latest_release_cache
 
 
+def _default_fetch_lock() -> asyncio.Lock:
+    return _latest_release_fetch_lock
+
+
+def _bucket_for(line: str) -> _Bucket | None:
+    if _NEW_CONTRIBUTOR_PATTERN.match(line) is not None:
+        return None
+    match: Final = _RELEASE_BULLET_PATTERN.match(line)
+    if match is None:
+        return None
+    prefix: Final = match.group(1)
+    return "other_updates" if prefix is None else _PREFIX_BUCKETS.get(prefix.lower(), "other_updates")
+
+
 def count_release_bullets(body: str) -> Counter[_Bucket]:
-    """
-    Bucket a release body's ``* type(scope): title by @user in <pr-url>`` bullets by conventional-commit type.
-    Lines without that shape (headings, "New Contributors" entries) are skipped, not counted as other.
-    """
-    return Counter(
-        _PREFIX_BUCKETS.get(match.group(1).lower(), "other_updates")
-        for line in body.splitlines()
-        if (match := _RELEASE_BULLET_PATTERN.match(line)) is not None
-    )
+    """Bucket release-note bullets by conventional-commit type or ``other_updates``."""
+    return Counter(bucket for line in body.splitlines() if (bucket := _bucket_for(line)) is not None)
 
 
 def parse_latest_release(response: httpx.Response) -> LatestReleaseInfo | LatestReleaseUnavailable:
@@ -102,19 +112,23 @@ async def fetch_latest_release(client: _AsyncGetClient) -> LatestReleaseInfo | L
 
 
 async def get_latest_release_info(
-    client: _AsyncGetClient, cache: InMemoryCache
+    client: _AsyncGetClient, cache: InMemoryCache, fetch_lock: asyncio.Lock
 ) -> LatestReleaseInfo | LatestReleaseUnavailable:
     cached: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
     if isinstance(cached, (LatestReleaseInfo, LatestReleaseUnavailable)):
         return cached
-    result: Final = await fetch_latest_release(client)
-    ttl: Final = (
-        LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS
-        if isinstance(result, LatestReleaseUnavailable)
-        else LATEST_RELEASE_CACHE_TTL_SECONDS
-    )
-    cache.set_cache(LATEST_RELEASE_CACHE_KEY, result, ttl=ttl)
-    return result
+    async with fetch_lock:
+        cached_after_lock: Final = cache.get_cache(LATEST_RELEASE_CACHE_KEY)
+        if isinstance(cached_after_lock, (LatestReleaseInfo, LatestReleaseUnavailable)):
+            return cached_after_lock
+        result: Final = await fetch_latest_release(client)
+        ttl: Final = (
+            LATEST_RELEASE_UNAVAILABLE_CACHE_TTL_SECONDS
+            if isinstance(result, LatestReleaseUnavailable)
+            else LATEST_RELEASE_CACHE_TTL_SECONDS
+        )
+        cache.set_cache(LATEST_RELEASE_CACHE_KEY, result, ttl=ttl)
+        return result
 
 
 @router.get(
@@ -126,12 +140,13 @@ async def get_latest_release_info(
 async def latest_release_info(
     client: Annotated[_AsyncGetClient, Depends(_default_client)],
     cache: Annotated[InMemoryCache, Depends(_default_cache)],
+    fetch_lock: Annotated[asyncio.Lock, Depends(_default_fetch_lock)],
 ) -> LatestReleaseInfo | None:
     """
     Latest stable LiteLLM GitHub release with its PR count split into new features, bug fixes and other updates.
     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
     """
-    result: Final = await get_latest_release_info(client=client, cache=cache)
+    result: Final = await get_latest_release_info(client=client, cache=cache, fetch_lock=fetch_lock)
     if isinstance(result, LatestReleaseUnavailable):
         verbose_proxy_logger.warning("LiteLLM: latest release info unavailable: %s", result.reason)
         return None

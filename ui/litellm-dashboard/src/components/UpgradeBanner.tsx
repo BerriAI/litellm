@@ -51,7 +51,7 @@ export const UpgradeBannerView: React.FC<UpgradeBannerViewProps> = ({ currentVer
   };
 
   return (
-    <Alert variant="info" className="rounded-none border-x-0 border-t-0">
+    <Alert role="status" variant="info" className="rounded-none border-x-0 border-t-0">
       <ArrowUpCircle className="size-4" aria-hidden />
       <AlertTitle>
         The latest version is{" "}
