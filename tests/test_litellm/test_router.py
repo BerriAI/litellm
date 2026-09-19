@@ -8789,6 +8789,7 @@ class TestBackgroundResponseCostPollCooldown:
                     "model_info": {"id": "dep-1"},
                 }
             ],
+            allowed_fails=0,
         )
 
     def _cooled_down_ids(self, router):
@@ -8801,16 +8802,13 @@ class TestBackgroundResponseCostPollCooldown:
         )
 
     def _deployment_callback_on_failure(self, router, kwargs):
-        import asyncio
         from datetime import datetime
 
-        async def callback():
-            now = datetime.now()
-            return router.deployment_callback_on_failure(kwargs, None, now, now)
+        now = datetime.now()
+        return router.deployment_callback_on_failure(kwargs, None, now, now)
 
-        return asyncio.run(callback())
-
-    def test_untagged_not_found_cools_down_deployment(self):
+    @pytest.mark.asyncio
+    async def test_untagged_not_found_cools_down_deployment(self):
         router = self._router()
         assert (
             self._deployment_callback_on_failure(
@@ -8856,7 +8854,33 @@ class TestBackgroundResponseCostPollCooldown:
         value = get_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id="dep-1")
         assert not value
 
-    def test_other_internal_origin_not_found_still_cools_down_deployment(self):
+    @pytest.mark.asyncio
+    async def test_cost_poll_non_404_still_cools_down_deployment(self):
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+
+        router = self._router()
+        assert (
+            self._deployment_callback_on_failure(
+                router,
+                {
+                    "exception": litellm.InternalServerError(
+                        message="upstream 500", llm_provider="openai", model="gpt-4.1"
+                    ),
+                    "litellm_params": {
+                        "model_info": {"id": "dep-1"},
+                        "litellm_metadata": {
+                            INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+                        },
+                    },
+                },
+            )
+            is True
+        )
+        assert "dep-1" in self._cooled_down_ids(router)
+
+    @pytest.mark.asyncio
+    async def test_other_internal_origin_not_found_still_cools_down_deployment(self):
         from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
         from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 

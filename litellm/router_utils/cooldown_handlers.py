@@ -64,12 +64,9 @@ def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
     return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
 
 
-def is_background_response_cost_poll_failure(litellm_params: Mapping[str, object]) -> bool:
-    """Whether the failed call was the enterprise cost poller reading back a stored background response.
-
-    A provider 404 there means the provider dropped the stored object, not that the deployment is unhealthy.
-    """
-    return any(
+def is_background_response_cost_poll_not_found(exception: Exception, litellm_params: Mapping[str, object]) -> bool:
+    """Whether a background response cost poll failed with a provider 404."""
+    return getattr(exception, "status_code", None) == 404 and any(
         isinstance(candidate, Mapping)
         and candidate.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
         for candidate in (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
