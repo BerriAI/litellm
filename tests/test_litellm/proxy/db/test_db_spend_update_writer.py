@@ -2195,7 +2195,19 @@ async def test_commit_with_redis_requeues_all_on_db_failure():
     # Both failed categories must be re-queued to Redis, nothing lost
     mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
     _, kwargs = mock_redis_update_buffer.restore_transactions_to_redis.call_args
-    assert kwargs["db_spend_update_transactions"] == db_spend
+    assert kwargs["db_spend_update_transactions"] == {
+        "user_list_transactions": {"user1": 1.5},
+        "end_user_list_transactions": None,
+        "key_list_transactions": {"key1": 1.5},
+        "team_list_transactions": None,
+        "team_member_list_transactions": None,
+        "org_list_transactions": None,
+        "org_member_list_transactions": None,
+        "project_list_transactions": None,
+        "tag_list_transactions": None,
+        "agent_list_transactions": None,
+        "model_access_group_list_transactions": None,
+    }
     assert kwargs["daily_spend_update_transactions"] == daily_user
     # The lock must still be released
     mock_pod_lock_manager.release_lock.assert_awaited_once()
