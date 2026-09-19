@@ -9,24 +9,29 @@ import contextlib
 import contextvars
 import hashlib
 import json
+import os
 import time
 import traceback
 import types
 import uuid
-from collections.abc import AsyncIterator, Callable, Mapping, Sequence
+from collections import Counter
+from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from pydantic import AnyUrl, ConfigDict, TypeAdapter, ValidationError
+from pydantic import AnyUrl, ConfigDict, Field, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import JSONResponse
 from starlette.types import Message, Receive, Scope, Send
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.constants import (
+    MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -35,6 +40,17 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     _is_mcp_admitted_user_subject,
+)
+from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+    byok_credential_cache,
+    byok_credential_cache_key,
+    cache_byok_credential,
+    get_cached_byok_credential,
+)
+from litellm.proxy._experimental.mcp_server.client_allowlist import (
+    MCPClientAllowlist,
+    check_mcp_client_allowed,
+    load_mcp_client_allowlist,
 )
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
@@ -48,6 +64,8 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_gateway_initialize_instructions,
     _mcp_gateway_server_name,
     _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # server-owned request mode
+    active_mcp_request_ctx_var,
+    get_active_mcp_request_ctx,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import (
     MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
@@ -61,6 +79,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_route_relative_request_path,
     well_known_root_suffix,
 )
+from litellm.proxy._experimental.mcp_server.ui_session_utils import is_ui_session_credential
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
@@ -80,11 +99,21 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
 )
-from litellm.types.mcp import MCPAuth, MCPSpecVersion
+from litellm.types.mcp import (
+    MCPAuth,
+    MCPGatewaySession,
+    MCPGatewaySessionGroupCount,
+    MCPGatewaySessionsResponse,
+    MCPGatewaySessionsTerminateResponse,
+    MCPSpecVersion,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
@@ -94,13 +123,6 @@ if TYPE_CHECKING:
 
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 
-# Short-lived in-memory cache for BYOK credentials.
-# Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).
-# Storing the credential value (not just a bool) means _get_byok_credential and
-# _check_byok_credential share a single DB round-trip per TTL window.
-_byok_cred_cache: Final[dict[tuple[str, str], tuple[str | None, float]]] = {}
-_BYOK_CRED_CACHE_TTL: Final = 60  # seconds
-_BYOK_CRED_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS: Final = 30 * 60
 # Upper bound on concurrent stateful sessions a single caller may hold. Each
 # `initialize` creates a session that survives until the idle timeout, so
@@ -117,22 +139,31 @@ _MCP_ROUTING_PEEK_MAX_BYTES: Final = 4096
 # ASGI scope keys carrying OTel request state into a stateful MCP message handler.
 _MCP_TRANSPORT_SPAN_SCOPE_KEY: Final = "litellm_otel_transport_span"
 _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
+_MCP_PROTOCOL_VERSION_HEADER: Final = b"mcp-protocol-version"
 
 
-def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
-    """Remove a (user_id, server_id) entry from the BYOK credential cache.
+def unsupported_protocol_version(scope: Scope) -> str | None:
+    """Return the unsupported ``MCP-Protocol-Version`` header value, if any.
 
-    Call this after storing or deleting a credential so subsequent calls
-    see the fresh value rather than a stale cached result.
+    SDK 2's ``StreamableHTTPSessionManager`` routes any version outside
+    ``HANDSHAKE_PROTOCOL_VERSIONS`` to the modern single-exchange path, which
+    bypasses litellm's session/auth model, so the ASGI entry rejects it.
     """
-    _byok_cred_cache.pop((user_id, server_id), None)
+    headers: Final[Iterable[tuple[bytes, bytes]]] = scope.get("headers") or ()
+    values: Final = tuple(
+        raw.decode("latin-1").strip() for key, raw in headers if key.lower() == _MCP_PROTOCOL_VERSION_HEADER
+    )
+    for value in values:
+        if value and value not in HANDSHAKE_PROTOCOL_VERSIONS:
+            return value
+    return None
 
 
-def _write_byok_cred_cache(user_id: str, server_id: str, credential: str | None) -> None:
-    """Write a credential value to the cache, evicting all entries if at capacity."""
-    if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
-        _byok_cred_cache.clear()
-    _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
+async def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
+    """Drop a stored-or-deleted BYOK credential from this worker's cache and from every peer worker's."""
+    cache_key: Final = byok_credential_cache_key(user_id, server_id)
+    byok_credential_cache.delete_cache(cache_key)
+    await publish_auth_cache_invalidation(cache_key=cache_key)
 
 
 # Check if MCP is available
@@ -145,14 +176,12 @@ try:
 
     from mcp import ReadResourceResult, Resource
     from mcp.server import Server
-    from mcp.server.lowlevel.helper_types import ReadResourceContents
     from mcp.server.session import ServerSession as _McpServerSession
     from mcp.types import (
         BlobResourceContents,
         GetPromptResult,
         ResourceTemplate,
         TextResourceContents,
-        Tool,
     )
 
     # Robust auth lookup keyed by session_object.
@@ -165,7 +194,6 @@ except ImportError as e:
     # so they will never be accessed at runtime
     BlobResourceContents = None
     GetPromptResult = None
-    ReadResourceContents = None
     ReadResourceResult = None
     Resource = None
     ResourceTemplate = None
@@ -266,8 +294,8 @@ def _mcp_meta_trace_carrier(req_ctx: object) -> dict[str, str] | None:
     span's identity attribution.
     """
     meta: Final = getattr(req_ctx, "meta", None)
-    extra: Final = getattr(meta, "model_extra", None)
-    if not isinstance(extra, dict):
+    extra: Final = meta if isinstance(meta, Mapping) else getattr(meta, "model_extra", None)
+    if not isinstance(extra, Mapping):
         return None
     carrier: Final = {key: extra[key] for key in ("traceparent", "tracestate") if isinstance(extra.get(key), str)}
     return carrier or None
@@ -445,6 +473,7 @@ if MCP_AVAILABLE:
         AuthContextMiddleware,
         auth_context_var,
     )
+    from mcp.server.context import ServerRequestContext
     from mcp.server.lowlevel.server import NotificationOptions
     from mcp.server.models import InitializationOptions
 
@@ -453,12 +482,23 @@ if MCP_AVAILABLE:
     except ImportError:
         StreamableHTTPSessionManager = None
     from mcp.types import (
+        INVALID_REQUEST,
+        CallToolRequestParams,
         CallToolResult,
+        GetPromptRequestParams,
+        Implementation,
+        InitializeRequest,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
         ListToolsResult,
+        PaginatedRequestParams,
         Prompt,
+        ReadResourceRequestParams,
         TextContent,
     )
     from mcp.types import Tool as MCPTool
+    from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
@@ -507,46 +547,20 @@ if MCP_AVAILABLE:
         Object returned by the /tools/list REST API route.
         """
 
-        mcp_info: MCPInfo | None = None
+        mcp_info: MCPInfo | None = Field(default=None, alias="mcp_info")
         model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    def _normalize_resource_contents(contents: list) -> list[ReadResourceContents]:
-        """Normalize ResourceContents to ReadResourceContents, preserving meta (MCP 1.26.0+)."""
-        normalized: Final[list[ReadResourceContents]] = []
-        for content in contents:
-            meta = getattr(content, "meta", None)
-            if meta is None and hasattr(content, "model_dump"):
-                d = content.model_dump()
-                meta = d.get("meta")
-                if meta is None:
-                    meta = d.get("_meta")
-            if isinstance(content, TextResourceContents):
-                normalized.append(
-                    ReadResourceContents(
-                        content=content.text,
-                        mime_type=content.mimeType,
-                        meta=meta,
-                    )
-                )
-            elif isinstance(content, BlobResourceContents):
-                normalized.append(
-                    ReadResourceContents(
-                        content=content.blob,
-                        mime_type=content.mimeType,
-                        meta=meta,
-                    )
-                )
-        return normalized
 
     def _gateway_create_initialization_options(
         self,
         notification_options: NotificationOptions | None = None,
         experimental_capabilities: dict[str, dict[str, object]] | None = None,
+        extensions: dict[str, dict[str, object]] | None = None,
     ) -> InitializationOptions:
         base_options: Final = Server.create_initialization_options(
             self,
             notification_options=notification_options,
             experimental_capabilities=experimental_capabilities or {},
+            extensions=extensions,
         )
         opts: Final = (
             base_options.model_copy(
@@ -607,6 +621,8 @@ if MCP_AVAILABLE:
     # still reading the shared object.
     _stateful_session_locks: Final[dict[str, asyncio.Lock]] = {}
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
+    _stateful_session_client_info: Final[dict[str, Implementation]] = {}  # mutable-ok: cleared on session teardown
+    _admin_terminated_session_ids: Final[dict[str, float]] = {}  # mutable-ok: admin-closed id -> last replay
 
     class _TerminableTransport(Protocol):
         async def terminate(self) -> None: ...
@@ -625,6 +641,7 @@ if MCP_AVAILABLE:
         _stateful_session_owners.pop(session_id, None)
         _stateful_session_locks.pop(session_id, None)
         _stateful_session_active_request_counts.pop(session_id, None)
+        _stateful_session_client_info.pop(session_id, None)
 
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless
@@ -677,6 +694,7 @@ if MCP_AVAILABLE:
         for session_id in list(_stateful_session_auth_context_last_seen):
             if session_id not in _stateful_session_auth_contexts:
                 _remove_stateful_session_tracking(session_id)
+        _forget_expired_admin_terminated_session_ids(now)
 
     async def _enforce_stateful_session_cap_for_owner(owner: str) -> bool:
         """
@@ -800,8 +818,7 @@ if MCP_AVAILABLE:
     ############### MCP Server Routes #######################
     ########################################################
 
-    @server.list_tools()
-    async def handle_list_tools() -> "ListToolsResult | list[Tool]":
+    async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:
         """
         List all available tools, with each server's listing outcome attached to the result's
         ``_meta`` (SERVER_OUTCOMES_META_KEY) so a broken upstream is distinguishable from a healthy
@@ -809,12 +826,9 @@ if MCP_AVAILABLE:
         pass the result through unwrapped, which is what lets the ``_meta`` survive to the client.
         Also captures the active session for propagation to callbacks.
         """
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        req_ctx: Final = ctx
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
         _trace_token = None
         _transport_token = None
         _destinations_token = None
@@ -847,13 +861,13 @@ if MCP_AVAILABLE:
             )
 
             if _mcp_proxy_mode.get():
-                return [Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()]  # mutable-ok: MCP SDK list
+                return ListToolsResult(tools=[Tool.model_validate(d) for d in get_mcp_proxy_tool_definitions()])
             if getattr(
                 getattr(user_api_key_auth, "object_permission", None),
                 "mcp_tool_search_enabled",
                 False,
             ):
-                return [Tool.model_validate(d) for d in get_virtual_tool_definitions()]
+                return ListToolsResult(tools=[Tool.model_validate(d) for d in get_virtual_tool_definitions()])
 
             # Get mcp_servers from context variable
             verbose_logger.debug("MCP list_tools - Calling _list_mcp_tools")
@@ -869,7 +883,7 @@ if MCP_AVAILABLE:
             )
             verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))
             if not listing.outcomes:
-                return listing.tools
+                return ListToolsResult(tools=listing.tools)
             outcome_meta: Final = {
                 SERVER_OUTCOMES_META_KEY: {
                     key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()
@@ -877,36 +891,32 @@ if MCP_AVAILABLE:
             }
             return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
         except HTTPException as e:
-            from mcp.shared.exceptions import McpError
-            from mcp.types import INVALID_REQUEST, ErrorData
+            from mcp.shared.exceptions import MCPError
+            from mcp.types import INVALID_REQUEST
 
-            raise McpError(ErrorData(code=INVALID_REQUEST, message=_http_detail_message(e.detail))) from e
+            raise MCPError(code=INVALID_REQUEST, message=_http_detail_message(e.detail)) from e
         except Exception as e:
             verbose_logger.exception("Error in list_tools endpoint: %s", e)
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
-            return []
+            return ListToolsResult(tools=[])  # mutable-ok: MCP result payload
         finally:
             _otel_reset_mcp_request_destinations(_destinations_token)
             _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    def _capture_host_progress_callback(host_server) -> Callable | None:
+    def _capture_host_progress_callback(ctx: ServerRequestContext) -> Callable | None:
         """Return a progress-forwarding callback bound to the host MCP session.
 
         Returns ``None`` when the host did not supply a progress token.
         """
-        try:
-            host_ctx: Final = host_server.request_context
-        except Exception as e:
-            verbose_logger.warning("Could not capture host progress context: %s", e)
-            return None
+        host_ctx: Final = ctx
 
         if not (host_ctx and hasattr(host_ctx, "meta") and host_ctx.meta):
             return None
-        host_token: Final = getattr(host_ctx.meta, "progressToken", None)
+        host_token: Final = host_ctx.meta.get("progress_token")
         if host_token is None or not (hasattr(host_ctx, "session") and host_ctx.session):
             return None
         host_session: Final = host_ctx.session
@@ -927,10 +937,10 @@ if MCP_AVAILABLE:
         return forward_progress
 
     def _reject_mcp_proxy_operation() -> NoReturn:
-        from mcp.shared.exceptions import McpError
-        from mcp.types import METHOD_NOT_FOUND, ErrorData
+        from mcp.shared.exceptions import MCPError
+        from mcp.types import METHOD_NOT_FOUND
 
-        raise McpError(ErrorData(code=METHOD_NOT_FOUND, message="Operation unavailable on /mcp/proxy"))
+        raise MCPError(code=METHOD_NOT_FOUND, message="Operation unavailable on /mcp/proxy")
 
     async def _build_virtual_call_logging_obj(
         name: str,
@@ -1005,7 +1015,7 @@ if MCP_AVAILABLE:
                 content=[  # mutable-ok: MCP result content
                     TextContent(type="text", text=f"Tool {name} is unavailable on /mcp/proxy")
                 ],
-                isError=True,
+                is_error=True,
             )
 
         if _mcp_proxy_mode.get() and name in MCP_PROXY_TOOL_NAMES:
@@ -1087,7 +1097,7 @@ if MCP_AVAILABLE:
                         text=f"Tool {name} requires mcp_tool_search_enabled on the key",
                     )
                 ],
-                isError=True,
+                is_error=True,
             )
 
         args: Final = arguments or {}
@@ -1137,29 +1147,24 @@ if MCP_AVAILABLE:
             litellm_logging_obj=virtual_logging_obj,
         )
 
-    @server.call_tool()
-    async def mcp_server_tool_call(name: str, arguments: dict[str, object] | None) -> CallToolResult:
+    async def mcp_server_tool_call(ctx: ServerRequestContext, params: CallToolRequestParams) -> CallToolResult:
         """
         Call a specific tool with the provided arguments
         Args:
-            name (str): Name of the tool to call
-            arguments (Dict[str, Any] | None): Arguments to pass to the tool
+            ctx: SDK request context carrying the client session and HTTP request
+            params (CallToolRequestParams): Tool name and arguments
         Returns:
-            List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]: Tool execution results
-        Raises:
-            HTTPException: If tool not found or arguments missing
+            CallToolResult: Tool execution results
         """
-        from mcp.server.lowlevel.server import request_ctx
         from mcp.types import CallToolResult
 
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
 
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        req_ctx: Final = ctx
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
         _trace_token = None
         _transport_token = None
         _destinations_token = None
@@ -1190,8 +1195,8 @@ if MCP_AVAILABLE:
                 # Inside this try so virtual-tool errors convert to isError
                 # CallToolResult instead of raising out of the protocol handler.
                 virtual_tool_result: Final = await _dispatch_virtual_mcp_tool(
-                    name=name,
-                    arguments=arguments,
+                    name=params.name,
+                    arguments=params.arguments,
                     user_api_key_auth=user_api_key_auth,
                     client_ip=_client_ip,
                     mcp_servers=mcp_servers,
@@ -1203,9 +1208,9 @@ if MCP_AVAILABLE:
                 if virtual_tool_result is not None:
                     return virtual_tool_result
 
-                host_progress_callback: Final = _capture_host_progress_callback(server)
+                host_progress_callback: Final = _capture_host_progress_callback(ctx)
                 # Create a body date for logging
-                body_data: Final = {"name": name, "arguments": arguments}
+                body_data: Final = {"name": params.name, "arguments": params.arguments}  # mutable-ok: logging payload
                 # Set trace/session id from raw_headers so spend logs and logging_obj stay consistent (same as A2A)
                 chain_id: Final = get_chain_id_from_headers(raw_headers)
                 if chain_id:
@@ -1230,7 +1235,7 @@ if MCP_AVAILABLE:
                         # Authorization is unaffected: it ran before this, and the union is resolved
                         # from the untouched auth object passed to call_mcp_tool below.
                         user_api_key_dict=await MCPRequestHandler.billing_auth_for_tool_call(
-                            user_api_key_auth, tool_name=name
+                            user_api_key_auth, tool_name=params.name
                         ),
                         proxy_config=proxy_config,
                     )
@@ -1256,7 +1261,7 @@ if MCP_AVAILABLE:
                 )
                 return CallToolResult(
                     content=[TextContent(text=str(e), type="text")],
-                    isError=True,
+                    is_error=True,
                 )
             except BlockedPiiEntityError as e:
                 verbose_logger.error("BlockedPiiEntityError in MCP tool call: %s", e)
@@ -1267,19 +1272,19 @@ if MCP_AVAILABLE:
                             type="text",
                         )
                     ],
-                    isError=True,
+                    is_error=True,
                 )
             except GuardrailRaisedException as e:
                 verbose_logger.error("GuardrailRaisedException in MCP tool call: %s", e)
                 return CallToolResult(
                     content=[TextContent(text=f"Error: Guardrail violation - {e}", type="text")],
-                    isError=True,
+                    is_error=True,
                 )
             except HTTPException as e:
                 verbose_logger.error("HTTPException in MCP tool call: %s", e)
                 return CallToolResult(
                     content=[TextContent(text=f"Error: {_http_detail_message(e.detail)}", type="text")],
-                    isError=True,
+                    is_error=True,
                 )
             except MCPUpstreamAuthError as e:
                 # The MCP session manager serializes handler exceptions as JSON-RPC errors, so a
@@ -1295,13 +1300,13 @@ if MCP_AVAILABLE:
                             type="text",
                         )
                     ],
-                    isError=True,
+                    is_error=True,
                 )
             except Exception as e:
                 verbose_logger.exception("MCP mcp_server_tool_call - error: %s", e)
                 return CallToolResult(
                     content=[TextContent(text=f"Error: {e}", type="text")],
-                    isError=True,
+                    is_error=True,
                 )
 
             return response
@@ -1309,22 +1314,17 @@ if MCP_AVAILABLE:
             _otel_reset_mcp_request_destinations(_destinations_token)
             _otel_reset_mcp_transport_span(_transport_token)
             _otel_reset_mcp_trace_carrier(_trace_token)
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.list_prompts()
-    async def list_prompts() -> list[Prompt]:
+    async def list_prompts(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListPromptsResult:
         """
         List all available prompts
         """
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             # Get user authentication from context variable
@@ -1354,36 +1354,24 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
             )
             verbose_logger.info("MCP list_prompts - Successfully returned %s prompts", len(prompts))
-            return prompts
+            return ListPromptsResult(prompts=prompts)
         except Exception as e:
             verbose_logger.exception("Error in list_prompts endpoint: %s", e)
             # Return empty list instead of failing completely
             # This prevents the HTTP stream from failing and allows the client to get a response
-            return []
+            return ListPromptsResult(prompts=[])  # mutable-ok: MCP result payload
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.get_prompt()
-    async def get_prompt(name: str, arguments: dict[str, str] | None) -> GetPromptResult:
+    async def get_prompt(ctx: ServerRequestContext, params: GetPromptRequestParams) -> GetPromptResult:
         """
         Get a specific prompt with the provided arguments
-
-        Args:
-            name (str): Name of the prompt to get
-            arguments (Dict[str, Any] | None): Arguments to pass to the prompt
-
-        Returns:
-            GetPromptResult: Getting prompt execution results
         """
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             (
@@ -1398,8 +1386,8 @@ if MCP_AVAILABLE:
 
             verbose_logger.debug("MCP mcp_server_tool_call - User API Key Auth from context: %s", user_api_key_auth)
             return await mcp_get_prompt(
-                name=name,
-                arguments=arguments,
+                name=params.name,
+                arguments=params.arguments,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
@@ -1408,20 +1396,15 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
             )
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.list_resources()
-    async def list_resources() -> list[Resource]:
+    async def list_resources(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListResourcesResult:
         """List all available resources."""
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             (
@@ -1449,25 +1432,22 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
             )
             verbose_logger.info("MCP list_resources - Successfully returned %s resources", len(resources))
-            return resources
+            return ListResourcesResult(resources=resources)
         except Exception as e:
             verbose_logger.exception("Error in list_resources endpoint: %s", e)
-            return []
+            return ListResourcesResult(resources=[])  # mutable-ok: MCP result payload
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.list_resource_templates()
-    async def list_resource_templates() -> list[ResourceTemplate]:
+    async def list_resource_templates(
+        ctx: ServerRequestContext, params: PaginatedRequestParams
+    ) -> ListResourceTemplatesResult:
         """List all available resource templates."""
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             (
@@ -1497,24 +1477,19 @@ if MCP_AVAILABLE:
             verbose_logger.info(
                 "MCP list_resource_templates - Successfully returned %s resource templates", len(resource_templates)
             )
-            return resource_templates
+            return ListResourceTemplatesResult(resource_templates=resource_templates)
         except Exception as e:
             verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
-            return []
+            return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
 
-    @server.read_resource()
-    async def read_resource(url: AnyUrl) -> list[ReadResourceContents]:
+    async def read_resource(ctx: ServerRequestContext, params: ReadResourceRequestParams) -> ReadResourceResult:
         if _mcp_proxy_mode.get():
             _reject_mcp_proxy_operation()
-        from mcp.server.lowlevel.server import request_ctx
-
-        req_ctx: Final = request_ctx.get(None)
-        _session_reset_token = None
-        if req_ctx:
-            _session_reset_token = active_mcp_session_var.set(req_ctx.session)
+        _ctx_reset_token: Final = active_mcp_request_ctx_var.set(ctx)
+        _session_reset_token: Final = active_mcp_session_var.set(ctx.session)
 
         try:
             (
@@ -1528,7 +1503,7 @@ if MCP_AVAILABLE:
             ) = await get_or_extract_auth_context()
 
             read_resource_result: Final = await mcp_read_resource(
-                url=url,
+                url=params.uri,
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
                 mcp_servers=mcp_servers,
@@ -1537,10 +1512,18 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
             )
 
-            return _normalize_resource_contents(read_resource_result.contents)
+            return read_resource_result
         finally:
-            if _session_reset_token is not None:
-                active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_session_var.reset(_session_reset_token)
+            active_mcp_request_ctx_var.reset(_ctx_reset_token)
+
+    server.add_request_handler("tools/list", PaginatedRequestParams, handle_list_tools)
+    server.add_request_handler("tools/call", CallToolRequestParams, mcp_server_tool_call)
+    server.add_request_handler("prompts/list", PaginatedRequestParams, list_prompts)
+    server.add_request_handler("prompts/get", GetPromptRequestParams, get_prompt)
+    server.add_request_handler("resources/list", PaginatedRequestParams, list_resources)
+    server.add_request_handler("resources/templates/list", PaginatedRequestParams, list_resource_templates)
+    server.add_request_handler("resources/read", ReadResourceRequestParams, read_resource)
 
     ########################################################
     ############ End of MCP Server Routes ##################
@@ -2799,35 +2782,28 @@ if MCP_AVAILABLE:
         mcp_server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
     ) -> str | None:
-        """Retrieve the stored BYOK credential for a user+server pair.
-
-        Uses the shared _byok_cred_cache to avoid a DB round-trip on every
-        tool call within the TTL window.
-        """
+        """Retrieve the stored BYOK credential for a user+server pair, served from the worker cache within its TTL."""
         if not mcp_server.is_byok:
             return None
         user_id: Final = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
         if not user_id:
             return None
 
-        cache_key: Final = (user_id, mcp_server.server_id)
-        cached: Final = _byok_cred_cache.get(cache_key)
+        cached: Final = get_cached_byok_credential(user_id, mcp_server.server_id)
         if cached is not None:
-            credential, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                return credential
+            return cached.credential
 
         from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             return None
-        credential = await get_user_credential(
+        credential: Final = await get_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
-        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
+        cache_byok_credential(user_id, mcp_server.server_id, credential)
         return credential
 
     async def _check_byok_credential(
@@ -2856,27 +2832,23 @@ if MCP_AVAILABLE:
                 headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
-        # Check shared credential cache before hitting the DB.
-        cache_key: Final = (user_id, mcp_server.server_id)
-        cached: Final = _byok_cred_cache.get(cache_key)
+        cached: Final = get_cached_byok_credential(user_id, mcp_server.server_id)
         if cached is not None:
-            cached_cred, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                if cached_cred is None:
-                    raise HTTPException(
-                        status_code=401,
-                        detail={
-                            "error": "byok_auth_required",
-                            "server_id": mcp_server.server_id,
-                            "server_name": mcp_server.server_name or mcp_server.name,
-                            "message": (
-                                "No stored credential found for this BYOK server. "
-                                "Complete the OAuth authorization flow to provide your API key."
-                            ),
-                        },
-                        headers={"WWW-Authenticate": get_byok_www_authenticate()},
-                    )
-                return
+            if cached.credential is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "byok_auth_required",
+                        "server_id": mcp_server.server_id,
+                        "server_name": mcp_server.server_name or mcp_server.name,
+                        "message": (
+                            "No stored credential found for this BYOK server. "
+                            "Complete the OAuth authorization flow to provide your API key."
+                        ),
+                    },
+                    headers={"WWW-Authenticate": get_byok_www_authenticate()},
+                )
+            return
 
         from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
@@ -2900,7 +2872,7 @@ if MCP_AVAILABLE:
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
-        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
+        cache_byok_credential(user_id, mcp_server.server_id, credential)
         if credential is None:
             raise HTTPException(
                 status_code=401,
@@ -3290,11 +3262,11 @@ if MCP_AVAILABLE:
         Guardrails run before the success/failure logging so the masked text, not
         the raw one, is what gets logged.
 
-        A result with ``isError=True`` is logged as a failure (``status="failure"``
+        A result with ``is_error=True`` is logged as a failure (``status="failure"``
         payload, so OTel marks the span ERROR) while the HTTP wire behavior stays
         200 + ``isError: true`` per the MCP spec. The error check runs after
         ``async_post_mcp_tool_call_hook`` because guardrails may flip the result
-        to ``isError=True`` in that hook. Raised exceptions never reach here (the
+        to ``is_error=True`` in that hook. Raised exceptions never reach here (the
         ``@client`` wrapper and ``call_mcp_tool``'s except path log those), so
         this cannot double-log a failure.
 
@@ -3629,10 +3601,10 @@ if MCP_AVAILABLE:
         """Execute a local-registry tool and report whether it succeeded.
 
         Returns the result rather than bare content because the verdict is part of it: the content
-        alone cannot say whether the handler failed, so callers used to stamp isError=False on every
+        alone cannot say whether the handler failed, so callers used to stamp is_error=False on every
         outcome and an upstream rejection was served as tool output.
 
-        A failure is reported as ``isError=True`` here rather than raised, because the REST surface
+        A failure is reported as ``is_error=True`` here rather than raised, because the REST surface
         turns an unrecognized exception into a 500 and an upstream 403 or 429 is not a gateway crash.
         ``MCPUpstreamAuthError`` is the exception: it propagates so the caller is told to
         re-authenticate, which both renderers already know how to say.
@@ -3654,8 +3626,14 @@ if MCP_AVAILABLE:
             raise
         except Exception as e:
             verbose_logger.exception("Error executing local tool %s: %s", name, e)
-            return CallToolResult(content=[TextContent(text=f"Error: {e}", type="text")], isError=True)
-        return CallToolResult(content=[TextContent(text=str(result), type="text")], isError=False)
+            return CallToolResult(
+                content=[TextContent(text=f"Error: {e}", type="text")],  # mutable-ok: MCP result content
+                is_error=True,
+            )
+        return CallToolResult(
+            content=[TextContent(text=str(result), type="text")],  # mutable-ok: MCP result content
+            is_error=False,
+        )
 
     def _get_mcp_servers_in_path(path: str) -> list[str] | None:
         """
@@ -3700,6 +3678,25 @@ if MCP_AVAILABLE:
                     else:
                         mcp_servers_from_path = [servers_and_path]
         return mcp_servers_from_path
+
+    def _load_mcp_client_allowlist() -> MCPClientAllowlist | None:
+        from litellm.proxy.proxy_server import general_settings
+
+        return load_mcp_client_allowlist(general_settings)
+
+    def reject_disallowed_mcp_client(headers: Mapping[str, str], user_api_key_auth: UserAPIKeyAuth | None) -> None:
+        """Gate every MCP tool surface on ``mcp_allowed_clients``; the dashboard's own session is not a client app."""
+        if user_api_key_auth is not None and is_ui_session_credential(user_api_key_auth):
+            return
+        rejection: Final = check_mcp_client_allowed(
+            allowlist=_load_mcp_client_allowlist(),
+            jwt_claims=user_api_key_auth.jwt_claims if user_api_key_auth is not None else None,
+            headers=headers,
+        )
+        if rejection is None:
+            return
+        verbose_logger.warning("Rejected MCP request from a disallowed client application: %s", rejection.details)
+        raise HTTPException(status_code=403, detail=rejection.response_body)
 
     async def extract_mcp_auth_context(scope, path):
         """
@@ -3815,6 +3812,129 @@ if MCP_AVAILABLE:
             return isinstance(data, dict) and data.get("method") == "initialize"
         except (json.JSONDecodeError, TypeError):
             return False
+
+    def _extract_initialize_client_info(body: bytes) -> Implementation | None:
+        try:
+            return InitializeRequest.model_validate_json(body, by_name=False).params.client_info
+        except ValidationError:
+            return None
+
+    def _group_session_counts(
+        sessions: Sequence[MCPGatewaySession],
+        label_for: Callable[[MCPGatewaySession], str | None],
+    ) -> tuple[MCPGatewaySessionGroupCount, ...]:
+        counts: Final = types.MappingProxyType(Counter(label_for(session) for session in sessions))
+        return tuple(
+            sorted(
+                (MCPGatewaySessionGroupCount(label=label, count=count) for label, count in counts.items()),
+                key=lambda group: (-group.count, group.label is None, group.label or ""),
+            )
+        )
+
+    def _gateway_session_for(session_id: str, auth_user: MCPAuthenticatedUser, now: float) -> MCPGatewaySession:
+        client_info: Final = _stateful_session_client_info.get(session_id)
+        key_auth: Final = auth_user.user_api_key_auth
+        return MCPGatewaySession(
+            session_id_prefix=session_id[:MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH],
+            client_name=client_info.name if client_info is not None else None,
+            client_version=client_info.version if client_info is not None else None,
+            user_id=key_auth.user_id if key_auth is not None else None,
+            user_email=key_auth.user_email if key_auth is not None else None,
+            key_alias=key_auth.key_alias if key_auth is not None else None,
+            team_id=key_auth.team_id if key_auth is not None else None,
+            team_alias=key_auth.team_alias if key_auth is not None else None,
+            client_ip=auth_user.client_ip,
+            idle_seconds=max(0.0, now - _stateful_session_auth_context_last_seen.get(session_id, now)),
+            in_flight_requests=_stateful_session_active_request_counts.get(session_id, 0),
+        )
+
+    def get_mcp_gateway_sessions_report(now: float | None = None) -> MCPGatewaySessionsResponse:
+        """Live stateful Streamable HTTP sessions held by this worker process.
+
+        Only sessions whose transport is still registered with the stateful
+        session manager are reported; SSE and stateless requests hold no
+        session and are never counted.
+        """
+        report_time: Final = time.monotonic() if now is None else now
+        live_session_ids: Final = frozenset(_stateful_server_instances())
+        sessions: Final = tuple(
+            _gateway_session_for(session_id, auth_user, report_time)
+            for session_id, auth_user in tuple(_stateful_session_auth_contexts.items())
+            if session_id in live_session_ids
+        )
+        return MCPGatewaySessionsResponse(
+            worker_pid=os.getpid(),
+            total_sessions=len(sessions),
+            by_client=_group_session_counts(sessions, lambda session: session.client_name),
+            by_user=_group_session_counts(sessions, lambda session: session.user_id),
+            sessions=sessions,
+        )
+
+    def _session_matches_admin_selector(
+        session_id: str,
+        auth_user: MCPAuthenticatedUser,
+        session_id_prefix: str | None,
+        user_id: str | None,
+    ) -> bool:
+        if session_id_prefix is not None and not session_id.startswith(session_id_prefix):
+            return False
+        if user_id is None:
+            return True
+        key_auth: Final = auth_user.user_api_key_auth
+        return key_auth is not None and key_auth.user_id == user_id
+
+    def _forget_expired_admin_terminated_session_ids(now: float) -> None:
+        for session_id in [
+            session_id
+            for session_id, last_replayed in _admin_terminated_session_ids.items()
+            if now - last_replayed >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
+        ]:
+            del _admin_terminated_session_ids[session_id]
+
+    def _is_admin_terminated_session_id(session_id: str, now: float) -> bool:
+        last_replayed: Final = _admin_terminated_session_ids.get(session_id)
+        if last_replayed is None:
+            return False
+        if now - last_replayed >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS:
+            del _admin_terminated_session_ids[session_id]
+            return False
+        _admin_terminated_session_ids[session_id] = now
+        return True
+
+    async def terminate_mcp_gateway_sessions(
+        *,
+        session_id_prefix: str | None = None,
+        user_id: str | None = None,
+    ) -> MCPGatewaySessionsTerminateResponse:
+        """Force-close every live stateful session on this worker matching the selector.
+
+        The transport is terminated (open streams close), all per-session
+        tracking is dropped, and the id is remembered so a client that keeps
+        sending it receives 404 and has to ``initialize`` again, which re-runs
+        admission. Only sessions held by this worker process are affected.
+        """
+        now: Final = time.monotonic()
+        _forget_expired_admin_terminated_session_ids(now)
+        server_instances: Final = _stateful_server_instances()
+        targets: Final = tuple(
+            (session_id, auth_user)
+            for session_id, auth_user in tuple(_stateful_session_auth_contexts.items())
+            if session_id in server_instances
+            and _session_matches_admin_selector(session_id, auth_user, session_id_prefix, user_id)
+        )
+        terminated: Final = tuple(_gateway_session_for(session_id, auth_user, now) for session_id, auth_user in targets)
+        for session_id, _ in targets:
+            _admin_terminated_session_ids[session_id] = now
+            transport = server_instances.pop(session_id, None)
+            _remove_stateful_session_tracking(session_id)
+            if transport is not None:
+                await transport.terminate()
+            verbose_logger.warning("MCP session '%s' terminated by an administrator.", session_id)
+        return MCPGatewaySessionsTerminateResponse(
+            worker_pid=os.getpid(),
+            terminated_sessions=len(terminated),
+            sessions=terminated,
+        )
 
     async def _read_request_body_for_routing(
         receive: Receive,
@@ -3938,6 +4058,17 @@ if MCP_AVAILABLE:
                 content={"message": "Session terminated successfully"},
             )
             await success_response(scope, receive, send)
+            return True
+
+        if _is_admin_terminated_session_id(_session_id, time.monotonic()):
+            terminated_response: Final = JSONResponse(
+                status_code=404,
+                content={  # mutable-ok: JSONResponse content must be a plain dict
+                    "error": "Not Found",
+                    "details": "mcp-session-id was terminated by an administrator. Send initialize to start a new session.",
+                },
+            )
+            await terminated_response(scope, receive, send)
             return True
 
         # Non-DELETE: strip stale session ID to allow new session creation
@@ -4394,6 +4525,21 @@ if MCP_AVAILABLE:
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
         """Handle MCP requests through StreamableHTTP."""
         try:
+            bad_version: Final = unsupported_protocol_version(scope)
+            if bad_version is not None:
+                supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
+                await JSONResponse(
+                    status_code=400,
+                    content={  # mutable-ok: JSON-RPC error payload
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {
+                            "code": INVALID_REQUEST,
+                            "message": f"Unsupported MCP-Protocol-Version {bad_version}; supported: {supported}",
+                        },
+                    },
+                )(scope, receive, send)
+                return
             path: Final[str] = scope.get("path", "")
             (
                 user_api_key_auth,
@@ -4403,6 +4549,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            reject_disallowed_mcp_client(StarletteRequest(scope).headers, user_api_key_auth)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
@@ -4652,6 +4799,7 @@ if MCP_AVAILABLE:
                         auth_user,
                         _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip),
                         _track_initialized_stateful_session,
+                        client_info=_extract_initialize_client_info(body),
                     )
 
                 async with _gateway_initialize_instructions_request_scope(
@@ -4730,6 +4878,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
+            reject_disallowed_mcp_client(StarletteRequest(scope).headers, user_api_key_auth)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
@@ -4965,6 +5114,7 @@ if MCP_AVAILABLE:
         auth_user: MCPAuthenticatedUser,
         owner_fingerprint: str,
         on_session_registered: Callable[[str], None] | None = None,
+        client_info: Implementation | None = None,
     ) -> Send:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
@@ -4979,6 +5129,8 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
                         _stateful_session_owners[session_id] = owner_fingerprint
+                        if client_info is not None:
+                            _stateful_session_client_info[session_id] = client_info
                         break
             await send(message)
 
@@ -5014,12 +5166,8 @@ if MCP_AVAILABLE:
         return None, None, None, None, None, None, None
 
     def _get_current_session():
-        try:
-            from mcp.server.lowlevel.server import request_ctx
-
-            return request_ctx.get().session
-        except (LookupError, ImportError):
-            return None
+        ctx: Final = get_active_mcp_request_ctx()
+        return ctx.session if ctx is not None else None
 
     def _cache_auth_context_lazily():
         session: Final = _get_current_session()

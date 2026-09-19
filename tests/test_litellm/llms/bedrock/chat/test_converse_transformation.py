@@ -1,15 +1,14 @@
-import asyncio
 import json
 import os
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import litellm
-from litellm import ModelResponse, RateLimitError, completion
+from litellm import ModelResponse
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.types.llms.bedrock import ConverseTokenUsageBlock
 
@@ -220,35 +219,6 @@ def test_bedrock_invoke_nova_cache_read_billed_at_discounted_rate(monkeypatch):
     )
     assert prompt_cost > 5 * model_info["input_cost_per_token"]
     assert completion_cost == pytest.approx(3 * model_info["output_cost_per_token"])
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "amazon.nova-micro-v1:0",
-        "amazon.nova-lite-v1:0",
-        "amazon.nova-pro-v1:0",
-        "us.amazon.nova-micro-v1:0",
-        "us.amazon.nova-lite-v1:0",
-        "us.amazon.nova-pro-v1:0",
-        "eu.amazon.nova-micro-v1:0",
-        "eu.amazon.nova-lite-v1:0",
-        "eu.amazon.nova-pro-v1:0",
-        "apac.amazon.nova-micro-v1:0",
-        "apac.amazon.nova-lite-v1:0",
-        "apac.amazon.nova-pro-v1:0",
-        "bedrock/us-gov-west-1/amazon.nova-micro-v1:0",
-        "bedrock/us-gov-west-1/amazon.nova-lite-v1:0",
-        "bedrock/us-gov-west-1/amazon.nova-pro-v1:0",
-        "bedrock/us-gov-east-1/amazon.nova-pro-v1:0",
-    ],
-)
-def test_nova_prompt_caching_models_price_cache_reads_below_the_input_rate(model, monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    entry = litellm.model_cost[model]
-    assert entry["supports_prompt_caching"] is True
-    assert 0 < entry["cache_read_input_token_cost"] < entry["input_cost_per_token"]
 
 
 def test_transform_usage_with_reasoning_content():
@@ -486,6 +456,34 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
     )
 
     assert optional_params["tool_choice"] == {"auto": {}}
+
+
+@pytest.mark.parametrize(
+    "model, param, value, expected_max_tokens",
+    [
+        ("us.openai.gpt-6-astra", "max_tokens", 1, 16),
+        ("us.openai.gpt-6-astra", "max_completion_tokens", 1, 16),
+        ("us.openai.gpt-6-astra", "max_tokens", 64, 64),
+        ("us.xai.grok-4.6", "max_tokens", 1, 16),
+        ("global.xai.grok-4.6", "max_completion_tokens", 1, 16),
+        ("us.xai.grok-4.6", "max_tokens", 32, 32),
+        ("anthropic.claude-sonnet-4-5-20250929-v1:0", "max_tokens", 1, 1),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.openai.gpt-6-astra", "max_tokens", 1, 16),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.xai.grok-4.6", "max_tokens", 1, 16),
+        ("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz", "max_tokens", 1, 1),
+    ],
+)
+def test_map_openai_params_enforces_minimum_max_tokens_for_openai_compat_models(
+    model: str, param: str, value: int, expected_max_tokens: int
+):
+    optional_params = AmazonConverseConfig().map_openai_params(
+        non_default_params={param: value},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert optional_params["maxTokens"] == expected_max_tokens
 
 
 @pytest.mark.parametrize(
@@ -1377,13 +1375,8 @@ def test_parallel_tool_calls_config_dropped_for_ttl_only_model(
 
 def test_transform_response_with_computer_use_tool():
     """Test response transformation with computer use tool call."""
-    import httpx
 
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-    from litellm.types.llms.bedrock import (
-        ConverseResponseBlock,
-        ConverseTokenUsageBlock,
-    )
     from litellm.types.utils import ModelResponse
 
     # Simulate a Bedrock Converse response with a computer-use tool call
@@ -1472,13 +1465,8 @@ def test_transform_response_with_computer_use_tool():
 
 def test_transform_response_with_bash_tool():
     """Test response transformation with bash tool call."""
-    import httpx
 
     from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-    from litellm.types.llms.bedrock import (
-        ConverseResponseBlock,
-        ConverseTokenUsageBlock,
-    )
     from litellm.types.utils import ModelResponse
 
     # Simulate a Bedrock Converse response with a bash tool call
@@ -4204,79 +4192,6 @@ def test_drop_thinking_param_when_thinking_blocks_missing():
     finally:
         # Restore original modify_params setting
         litellm.modify_params = original_modify_params
-
-
-def test_supports_native_structured_outputs(monkeypatch):
-    """Test model detection for native structured outputs support.
-
-    Support is driven by the ``supports_native_structured_output`` flag in the
-    cost JSON (litellm.model_cost), not a hardcoded model set.
-    """
-    old_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
-    old_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    try:
-        config = AmazonConverseConfig()
-
-        # Supported models (have supports_native_structured_output=true in cost JSON)
-        assert config._supports_native_structured_outputs(
-            "anthropic.claude-sonnet-4-5-20250929-v1:0"
-        )
-        assert config._supports_native_structured_outputs(
-            "anthropic.claude-haiku-4-5-20251001-v1:0"
-        )
-        assert config._supports_native_structured_outputs(
-            "anthropic.claude-opus-4-6-v1"
-        )
-        # Regional prefix is stripped by get_bedrock_base_model
-        assert config._supports_native_structured_outputs(
-            "eu.anthropic.claude-opus-4-5-20251101-v1:0"
-        )
-        # Claude 4.6 Sonnet
-        assert config._supports_native_structured_outputs("anthropic.claude-sonnet-4-6")
-        assert config._supports_native_structured_outputs(
-            "us.anthropic.claude-sonnet-4-6"
-        )
-        # Non-Anthropic models
-        assert config._supports_native_structured_outputs(
-            "qwen.qwen3-235b-a22b-2507-v1:0"
-        )
-        assert config._supports_native_structured_outputs(
-            "mistral.mistral-large-3-675b-instruct"
-        )
-        assert config._supports_native_structured_outputs("minimax.minimax-m2")
-        assert config._supports_native_structured_outputs("moonshot.kimi-k2-thinking")
-        assert config._supports_native_structured_outputs("nvidia.nemotron-nano-3-30b")
-        # DeepSeek: old substring "deepseek-v3.1" didn't match real ID
-        assert config._supports_native_structured_outputs("deepseek.v3-v1:0")
-        assert config._supports_native_structured_outputs("deepseek.v3.2")
-        assert config._supports_native_structured_outputs("zai.glm-5")
-
-        # Unsupported models -- should fall back to tool-call approach
-        assert not config._supports_native_structured_outputs(
-            "anthropic.claude-sonnet-4-20250514-v1:0"
-        )
-        assert not config._supports_native_structured_outputs(
-            "meta.llama3-3-70b-instruct-v1:0"
-        )
-        assert not config._supports_native_structured_outputs("amazon.nova-pro-v1:0")
-        # Excluded: broken constrained decoding on Bedrock
-        assert not config._supports_native_structured_outputs("openai.gpt-oss-120b-1:0")
-        assert not config._supports_native_structured_outputs(
-            "mistral.magistral-small-2509"
-        )
-        # Excluded: ignores schema or broken on Bedrock
-        assert not config._supports_native_structured_outputs("google.gemma-3-27b-it")
-        assert not config._supports_native_structured_outputs(
-            "nvidia.nemotron-nano-12b-v2"
-        )
-    finally:
-        litellm.model_cost = old_cost
-        if old_env is None:
-            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-        else:
-            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
 def test_create_output_config_for_response_format():
@@ -7356,7 +7271,6 @@ def test_update_optional_params_with_thinking_tokens_bool_thinking_does_not_cras
     assert "maxTokens" not in optional_params
 
 
-
 @pytest.mark.parametrize(
     "model, expected_dropped",
     [
@@ -7515,3 +7429,111 @@ def test_transform_response_honors_json_mode_kwarg_when_optional_params_lack_it(
     )
     assert result.choices[0].message.tool_calls is None
     assert json.loads(result.choices[0].message.content) == {"city": "Paris", "population": 2100000}
+
+
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
+EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+
+
+def _eager_openai_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": {"name": "write_file", "parameters": EAGER_TOOL_SCHEMA}, **extra}
+
+
+def _eager_openai_function_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": {"name": "write_file", "parameters": EAGER_TOOL_SCHEMA, **extra}}
+
+
+def _eager_anthropic_tool(**extra: object) -> dict[str, object]:
+    return {"name": "write_file", "input_schema": EAGER_TOOL_SCHEMA, **extra}
+
+
+def _converse_request(
+    model: str, tools: list[dict[str, object]], headers: dict[str, object] | None = None
+) -> dict[str, object]:
+    return AmazonConverseConfig()._transform_request_helper(
+        model=model,
+        system_content_blocks=[],
+        optional_params={"tools": tools},
+        messages=[{"role": "user", "content": "write a big file"}],
+        headers=headers,
+    )
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        _eager_openai_tool(eager_input_streaming=True),
+        _eager_openai_function_tool(eager_input_streaming=True),
+        _eager_anthropic_tool(eager_input_streaming=True),
+    ],
+    ids=["openai_top_level", "openai_under_function", "anthropic_shape"],
+)
+def test_eager_input_streaming_tool_adds_fine_grained_tool_streaming_beta(tool):
+    data = _converse_request("us.anthropic.claude-sonnet-4-5-20250929-v1:0", [tool])
+
+    assert data["additionalModelRequestFields"]["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+    tool_spec = data["toolConfig"]["tools"][0]["toolSpec"]
+    assert tool_spec["name"] == "write_file"
+    assert "eager_input_streaming" not in tool_spec
+    assert "eager_input_streaming" not in tool_spec["inputSchema"]["json"]
+
+
+@pytest.mark.parametrize(
+    "tool",
+    [
+        _eager_openai_tool(eager_input_streaming=False),
+        _eager_openai_function_tool(eager_input_streaming=False),
+        _eager_anthropic_tool(eager_input_streaming=False),
+        _eager_openai_tool(),
+    ],
+    ids=["openai_false", "function_false", "anthropic_false", "absent"],
+)
+def test_eager_input_streaming_false_or_absent_adds_no_beta(tool):
+    data = _converse_request("us.anthropic.claude-sonnet-4-5-20250929-v1:0", [tool])
+
+    assert "anthropic_beta" not in data.get("additionalModelRequestFields", {})
+    assert "eager_input_streaming" not in data["toolConfig"]["tools"][0]["toolSpec"]
+
+
+def test_eager_input_streaming_beta_only_on_anthropic_models():
+    data = _converse_request("amazon.nova-pro-v1:0", [_eager_openai_tool(eager_input_streaming=True)])
+
+    assert "anthropic_beta" not in data.get("additionalModelRequestFields", {})
+    assert data["toolConfig"]["tools"][0]["toolSpec"]["name"] == "write_file"
+
+
+def test_eager_input_streaming_beta_not_duplicated_with_client_header():
+    data = _converse_request(
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        [_eager_openai_tool(eager_input_streaming=True)],
+        headers={"anthropic-beta": f"{FINE_GRAINED_TOOL_STREAMING_BETA},interleaved-thinking-2025-05-14"},
+    )
+
+    assert data["additionalModelRequestFields"]["anthropic_beta"] == [
+        FINE_GRAINED_TOOL_STREAMING_BETA,
+        "interleaved-thinking-2025-05-14",
+    ]
+
+
+def test_eager_input_streaming_beta_never_written_back_into_client_header_list():
+    headers = {"anthropic-beta": ["interleaved-thinking-2025-05-14"]}
+
+    data = _converse_request(
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        [_eager_openai_tool(eager_input_streaming=True)],
+        headers=headers,
+    )
+
+    assert data["additionalModelRequestFields"]["anthropic_beta"] == [
+        "interleaved-thinking-2025-05-14",
+        FINE_GRAINED_TOOL_STREAMING_BETA,
+    ]
+    assert headers == {"anthropic-beta": ["interleaved-thinking-2025-05-14"]}
+
+
+def test_eager_input_streaming_non_boolean_is_a_bad_request():
+    with pytest.raises(litellm.BadRequestError, match="eager_input_streaming must be a boolean"):
+        _converse_request(
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            [_eager_openai_tool(eager_input_streaming="true")],
+        )

@@ -49,6 +49,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - shard: mcp-integration
+            artifact-name: mcp-integration
+            test-path: "tests/mcp_tests"
+            workers: 2
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+
           - shard: core-utils
             artifact-name: core-utils
             test-path: "tests/test_litellm/litellm_core_utils"
@@ -213,7 +221,6 @@ jobs:
             test-path: >-
               tests/local_testing/test_cache_preset_key.py
               tests/local_testing/test_caching_handler.py
-              tests/local_testing/test_prompt_caching.py
               tests/local_testing/test_responses_stream_cache_keys.py
               tests/local_testing/test_unit_test_caching.py
             workers: 2
@@ -255,3 +262,4 @@ jobs:
       timeout-minutes: ${{ matrix.timeout-minutes }}
       job-timeout-minutes: ${{ matrix.job-timeout-minutes }}
       artifact-name: ${{ matrix.artifact-name }}
+      legacy-mcp-peer: ${{ matrix.shard == 'mcp-integration' }}

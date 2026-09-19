@@ -209,6 +209,7 @@ _TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | f
     _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS
 )
 _OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
+_OUTPUT_TEXT_EVENT_TYPES: Final = frozenset({"response.output_text.delta", "response.output_text.done"})
 _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "message": "content"}
 )
@@ -832,9 +833,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         (``response.output_text.delta`` / ``.done``,
         ``response.content_part.done``, ``response.output_item.done``) are synced
         to the rewritten envelope too, so a client reading deltas sees the
-        rewrite instead of the raw model output; a rewrite observed where no
-        write-back is possible is reported as undeliverable, so the pipeline
-        executor discards it and releases the original events.
+        rewrite instead of the raw model output; a stream with no envelope
+        gets its rewrite spread over the buffered text events, and a rewrite
+        observed where no write-back is possible is reported as undeliverable,
+        so the pipeline executor discards it and releases the original events.
         """
         if not responses_so_far:
             return responses_so_far
@@ -958,10 +960,9 @@ class OpenAIResponsesHandler(BaseTranslation):
                 return responses_so_far
 
         # ------------------------------------------------------------------ #
-        # Fallback: apply guardrail to the accumulated text string.           #
-        # No structured write-back is possible here; guardrails that only     #
-        # need to block/flag (not rewrite) still work correctly, and a        #
-        # rewrite a caller expects delivered is reported undeliverable.       #
+        # Fallback: apply guardrail to the accumulated text string. With no   #
+        # envelope to rewrite, a rewrite a caller expects delivered is spread #
+        # over the buffered text events instead.                              #
         # ------------------------------------------------------------------ #
         string_so_far: Final = self.get_streaming_string_so_far(responses_so_far)
         if string_so_far:
@@ -979,10 +980,53 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             fallback_texts: Final = fallback_outputs.get("texts")
             if deliver_ended_stream_rewrites and fallback_texts and tuple(fallback_texts) != (string_so_far,):
-                from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
-                raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
+                self._spread_text_rewrite_over_stream_events(
+                    stream_events=responses_so_far,
+                    rewritten_text=fallback_texts[0],
+                    guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+                )
         return responses_so_far
+
+    def _spread_text_rewrite_over_stream_events(
+        self,
+        stream_events: Sequence[Any],
+        rewritten_text: str,
+        guardrail_name: str,
+    ) -> None:
+        """Deliver a text rewrite on a stream with no completed envelope by
+        spreading it over the text parts the guardrail scanned, in stream
+        order: the whole rewrite on the first part and every later part
+        blanked, through the same sync the envelope path uses. A scanned
+        event the sync cannot place (one that is not an ``output_text`` delta
+        or done, or lacks integer ``output_index`` / ``content_index``) makes
+        the rewrite undeliverable, so the pipeline executor discards it and
+        releases the original events."""
+        scanned_events: Final = tuple(
+            event
+            for event in stream_events
+            if isinstance(stream_item_field(event, "text"), str) or isinstance(stream_item_field(event, "delta"), str)
+        )
+        scanned_positions: Final = tuple(
+            dict.fromkeys(
+                (stream_item_field(event, "output_index"), stream_item_field(event, "content_index"))
+                for event in scanned_events
+            )
+        )
+        placeable_positions: Final = tuple(
+            (output_index, content_index)
+            for output_index, content_index in scanned_positions
+            if isinstance(output_index, int) and isinstance(content_index, int)
+        )
+        if len(placeable_positions) != len(scanned_positions) or any(
+            stream_item_field(event, "type") not in _OUTPUT_TEXT_EVENT_TYPES for event in scanned_events
+        ):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(guardrail_name)
+        self._sync_stream_events_with_rewrites(
+            stream_events=stream_events,
+            rewrites_by_position=MappingProxyType(dict(zip(placeable_positions, chain((rewritten_text,), repeat(""))))),
+        )
 
     @staticmethod
     def _write_event_field(event: object, field: str, value: str) -> None:

@@ -33,6 +33,11 @@ vi.mock("@/lib/toast", () => ({
   },
 }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => state.authorized }));
+vi.mock("@/app/(dashboard)/hooks/budgets/useBudgetOptions", () => ({
+  useBudgetOptions: () => ({
+    data: [{ budget_id: "svc-a-budget", max_budget: 0.5, created_at: "", updated_at: "" }],
+  }),
+}));
 vi.mock("@/app/(dashboard)/hooks/useCan", () => ({
   default: (capability: string) => state.can[capability] ?? true,
 }));
@@ -646,6 +651,46 @@ describe("CreateKey", () => {
       const payload = vi.mocked(keyCreateServiceAccountCall).mock.calls[0][1] as Record<string, unknown>;
       expect(JSON.parse(String(payload.metadata))).toStrictEqual({ service_account_id: "svc-account-1" });
       expect(payload).not.toHaveProperty("user_id");
+    });
+
+    it("sends the chosen default customer budget with a service account", async () => {
+      state.teams = [{ team_id: "team-1", team_alias: "Team One", models: [] }];
+      await openModal({ teams: state.teams as unknown as Team[] });
+      await userEvent.click(screen.getByRole("radio", { name: "Service Account" }));
+      await userEvent.type(await screen.findByLabelText(/Service Account ID/), "svc-account-1");
+      await userEvent.click(await screen.findByLabelText("Team"));
+      await userEvent.click(await screen.findByRole("option", { name: /Team One/ }));
+      await openSection(/Optional Settings/i);
+      await userEvent.click(await screen.findByRole("combobox", { name: "Default Customer Budget" }));
+      await userEvent.click(await screen.findByRole("option", { name: /svc-a-budget/ }));
+
+      await submit();
+
+      await waitFor(() => {
+        expect(vi.mocked(keyCreateServiceAccountCall)).toHaveBeenCalled();
+      });
+      const payload = vi.mocked(keyCreateServiceAccountCall).mock.calls[0][1] as Record<string, unknown>;
+      expect(payload).toHaveProperty("end_user_budget_id", "svc-a-budget");
+    });
+
+    it("offers the default customer budget only to admins creating a service account", async () => {
+      await openModal();
+      await openSection(/Optional Settings/i);
+      await screen.findByLabelText(/Max Budget/);
+      expect(screen.queryByRole("combobox", { name: "Default Customer Budget" })).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("radio", { name: "Service Account" }));
+      expect(await screen.findByRole("combobox", { name: "Default Customer Budget" })).toBeInTheDocument();
+    });
+
+    it("hides the default customer budget from a non-admin creating a service account", async () => {
+      state.authorized = { ...state.authorized, userRole: "Internal User" };
+      await openModal();
+      await userEvent.click(screen.getByRole("radio", { name: "Service Account" }));
+      await openSection(/Optional Settings/i);
+
+      await screen.findByLabelText(/Max Budget/);
+      expect(screen.queryByRole("combobox", { name: "Default Customer Budget" })).not.toBeInTheDocument();
     });
   });
 

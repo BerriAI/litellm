@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
 
 import httpx
 
@@ -57,6 +57,7 @@ from litellm.types.llms.vertex_ai import (
     ContentType,
     FunctionCallingConfig,
     FunctionDeclaration,
+    GeminiFinishReason,
     GeminiThinkingConfig,
     GenerateContentResponseBody,
     HttpxPartType,
@@ -1330,25 +1331,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "IMAGE_PROHIBITED_CONTENT": "The token generation was stopped as the response was flagged for prohibited image content.",
         }
 
-    _GEMINI_FINISH_REASON_KEYS = frozenset(
-        {
-            "STOP",
-            "MAX_TOKENS",
-            "SAFETY",
-            "RECITATION",
-            "FINISH_REASON_UNSPECIFIED",
-            "MALFORMED_FUNCTION_CALL",
-            "LANGUAGE",
-            "OTHER",
-            "BLOCKLIST",
-            "PROHIBITED_CONTENT",
-            "SPII",
-            "IMAGE_SAFETY",
-            "IMAGE_PROHIBITED_CONTENT",
-            "TOO_MANY_TOOL_CALLS",
-            "MALFORMED_RESPONSE",
-        }
-    )
+    _GEMINI_FINISH_REASON_KEYS: Final[frozenset[str]] = frozenset(get_args(GeminiFinishReason))
 
     @staticmethod
     def get_finish_reason_mapping() -> dict[str, OpenAIChatCompletionFinishReason]:
@@ -2232,21 +2215,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         grounding_metadata: Final[list[dict]] = []
         url_context_metadata: Final[list[dict]] = []
-        image_response: list[ImageURLListItem] | None = None
         safety_ratings: Final[list] = []
         citation_metadata: Final[list] = []
-        chat_completion_message: Final[ChatCompletionResponseMessage] = {"role": "assistant"}
-        chat_completion_logprobs: ChoiceLogprobs | None = None
-        tools: list[ChatCompletionToolCallChunk] | None = []
-        functions: ChatCompletionToolCallFunctionChunk | None = None
-        thinking_blocks: list[ChatCompletionThinkingBlock] | None = None
-        reasoning_content: str | None = None
-        thought_signatures: Sequence[str] | None = None
-        server_side_tool_invocations: list[dict[str, object]] | None = None
 
         for idx, candidate in enumerate(_candidates):
-            if "content" not in candidate:
+            if "content" not in candidate and "finishReason" not in candidate:
                 continue
+
+            image_response: list[ImageURLListItem] | None = None
+            chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
+            chat_completion_logprobs: ChoiceLogprobs | None = None
+            tools: list[ChatCompletionToolCallChunk] | None = None
+            functions: ChatCompletionToolCallFunctionChunk | None = None
+            thinking_blocks: list[ChatCompletionThinkingBlock] | None = None
+            reasoning_content: str | None = None
+            thought_signatures: Sequence[str] | None = None
+            server_side_tool_invocations: list[dict[str, object]] | None = None
 
             # Extract metadata using helper function
             (
@@ -2261,7 +2245,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             safety_ratings.extend(candidate_safety_ratings)
             citation_metadata.extend(candidate_citation_metadata)
 
-            if "parts" in candidate["content"]:
+            if "content" in candidate and candidate["content"] and "parts" in candidate["content"]:
                 (
                     content,
                     reasoning_content,
@@ -2368,14 +2352,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
+                native_finish_reason = candidate.get("finishReason")
                 choice = litellm.Choices(
                     finish_reason=VertexGeminiConfig._check_finish_reason(
-                        chat_completion_message, candidate.get("finishReason")
+                        chat_completion_message, native_finish_reason
                     ),
                     index=candidate.get("index", idx),
                     message=chat_completion_message,
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
+                    provider_specific_fields=(
+                        {"native_finish_reason": native_finish_reason} if native_finish_reason is not None else None
+                    ),
                 )
                 model_response.choices.append(choice)
 
@@ -2701,8 +2689,6 @@ class VertexLLM(VertexBase):
         gemini_api_key: str | None = None,
         extra_headers: dict | None = None,
     ) -> CustomStreamWrapper:
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
-
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -2722,7 +2708,6 @@ class VertexLLM(VertexBase):
             stream=stream,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
@@ -2797,8 +2782,6 @@ class VertexLLM(VertexBase):
         gemini_api_key: str | None = None,
         extra_headers: dict | None = None,
     ) -> ModelResponse | CustomStreamWrapper:
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
-
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -2818,7 +2801,6 @@ class VertexLLM(VertexBase):
             stream=stream,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
 
@@ -2981,8 +2963,6 @@ class VertexLLM(VertexBase):
                 extra_headers=extra_headers,
             )
 
-        should_use_v1beta1_features: Final = self.is_using_v1beta1_features(optional_params=optional_params)
-
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
@@ -3002,7 +2982,6 @@ class VertexLLM(VertexBase):
             stream=stream,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
-            should_use_v1beta1_features=should_use_v1beta1_features,
             use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers: Final = VertexGeminiConfig().validate_environment(
@@ -3182,12 +3161,10 @@ class ModelResponseIterator:
                     self.has_seen_tool_calls = True
                     break
 
-        # _process_candidates skips candidates without a "content" part, so a
-        # content-less chunk leaves choices empty and the downstream streaming
-        # handler hits IndexError on choices[0]. This covers the final chunk
-        # (finishReason, no content) and mid-stream metadata-only chunks
-        # (grounding/web-search/thought, no content and no finishReason — seen
-        # with web_search + reasoning) by emitting an empty-delta choice.
+        # _process_candidates skips candidates with neither "content" nor
+        # "finishReason", so a metadata-only chunk (grounding/web-search/thought,
+        # seen with web_search + reasoning) leaves choices empty and the downstream
+        # streaming handler hits IndexError on choices[0]. Emit an empty-delta choice.
         if not model_response.choices and _candidates:
             from litellm.types.utils import Delta, StreamingChoices
 

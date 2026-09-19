@@ -14,7 +14,7 @@ export const NO_COMPRESSION = "none";
 
 /** Guardrail providers that compress prompts, mirroring COMPRESSION_GUARDRAIL_PROVIDERS in
  * litellm/proxy/guardrails/auto_router_compression.py. Both are selectable per hop. */
-export const COMPRESSION_GUARDRAIL_PROVIDERS: readonly string[] = ["headroom", "compresr"];
+export const COMPRESSION_GUARDRAIL_PROVIDERS: readonly string[] = ["headroom", "compresr", "typesafe"];
 
 export const isCompressionGuardrailProvider = (provider: unknown): boolean =>
   typeof provider === "string" && COMPRESSION_GUARDRAIL_PROVIDERS.includes(provider.toLowerCase());

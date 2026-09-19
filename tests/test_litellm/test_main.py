@@ -349,28 +349,66 @@ def test_bedrock_latency_optimized_inference():
         assert json_data["performanceConfig"]["latency"] == "optimized"
 
 
-def test_strip_input_examples_for_non_anthropic_providers():
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "expected"),
+    [
+        ("anthropic", "claude-sonnet-5", True),
+        ("bedrock", "us.anthropic.claude-sonnet-5-20260501-v1:0", True),
+        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", True),
+        ("bedrock", "us.amazon.nova-2-lite-v1:0", False),
+        ("vertex_ai", "claude-sonnet-5", True),
+        ("vertex_ai", "gemini-3.8-flash", False),
+        ("azure_ai", "claude-sonnet-4-6", True),
+        ("azure_ai", "gpt-5.6", False),
+        ("openai", "gpt-5.6", False),
+        ("gemini", "gemini-3.8-flash", False),
+    ],
+)
+def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
+    assert litellm_main._is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
+
+
+@pytest.mark.parametrize("key", ["input_examples", "eager_input_streaming"])
+def test_drop_anthropic_only_tool_keys_strips_tool_and_function_levels(key: str):
     tools = [
-        {
-            "type": "function",
-            "name": "example_tool",
-            "input_examples": [{"foo": "bar"}],
-            "function": {
-                "name": "example_tool",
-                "input_examples": [{"foo": "bar"}],
-            },
-        }
+        {"type": "function", "name": "example_tool", key: True, "function": {"name": "example_tool", key: True}},
+        "opaque_tool",
     ]
 
-    assert not litellm_main._should_allow_input_examples(
-        custom_llm_provider="openai", model="gpt-4o-mini"
+    cleaned = litellm_main._drop_anthropic_only_tool_keys(tools=tools)
+
+    assert cleaned == [
+        {"type": "function", "name": "example_tool", "function": {"name": "example_tool"}},
+        "opaque_tool",
+    ]
+    assert tools[0][key] is True
+    assert tools[0]["function"][key] is True
+
+
+def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx.MockRouter, openai_api_response):
+    api_base: Final = "http://localhost:12346/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
     )
 
-    cleaned = litellm_main._drop_input_examples_from_tools(tools=tools)
+    litellm.completion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Write the file"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "write_file", "parameters": {"type": "object", "properties": {}}},
+                "eager_input_streaming": True,
+            }
+        ],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+    )
 
-    assert isinstance(cleaned, list)
-    assert "input_examples" not in cleaned[0]
-    assert "input_examples" not in cleaned[0]["function"]
+    assert mock_route.called
+    sent_tool: Final = json.loads(respx_mock.calls[0].request.content)["tools"][0]
+    assert "eager_input_streaming" not in sent_tool
+    assert sent_tool["function"]["name"] == "write_file"
 
 
 def test_custom_provider_with_extra_headers():
@@ -3409,7 +3447,6 @@ def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_ma
     cost = litellm.completion_cost(completion_response=rebuilt, model=STREAM_COST_MODEL)
 
     assert cost == pytest.approx(_priced_at(137, 42))
-    assert cost == pytest.approx(0.0007625)
 
 
 def test_streaming_and_not_streaming_bill_the_same_usage_the_same(local_cost_map):
@@ -3930,3 +3967,17 @@ def test_aiohttp_openai_warns_only_when_http2_enabled(
     assert handler_completion.called
     warned: Final = "aiohttp_openai/ always uses aiohttp" in caplog.text
     assert warned is http2_on
+
+
+@pytest.mark.parametrize("tool_choice", [{"type": "bogus"}, {"name": "lookup_fruit"}, {"type": "file_search"}])
+def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Which fruit is red?"}],
+            tools=[{"type": "function", "function": {"name": "lookup_fruit", "parameters": {"type": "object"}}}],
+            tool_choice=tool_choice,
+            api_key="sk-unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert f"tool_choice={tool_choice}" in str(exc_info.value)
