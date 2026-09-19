@@ -323,6 +323,7 @@ _OAuthDiscoveryOutcome: TypeAlias = _OAuthDiscoveryResolved | _OAuthDiscoveryFai
 class _ListHeaders:
     upstream: dict[str, str] | None
     signed_for_user: bool
+    minted: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -4519,14 +4520,17 @@ class MCPServerManager:
         )
         if get_mcp_jwt_signer() is None or has_static_authorization or mcp_auth_header or has_extra_authorization:
             return _ListHeaders(headers, signed_for_user=False)
+        signed: Final = await inject_mcp_jwt_headers_for_upstream(
+            user_api_key_dict=user_api_key_auth,
+            extra_headers=headers,
+            raw_headers=raw_headers,
+            for_list_tools=True,
+        )
+        unsigned_items: Final = frozenset((headers or {}).items())
         return _ListHeaders(
-            await inject_mcp_jwt_headers_for_upstream(
-                user_api_key_dict=user_api_key_auth,
-                extra_headers=headers,
-                raw_headers=raw_headers,
-                for_list_tools=True,
-            ),
+            signed,
             signed_for_user=True,
+            minted=frozenset(name.lower() for name, value in signed.items() if (name, value) not in unsigned_items),
         )
 
     def _invalidate_discovery_lists(self, server_id: str) -> None:
@@ -4595,7 +4599,7 @@ class MCPServerManager:
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
             )
-            credential_fingerprint: Final = await client.discovery_auth_fingerprint()
+            credential_fingerprint: Final = await client.discovery_auth_fingerprint(ignore_headers=headers.minted)
             key: Final = self._discovery_key(
                 server,
                 user_api_key_auth,
@@ -4646,7 +4650,7 @@ class MCPServerManager:
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
             )
-            credential_fingerprint: Final = await client.discovery_auth_fingerprint()
+            credential_fingerprint: Final = await client.discovery_auth_fingerprint(ignore_headers=headers.minted)
             key: Final = self._discovery_key(
                 server,
                 user_api_key_auth,
@@ -4697,7 +4701,7 @@ class MCPServerManager:
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
             )
-            credential_fingerprint: Final = await client.discovery_auth_fingerprint()
+            credential_fingerprint: Final = await client.discovery_auth_fingerprint(ignore_headers=headers.minted)
             key: Final = self._discovery_key(
                 server,
                 user_api_key_auth,

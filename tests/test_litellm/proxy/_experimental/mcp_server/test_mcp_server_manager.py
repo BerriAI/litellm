@@ -4098,6 +4098,7 @@ class TestMCPServerManager:
         from types import SimpleNamespace
 
         import litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer as jwt_signer_module
+        from litellm.experimental_mcp_client.client import MCPClient
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import MCPJWTSigner
 
@@ -4120,19 +4121,28 @@ class TestMCPServerManager:
             url="https://example.com",
             transport=MCPTransport.http,
         )
-        mock_client = AsyncMock()
-        setattr(mock_client, client_method, AsyncMock(side_effect=[[make_item("first")], [make_item("second")]]))
-        mock_client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
+        upstream_call = AsyncMock(side_effect=[[make_item("first")], [make_item("second")]])
+        seen_authorization: list[str] = []
+
+        async def create_client(**kwargs: object) -> MCPClient:
+            extra_headers = kwargs["extra_headers"]
+            assert isinstance(extra_headers, dict)
+            seen_authorization.append(extra_headers["Authorization"])
+            client = MCPClient(server_url=server.url, transport_type=MCPTransport.http, extra_headers=extra_headers)
+            setattr(client, client_method, upstream_call)
+            return client
+
         alice = UserAPIKeyAuth(api_key="sk-alice", user_id="alice")
         bob = UserAPIKeyAuth(api_key="sk-bob", user_id="bob")
 
-        with patch.object(manager, "_create_mcp_client", AsyncMock(return_value=mock_client)):
+        with patch.object(manager, "_create_mcp_client", AsyncMock(side_effect=create_client)):
             alice_first = await getattr(manager, manager_method)(server, user_api_key_auth=alice, add_prefix=False)
             alice_second = await getattr(manager, manager_method)(server, user_api_key_auth=alice, add_prefix=False)
             bob_first = await getattr(manager, manager_method)(server, user_api_key_auth=bob, add_prefix=False)
         assert [item.name for item in alice_first] == ["first"]
         assert alice_second == alice_first
         assert [item.name for item in bob_first] == ["second"]
+        assert len(seen_authorization) == 3 and len(set(seen_authorization)) == 3
 
     @pytest.mark.asyncio
     async def test_read_resource_from_server_success(self):
