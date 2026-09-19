@@ -51,9 +51,18 @@ impl ForkGate {
         Ok(())
     }
 
+    /// Reserves `pid` for forking. Reserve first, then look for a started runtime: `enter` does
+    /// the mirror image, so when the two race at least one of them sees the other. A refused
+    /// reservation leaves the gate exactly as it was, so a process already running the runtime
+    /// keeps refusing the children it forks.
     pub(crate) fn reserve(&self, pid: u32) -> Result<(), RuntimeAlreadyStarted> {
         self.fork_only_pid.store(pid, Ordering::SeqCst);
         if self.runtime_pid.load(Ordering::SeqCst) == pid {
+            // Nothing may change for a process that already runs the runtime: its children
+            // must still be refused.
+            let _ =
+                self.fork_only_pid
+                    .compare_exchange(pid, UNSET, Ordering::SeqCst, Ordering::SeqCst);
             return Err(RuntimeAlreadyStarted);
         }
         Ok(())
@@ -107,6 +116,17 @@ mod tests {
         gate.enter(MASTER).unwrap();
 
         assert_eq!(gate.reserve(MASTER), Err(RuntimeAlreadyStarted));
+    }
+
+    #[test]
+    fn a_refused_reservation_leaves_the_runtime_claimed_and_its_children_refused() {
+        let gate = ForkGate::new();
+        gate.enter(MASTER).unwrap();
+
+        assert_eq!(gate.reserve(MASTER), Err(RuntimeAlreadyStarted));
+        assert_eq!(gate.enter(MASTER), Ok(()));
+        assert!(gate.started(MASTER));
+        assert_eq!(gate.enter(WORKER), Err(Refused::ForkedAfterStart));
     }
 
     #[test]
