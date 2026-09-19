@@ -654,6 +654,12 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             "error": error_info,
             **({"tool_definitions": tool_definitions} if tool_definitions else {}),
         }
+        # Datadog prices llm/embedding spans from top-level meta.model_name /
+        # model_provider. Those values already live in metadata; lift them so
+        # embedding spans are not flagged "Partial cost — Unsupported model provider".
+        if span_kind in ("llm", "embedding"):
+            meta["model_name"] = standard_logging_payload.get("model", "unknown")
+            meta["model_provider"] = standard_logging_payload.get("custom_llm_provider", "unknown")
 
         metrics: Final = self._assemble_metrics(standard_logging_payload, tool_output_tokens)
 
