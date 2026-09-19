@@ -1864,22 +1864,21 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
     )
     setattr(response, "service_tier", "priority")
 
-    usage_no_tier = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
-    priority_reference = completion_cost(
+    usage_no_tier: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    priority_reference: Final = completion_cost(
         completion_response=ModelResponse(usage=usage_no_tier, model=model),
         model=model,
         custom_llm_provider="openai",
         service_tier="priority",
     )
-    flex_reference = completion_cost(
+    flex_reference: Final = completion_cost(
         completion_response=ModelResponse(usage=usage_no_tier, model=model),
         model=model,
         custom_llm_provider="openai",
         service_tier="flex",
     )
 
-    # Response "priority" beats requested "flex"
-    cost_from_params = completion_cost(
+    cost_from_params: Final = completion_cost(
         completion_response=response,
         model=model,
         custom_llm_provider="openai",
@@ -1887,12 +1886,11 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
     )
     assert cost_from_params == pytest.approx(priority_reference)
 
-    # Response without tier falls back to usage "flex", beating requested "priority"
-    response_no_tier = ModelResponse(
+    response_no_tier: Final = ModelResponse(
         usage=usage,
         model=model,
     )
-    cost_from_usage = completion_cost(
+    cost_from_usage: Final = completion_cost(
         completion_response=response_no_tier,
         model=model,
         custom_llm_provider="openai",
@@ -1900,8 +1898,7 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
     )
     assert cost_from_usage == pytest.approx(flex_reference)
 
-    # No response or usage tier: optional_params "flex" applies
-    cost_from_optional_params = completion_cost(
+    cost_from_optional_params: Final = completion_cost(
         completion_response=ModelResponse(usage=usage_no_tier, model=model),
         model=model,
         custom_llm_provider="openai",

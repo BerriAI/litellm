@@ -1418,6 +1418,11 @@ class CustomStreamWrapper:
                 return dispatch_result.value
             response_obj = dispatch_result.response_obj
 
+            chunk_service_tier: Final = getattr(chunk, "service_tier", None)
+            if chunk_service_tier is not None:
+                self._service_tier = chunk_service_tier
+                setattr(model_response, "service_tier", chunk_service_tier)
+
             model_response.model = self.model
             ## FUNCTION CALL PARSING
             original_chunk: Final = response_obj.get("original_chunk") if response_obj is not None else None
@@ -1718,6 +1723,9 @@ class CustomStreamWrapper:
             model_response.choices[0].finish_reason == "stop" and self.tool_call
         ):  # don't overwrite for other - potential error finish reasons
             model_response.choices[0].finish_reason = "tool_calls"
+        _last_service_tier: Final = getattr(self, "_service_tier", None)
+        if _last_service_tier is not None:
+            setattr(model_response, "service_tier", _last_service_tier)
         return model_response
 
     def _record_usage_only_chunk(self, model_response: "ModelResponseStream") -> None:
@@ -1873,6 +1881,11 @@ class CustomStreamWrapper:
                         "usage",
                         getattr(complete_streaming_response, "usage"),
                     )
+                    _stream_service_tier: Final = getattr(complete_streaming_response, "service_tier", None) or getattr(
+                        self, "_service_tier", None
+                    )
+                    if _stream_service_tier is not None:
+                        setattr(response, "service_tier", _stream_service_tier)
                     try:
                         _cache_copy = complete_streaming_response.model_copy(deep=True)
                         _log_copy = complete_streaming_response.model_copy(deep=True)
@@ -2124,6 +2137,11 @@ class CustomStreamWrapper:
                     "usage",
                     getattr(complete_streaming_response, "usage"),
                 )
+                _stream_service_tier: Final = getattr(complete_streaming_response, "service_tier", None) or getattr(
+                    self, "_service_tier", None
+                )
+                if _stream_service_tier is not None:
+                    setattr(response, "service_tier", _stream_service_tier)
                 try:
                     _copy = complete_streaming_response.model_copy(deep=True)
                 except RuntimeError:
