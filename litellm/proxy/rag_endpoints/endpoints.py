@@ -166,6 +166,30 @@ def _ingest_provider_error(vector_store_config: Mapping[str, object]) -> str | N
     return None
 
 
+_MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
+    {
+        "vector_store_id",
+        "litellm_credential_name",
+        "data_source_id",
+        "wait_for_ingestion",
+        "ingestion_timeout",
+        "custom_metadata",
+        "file_description",
+    }
+)
+
+
+def _caller_vector_store_options(
+    request_vector_store_config: Mapping[str, object],
+    managed_store: LiteLLM_ManagedVectorStore | None,
+) -> Mapping[str, object]:
+    if managed_store is None:
+        return request_vector_store_config
+    return MappingProxyType(
+        {key: value for key, value in request_vector_store_config.items() if key in _MANAGED_STORE_CALLER_OPTIONS}
+    )
+
+
 def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -> Mapping[str, object]:
     if managed_store is None:
         return MappingProxyType({})
@@ -595,7 +619,7 @@ async def rag_ingest(
 
         managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
         merged_vector_store_config: Final = {  # mutable-ok: ingestion classes mutate it when loading credentials
-            **request_vector_store_config,
+            **_caller_vector_store_options(request_vector_store_config, managed_store),
             **_managed_store_overrides(managed_store),
         }
         merged_ingest_options: Final = {  # mutable-ok: litellm.aingest takes a plain dict payload
