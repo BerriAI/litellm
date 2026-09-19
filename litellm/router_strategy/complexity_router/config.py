@@ -833,6 +833,15 @@ class CustomDimension(BaseModel):
         )
 
 
+class ContextCompactionConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: str | None = Field(default=None, min_length=1)
+    trigger_ratio: float = Field(default=0.9, gt=0, lt=1)
+    max_tokens: int = Field(default=4096, ge=512)
+    timeout_seconds: float = Field(default=120, gt=0)
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -1303,6 +1312,16 @@ class ComplexityRouterConfig(BaseModel):
             "wording the built-ins don't cover, or after a client release changes its strings."
         ),
     )
+
+    context_compaction: ContextCompactionConfig | Literal[False] | None = Field(
+        default_factory=ContextCompactionConfig,
+        description="Native Anthropic compact-to-fit is enabled by default for Chat and Messages. Selects a compatible configured tier model unless model is specified. Set false to disable (null is normalized to false). Takes precedence over context-window escalation on supported requests.",
+    )
+
+    @field_validator("context_compaction", mode="before")
+    @classmethod
+    def _normalize_context_compaction(cls, value: object) -> object:
+        return False if value is None else value
 
     enable_context_window_escalation: bool = Field(
         default=True,

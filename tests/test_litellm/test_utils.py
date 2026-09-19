@@ -855,6 +855,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "source": {"type": "string"},
                 "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},
+                "supports_anthropic_compaction": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
                 "gemini_native_audio": {"type": "boolean"},

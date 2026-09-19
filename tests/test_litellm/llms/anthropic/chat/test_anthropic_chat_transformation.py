@@ -1,7 +1,10 @@
 
-import pytest
-
+import json
+from typing import Final
 from unittest.mock import MagicMock, patch
+
+import httpx
+import pytest
 
 import litellm
 from litellm.constants import (
@@ -17,6 +20,7 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.utils import ServerToolUse, Usage
 
@@ -3759,6 +3763,64 @@ def test_multiple_compaction_blocks():
     assert len(compaction_blocks) == 2
     assert compaction_blocks[0]["content"] == "First summary..."
     assert compaction_blocks[1]["content"] == "Second summary..."
+
+
+@pytest.mark.parametrize("messages_api", [False, True])
+async def test_native_compaction_wire_roundtrip(messages_api: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    monkeypatch.setattr(litellm.anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
+    block: Final = {"type": "compaction", "content": "Exact summary", "signature": "opaque-signature"}
+    operation: Final = {"type": "summarize", "instructions": "Keep identifiers"}
+    usage: Final = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "iterations": [{"type": "compaction", "input_tokens": 103, "output_tokens": 165}],
+    }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        payload: Final = json.loads(request.content)
+        assert len(request.headers.get_list("anthropic-beta")) == 1
+        assert {value.strip() for value in request.headers["anthropic-beta"].split(",")} == {
+            "compact-2026-09-04",
+            "interleaved-thinking-2025-05-14",
+        }
+        if "compaction" in payload:
+            assert payload["compaction"] == operation
+        else:
+            assert payload["messages"][0] == {"role": "assistant", "content": [block]}
+        body: Final = dict(
+            id="msg_compact",
+            type="message",
+            role="assistant",
+            model="claude-sonnet-5",
+            content=[block],
+            stop_reason="compaction",
+            usage=usage,
+        )
+        return httpx.Response(200, json=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as transport:
+        client: Final = AsyncHTTPHandler()
+        await client.client.aclose()
+        client.client = transport
+        call: Final = litellm.anthropic.messages.acreate if messages_api else litellm.acompletion
+        params: Final = dict(
+            model="anthropic/claude-sonnet-5",
+            api_key="test",
+            client=client,
+            max_tokens=512,
+            extra_headers={"Anthropic-Beta": "interleaved-thinking-2025-05-14"},
+        )
+        response: Final = await call(
+            messages=[{"role": "user", "content": "Remember identifiers"}], compaction=operation, **params
+        )
+        message: Final = response if messages_api else response.choices[0].message.model_dump()
+        blocks: Final = message["content"] if messages_api else message["provider_specific_fields"]["compaction_blocks"]
+        assert blocks == [block]
+        if messages_api:
+            assert response["usage"] == usage
+        replay: Final = {"role": "assistant", "content": blocks} if messages_api else message
+        await call(messages=[replay, {"role": "user", "content": "Continue"}], **params)
 
 
 def test_compaction_block_request_transformation():

@@ -68,6 +68,68 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
+### Context compaction
+
+Native compact-to-fit is enabled by default for Complexity Router Chat Completions
+and Anthropic Messages requests. Near the selected deployment's context limit,
+it compacts older history while keeping that answering deployment pinned.
+It takes precedence over context-window escalation on these request types;
+other API surfaces retain their existing behavior
+
+```yaml
+complexity_router_config:
+  context_compaction:
+    model: native-compactor
+    max_tokens: 4096
+    trigger_ratio: 0.9
+    timeout_seconds: 120
+```
+
+The three numeric values shown are defaults. With no `model` override, the router
+uses the first configured tier group whose deployments all support Anthropic native
+on-demand compaction and fit the old history plus output allowance. Selection follows
+the configured tier order and never searches unrelated gateway deployments. If no
+group qualifies, the request fails before compaction. A fitting request needs no compactor
+
+Compactor capability comes from `supports_anthropic_compaction` in the model catalog,
+read through `get_model_info`, rather than a model-name allowlist. This flag specifically
+means support for Anthropic's signed on-demand compaction operation. Catalog updates
+or `litellm.register_model` can enable a compatible new compactor without router changes
+
+OpenAI-compatible gateways receive the native operation and its required beta header.
+For Messages calls without native Messages passthrough, compaction uses the Chat bridge
+automatically; ordinary OpenAI/Azure Messages routing keeps its existing behavior
+
+Set `model` to override automatic selection with a configured regular model group,
+such as one backed by `anthropic/claude-sonnet-5`. This also supports custom gateway
+aliases or newly supported native models not yet recognized automatically. Another
+auto-router cannot be the compactor. Set `context_compaction: false` to disable this
+behavior; an omitted setting or empty object enables it. Explicit null is normalized
+to false so the opt-out survives management API serialization. Escalation remains a separate setting
+
+Anthropic generates the summary using its native compaction operation. The router
+replays that summary as ordinary text to the same selected answering deployment,
+for example `anthropic/claude-haiku-4-5-20251001`. It does not replay the signed
+compaction block to Haiku. Answering models need no native-compaction capability:
+DeepSeek and other Chat/Messages targets receive the same ordinary-text summary.
+Using a model inside a coding agent does not imply that its provider API supports
+native compaction; the agent may manage summarization itself. Leading system/developer instructions, the Messages
+system prompt, and the latest user turn with its following tool calls/results
+stay unchanged. The history split must preserve complete tool pairs
+
+The input budget is `floor(trigger_ratio * max_input_tokens) - output_reserve`.
+Token counts are estimates; the reserve uses the request's output limit or the
+model's known output limit. The compacted request is checked again before dispatch
+
+Upgrading enables lossy history summarization and an extra paid call near the limit
+unless explicitly disabled. Each request gets at most one billable compaction attempt. On the proxy, the caller
+must have access to the compactor and sufficient budget. Compactor retries and
+fallbacks are disabled. Automatic mode leaves unknown input limits to the provider;
+when the output reserve is unknown or leaves no usable input budget, it still rejects
+inputs exceeding the known window. An explicit compactor requires a positive reserved-input budget. Detected overflow, unsafe history,
+or a summary that still does not fit fails closed. There is no chunking, prompt-based summarization,
+or context-window escalation fallback
+
 ### Capability forecasting
 
 Set `classifier_type: capability` to use
