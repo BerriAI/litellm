@@ -1485,11 +1485,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if read_only:
             if self.parallel_count_script is not None:
                 try:
-                    raw_counts: Final[list[CacheCounterValue]] = await self.parallel_count_script(
-                        keys=gauge_keys,
-                        args=[PARALLEL_REQUEST_SLOT_TTL_SECONDS for _ in gauges],
-                    )
-                    counts = [max(0, int(value)) for value in raw_counts]
+                    counts = [
+                        max(0, int(value))
+                        for gauge_key in gauge_keys
+                        for value in await self.parallel_count_script(
+                            keys=(gauge_key,), args=(PARALLEL_REQUEST_SLOT_TTL_SECONDS,)
+                        )
+                    ]
                 except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror, never a 500
                     log_redis_failure(
                         verbose_proxy_logger, logging.WARNING, "parallel_count_script failed, using local mirror", e
@@ -1516,11 +1518,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         if self.parallel_acquire_script is not None:
             try:
-                raw: Final[list[CacheCounterValue]] = await self.parallel_acquire_script(
-                    keys=gauge_keys,
-                    args=[
-                        arg for gauge in gauges for arg in (gauge["limit"], PARALLEL_REQUEST_SLOT_TTL_SECONDS, slot_id)
-                    ],
+                return await self._acquire_parallel_slots_in_redis(
+                    acquire_script=self.parallel_acquire_script,
+                    gauges=gauges,
+                    slot_id=slot_id,
+                    parent_otel_span=parent_otel_span,
                 )
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to in-memory enforcement, never a 500
                 log_redis_failure(
@@ -1529,28 +1531,63 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "parallel_acquire_script failed, falling back to in-memory gauge",
                     e,
                 )
-                async with self._check_and_increment_lock:
-                    return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
-            if int(raw[0]) == 1:
-                gauge = gauges[int(raw[1]) - 1]
-                return RateLimitResponse(
-                    overall_code="OVER_LIMIT",
-                    statuses=[self._gauge_status(gauge, int(raw[2]), "OVER_LIMIT")],
-                )
-            statuses = []
-            for gauge, in_flight in zip(gauges, raw[1:]):
+
+        async with self._check_and_increment_lock:
+            return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
+
+    async def _acquire_parallel_slots_in_redis(
+        self,
+        acquire_script: _AsyncLuaScript,
+        gauges: Sequence[ParallelRequestGauge],
+        slot_id: str,
+        parent_otel_span: Span | None,
+        acquired_in_flight: tuple[int, ...] = (),
+    ) -> RateLimitResponse:
+        """
+        One Lua call per gauge so every call stays on a single Redis Cluster
+        slot (the api_key and team gauges carry different hash tags). A
+        rejection by a later gauge releases the slots the earlier gauges
+        already granted this request, and a Redis failure mid-way does the
+        same before the caller falls back to the in-memory gauge.
+        """
+        if len(acquired_in_flight) == len(gauges):
+            for gauge, in_flight in zip(gauges, acquired_in_flight):
                 await self.internal_usage_cache.async_set_cache(
                     key=gauge["counter_key"],
-                    value=int(in_flight),
+                    value=in_flight,
                     ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
                     litellm_parent_otel_span=parent_otel_span,
                     local_only=True,
                 )
-                statuses.append(self._gauge_status(gauge, int(in_flight), "OK"))
-            return RateLimitResponse(overall_code="OK", statuses=statuses)
-
-        async with self._check_and_increment_lock:
-            return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
+            return RateLimitResponse(
+                overall_code="OK",
+                statuses=[
+                    self._gauge_status(gauge, in_flight, "OK") for gauge, in_flight in zip(gauges, acquired_in_flight)
+                ],
+            )
+        gauge: Final = gauges[len(acquired_in_flight)]
+        acquired_keys: Final = tuple(g["counter_key"] for g in gauges[: len(acquired_in_flight)])
+        try:
+            raw: Final = await acquire_script(
+                keys=(gauge["counter_key"],),
+                args=(gauge["limit"], PARALLEL_REQUEST_SLOT_TTL_SECONDS, slot_id),
+            )
+        except Exception:
+            await self._release_slots(counter_keys=acquired_keys, slot_id=slot_id, parent_otel_span=parent_otel_span)
+            raise
+        if int(raw[0]) == 1:
+            await self._release_slots(counter_keys=acquired_keys, slot_id=slot_id, parent_otel_span=parent_otel_span)
+            return RateLimitResponse(
+                overall_code="OVER_LIMIT",
+                statuses=[self._gauge_status(gauge, int(raw[2]), "OVER_LIMIT")],
+            )
+        return await self._acquire_parallel_slots_in_redis(
+            acquire_script=acquire_script,
+            gauges=gauges,
+            slot_id=slot_id,
+            parent_otel_span=parent_otel_span,
+            acquired_in_flight=(*acquired_in_flight, int(raw[1])),
+        )
 
     async def _read_local_gauge_counts(
         self,
@@ -1648,23 +1685,28 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         request's slot. The in-memory fallback decrements integer mirror
         values (floored at 0) because the mirror carries no per-slot ids.
         """
-        counter_keys: Final = acquisition["counter_keys"]
-        slot_id: Final = acquisition["slot_id"]
+        await self._release_slots(
+            counter_keys=acquisition["counter_keys"],
+            slot_id=acquisition["slot_id"],
+            parent_otel_span=parent_otel_span,
+        )
+
+    async def _release_slots(
+        self,
+        counter_keys: Sequence[str],
+        slot_id: str,
+        parent_otel_span: Span | None,
+    ) -> None:
         if not counter_keys or not slot_id:
             return
         if self.parallel_release_script is not None:
             try:
-                raw: Final[list[CacheCounterValue]] = await self.parallel_release_script(
-                    keys=counter_keys,
-                    args=[slot_id for _ in counter_keys],
-                )
-                for counter_key, remaining in zip(counter_keys, raw):
-                    await self.internal_usage_cache.async_set_cache(
-                        key=counter_key,
-                        value=max(0, int(remaining)),
-                        ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
-                        litellm_parent_otel_span=parent_otel_span,
-                        local_only=True,
+                for counter_key in counter_keys:
+                    await self._release_one_slot_in_redis(
+                        release_script=self.parallel_release_script,
+                        counter_key=counter_key,
+                        slot_id=slot_id,
+                        parent_otel_span=parent_otel_span,
                     )
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
@@ -1697,6 +1739,22 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     litellm_parent_otel_span=parent_otel_span,
                     local_only=True,
                 )
+
+    async def _release_one_slot_in_redis(
+        self,
+        release_script: _AsyncLuaScript,
+        counter_key: str,
+        slot_id: str,
+        parent_otel_span: Span | None,
+    ) -> None:
+        remaining: Final = await release_script(keys=(counter_key,), args=(slot_id,))
+        await self.internal_usage_cache.async_set_cache(
+            key=counter_key,
+            value=max(0, int(remaining[0])),
+            ttl=PARALLEL_REQUEST_SLOT_TTL_SECONDS,
+            litellm_parent_otel_span=parent_otel_span,
+            local_only=True,
+        )
 
     async def atomic_check_and_increment_by_n(
         self,

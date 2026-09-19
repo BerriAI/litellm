@@ -1,4 +1,4 @@
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import datetime
 
 import pytest
@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     RequestRateLimiterStash,
     _PROXY_MaxParallelRequestsHandler_v3,
     _request_stash,
@@ -183,3 +184,103 @@ async def test_team_gauge_rejection_does_not_consume_key_slot():
 
     assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=key_b_counter)) == 0
     assert get_request_stash().parallel_slot is None
+
+
+KEY_A = hash_token("sk-a")
+KEY_A_COUNTER_KEY = f"{{api_key:{KEY_A}}}:max_parallel_requests"
+
+
+class _FakeRedisGauges:
+    def __init__(self, reject_key: str | None = None, raise_on_key: str | None = None) -> None:
+        self.reject_key = reject_key
+        self.raise_on_key = raise_on_key
+        self.acquire_calls: list[tuple[tuple[str, ...], tuple[object, ...]]] = []
+        self.release_calls: list[tuple[tuple[str, ...], tuple[object, ...]]] = []
+        self.count_calls: list[tuple[str, ...]] = []
+
+    async def acquire(self, keys: Sequence[str], args: Sequence[object]) -> list[int]:
+        self.acquire_calls.append((tuple(keys), tuple(args)))
+        if keys[0] == self.raise_on_key:
+            raise ConnectionError("CROSSSLOT Keys in request don't hash to the same slot")
+        if keys[0] == self.reject_key:
+            return [1, 1, 1, 1]
+        return [0, 1]
+
+    async def release(self, keys: Sequence[str], args: Sequence[object]) -> list[int]:
+        self.release_calls.append((tuple(keys), tuple(args)))
+        return [0]
+
+    async def count(self, keys: Sequence[str], args: Sequence[object]) -> list[int]:
+        self.count_calls.append(tuple(keys))
+        return [0]
+
+
+def _handler_with_fake_redis(fake: _FakeRedisGauges) -> tuple[_PROXY_MaxParallelRequestsHandler_v3, DualCache]:
+    handler, cache = _handler()
+    handler.parallel_acquire_script = fake.acquire
+    handler.parallel_release_script = fake.release
+    handler.parallel_count_script = fake.count
+    return handler, cache
+
+
+@pytest.mark.asyncio
+async def test_key_and_team_gauges_use_one_redis_call_per_key():
+    fake = _FakeRedisGauges()
+    handler, cache = _handler_with_fake_redis(fake)
+
+    stash = await _admit(handler, cache, _team_key("sk-a", team_max_parallel_requests=2, max_parallel_requests=3))
+
+    slot_id = stash.parallel_slot["slot_id"]
+    assert fake.acquire_calls == [
+        ((KEY_A_COUNTER_KEY,), (3, PARALLEL_REQUEST_SLOT_TTL_SECONDS, slot_id)),
+        ((TEAM_COUNTER_KEY,), (2, PARALLEL_REQUEST_SLOT_TTL_SECONDS, slot_id)),
+    ]
+
+    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict=UserAPIKeyAuth())
+    assert fake.release_calls == [((KEY_A_COUNTER_KEY,), (slot_id,)), ((TEAM_COUNTER_KEY,), (slot_id,))]
+
+
+@pytest.mark.asyncio
+async def test_team_rejection_in_redis_releases_key_slot_taken_first():
+    fake = _FakeRedisGauges(reject_key=TEAM_COUNTER_KEY)
+    handler, cache = _handler_with_fake_redis(fake)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _admit(handler, cache, _team_key("sk-a", team_max_parallel_requests=1, max_parallel_requests=3))
+
+    assert f"team: {TEAM_ID}" in exc_info.value.detail
+    slot_id = fake.acquire_calls[0][1][2]
+    assert fake.release_calls == [((KEY_A_COUNTER_KEY,), (slot_id,))]
+    assert get_request_stash().parallel_slot is None
+
+
+@pytest.mark.asyncio
+async def test_redis_failure_on_second_gauge_releases_first_before_falling_back():
+    fake = _FakeRedisGauges(raise_on_key=TEAM_COUNTER_KEY)
+    handler, cache = _handler_with_fake_redis(fake)
+
+    stash = await _admit(handler, cache, _team_key("sk-a", team_max_parallel_requests=2, max_parallel_requests=3))
+
+    slot_id = stash.parallel_slot["slot_id"]
+    assert fake.release_calls == [((KEY_A_COUNTER_KEY,), (slot_id,))]
+    assert await _team_in_flight(handler, cache) == 1
+    assert handler._gauge_in_flight_from_cache_value(await cache.async_get_cache(key=KEY_A_COUNTER_KEY)) == 1
+
+
+@pytest.mark.asyncio
+async def test_read_only_count_uses_one_redis_call_per_key():
+    fake = _FakeRedisGauges()
+    handler, cache = _handler_with_fake_redis(fake)
+    descriptors = handler._create_rate_limit_descriptors(
+        user_api_key_dict=_team_key("sk-a", team_max_parallel_requests=2, max_parallel_requests=3),
+        data={"model": "gpt-4o-mini"},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+    _, _, gauges = handler._collect_windowed_keys_and_gauges(descriptors, skip_tpm_check=False)
+
+    response = await handler._check_parallel_request_gauges(gauges, slot_id="unused", read_only=True)
+
+    assert response["overall_code"] == "OK"
+    assert fake.count_calls == [(KEY_A_COUNTER_KEY,), (TEAM_COUNTER_KEY,)]
