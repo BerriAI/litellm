@@ -12,8 +12,6 @@ use crate::{errors::RustBridgeDeclined, python_settings::PythonSettings};
 static POOL: LazyLock<HttpClientPool> =
     LazyLock::new(|| HttpClientPool::new(Arc::new(PublicDnsResolver)));
 
-const LIVE_CLIENT_ARGUMENTS: [&str; 3] = ["client", "shared_session", "aclient_session"];
-
 pub(crate) fn pool() -> &'static HttpClientPool {
     &POOL
 }
@@ -23,7 +21,7 @@ pub(crate) fn call_config(
     kwargs: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<HttpClientConfig> {
-    decline_live_clients(kwargs)?;
+    decline_live_client(kwargs)?;
     decline_custom_url_policy(&PythonSettings::UrlPolicy.read(py)?)?;
     let configured = settings(&PythonSettings::Http.read(py)?)?
         .with_environment(&|name| std::env::var(name).ok());
@@ -53,13 +51,14 @@ fn for_call(
     }
 }
 
-pub(crate) fn decline_live_clients(kwargs: &Bound<'_, PyDict>) -> PyResult<()> {
-    for name in LIVE_CLIENT_ARGUMENTS {
-        if kwargs.get_item(name)?.is_some_and(|value| !value.is_none()) {
-            return Err(RustBridgeDeclined::new_err(format!(
-                "{name} is a live Python HTTP client and cannot be used by the Rust route"
-            )));
-        }
+fn decline_live_client(kwargs: &Bound<'_, PyDict>) -> PyResult<()> {
+    if kwargs
+        .get_item("client")?
+        .is_some_and(|value| !value.is_none())
+    {
+        return Err(RustBridgeDeclined::new_err(
+            "client is a live Python HTTP client and cannot be used by the Rust route",
+        ));
     }
     Ok(())
 }
@@ -362,32 +361,29 @@ user_agent='litellm/9.9.9',
         assert_eq!(config.trust_proxy_env, expected);
     }
 
-    #[rstest]
-    #[case::client("client")]
-    #[case::shared_session("shared_session")]
-    #[case::aclient_session("aclient_session")]
-    fn live_python_clients_decline_before_dispatch(#[case] name: &str) {
+    #[test]
+    fn live_python_client_declines_before_dispatch() {
         Python::initialize();
         Python::attach(|py| {
             let kwargs = PyDict::new(py);
             kwargs
-                .set_item(name, py.eval(c"object()", None, None).unwrap())
+                .set_item("client", py.eval(c"object()", None, None).unwrap())
                 .unwrap();
-            let error = decline_live_clients(&kwargs).unwrap_err();
+            let error = decline_live_client(&kwargs).unwrap_err();
             assert!(error.is_instance_of::<RustBridgeDeclined>(py));
-            assert!(error.value(py).to_string().contains(name));
         });
     }
 
-    #[test]
-    fn none_valued_client_arguments_are_not_live_clients() {
+    #[rstest]
+    #[case::absent_client("{}")]
+    #[case::none_client("{'client': None}")]
+    #[case::proxy_shared_session("{'shared_session': object()}")]
+    fn calls_without_a_python_client_stay_on_the_rust_route(#[case] kwargs: &str) {
         Python::initialize();
         Python::attach(|py| {
-            let kwargs = PyDict::new(py);
-            for name in LIVE_CLIENT_ARGUMENTS {
-                kwargs.set_item(name, py.None()).unwrap();
-            }
-            decline_live_clients(&kwargs).unwrap();
+            let source = std::ffi::CString::new(kwargs).unwrap();
+            let kwargs = py.eval(&source, None, None).unwrap();
+            decline_live_client(kwargs.cast::<PyDict>().unwrap()).unwrap();
         });
     }
 }
