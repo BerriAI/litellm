@@ -4,6 +4,7 @@ Tests for ChatGPT subscription Responses API transformation
 Source: litellm/llms/chatgpt/responses/transformation.py
 """
 
+import hashlib
 import json
 from collections.abc import Generator
 from unittest.mock import MagicMock, patch
@@ -12,6 +13,10 @@ import httpx
 import pytest
 
 import litellm
+from litellm.llms.chatgpt.common_utils import (
+    ensure_chatgpt_session_id,
+    get_chatgpt_session_id,
+)
 from litellm.llms.chatgpt.responses.transformation import ChatGPTResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.main import responses_api_bridge_check
@@ -55,7 +60,6 @@ class TestChatGPTResponsesAPITransformation:
         assert isinstance(config, ChatGPTResponsesAPIConfig)
         assert config.custom_llm_provider == LlmProviders.CHATGPT
 
-
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -92,14 +96,10 @@ class TestChatGPTResponsesAPITransformation:
         url = config.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://chatgpt.example.com/responses"
 
-        custom_url = config.get_complete_url(
-            api_base="https://custom.chatgpt.com", litellm_params={}
-        )
+        custom_url = config.get_complete_url(api_base="https://custom.chatgpt.com", litellm_params={})
         assert custom_url == "https://custom.chatgpt.com/responses"
 
-        url_with_slash = config.get_complete_url(
-            api_base="https://chatgpt.example.com/", litellm_params={}
-        )
+        url_with_slash = config.get_complete_url(api_base="https://chatgpt.example.com/", litellm_params={})
         assert url_with_slash == "https://chatgpt.example.com/responses"
 
     @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
@@ -162,9 +162,7 @@ class TestChatGPTResponsesAPITransformation:
                 "user": "user_123",
                 "temperature": 0.2,
                 "top_p": 0.9,
-                "context_management": [
-                    {"type": "compaction", "compact_threshold": 200000}
-                ],
+                "context_management": [{"type": "compaction", "compact_threshold": 200000}],
                 "metadata": {"foo": "bar"},
                 "max_output_tokens": 123,
                 "stream_options": {"include_usage": True},
@@ -203,9 +201,7 @@ class TestChatGPTResponsesAPITransformation:
             ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
         ],
     )
-    def test_chatgpt_non_stream_sse_response_parsing(
-        self, model_name: str, response_model: str
-    ):
+    def test_chatgpt_non_stream_sse_response_parsing(self, model_name: str, response_model: str):
         config = ChatGPTResponsesAPIConfig()
         response_payload = {
             "id": "resp_test",
@@ -228,9 +224,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
@@ -248,9 +242,7 @@ class TestChatGPTResponsesAPITransformation:
             ("chatgpt/gpt-5.3-codex", "gpt-5.3-codex"),
         ],
     )
-    def test_chatgpt_non_stream_sse_response_recovers_output_items(
-        self, model_name: str, response_model: str
-    ):
+    def test_chatgpt_non_stream_sse_response_recovers_output_items(self, model_name: str, response_model: str):
         config = ChatGPTResponsesAPIConfig()
         response_payload = {
             "id": "resp_test",
@@ -273,9 +265,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
@@ -315,9 +305,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         parsed = config.transform_response_api_response(
@@ -350,9 +338,7 @@ class TestChatGPTResponsesAPITransformation:
                 "",
             ]
         )
-        raw_response = httpx.Response(
-            502, headers={"content-type": "text/event-stream"}, text=sse_body
-        )
+        raw_response = httpx.Response(502, headers={"content-type": "text/event-stream"}, text=sse_body)
         logging_obj = MagicMock()
 
         with pytest.raises(OpenAIError) as exc_info:
@@ -364,3 +350,38 @@ class TestChatGPTResponsesAPITransformation:
 
         assert "ChatGPT upstream failed" in str(exc_info.value)
         assert exc_info.value.status_code == 502
+
+
+class TestChatGPTSessionId:
+    def test_explicit_session_ids_win(self):
+        assert get_chatgpt_session_id({"session_id": "s", "prompt_cache_key": "k"}) == "s"
+        assert get_chatgpt_session_id({"litellm_session_id": "ls", "prompt_cache_key": "k"}) == "ls"
+        assert get_chatgpt_session_id({"metadata": {"session_id": "ms"}, "prompt_cache_key": "k"}) == "ms"
+
+    def test_prompt_cache_key_becomes_session_id(self):
+        assert get_chatgpt_session_id({"prompt_cache_key": "conv-abc"}) == "conv-abc"
+        assert ensure_chatgpt_session_id({"prompt_cache_key": "conv-abc"}) == "conv-abc"
+
+    def test_prompt_cache_key_beats_internal_request_ids(self):
+        assert get_chatgpt_session_id({"litellm_call_id": "c", "prompt_cache_key": "k"}) == "k"
+        assert get_chatgpt_session_id({"litellm_trace_id": "t", "prompt_cache_key": "k"}) == "k"
+
+    def test_unsafe_cache_keys_are_hashed_not_collapsed(self):
+        mangled_a = get_chatgpt_session_id({"prompt_cache_key": "a\nb"})
+        mangled_b = get_chatgpt_session_id({"prompt_cache_key": "a\tb"})
+        assert mangled_a == hashlib.sha256(b"a\nb").hexdigest()
+        assert mangled_b == hashlib.sha256(b"a\tb").hexdigest()
+        assert mangled_a != mangled_b
+
+    def test_generated_session_ids_are_skipped(self):
+        for metadata_key in ("metadata", "litellm_metadata"):
+            generated = {
+                "litellm_session_id": "gen",
+                metadata_key: {"session_id": "gen", "litellm_session_id_generated": True},
+            }
+            assert get_chatgpt_session_id({**generated, "prompt_cache_key": "k"}) == "k"
+            assert get_chatgpt_session_id(generated) is None
+            assert ensure_chatgpt_session_id(generated) != ensure_chatgpt_session_id(generated) != "gen"
+
+    def test_uuid4_fallback_without_any_key(self):
+        assert ensure_chatgpt_session_id({}) != ensure_chatgpt_session_id({})

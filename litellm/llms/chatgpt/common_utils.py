@@ -2,6 +2,7 @@
 Constants and helpers for ChatGPT subscription OAuth.
 """
 
+import hashlib
 import os
 import platform
 from typing import Any, Final
@@ -272,14 +273,6 @@ def _normalize_litellm_params(litellm_params: Any | None) -> dict:
 def get_chatgpt_session_id(litellm_params: object) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
     metadata: Final = params.get("metadata")
-    # A session id the proxy generated for a request that had none
-    # (general_settings.missing_session_id: "generate") is per-request; using
-    # it as identity pins every request to a different ChatGPT cache shard
-    # and the prompt cache never hits (same guard as fireworks'
-    # get_fireworks_session_id). The marker can sit in "metadata" or
-    # "litellm_metadata" -- the LITELLM_METADATA_ROUTES (responses included)
-    # carry internal metadata under the latter. Generated ids are skipped,
-    # not returned, so a caller-supplied stable prompt_cache_key still wins.
     generated: Final = any(
         isinstance(params.get(name), dict) and params[name].get(SESSION_ID_GENERATED_METADATA_KEY)
         for name in ("metadata", "litellm_metadata")
@@ -293,16 +286,12 @@ def get_chatgpt_session_id(litellm_params: object) -> str | None:
             value = metadata.get("session_id")
             if value:
                 return str(value)
-    # ChatGPT derives prompt-cache affinity from the Responses session-id
-    # header (the Codex CLI sends a stable per-conversation key derived from
-    # prompt_cache_key). Callers of the responses API already send a stable
-    # prompt_cache_key; retaining it as the session id lets repeat turns of a
-    # conversation reuse the provider's prompt cache instead of landing on a
-    # fresh shard every request. Explicit operator configuration above still
-    # wins; litellm-internal per-request ids below still lose to it.
     prompt_cache_key: Final = params.get("prompt_cache_key")
     if prompt_cache_key:
-        return _safe_header_value(str(prompt_cache_key)) or None
+        key = str(prompt_cache_key)
+        safe = _safe_header_value(key)
+        # hashing avoids collisions from _safe_header_value's replacement char
+        return safe if safe == key else hashlib.sha256(key.encode()).hexdigest()
     if generated:
         return None
     for key in ("litellm_trace_id", "litellm_call_id"):
