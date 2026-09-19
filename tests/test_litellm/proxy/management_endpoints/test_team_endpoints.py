@@ -14443,10 +14443,6 @@ def _team_with_default_budget(team_id: str, budget_id: str) -> LiteLLM_TeamTable
 
 @pytest.mark.asyncio
 async def test_reset_team_member_budget_fn_relinks_custom_member_to_team_default(monkeypatch):
-    """An admin undoing a per-member budget must put the membership back on the team's shared
-    default row (a connect, not a copy) so later /team/update changes reach the member again,
-    and must drop the cached membership so the old cap stops being enforced. The shared row and
-    the member's tracked spend are never written."""
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     mock_prisma_client = MagicMock()
@@ -14498,9 +14494,6 @@ async def test_reset_team_member_budget_fn_relinks_custom_member_to_team_default
 async def test_reset_team_member_budget_fn_detaches_member_when_team_has_no_usable_default(
     monkeypatch, team_obj, default_row
 ):
-    """With no shared default to link to, reset leaves the member exactly where a freshly added
-    member would be: no budget row at all, reported as budget_source='none', rather than
-    connecting to a budget_id that does not exist or leaving the custom cap in place."""
     mock_prisma_client = MagicMock()
     membership_row = LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", budget_id="custom-b1")
     mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
@@ -14604,9 +14597,6 @@ async def _team_info_budget_sources(
 
 @pytest.mark.asyncio
 async def test_team_info_reports_whether_each_member_follows_the_team_default_budget():
-    """/team/info must tell the caller which members still follow the team's shared member budget
-    and which carry their own row, since budget_id alone only means something to a reader who
-    also knows the team's team_member_budget_id."""
     sources = await _team_info_budget_sources(
         team_row=_team_with_default_budget("team-1", "team-default-b"),
         memberships=[
@@ -14626,9 +14616,6 @@ async def test_team_info_reports_whether_each_member_follows_the_team_default_bu
 
 @pytest.mark.asyncio
 async def test_team_info_reports_no_budget_source_when_team_has_no_default():
-    """A team that never set team_member_budget has nothing for members to inherit, so an
-    unlinked member is 'none' rather than 'team_default', while a member with their own row is
-    still 'custom'."""
     sources = await _team_info_budget_sources(
         team_row=LiteLLM_TeamTable(team_id="team-1"),
         memberships=[
@@ -14646,9 +14633,6 @@ async def test_team_info_reports_no_budget_source_when_team_has_no_default():
 
 @pytest.mark.asyncio
 async def test_team_info_reports_no_budget_source_when_team_default_row_was_deleted():
-    """If the budget row named by team_member_budget_id was removed via /budget/delete, nothing is
-    enforced for unlinked members any more, so /team/info must not keep advertising a team default
-    that no longer exists."""
     sources = await _team_info_budget_sources(
         team_row=_team_with_default_budget("team-1", "deleted-b"),
         memberships=[
