@@ -35,6 +35,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     is_litellm_executed_batch,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.managed_batch_repository import ManagedBatchRepository
 from litellm.router import Router
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import EmbeddingResponse, LiteLLMBatch, ModelResponse, SpecialEnums
@@ -391,6 +392,7 @@ def make_runner(
         llm_router=cast("Router", router),
         prisma_client=cast("PrismaClient", prisma),
         managed_files=store,
+        batches=ManagedBatchRepository(prisma),
         proxy_logging_obj=MagicMock(spec=ProxyLogging),
         general_settings=general_settings,
         concurrency=concurrency,
@@ -1045,6 +1047,33 @@ async def test_batch_expires_at_the_completion_window_and_keeps_what_finished() 
         error = line["error"]
         assert isinstance(error, dict)
         assert error["code"] == "batch_expired"
+
+
+async def test_a_provider_timeout_fails_its_row_without_expiring_the_batch() -> None:
+    harness = make_runner()
+    reply = chat_response("hi 2")
+
+    def dispatch(messages: Sequence[Mapping[str, str]], **_: object) -> ModelResponse:
+        if messages[0]["content"] == "hi 1":
+            raise asyncio.TimeoutError("the provider took too long")
+        return reply
+
+    harness.router.acompletion.side_effect = dispatch
+    _, finished = await harness.create_and_finish()
+
+    assert finished.status == "completed"
+    assert finished.expired_at is None
+    assert finished.request_counts == BatchRequestCounts(completed=1, failed=1, total=2)
+    assert set(harness.uploads.calls[0].lines()) == {"row-2"}
+    error_lines = harness.uploads.calls[1].lines()
+    assert set(error_lines) == {"row-1"}
+    assert error_lines["row-1"]["error"] is None
+    response = error_lines["row-1"]["response"]
+    assert isinstance(response, dict)
+    assert response["status_code"] == 500
+    assert response["body"] == {
+        "error": {"message": "the provider took too long", "type": "TimeoutError", "param": None, "code": None}
+    }
 
 
 async def test_batch_created_past_its_window_dispatches_nothing() -> None:
