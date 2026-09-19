@@ -111,7 +111,6 @@ from litellm.proxy._types import (
     PassThroughGenericEndpoint,
     ProxyErrorTypes,
     ProxyException,
-    RoleBasedPermissions,
     SpecialModelNames,
     SupportedDBObjectType,
     TeamDefaultSettings,
@@ -317,6 +316,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
 from litellm.proxy.auth.auth_checks import (
+    ROLE_BASED_PERMISSIONS_ADAPTER,
     ExperimentalUIJWTToken,
     can_key_call_resolved_model,
     get_team_object,
@@ -6307,9 +6307,7 @@ class ProxyConfig:
             ### RBAC ###
             rbac_role_permissions: Final = general_settings.get("role_permissions", None)
             if rbac_role_permissions is not None:
-                general_settings["role_permissions"] = [  # validate role permissions
-                    RoleBasedPermissions(**role_permission) for role_permission in rbac_role_permissions
-                ]
+                ROLE_BASED_PERMISSIONS_ADAPTER.validate_python(rbac_role_permissions)
 
             ### SSRF URL VALIDATION SETTINGS ###
             _apply_ssrf_general_settings(general_settings)
