@@ -184,7 +184,7 @@ async def test_proxy_shutdown_flushes_langfuse_off_the_event_loop_and_logs_a_tim
     (flush_thread, timeout_millis), _ = ran_on.call_args
     assert flush_thread is not threading.main_thread()
     assert timeout_millis == LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS
-    assert any("Langfuse export did not finish" in record.getMessage() for record in caplog.records)
+    assert any("Langfuse shutdown flush incomplete" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio
