@@ -474,12 +474,13 @@ class TestDetailedTiming:
         monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", True)
 
         result = ModelResponse()
-        start = datetime.datetime(2025, 1, 1, 0, 0, 0)
-        received_at = start - datetime.timedelta(milliseconds=200)
+        received_at = datetime.datetime.now(datetime.timezone.utc)
+        start = received_at + datetime.timedelta(milliseconds=200)
+        api_call_start = start.replace(tzinfo=None)
         end = start + datetime.timedelta(milliseconds=530)
         logging_obj = self._make_logging_obj(
             llm_api_duration_ms=500.0,
-            api_call_start_time=start,
+            api_call_start_time=api_call_start,
         )
         logging_obj.model_call_details["litellm_params"] = {"metadata": {"litellm_received_at": received_at}}
 
