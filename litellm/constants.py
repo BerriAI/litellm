@@ -1001,6 +1001,10 @@ openai_compatible_providers: Final[list] = [
 
 OPENAI_COMPATIBLE_PROVIDERS_WITH_NATIVE_AUDIO_TRANSCRIPTION: Final = frozenset({"xai"})
 
+OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset(
+    {"openai"} | (frozenset(openai_compatible_providers) - OPENAI_COMPATIBLE_PROVIDERS_WITH_NATIVE_AUDIO_TRANSCRIPTION)
+)
+
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",
