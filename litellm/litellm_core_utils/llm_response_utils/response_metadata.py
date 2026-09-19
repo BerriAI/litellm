@@ -205,7 +205,7 @@ class ResponseMetadata:
             api_call_start: Final[datetime.datetime | None] = logging_obj.model_call_details.get("api_call_start_time")
             if api_call_start is not None and start_time is not None:
                 anchor: Final = _timing_window_start(start_time, logging_obj)[0]
-                pre_ms: Final = (api_call_start - anchor).total_seconds() * 1000
+                pre_ms: Final = (api_call_start.timestamp() - anchor.timestamp()) * 1000
                 detailed["timing_pre_processing_ms"] = round(pre_ms, 4)
 
                 # post-processing = total - pre - llm_api
