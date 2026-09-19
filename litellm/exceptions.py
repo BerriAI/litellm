@@ -787,6 +787,7 @@ class InternalServerError(openai.InternalServerError):
         super().__init__(
             self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
+        self.type = "internal_server_error"
 
     def __str__(self):
         _message = self.message

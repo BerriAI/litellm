@@ -5235,6 +5235,12 @@
       }
     }
   },
+  "claude_code_gateway": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {}
+  },
   "claude_code_marketplace": {
     "components": {
       "schemas": {
@@ -11149,7 +11155,6 @@
                   "type": "null"
                 }
               ],
-              "default": "v1",
               "description": "API version for Javelin service",
               "title": "Api Version"
             },
@@ -23678,6 +23683,17 @@
               ],
               "title": "Refresh Token"
             },
+            "requested_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Requested Token Type"
+            },
             "resource": {
               "anyOf": [
                 {
@@ -23699,6 +23715,28 @@
                 }
               ],
               "title": "Scope"
+            },
+            "subject_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
             }
           },
           "required": [
@@ -23752,6 +23790,17 @@
               ],
               "title": "Refresh Token"
             },
+            "requested_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Requested Token Type"
+            },
             "resource": {
               "anyOf": [
                 {
@@ -23773,6 +23822,28 @@
                 }
               ],
               "title": "Scope"
+            },
+            "subject_token": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token"
+            },
+            "subject_token_type": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subject Token Type"
             }
           },
           "required": [

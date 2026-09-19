@@ -3,7 +3,21 @@ use std::sync::OnceLock;
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
 
-use crate::base_llm::ocr::{error::Error, transformation::OcrConnection};
+use crate::base_llm::ocr::{
+    error::Error,
+    transformation::{OcrConnection, PreparedOcrRequest},
+};
+
+pub(crate) fn azure_auth_inputs(request: &PreparedOcrRequest) -> Result<AzureAuthInputs, Error> {
+    Ok(AzureAuthInputs {
+        azure_ad_token_provider: request.azure_ad_token_provider.clone(),
+        ..AzureAuthInputs::from_sourced_optional_params(
+            &request.optional_params,
+            &request.input_sources,
+        )?
+    }
+    .or_configured_token_refresh(request.connection.settings.enable_azure_ad_token_refresh))
+}
 
 pub(super) async fn resolve_entra(
     config: &AzureAuthInputs,

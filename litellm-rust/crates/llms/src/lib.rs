@@ -3,7 +3,6 @@ pub mod azure_ai;
 pub mod base_llm;
 pub mod bedrock;
 pub mod cohere;
-pub mod custom_httpx;
 pub mod mistral;
 pub mod openai;
 pub mod reducto;

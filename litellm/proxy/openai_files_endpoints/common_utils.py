@@ -350,6 +350,10 @@ def get_credentials_for_model(
     """
     Retrieve API credentials for a model from the LLM Router.
 
+    Does not check whether the caller may use ``model_id``; use
+    ``get_authorized_credentials_for_model`` for anything driven by a caller-supplied
+    model name (request body, header, query param, or a model-encoded resource id).
+
     Args:
         llm_router: LiteLLM Router instance
         model_id: Model name or deployment ID
@@ -363,6 +367,8 @@ def get_credentials_for_model(
     """
     from fastapi import HTTPException
 
+    from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
     if llm_router is None:
         raise HTTPException(
             status_code=500,
@@ -372,12 +378,53 @@ def get_credentials_for_model(
     credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
 
     if credentials is None:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": f"Model '{model_id}' not found in model_list. Please check your config.yaml."},
+        raise ProxyModelNotFoundError(
+            route=operation_context, model_name=model_id, retryable_with_model_read_through=False
         )
 
     return credentials
+
+
+async def authorize_model_for_key(
+    model_id: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: "UserAPIKeyAuth",
+) -> None:
+    """
+    Enforce the caller's model grants on a model name the auth layer never saw.
+
+    The files and batches routes carry their model in a header, query param, or a
+    model-encoded resource id rather than the request body, so ``user_api_key_auth``
+    cannot check it. Run the same key, team (incl. team-member and access-group
+    fallbacks), org and project allowlist checks a chat request would get, so a
+    restricted key cannot borrow another deployment's server-side credentials.
+
+    Raises:
+        ProxyException (403): the caller is not allowed to use ``model_id``
+    """
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+
+    await can_key_call_resolved_model(
+        model=model_id,
+        llm_model_list=None,
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+    )
+
+
+async def get_authorized_credentials_for_model(
+    llm_router: Optional["Router"],
+    model_id: str,
+    user_api_key_dict: "UserAPIKeyAuth",
+    operation_context: str = "file operation",
+) -> dict:  # mutable-ok: same contract as get_credentials_for_model, callers merge it into request data
+    """``get_credentials_for_model`` gated by ``authorize_model_for_key``."""
+    await authorize_model_for_key(model_id=model_id, llm_router=llm_router, user_api_key_dict=user_api_key_dict)
+    return get_credentials_for_model(
+        llm_router=llm_router,
+        model_id=model_id,
+        operation_context=operation_context,
+    )
 
 
 def get_team_provider_credentials(
@@ -547,6 +594,25 @@ def add_internal_model_credentials(
     data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
 
 
+def add_deployment_model_info(
+    data: dict,
+    llm_router: Optional["Router"],
+    model_id: str,
+) -> None:
+    """
+    Stamp the resolved deployment's `model_info` onto a direct (non-router) batch call
+    (in-place), the way the router does for routed calls, so the completed batch is
+    priced by its deployment id instead of the published model rate.
+    """
+    deployment: Final = llm_router.get_credential_deployment(model_id=model_id) if llm_router is not None else None
+    if deployment is None:
+        return
+    data["litellm_metadata"] = {
+        **(data.get("litellm_metadata") or {}),
+        "model_info": deployment.model_info.model_dump(),
+    }
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,
@@ -572,21 +638,27 @@ def prepare_data_with_credentials(
         data["file_id"] = file_id
 
 
-def handle_model_based_routing(
+async def handle_model_based_routing(
     file_id: str,
     request,  # FastAPI Request object
     llm_router,  # Router instance
     data: dict,
+    user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
 ) -> tuple[bool, str | None, str | None, dict | None]:
     """
     Orchestrate model-based credential routing for file operations.
+
+    The model name comes from the caller (embedded in the file id, or a header, query
+    param or body field), so it is authorized against the caller's key, team, org and
+    project grants before any deployment credentials are resolved.
 
     Args:
         file_id: File ID (may contain embedded model info)
         request: FastAPI request object
         llm_router: LiteLLM Router instance
         data: Request data dictionary
+        user_api_key_dict: The authenticated caller
         check_file_id_encoding: Whether to check for embedded model in file_id
 
     Returns:
@@ -598,6 +670,7 @@ def handle_model_based_routing(
 
     Raises:
         HTTPException: If router unavailable or model not found
+        ProxyException: If the caller is not allowed to use the model
     """
     model_from_id, model_from_param = extract_model_from_sources(
         file_id=file_id,
@@ -607,19 +680,21 @@ def handle_model_based_routing(
 
     # Priority 1: Model embedded in file_id
     if check_file_id_encoding and model_from_id is not None:
-        credentials = get_credentials_for_model(
+        credentials = await get_authorized_credentials_for_model(
             llm_router=llm_router,
             model_id=model_from_id,
-            operation_context=f"file operation (file created with model '{model_from_id}')",
+            user_api_key_dict=user_api_key_dict,
+            operation_context="file operation (file created with model)",
         )
         original_file_id: Final = get_original_file_id(file_id)
         return True, model_from_id, original_file_id, credentials
 
     # Priority 2: Model from header/query/body
     elif model_from_param is not None:
-        credentials = get_credentials_for_model(
+        credentials = await get_authorized_credentials_for_model(
             llm_router=llm_router,
             model_id=model_from_param,
+            user_api_key_dict=user_api_key_dict,
             operation_context="file operation",
         )
         return True, model_from_param, None, credentials

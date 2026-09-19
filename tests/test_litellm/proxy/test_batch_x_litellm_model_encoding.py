@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     get_batch_id_from_unified_batch_id,
@@ -58,10 +59,7 @@ def _make_batch_response(
 
 
 def test_get_batch_id_from_unified_batch_id_handles_appended_fields():
-    decoded_id = (
-        "litellm_proxy;model_id:deployment-123;"
-        "llm_batch_id:batch_openai_123;llm_output_file_id:file-output"
-    )
+    decoded_id = "litellm_proxy;model_id:deployment-123;llm_batch_id:batch_openai_123;llm_output_file_id:file-output"
 
     assert get_batch_id_from_unified_batch_id(decoded_id) == "batch_openai_123"
 
@@ -107,12 +105,10 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
                 }
             ),
         ),
+        patch("litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing") as mock_processor_cls,
         patch(
-            "litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
-        ) as mock_processor_cls,
-        patch(
-            "litellm.proxy.batches_endpoints.endpoints.get_credentials_for_model",
-            return_value=mock_credentials,
+            "litellm.proxy.batches_endpoints.endpoints.get_authorized_credentials_for_model",
+            new=AsyncMock(return_value=mock_credentials),
         ),
         patch(
             "litellm.proxy.batches_endpoints.endpoints.prepare_data_with_credentials",
@@ -165,23 +161,15 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
         )
 
     # The batch_id should be encoded with model info
-    assert (
-        response.id != raw_batch_id
-    ), f"Expected batch_id to be encoded, but got raw ID: {response.id}"
-    assert response.id.startswith(
-        "batch_"
-    ), f"Encoded batch_id should keep batch_ prefix, got: {response.id}"
+    assert response.id != raw_batch_id, f"Expected batch_id to be encoded, but got raw ID: {response.id}"
+    assert response.id.startswith("batch_"), f"Encoded batch_id should keep batch_ prefix, got: {response.id}"
 
     # Should be decodable back to the original
     decoded_model = decode_model_from_file_id(response.id)
-    assert (
-        decoded_model == model_name
-    ), f"Expected model '{model_name}' from decoded batch_id, got: {decoded_model}"
+    assert decoded_model == model_name, f"Expected model '{model_name}' from decoded batch_id, got: {decoded_model}"
 
     original_id = get_original_file_id(response.id)
-    assert (
-        original_id == raw_batch_id
-    ), f"Expected original ID '{raw_batch_id}', got: {original_id}"
+    assert original_id == raw_batch_id, f"Expected original ID '{raw_batch_id}', got: {original_id}"
     assert mock_create_batch.call_args.kwargs["metadata"] == {"customer_id": "cust-123"}
 
 
@@ -227,12 +215,10 @@ async def test_create_batch_with_x_litellm_model_encodes_output_and_error_file_i
                 }
             ),
         ),
+        patch("litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing") as mock_processor_cls,
         patch(
-            "litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
-        ) as mock_processor_cls,
-        patch(
-            "litellm.proxy.batches_endpoints.endpoints.get_credentials_for_model",
-            return_value=mock_credentials,
+            "litellm.proxy.batches_endpoints.endpoints.get_authorized_credentials_for_model",
+            new=AsyncMock(return_value=mock_credentials),
         ),
         patch(
             "litellm.proxy.batches_endpoints.endpoints.prepare_data_with_credentials",
@@ -316,9 +302,7 @@ async def test_create_batch_without_x_litellm_model_returns_raw_ids(monkeypatch)
                 }
             ),
         ),
-        patch(
-            "litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
-        ) as mock_processor_cls,
+        patch("litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing") as mock_processor_cls,
         patch(
             "litellm.acreate_batch",
             new=AsyncMock(return_value=mock_response),
@@ -383,9 +367,7 @@ class TestBatchIdRoundTripWithRetrieve:
         raw_batch_id = "batch_vllm_12345"
 
         # What create_batch does:
-        encoded_id = encode_file_id_with_model(
-            file_id=raw_batch_id, model=model_name, id_type="batch"
-        )
+        encoded_id = encode_file_id_with_model(file_id=raw_batch_id, model=model_name, id_type="batch")
 
         # What retrieve_batch does:
         decoded_model = decode_model_from_file_id(encoded_id)
@@ -410,9 +392,7 @@ class TestBatchIdRoundTripWithRetrieve:
         ]
 
         for raw_id, model in test_cases:
-            encoded = encode_file_id_with_model(
-                file_id=raw_id, model=model, id_type="batch"
-            )
+            encoded = encode_file_id_with_model(file_id=raw_id, model=model, id_type="batch")
             assert encoded.startswith("batch_")
             assert decode_model_from_file_id(encoded) == model
             assert get_original_file_id(encoded) == raw_id
@@ -433,16 +413,10 @@ async def test_cancel_batch_with_unified_id_routes_with_decoded_model_and_batch_
     mock_request.url.path = f"/v1/batches/{unified_batch_id}/cancel"
     mock_fastapi_response = MagicMock()
     mock_fastapi_response.headers = {}
-    mock_user_api_key_dict = MagicMock()
-    mock_user_api_key_dict.parent_otel_span = None
-    mock_user_api_key_dict.user_id = "test_user"
-    mock_user_api_key_dict.allowed_model_region = None
-    mock_user_api_key_dict.team_metadata = {}
+    mock_user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="test_user", team_metadata={})
 
     with (
-        patch(
-            "litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing"
-        ) as mock_processor_cls,
+        patch("litellm.proxy.batches_endpoints.endpoints.ProxyBaseLLMRequestProcessing") as mock_processor_cls,
         patch(
             "litellm.proxy.batches_endpoints.endpoints.update_batch_in_database",
             new=AsyncMock(),
