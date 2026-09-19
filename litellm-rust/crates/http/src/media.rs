@@ -103,8 +103,7 @@ impl MediaFetcher {
         config: &HttpClientConfig,
         url_policy: UrlPolicy,
     ) -> Result<Self, crate::Error> {
-        let proxies = config.proxies.clone();
-        let uses_proxy: ProxyMatch = Arc::new(move |url| proxies.apply_to(url));
+        let uses_proxy: ProxyMatch = Arc::new(config.proxies.matcher());
         Self::with_resolution(
             pool,
             config,

@@ -2145,6 +2145,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "veil",
  "webpki-roots",
 ]
 
