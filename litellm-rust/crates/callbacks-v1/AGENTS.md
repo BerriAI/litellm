@@ -1,0 +1,8 @@
+- Target invariants, not completion claims
+- Keep this crate the runtime-neutral v1 callback contract and nothing else: envelopes, sequencing, redaction and validated wire patches
+  - This crate may depend on `litellm-host`, but never on `litellm-host-python`, PyO3 or a runtime registry
+  - `golden/v1` pins every serialized envelope shape
+- No runtime object of a call reaches a callback contract value
+- `RequestFacts::new` is the only request projection and always applies the contract's credential redaction
+- A patch cannot change the URL or set or remove a credential header
+- Schema v1 is additive-only; a rename, removal or retype requires a new contract version
