@@ -39,7 +39,12 @@ from litellm.router_utils.cooldown_callbacks import (
     _get_prometheus_logger_from_callbacks,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErrors
+from litellm.types.router import (
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    RouterErrors,
+    RouterNoDeploymentsAvailableError,
+)
 from litellm.types.utils import BudgetConfig, GenericBudgetConfigType, StandardLoggingPayload
 from litellm.types.utils import BudgetConfig as GenericBudgetInfo
 
@@ -189,7 +194,7 @@ class RouterBudgetLimiting(CustomLogger):
             )
 
             if len(potential_deployments) == 0:
-                raise ValueError(
+                raise RouterNoDeploymentsAvailableError(
                     f"{RouterErrors.no_deployments_with_provider_budget_routing.value}: {deployment_above_budget_info}"
                 )
 
