@@ -13,6 +13,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from copy import deepcopy
 from functools import partial
+from types import MappingProxyType
 from typing import Dict, Final, List, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -90,6 +91,7 @@ from litellm.types.router import (
     TaggedPreRoutingStrategy,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
@@ -6558,6 +6560,7 @@ class TestTierModelAffinity:
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
             complexity_router_config={
                 "tiers": {"SIMPLE": ["small-model", "big-model"]},
+                "enable_context_window_escalation": True,
                 "adaptive": adaptive,
                 "deployment_affinity": True,
                 "session_affinity": False,
@@ -13723,8 +13726,12 @@ _CJK_TURNS = [
 ]
 
 
-def _tier_config(**overrides) -> Dict:
-    return {"tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"}, **overrides}
+def _tier_config(**overrides: object) -> dict[str, object]:
+    return {
+        "tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"},
+        "enable_context_window_escalation": True,
+        **overrides,
+    }
 
 
 class TestContextWindowEscalation:
@@ -13783,7 +13790,7 @@ class TestContextWindowEscalation:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=_windowed_router(_SMALL, ("mid-model", "openai/gpt-4o-mini", 200000), _BIG),
-            complexity_router_config={"tiers": {"SIMPLE": ["small-model", "mid-model"], "COMPLEX": "big-model"}},
+            complexity_router_config=_tier_config(tiers={"SIMPLE": ["small-model", "mid-model"], "COMPLEX": "big-model"}),
         )
 
         result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
@@ -13820,7 +13827,7 @@ class TestContextWindowEscalation:
                     },
                 ]
             ),
-            complexity_router_config={"tiers": {"SIMPLE": "mixed-pool", "COMPLEX": "big-model"}},
+            complexity_router_config=_tier_config(tiers={"SIMPLE": "mixed-pool", "COMPLEX": "big-model"}),
         )
 
         result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
@@ -13871,7 +13878,7 @@ class TestContextWindowEscalation:
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=_windowed_router(*deployments),
-            complexity_router_config={"tiers": tiers},
+            complexity_router_config=_tier_config(tiers=tiers),
         )
 
         result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
@@ -13880,19 +13887,37 @@ class TestContextWindowEscalation:
         assert result.model == expected_model
 
     @pytest.mark.asyncio
-    async def test_the_disabled_gate_dispatches_on_complexity_alone(self):
-        """The escape hatch: enable_context_window_escalation false restores today's behavior."""
-        router = ComplexityRouter(
+    @pytest.mark.parametrize("enabled", (None, False, True), ids=("omitted", "disabled", "enabled"))
+    @pytest.mark.parametrize("serialized", (False, True), ids=("config", "http-json"))
+    async def test_context_window_escalation_requires_opt_in(self, enabled: bool | None, serialized: bool) -> None:
+        setting: Final = (
+            MappingProxyType({"enable_context_window_escalation": enabled})
+            if enabled is not None
+            else MappingProxyType({})
+        )
+        raw_config: Final = RequestComplexityRouterConfig.model_validate(
+            MappingProxyType(
+                {"tiers": MappingProxyType({"SIMPLE": "small-model", "COMPLEX": "big-model"}), **setting}
+            )
+        )
+        config: Final = (
+            RequestComplexityRouterConfig.model_validate_json(raw_config.model_dump_json())
+            if serialized
+            else raw_config
+        )
+        router: Final = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=_windowed_router(_SMALL, _BIG),
-            complexity_router_config=_tier_config(enable_context_window_escalation=False),
+            complexity_router_config=config.model_dump(exclude_unset=not serialized, exclude_none=True),
         )
 
-        result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
+        result: Final = await router.async_pre_routing_hook(
+            model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS
+        )
 
         assert result is not None
-        assert result.model == "small-model"
-        assert "context_escalated" not in result.routing_decision
+        assert result.model == ("big-model" if enabled else "small-model")
+        assert result.routing_decision.get("context_escalated", False) is (enabled is True)
 
     @pytest.mark.asyncio
     async def test_out_of_band_system_and_tools_count_against_the_window(self):
@@ -14001,7 +14026,7 @@ class TestContextWindowEscalation:
                     },
                 ]
             ),
-            complexity_router_config={"adaptive": True, "tiers": {"SIMPLE": ["small-model", "mid-model"]}},
+            complexity_router_config=_tier_config(adaptive=True, tiers={"SIMPLE": ["small-model", "mid-model"]}),
         )
 
         result = await router.async_pre_routing_hook(model="test-router", request_kwargs={}, messages=_OVERSIZED_TURNS)
@@ -14031,7 +14056,7 @@ class TestContextWindowEscalation:
                     },
                 ]
             ),
-            complexity_router_config={"tiers": {"SIMPLE": "cop-pool", "COMPLEX": "big-model"}},
+            complexity_router_config=_tier_config(tiers={"SIMPLE": "cop-pool", "COMPLEX": "big-model"}),
         )
         real_get_llm_provider = litellm.get_llm_provider
         copilot_resolutions: List = []
@@ -14064,7 +14089,7 @@ class TestContextWindowEscalation:
                     "model_name": "smart-router",
                     "litellm_params": {
                         "model": "auto_router/complexity_router",
-                        "complexity_router_config": {"tiers": {"SIMPLE": "small-model", "COMPLEX": "big-model"}},
+                        "complexity_router_config": _tier_config(),
                     },
                 },
                 {
@@ -14894,7 +14919,12 @@ class TestHealthFallbackDispatch:
     ) -> None:
         from litellm.types.router import RouterRateLimitError
 
-        router: Final = self._router(config={"tiers": {"SIMPLE": "primary", "MEDIUM": "peer", "COMPLEX": "large"}})
+        router: Final = self._router(
+            config={
+                "tiers": {"SIMPLE": "primary", "MEDIUM": "peer", "COMPLEX": "large"},
+                "enable_context_window_escalation": True,
+            }
+        )
         router.add_deployment(
             Deployment(
                 model_name="large",
@@ -14971,7 +15001,13 @@ class TestHealthFallbackDispatch:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("default_fits", [True, False])
     async def test_modality_default_must_also_fit_context(self, default_fits: bool) -> None:
-        router: Final = self._router(config={"modality_routing": True, "tiers": {"SIMPLE": "primary"}})
+        router: Final = self._router(
+            config={
+                "modality_routing": True,
+                "tiers": {"SIMPLE": "primary"},
+                "enable_context_window_escalation": True,
+            }
+        )
         for deployment in router.model_list:
             deployment["model_info"]["supports_vision"] = deployment["model_name"] == "fallback"
             deployment["model_info"]["max_input_tokens"] = 10000 if default_fits else 10

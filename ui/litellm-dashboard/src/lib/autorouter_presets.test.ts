@@ -708,7 +708,7 @@ describe("autorouter_presets", () => {
       expect(prefill.escalationKeywords).toEqual([]);
     });
 
-    it("carries a preset's context-window escalation opt-out and buffer through the prefill", () => {
+    it.each([undefined, false, true])("preserves a preset's context-window escalation setting: %s", (enabled) => {
       const prefill = buildPresetPrefill(
         {
           tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
@@ -716,12 +716,12 @@ describe("autorouter_presets", () => {
           classification_mode: "every_request",
           session_affinity: false,
           deployment_affinity: true,
-          enable_context_window_escalation: false,
+          enable_context_window_escalation: enabled,
           context_window_escalation_buffer: 0.9,
         },
         groupsOnly(["gpt-5-nano"]),
       );
-      expect(prefill.complexityRouterConfig.enable_context_window_escalation).toBe(false);
+      expect(prefill.complexityRouterConfig.enable_context_window_escalation).toBe(enabled);
       expect(prefill.complexityRouterConfig.context_window_escalation_buffer).toBe(0.9);
     });
 
