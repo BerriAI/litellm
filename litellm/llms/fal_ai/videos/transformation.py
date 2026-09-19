@@ -75,8 +75,16 @@ def _duration_value(value: object) -> str | None:
         return None
 
 
-def _resolution_for_height(height: int) -> str:
-    return next((resolution for threshold, resolution in _RESOLUTION_TIERS if height <= threshold), "4k")
+def _resolution_for_short_side(short_side: int) -> str:
+    return next((resolution for threshold, resolution in _RESOLUTION_TIERS if short_side <= threshold), "4k")
+
+
+def _model_path_from_queue_url(url: object) -> str | None:
+    if not isinstance(url, str) or not url:
+        return None
+    path: Final[str] = httpx.URL(url).path.strip("/")
+    model_path, separator, _ = path.partition("/requests/")
+    return model_path if separator and model_path else None
 
 
 def _size_params(size: object) -> Mapping[str, str]:
@@ -95,7 +103,7 @@ def _size_params(size: object) -> Mapping[str, str]:
         return MappingProxyType({})
     reduced_gcd: Final[int] = math.gcd(width, height)
     aspect_ratio: Final[str] = f"{width // reduced_gcd}:{height // reduced_gcd}"
-    resolution: Final[str] = _resolution_for_height(height)
+    resolution: Final[str] = _resolution_for_short_side(min(width, height))
     if aspect_ratio in _ALLOWED_ASPECT_RATIOS:
         return MappingProxyType({"resolution": resolution, "aspect_ratio": aspect_ratio})
     return MappingProxyType({"resolution": resolution})
@@ -287,8 +295,9 @@ class FalAIVideoConfig(BaseVideoConfig):
         error_value: Final[object] = response_data.get("error")
         error: Final[str | None] = error_value if isinstance(error_value, str) else None
         provider: Final[str] = custom_llm_provider or _FAL_AI_PROVIDER
+        model_path: Final[str | None] = _model_path_from_queue_url(response_data.get("response_url"))
         return VideoObject(
-            id=encode_video_id_with_provider(_response_string(response_data, "request_id"), provider),
+            id=encode_video_id_with_provider(_response_string(response_data, "request_id"), provider, model_path),
             object="video",
             status="failed" if error else status,
             created_at=0,

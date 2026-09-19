@@ -51,6 +51,14 @@ class TestFalAIVideoTransformation:
             "aspect_ratio": "1:1",
         }
         assert self.config.map_openai_params({"size": "720p"}, MODEL, False) == {"resolution": "720p"}
+        assert self.config.map_openai_params({"size": "720x1280"}, MODEL, False) == {
+            "resolution": "720p",
+            "aspect_ratio": "9:16",
+        }
+        assert self.config.map_openai_params({"size": "1080x1920"}, MODEL, False) == {
+            "resolution": "1080p",
+            "aspect_ratio": "9:16",
+        }
 
     def test_map_openai_params_rejects_non_url_input_reference(self):
         with pytest.raises(ValueError, match="public image URL"):
@@ -164,6 +172,35 @@ class TestFalAIVideoTransformation:
 
         assert video.status == expected_status
         assert video.created_at == 0
+
+    def test_status_response_id_stays_pollable(self):
+        response = Mock(spec=httpx.Response)
+        response.json.return_value = {
+            "request_id": "abc",
+            "status": "IN_PROGRESS",
+            "response_url": "https://queue.fal.run/bytedance/seedance-2.5/requests/abc",
+        }
+
+        video = self.config.transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+        )
+
+        status_url, _ = self.config.transform_video_status_retrieve_request(
+            video_id=video.id,
+            api_base="https://queue.fal.run",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        content_url, _ = self.config.transform_video_content_request(
+            video_id=video.id,
+            api_base="https://queue.fal.run",
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert status_url == "https://queue.fal.run/bytedance/seedance-2.5/requests/abc/status"
+        assert content_url == "https://queue.fal.run/bytedance/seedance-2.5/requests/abc"
 
     def test_status_response_error(self):
         response = Mock(spec=httpx.Response)
