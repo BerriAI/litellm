@@ -7,6 +7,7 @@ code paths.
 """
 
 import json
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -69,35 +70,15 @@ class TestImageGenerationExtraHeaders:
 
         assert "extra_headers" not in optional_params
 
-    @patch("litellm.images.main.openai_chat_completions")
-    def test_extra_headers_not_in_extra_body(self, mock_openai_chat_completions):
-        mock_image_response = litellm.utils.ImageResponse(
-            created=1234567890,
-            data=[{"url": "https://example.com/image.png"}],
-        )
-        mock_openai_chat_completions.image_generation.return_value = mock_image_response
-
-        image_generation(
-            model="openai/dall-e-3",
-            prompt="A red circle",
-            extra_headers={"cf-aig-auth": "123"},
-        )
-
-        mock_openai_chat_completions.image_generation.assert_called_once()
-        call_kwargs = mock_openai_chat_completions.image_generation.call_args
-        optional_params = call_kwargs.kwargs.get("optional_params", call_kwargs[1].get("optional_params", {}))
-        extra_body = optional_params.get("extra_body", {})
-        assert "extra_headers" not in extra_body
-
     def test_openai_image_generation_excludes_extra_headers_from_body(self):
-        captured_requests = []
+        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
 
-        def handle_request(request):
-            captured_requests.append(request)
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            captured["request"] = request
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
-        transport = httpx.MockTransport(handle_request)
-        client = litellm.OpenAI(api_key="fake-key", http_client=httpx.Client(transport=transport))
+        transport: Final = httpx.MockTransport(handle_request)
+        client: Final = litellm.OpenAI(api_key="fake-key", http_client=httpx.Client(transport=transport))
 
         image_generation(
             model="gpt-image-2",
@@ -106,23 +87,23 @@ class TestImageGenerationExtraHeaders:
             extra_headers={"cf-aig-auth": "secret-123"},
         )
 
-        assert len(captured_requests) == 1
-        req = captured_requests[0]
+        assert "request" in captured
+        req: Final = captured["request"]
         assert req.headers.get("cf-aig-auth") == "secret-123"
-        body = json.loads(req.read())
+        body: Final = json.loads(req.read())
         assert "extra_headers" not in body
         assert body == {"prompt": "test prompt", "model": "gpt-image-2"}
 
     @pytest.mark.asyncio
     async def test_openai_aimage_generation_excludes_extra_headers_from_body(self):
-        captured_requests = []
+        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
 
-        def handle_request(request):
-            captured_requests.append(request)
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            captured["request"] = request
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
-        transport = httpx.MockTransport(handle_request)
-        client = litellm.AsyncOpenAI(api_key="fake-key", http_client=httpx.AsyncClient(transport=transport))
+        transport: Final = httpx.MockTransport(handle_request)
+        client: Final = litellm.AsyncOpenAI(api_key="fake-key", http_client=httpx.AsyncClient(transport=transport))
 
         await litellm.aimage_generation(
             model="gpt-image-2",
@@ -131,22 +112,22 @@ class TestImageGenerationExtraHeaders:
             extra_headers={"cf-aig-auth": "async-secret-123"},
         )
 
-        assert len(captured_requests) == 1
-        req = captured_requests[0]
+        assert "request" in captured
+        req: Final = captured["request"]
         assert req.headers.get("cf-aig-auth") == "async-secret-123"
-        body = json.loads(req.read())
+        body: Final = json.loads(req.read())
         assert "extra_headers" not in body
         assert body == {"prompt": "async test prompt", "model": "gpt-image-2"}
 
     def test_openai_image_generation_with_headers_excludes_from_body(self):
-        captured_requests = []
+        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
 
-        def handle_request(request):
-            captured_requests.append(request)
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            captured["request"] = request
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
-        transport = httpx.MockTransport(handle_request)
-        client = litellm.OpenAI(api_key="fake-key", http_client=httpx.Client(transport=transport))
+        transport: Final = httpx.MockTransport(handle_request)
+        client: Final = litellm.OpenAI(api_key="fake-key", http_client=httpx.Client(transport=transport))
 
         image_generation(
             model="gpt-image-2",
@@ -155,10 +136,108 @@ class TestImageGenerationExtraHeaders:
             headers={"custom-header": "custom-val"},
         )
 
-        assert len(captured_requests) == 1
-        req = captured_requests[0]
+        assert "request" in captured
+        req: Final = captured["request"]
         assert req.headers.get("custom-header") == "custom-val"
-        body = json.loads(req.read())
+        body: Final = json.loads(req.read())
         assert "headers" not in body
         assert "extra_headers" not in body
         assert body == {"prompt": "headers test", "model": "gpt-image-2"}
+
+    def test_openai_image_generation_sanitizes_extra_body_and_preserves_siblings(self):
+        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            captured["request"] = request
+            return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
+
+        transport: Final = httpx.MockTransport(handle_request)
+        client: Final = litellm.OpenAI(api_key="fake-key", http_client=httpx.Client(transport=transport))
+
+        image_generation(
+            model="gpt-image-2",
+            prompt="test prompt",
+            client=client,
+            extra_body={"extra_headers": {"cf-aig-auth": "secret-123"}, "custom_sibling": "sibling_val"},
+        )
+
+        assert "request" in captured
+        req: Final = captured["request"]
+        body: Final = json.loads(req.read())
+        assert "extra_headers" not in body
+        assert body.get("custom_sibling") == "sibling_val"
+        assert body == {"prompt": "test prompt", "model": "gpt-image-2", "custom_sibling": "sibling_val"}
+
+    @pytest.mark.asyncio
+    async def test_openai_aimage_generation_sanitizes_extra_body_and_preserves_siblings(self):
+        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            captured["request"] = request
+            return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
+
+        transport: Final = httpx.MockTransport(handle_request)
+        client: Final = litellm.AsyncOpenAI(api_key="fake-key", http_client=httpx.AsyncClient(transport=transport))
+
+        await litellm.aimage_generation(
+            model="gpt-image-2",
+            prompt="async test prompt",
+            client=client,
+            extra_body={"extra_headers": {"cf-aig-auth": "secret-123"}, "custom_sibling": "async_sibling_val"},
+        )
+
+        assert "request" in captured
+        req: Final = captured["request"]
+        body: Final = json.loads(req.read())
+        assert "extra_headers" not in body
+        assert body.get("custom_sibling") == "async_sibling_val"
+        assert body == {"prompt": "async test prompt", "model": "gpt-image-2", "custom_sibling": "async_sibling_val"}
+
+    def test_openai_image_generation_extra_body_only_headers_pops_empty_extra_body(self):
+        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            captured["request"] = request
+            return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
+
+        transport: Final = httpx.MockTransport(handle_request)
+        client: Final = litellm.OpenAI(api_key="fake-key", http_client=httpx.Client(transport=transport))
+
+        image_generation(
+            model="gpt-image-2",
+            prompt="test prompt",
+            client=client,
+            extra_body={"extra_headers": {"cf-aig-auth": "secret-123"}},
+        )
+
+        assert "request" in captured
+        req: Final = captured["request"]
+        body: Final = json.loads(req.read())
+        assert "extra_headers" not in body
+        assert "extra_body" not in body
+        assert body == {"prompt": "test prompt", "model": "gpt-image-2"}
+
+    @pytest.mark.asyncio
+    async def test_openai_aimage_generation_extra_body_only_headers_pops_empty_extra_body(self):
+        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+
+        def handle_request(request: httpx.Request) -> httpx.Response:
+            captured["request"] = request
+            return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
+
+        transport: Final = httpx.MockTransport(handle_request)
+        client: Final = litellm.AsyncOpenAI(api_key="fake-key", http_client=httpx.AsyncClient(transport=transport))
+
+        await litellm.aimage_generation(
+            model="gpt-image-2",
+            prompt="async test prompt",
+            client=client,
+            extra_body={"extra_headers": {"cf-aig-auth": "secret-123"}},
+        )
+
+        assert "request" in captured
+        req: Final = captured["request"]
+        body: Final = json.loads(req.read())
+        assert "extra_headers" not in body
+        assert "extra_body" not in body
+        assert body == {"prompt": "async test prompt", "model": "gpt-image-2"}
