@@ -669,6 +669,59 @@ class TestChunkTransformation:
         assert ManagedResponsesWebSocketHandler._input_to_messages({}) == []
 
 
+class TestUpdateProxyRequest:
+    """Regression tests for ManagedResponsesWebSocketHandler._update_proxy_request.
+
+    The managed WebSocket path calls ``litellm.aresponses(model=..., **call_kwargs)``.
+    ``litellm_params`` is not a Responses API request field, so passing it as a
+    top-level kwarg leaks it into the provider request body and providers that
+    forbid extra inputs (e.g. Anthropic) reject the call with
+    ``litellm_params: Extra inputs are not permitted``. The request-tracking data
+    must ride along as ``proxy_server_request`` instead, which litellm consumes
+    internally and never forwards to the provider.
+    """
+
+    def test_does_not_inject_litellm_params_kwarg(self):
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        call_kwargs = {
+            "input": "hello",
+            "store": True,
+            "litellm_metadata": {
+                "proxy_server_request": {"headers": {}, "body": {}},
+            },
+        }
+
+        ManagedResponsesWebSocketHandler._update_proxy_request(
+            call_kwargs, "anthropic/claude-sonnet-4-5"
+        )
+
+        assert "litellm_params" not in call_kwargs
+        assert call_kwargs["proxy_server_request"]["body"]["model"] == (
+            "anthropic/claude-sonnet-4-5"
+        )
+        assert call_kwargs["proxy_server_request"]["body"]["input"] == "hello"
+
+    def test_proxy_server_request_matches_metadata(self):
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        call_kwargs = {
+            "input": "hi",
+            "litellm_metadata": {"proxy_server_request": {"body": {}}},
+        }
+
+        ManagedResponsesWebSocketHandler._update_proxy_request(call_kwargs, "gpt-4o")
+
+        assert (
+            call_kwargs["proxy_server_request"]
+            == call_kwargs["litellm_metadata"]["proxy_server_request"]
+        )
+
+
 class TestWebSocketEventTypes:
     """Test that all WebSocket event types are properly handled with dict-based chunks"""
 
@@ -1202,6 +1255,278 @@ class TestWebSocketProjectQuotaEnforcement:
 
         assert allowed is True
         quota_callback.enforce_project_io_token_quota_for_frame.assert_awaited_once()
+
+
+def _deployment_defaults():
+    from types import MappingProxyType
+
+    from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
+
+    return ResponsesWebSocketRequestDefaults(
+        fill_missing=MappingProxyType({"reasoning": {"effort": "high"}, "service_tier": "priority"}),
+        overrides=MappingProxyType({"provider_default": "configured"}),
+    )
+
+
+class TestNativeWebSocketDeploymentDefaults:
+    """The native relay merges deployment litellm_params into every response.create like HTTP does."""
+
+    def test_builder_maps_router_kwargs_like_the_http_path(self):
+        from litellm.responses.main import _build_responses_websocket_request_defaults
+
+        defaults = _build_responses_websocket_request_defaults(
+            {
+                "model": "gpt-5-pro",
+                "reasoning_effort": "high",
+                "service_tier": "priority",
+                "extra_body": {"provider_default": "configured"},
+                "temperature": None,
+                "timeout": 600,
+                "max_retries": 2,
+                "caching": False,
+                "custom_llm_provider": "openai",
+                "litellm_metadata": {"user_api_key": "hashed"},
+                "user_api_key_dict": MagicMock(),
+                "litellm_logging_obj": MagicMock(),
+                "websocket": MagicMock(),
+            }
+        )
+
+        assert dict(defaults.fill_missing) == {"reasoning": {"effort": "high"}, "service_tier": "priority"}
+        assert dict(defaults.overrides) == {"provider_default": "configured"}
+
+    def test_builder_keeps_explicit_reasoning_over_reasoning_effort(self):
+        from litellm.responses.main import _build_responses_websocket_request_defaults
+
+        defaults = _build_responses_websocket_request_defaults(
+            {"model": "gpt-5-pro", "reasoning": {"effort": "low"}, "reasoning_effort": "high"}
+        )
+
+        assert dict(defaults.fill_missing) == {"reasoning": {"effort": "low"}}
+        assert dict(defaults.overrides) == {}
+
+    def test_builder_copies_dict_valued_reasoning_effort_like_the_http_path(self):
+        from litellm.responses.main import _build_responses_websocket_request_defaults
+
+        defaults = _build_responses_websocket_request_defaults(
+            {"model": "gpt-5-pro", "reasoning_effort": {"effort": "xhigh", "summary": "auto"}}
+        )
+
+        assert dict(defaults.fill_missing) == {"reasoning": {"effort": "xhigh", "summary": "auto"}}
+
+    @pytest.mark.asyncio
+    async def test_extra_body_type_key_never_replaces_the_frame_type(self):
+        from types import MappingProxyType
+
+        from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
+
+        handler = _make_streaming(
+            authorized_model="gpt-5-pro",
+            request_defaults=ResponsesWebSocketRequestDefaults(
+                fill_missing=MappingProxyType({}),
+                overrides=MappingProxyType({"type": "session.update", "provider_default": "configured"}),
+            ),
+        )
+
+        forwarded = json.loads(
+            await handler._mask_response_create(
+                json.dumps({"type": "response.create", "model": "gpt-5-pro", "input": "hi"})
+            )
+        )
+
+        assert forwarded == {
+            "type": "response.create",
+            "model": "gpt-5-pro",
+            "input": "hi",
+            "provider_default": "configured",
+        }
+
+    @pytest.mark.asyncio
+    async def test_flat_frame_gets_defaults_client_keys_win_extra_body_overrides(self):
+        handler = _make_streaming(authorized_model="gpt-5-pro", request_defaults=_deployment_defaults())
+
+        forwarded = json.loads(
+            await handler._mask_response_create(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "model": "gpt-5-pro",
+                        "input": "Say hello",
+                        "service_tier": "default",
+                        "provider_default": "client",
+                    }
+                )
+            )
+        )
+
+        assert forwarded == {
+            "type": "response.create",
+            "model": "gpt-5-pro",
+            "input": "Say hello",
+            "service_tier": "default",
+            "provider_default": "configured",
+            "reasoning": {"effort": "high"},
+        }
+
+    @pytest.mark.asyncio
+    async def test_nested_response_frame_gets_defaults_inside_response(self):
+        handler = _make_streaming(authorized_model="gpt-5-pro", request_defaults=_deployment_defaults())
+
+        forwarded = json.loads(
+            await handler._mask_response_create(
+                json.dumps({"type": "response.create", "response": {"model": "gpt-5-pro", "input": "hi"}})
+            )
+        )
+
+        assert forwarded == {
+            "type": "response.create",
+            "response": {
+                "model": "gpt-5-pro",
+                "input": "hi",
+                "reasoning": {"effort": "high"},
+                "service_tier": "priority",
+                "provider_default": "configured",
+            },
+        }
+
+    @pytest.mark.asyncio
+    async def test_frames_that_need_nothing_pass_through_untouched(self):
+        handler = _make_streaming(authorized_model="gpt-5-pro", request_defaults=_deployment_defaults())
+        cancel_frame = json.dumps({"type": "response.cancel"})
+        complete_frame = json.dumps(
+            {
+                "type": "response.create",
+                "model": "gpt-5-pro",
+                "input": "hi",
+                "reasoning": {"effort": "high"},
+                "service_tier": "priority",
+                "provider_default": "configured",
+            }
+        )
+
+        assert await handler._mask_response_create(cancel_frame) is cancel_frame
+        assert await handler._mask_response_create(complete_frame) is complete_frame
+
+    @pytest.mark.asyncio
+    async def test_handler_applies_defaults_to_the_first_frame_sent_upstream(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        class FakeBackend:
+            def __init__(self):
+                self.sent = []
+
+            async def send(self, message):
+                self.sent.append(message)
+
+            async def recv(self, decode=False):
+                raise RuntimeError("backend closed")
+
+            async def close(self):
+                pass
+
+        backend = FakeBackend()
+
+        class FakeConnect:
+            def __init__(self, url, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return backend
+
+            async def __aexit__(self, *args):
+                pass
+
+        mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
+        mock_config.supports_native_websocket.return_value = True
+        mock_config.model_in_websocket_url.return_value = True
+        mock_config.get_websocket_url.return_value = "wss://api.openai.com/v1/responses"
+        mock_config.validate_environment.return_value = {}
+
+        mock_logging = MagicMock()
+        mock_logging.pre_call = MagicMock()
+        mock_logging.dispatch_success_handlers = AsyncMock()
+
+        client_ws = MagicMock()
+        client_ws.receive_text = AsyncMock(side_effect=RuntimeError("client closed"))
+        client_ws.send_text = AsyncMock()
+        client_ws.close = AsyncMock()
+
+        with patch("websockets.connect", FakeConnect):
+            await BaseLLMHTTPHandler().async_responses_websocket(
+                model="gpt-5-pro",
+                websocket=client_ws,
+                logging_obj=mock_logging,
+                responses_api_provider_config=mock_config,
+                api_key="sk-test",
+                first_message=json.dumps({"type": "response.create", "model": "gpt-5-pro", "input": "Say hello"}),
+                request_defaults=_deployment_defaults(),
+            )
+        await asyncio.sleep(0)
+
+        assert [json.loads(frame) for frame in backend.sent] == [
+            {
+                "type": "response.create",
+                "model": "gpt-5-pro",
+                "input": "Say hello",
+                "reasoning": {"effort": "high"},
+                "service_tier": "priority",
+                "provider_default": "configured",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_aresponses_websocket_builds_defaults_from_deployment_kwargs(self, monkeypatch):
+        import importlib
+        from unittest.mock import AsyncMock
+
+        responses_main = importlib.import_module("litellm.responses.main")
+
+        stub = MagicMock()
+        stub.async_responses_websocket = AsyncMock()
+        monkeypatch.setattr(responses_main, "base_llm_http_handler", stub)
+
+        await responses_main._aresponses_websocket.__wrapped__(
+            model="openai/gpt-5-pro",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=MagicMock(),
+            reasoning_effort="high",
+            service_tier="priority",
+            extra_body={"provider_default": "configured"},
+        )
+
+        request_defaults = stub.async_responses_websocket.call_args.kwargs["request_defaults"]
+        assert dict(request_defaults.fill_missing) == {"reasoning": {"effort": "high"}, "service_tier": "priority"}
+        assert dict(request_defaults.overrides) == {"provider_default": "configured"}
+
+    @pytest.mark.asyncio
+    async def test_aresponses_websocket_keeps_first_frame_routing_hints_out_of_the_defaults(self, monkeypatch):
+        import importlib
+        from unittest.mock import AsyncMock
+
+        responses_main = importlib.import_module("litellm.responses.main")
+
+        stub = MagicMock()
+        stub.async_responses_websocket = AsyncMock()
+        monkeypatch.setattr(responses_main, "base_llm_http_handler", stub)
+
+        await responses_main._aresponses_websocket.__wrapped__(
+            model="openai/gpt-5-pro",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=MagicMock(),
+            reasoning_effort="high",
+            input=[{"id": "encitem_abc", "type": "reasoning", "encrypted_content": "litellm_enc:abc"}],
+            previous_response_id="resp_first_turn",
+        )
+
+        call_kwargs = stub.async_responses_websocket.call_args.kwargs
+        assert dict(call_kwargs["request_defaults"].fill_missing) == {"reasoning": {"effort": "high"}}
+        assert "input" not in call_kwargs
+        assert "previous_response_id" not in call_kwargs
 
 
 class TestNativeWebSocketGuardrails:

@@ -62,6 +62,20 @@ describe("MCPServers", () => {
     expect(screen.getByText("MCP Servers")).toBeInTheDocument();
   });
 
+  it.each(["Admin", "Internal User"])("links a %s to their MCP connections page", async (userRole) => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} userRole={userRole} />
+      </QueryClientProvider>,
+    );
+
+    const myConnections = await screen.findByRole("link", { name: "My Connections" });
+    expect(myConnections).toBeVisible();
+    expect(myConnections).toHaveAttribute("href", "/ui/connect");
+  });
+
   it("should render mocked MCP servers data in the table", async () => {
     // Mock MCP servers data
     const mockServers = [
