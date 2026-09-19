@@ -6,7 +6,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, assert_never
+from typing import Final
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 
