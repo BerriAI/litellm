@@ -48,6 +48,7 @@ most likely to silently break and the one a mock can't prove works.
 |----------|---------------|-----------|------------|-------------|--------|
 | Chat | live (spend suite) | live (spend suite) | gap | live | partial |
 | Embeddings | live (spend suite) | n/a | n/a | live | covered |
+| Video | live (fal.ai Seedance) | n/a | n/a | - | partial |
 | Responses / image / audio / rerank / realtime | - | - | - | - | gap |
 
 ## This suite's files
@@ -61,6 +62,7 @@ most likely to silently break and the one a mock can't prove works.
 | `test_anthropic_passthrough_streaming_logs_cost` | anthropic native, stream, cost |
 | `test_anthropic_passthrough_tool_call_logs_cost` | anthropic native, tool call, cost |
 | `test_vertex_passthrough_via_managed_model_logs_cost` | vertex_ai native, non-stream, cost |
+| `test_fal_seedance_video_completes_and_downloads` | fal.ai Seedance video create, poll, and content download |
 
 Vertex keeps the credential on the proxy like gemini/anthropic, but the deployment is
 added at runtime instead of declared in the gateway config: the test POSTs `/model/new`
