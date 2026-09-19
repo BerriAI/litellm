@@ -69,7 +69,7 @@ jobs:
           uv run --frozen --no-default-groups
           --with pytest==8.3.5
           --with pytest-codspeed==4.3.0
-          --with "mcp>=1.26.0,<2.0"
+          --with "mcp>=2.2.0,<3.0"
           --with "a2a-sdk>=1.1.0,<2.0"
           pytest
           -p pytest_codspeed.plugin
@@ -86,7 +86,7 @@ jobs:
             uv run --frozen --no-default-groups
             --with pytest==8.3.5
             --with pytest-codspeed==4.3.0
-            --with "mcp>=1.26.0,<2.0"
+            --with "mcp>=2.2.0,<3.0"
             --with "a2a-sdk>=1.1.0,<2.0"
             pytest
             -p pytest_codspeed.plugin
