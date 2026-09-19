@@ -1,19 +1,17 @@
-use litellm_auth_gcp::{self as vertex, VertexConfig};
+use litellm_auth_gcp as vertex;
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::transformation::VertexAiOcrConfig;
-use crate::{
-    base_llm::ocr::{
-        error::Error,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions,
-            OcrPageImage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-            credential_env, decode_and_normalize_response, decode_response_value,
-        },
+use super::{common_utils::vertex_config, transformation::VertexAiOcrConfig};
+use crate::base_llm::ocr::{
+    error::Error,
+    handler::OcrClient,
+    transformation::{
+        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage,
+        OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        decode_and_normalize_response, decode_response_value,
     },
-    custom_httpx::llm_http_handler::OcrClient,
 };
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
@@ -124,12 +122,10 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         _params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, Error> {
-        let config = VertexConfig::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )?;
-        let location = vertex::get_vertex_ai_location(&config, &credential_env)
-            .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
+        let config = vertex_config(request)?;
+        let location =
+            vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
+                .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         self.get_complete_url(
             request.connection.api_base.as_deref(),
             &environment.project_id,

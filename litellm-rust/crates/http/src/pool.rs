@@ -6,7 +6,7 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{config::HttpClientConfig, error::Error};
+use crate::{config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -52,7 +52,7 @@ impl HttpClientPool {
         let effective = match variant {
             ClientVariant::Media => HttpClientConfig {
                 client_certificate: None,
-                trust_proxy_env: false,
+                proxies: EnvironmentProxies::default(),
                 ..config.clone()
             },
             ClientVariant::UnpinnedMedia => HttpClientConfig {
@@ -138,6 +138,13 @@ mod tests {
         }
     }
 
+    fn proxied_through(proxy: &str) -> EnvironmentProxies {
+        let proxy = proxy.to_owned();
+        EnvironmentProxies::from_environment(&move |name: &str| {
+            (name == "HTTP_PROXY").then(|| proxy.clone())
+        })
+    }
+
     async fn serve(
         status_line: &'static str,
     ) -> (SocketAddr, Arc<AtomicUsize>, Arc<Mutex<Vec<String>>>) {
@@ -203,6 +210,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn provider_clients_route_through_the_resolved_proxy_not_the_process_environment() {
+        let (proxy, connections, requests) = serve("HTTP/1.1 204 No Content").await;
+        let config = HttpClientConfig {
+            proxies: proxied_through(&format!("http://user:secret@{proxy}")),
+            ..config("a")
+        };
+        let response = get(
+            &pool(),
+            &config,
+            ClientVariant::Provider,
+            "http://upstream.invalid/v1/ocr",
+        )
+        .await;
+        assert_eq!(response.status(), 204);
+        assert_eq!(connections.load(Ordering::SeqCst), 1);
+        let request = requests.lock().unwrap().concat();
+        assert!(request.starts_with("GET http://upstream.invalid/v1/ocr HTTP/1.1"));
+        assert!(request.contains("proxy-authorization: Basic dXNlcjpzZWNyZXQ="));
+    }
+
+    #[tokio::test]
+    async fn no_proxy_hosts_bypass_the_resolved_proxy() {
+        let (upstream, _, _) = serve("HTTP/1.1 204 No Content").await;
+        let (proxy, proxy_connections, _) = serve("HTTP/1.1 502 Bad Gateway").await;
+        let config = HttpClientConfig {
+            proxies: EnvironmentProxies::from_environment(&move |name: &str| match name {
+                "HTTP_PROXY" => Some(format!("http://{proxy}")),
+                "NO_PROXY" => Some("127.0.0.1".into()),
+                _ => None,
+            }),
+            ..config("a")
+        };
+        let response = get(
+            &pool(),
+            &config,
+            ClientVariant::Provider,
+            &format!("http://{upstream}/v1/ocr"),
+        )
+        .await;
+        assert_eq!(response.status(), 204);
+        assert_eq!(proxy_connections.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
     async fn expired_clients_are_rebuilt() {
         let (address, connections, _) = serve("HTTP/1.1 204 No Content").await;
         let url = format!("http://{address}");
@@ -220,9 +271,12 @@ mod tests {
         let (address, connections, _) = serve("HTTP/1.1 204 No Content").await;
         let pool = HttpClientPool::new(Arc::new(FixedResolver(address)));
         let url = format!("http://media.invalid:{}/doc", address.port());
-        for trust_proxy_env in [true, false] {
+        for proxies in [
+            proxied_through("http://proxy.invalid:3128"),
+            EnvironmentProxies::default(),
+        ] {
             let config = HttpClientConfig {
-                trust_proxy_env,
+                proxies,
                 ..config("a")
             };
             get(&pool, &config, ClientVariant::Media, &url).await;

@@ -20,9 +20,9 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
-    Transport(#[from] litellm_llms::custom_httpx::transport::Error),
+    Transport(#[from] litellm_http::transport::Error),
     #[error(transparent)]
-    Headers(#[from] litellm_llms::custom_httpx::http_handler::HeaderError),
+    Headers(#[from] litellm_http::request::HeaderError),
     #[error(transparent)]
     Aws(#[from] litellm_auth_aws::Error),
 }
