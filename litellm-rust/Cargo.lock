@@ -2030,7 +2030,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-callbacks-legacy"
+name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
  "litellm-auth",
@@ -2044,19 +2044,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-callbacks-next"
+name = "litellm-callbacks-v1"
 version = "0.1.0"
 dependencies = [
  "litellm-auth",
  "litellm-host",
- "litellm-host-python",
  "proptest",
- "pyo3",
  "rstest",
  "serde",
  "serde_json",
  "strum",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-callbacks-v1-python"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth",
+ "litellm-callbacks-v1",
+ "litellm-host",
+ "litellm-host-python",
+ "pyo3",
+ "serde_json",
+ "strum",
 ]
 
 [[package]]
@@ -2210,7 +2221,7 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-auth-gcp",
- "litellm-callbacks-legacy",
+ "litellm-callbacks-legacy-python",
  "litellm-core",
  "litellm-core-utils",
  "litellm-host-python",
