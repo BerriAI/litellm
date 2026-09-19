@@ -6177,6 +6177,100 @@ def test_prompt_hooks_skip_prompt_managers_when_no_prompt_id(logging_obj, tmp_pa
             )
         for hook in [cb for cb in litellm.callbacks if isinstance(cb, VectorStorePreCallHook)]:
             litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, hook)
+
+
+@pytest.mark.asyncio
+async def test_prompt_hooks_compose_vector_search_with_anthropic_cache_control(logging_obj, monkeypatch):
+    """
+    Regression for https://github.com/BerriAI/litellm/issues/40908: with
+    `enable_anthropic_prompt_caching` on, `get_custom_logger_for_prompt_management` selects
+    AnthropicCacheControlHook over VectorStorePreCallHook (first-match-wins), so a model
+    configured with `vector_store_ids` never retrieved from its knowledge base and
+    `vector_store_ids` leaked into the provider request. Both hooks must now run.
+    """
+    from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
+    from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
+        VectorStorePreCallHook,
+    )
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.types.vector_stores import (
+        LiteLLM_ManagedVectorStore,
+        VectorStoreResultContent,
+        VectorStoreSearchResponse,
+        VectorStoreSearchResult,
+    )
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    model = "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0"
+    messages = [{"role": "user", "content": "What does the handbook say about refunds?"}]
+    params = {"custom_llm_provider": "bedrock", "vector_store_ids": ["vs_123"]}
+
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[LiteLLM_ManagedVectorStore(vector_store_id="vs_123", custom_llm_provider="bedrock")]
+        ),
+    )
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+
+    AnthropicCacheControlHook.maybe_seed_default_injection_points(
+        non_default_params=params, messages=messages, model=model, custom_llm_provider="bedrock"
+    )
+    assert "cache_control_injection_points" in params
+
+    selected = logging_obj.get_custom_logger_for_prompt_management(
+        model=model, non_default_params=params, tools=None, prompt_id=None
+    )
+    assert isinstance(selected, AnthropicCacheControlHook)
+
+    class _RecordingRouter:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def avector_store_search(self, **kwargs: object) -> VectorStoreSearchResponse:
+            self.calls.append(kwargs)
+            return VectorStoreSearchResponse(
+                object="vector_store.search_results.page",
+                search_query="What does the handbook say about refunds?",
+                data=[
+                    VectorStoreSearchResult(
+                        score=1.0,
+                        content=[VectorStoreResultContent(text="Refunds take seven days", type="text")],
+                    )
+                ],
+            )
+
+    router = _RecordingRouter()
+    runtime = MagicMock()
+    runtime.llm_router.return_value = router
+    runtime.prisma_client.return_value = None
+    vector_store_hook = VectorStorePreCallHook(proxy_runtime=runtime)
+    previous_loggers = tuple(logging_module._in_memory_loggers)
+    logging_module._in_memory_loggers.clear()
+    logging_module._in_memory_loggers.append(vector_store_hook)
+    try:
+        _, result_messages, remaining_params = await logging_obj.async_get_chat_completion_prompt(
+            model=model,
+            messages=messages,
+            non_default_params=params,
+            prompt_variables=None,
+        )
+
+        assert len(router.calls) == 1
+        assert result_messages[0]["content"] == "Context:\n\nRefunds take seven days\n\n"
+        assert result_messages[1]["content"] == "What does the handbook say about refunds?"
+        assert result_messages[1]["cache_control"] == {"type": "ephemeral"}
+        assert "vector_store_ids" not in remaining_params
+        assert "cache_control_injection_points" not in remaining_params
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            litellm.callbacks, vector_store_hook, require_self=False
+        )
+        logging_module._in_memory_loggers.clear()
+        logging_module._in_memory_loggers.extend(previous_loggers)
+
+
 def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
     """With LITELLM_OTEL_V2 on and operator credentials present, the "newrelic"
     callback builds the OTel v2 logger (per-team credential routing); with the
