@@ -1,3 +1,5 @@
+import base64
+import io
 from typing import Any, Final
 
 import httpx
@@ -11,35 +13,33 @@ class OllamaError(BaseLLMException):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
 
-def _convert_image(image):
-    """
-    Convert image to base64 encoded image if not already in base64 format
+_JPEG_AND_PNG_SIGNATURES: Final = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")
 
-    If image is already in base64 format AND is a jpeg/png, return it
 
-    If image is not JPEG/PNG, convert it to JPEG base64 format
-    """
-    import base64
-    import io
-
+def _reencode_as_jpeg(raw_image: bytes, original: str) -> str:
     try:
         from PIL import Image
-    except Exception:
+    except ImportError:
         raise Exception("ollama image conversion failed please run `pip install Pillow`")
 
-    orig: Final = image
-    if image.startswith("data:"):
-        image = image.split(",")[-1]
     try:
-        image_data: Final = Image.open(io.BytesIO(base64.b64decode(image)))
-        if image_data.format in ["JPEG", "PNG"]:
-            return image
+        picture: Final = Image.open(io.BytesIO(raw_image))
     except Exception:
-        return orig
+        return original
     jpeg_image: Final = io.BytesIO()
-    image_data.convert("RGB").save(jpeg_image, "JPEG")
-    jpeg_image.seek(0)
+    picture.convert("RGB").save(jpeg_image, "JPEG")
     return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
+
+
+def _convert_image(image: str) -> str:
+    payload: Final = image.split(",")[-1] if image.startswith("data:") else image
+    try:
+        raw_image: Final = base64.b64decode(payload)
+    except ValueError:
+        return image
+    if raw_image.startswith(_JPEG_AND_PNG_SIGNATURES):
+        return payload
+    return _reencode_as_jpeg(raw_image, original=image)
 
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
