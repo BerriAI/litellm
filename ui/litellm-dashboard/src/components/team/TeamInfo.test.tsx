@@ -1380,7 +1380,7 @@ describe("TeamInfoView", () => {
       expect(screen.getByLabelText("Estimated Output Tokens Per Model")).toBeEnabled();
     });
 
-    it("should keep declared keys as ordinary prefilled rows and submit the edited value", async () => {
+    it("should show declared keys as fixed labels and submit the edited value", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(useTeamMetadataSchema).mockReturnValue({
         data: [
@@ -1401,16 +1401,18 @@ describe("TeamInfoView", () => {
       await openSettingsEditor(user);
 
       await waitFor(() => {
-        expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
-          "cost_center",
-          "department",
-          "app_name",
+        expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
+          "Cost Center",
+          "Application Name",
         ]);
       });
-      expect(screen.getAllByPlaceholderText("Value")[0]).toHaveValue("CC-OLD");
+      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
+        "department",
+      ]);
+      expect(screen.getByLabelText("Cost Center")).toHaveValue("CC-OLD");
 
-      await user.clear(screen.getAllByPlaceholderText("Value")[0]);
-      fireEvent.change(screen.getAllByPlaceholderText("Value")[0], { target: { value: "CC-NEW" } });
+      await user.clear(screen.getByLabelText("Cost Center"));
+      fireEvent.change(screen.getByLabelText("Cost Center"), { target: { value: "CC-NEW" } });
       await user.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {

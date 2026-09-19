@@ -212,17 +212,41 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     { key: "app_name", label: "Application Name" },
   ];
 
-  it("should prepopulate one ordinary editable pair row per declared key", async () => {
+  it("should render each declared key as a fixed label with only the value editable", async () => {
     render(<Harness onFinish={vi.fn()} schemaFields={schema} />);
 
     await waitFor(() => {
-      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
-        "cost_center",
-        "app_name",
+      expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
+        "Cost Center",
+        "Application Name",
       ]);
     });
-    screen.getAllByPlaceholderText("Key").forEach((input) => expect(input).toBeEnabled());
-    expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(2);
+    expect(screen.queryByPlaceholderText("Key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Remove key-value pair")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Cost Center")).toHaveAttribute("placeholder", "Value");
+  });
+
+  it("should fall back to the key when a declared field has no label", async () => {
+    render(<Harness onFinish={vi.fn()} schemaFields={[{ key: "cost_center" }]} />);
+
+    expect(await screen.findByTestId("metadata-schema-label")).toHaveTextContent("cost_center");
+  });
+
+  it("should treat an existing pair that matches a declared key as fixed too", async () => {
+    render(
+      <Harness
+        onFinish={vi.fn()}
+        schemaFields={[{ key: "cost_center", label: "Cost Center" }]}
+        initialMetadata={[
+          { key: "cost_center", value: "CC-1001" },
+          { key: "region", value: "us" },
+        ]}
+      />,
+    );
+
+    expect(await screen.findByLabelText("Cost Center")).toHaveValue("CC-1001");
+    expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual(["region"]);
+    expect(screen.getAllByLabelText("Remove key-value pair")).toHaveLength(1);
   });
 
   it("should submit a prepopulated key with its typed value", async () => {
@@ -244,9 +268,9 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
-        "cost_center",
-        "app_name",
+      expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
+        "Cost Center",
+        "Application Name",
       ]);
     });
     expect(screen.getAllByPlaceholderText("Value").map((input) => (input as HTMLInputElement).value)).toEqual([
@@ -255,18 +279,32 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     ]);
   });
 
-  it("should let the user remove a prepopulated row", async () => {
+  it("should still let the user add and remove free-form pairs below the declared keys", async () => {
     const user = userEvent.setup();
-    render(<Harness onFinish={vi.fn()} schemaFields={schema} />);
+    const onFinish = vi.fn();
+    render(<Harness onFinish={onFinish} schemaFields={[{ key: "cost_center", label: "Cost Center" }]} />);
 
-    await screen.findAllByPlaceholderText("Key");
-    await user.click(screen.getAllByLabelText("Remove key-value pair")[0]);
+    await screen.findByTestId("metadata-schema-label");
+    await user.click(screen.getByRole("button", { name: /add key-value pair/i }));
+    fireEvent.change(screen.getByPlaceholderText("Key"), { target: { value: "region" } });
+    fireEvent.change(screen.getAllByPlaceholderText("Value")[1], { target: { value: "us" } });
+    fireEvent.change(screen.getByLabelText("Cost Center"), { target: { value: "CC-1001" } });
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
-        "app_name",
-      ]);
+      expect(onFinish).toHaveBeenCalledWith({
+        metadata: [
+          { key: "cost_center", value: "CC-1001" },
+          { key: "region", value: "us" },
+        ],
+      });
     });
+
+    await user.click(screen.getByLabelText("Remove key-value pair"));
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText("Key")).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("metadata-schema-label")).toBeInTheDocument();
   });
 
   it("should show a skeleton instead of the editor while the schema is loading", () => {
@@ -283,9 +321,9 @@ describe("MetadataKeyValueFields with a declared schema", () => {
     rerender(<Harness onFinish={onFinish} schemaFields={schema} schemaLoading={false} />);
 
     await waitFor(() => {
-      expect(screen.getAllByPlaceholderText("Key").map((input) => (input as HTMLInputElement).value)).toEqual([
-        "cost_center",
-        "app_name",
+      expect(screen.getAllByTestId("metadata-schema-label").map((label) => label.textContent)).toEqual([
+        "Cost Center",
+        "Application Name",
       ]);
     });
   });
