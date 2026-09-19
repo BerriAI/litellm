@@ -5430,6 +5430,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/websearch_interception_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Websearch Interception Settings
+         * @description Get web search interception configuration.
+         *
+         *     Returns the current settings plus their schema, for the Admin UI to render.
+         */
+        get: operations["get_websearch_interception_settings_get_websearch_interception_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get_favicon": {
         parameters: {
             query?: never;
@@ -16818,6 +16840,28 @@ export interface paths {
          *     Only proxy admins are allowed to modify it.
          */
         patch: operations["update_user_banner_update_user_banner_patch"];
+        trace?: never;
+    };
+    "/update/websearch_interception_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Websearch Interception Settings
+         * @description Update web search interception settings in database.
+         *
+         *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
+         */
+        patch: operations["update_websearch_interception_settings_update_websearch_interception_settings_patch"];
         trace?: never;
     };
     "/upload/logo": {
@@ -41154,6 +41198,47 @@ export interface components {
             /** Vector Store Name */
             vector_store_name?: string | null;
         };
+        /**
+         * WebSearchInterceptionSettings
+         * @description Configuration for server-side web search interception
+         */
+        WebSearchInterceptionSettings: {
+            /**
+             * Enabled
+             * @description Serve web search tool calls from a configured search tool instead of passing them upstream
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Enabled Providers
+             * @description LLM providers to intercept for (e.g. 'bedrock', 'vertex_ai'). Empty intercepts Bedrock only.
+             */
+            enabled_providers?: string[];
+            /**
+             * Max Agentic Loops
+             * @description How many follow-up model calls one intercepted request may chain. Empty applies the default of 3.
+             */
+            max_agentic_loops?: number | null;
+            /**
+             * Search Tool Name
+             * @description Name of the configured search tool to run searches through. Empty uses the first one available.
+             */
+            search_tool_name?: string | null;
+        };
+        /**
+         * WebSearchInterceptionSettingsResponse
+         * @description Response model for web search interception settings
+         */
+        WebSearchInterceptionSettingsResponse: {
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
+        };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
             /** Name */
@@ -49618,6 +49703,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserBanner"];
+                };
+            };
+        };
+    };
+    get_websearch_interception_settings_get_websearch_interception_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebSearchInterceptionSettingsResponse"];
                 };
             };
         };
@@ -62736,6 +62841,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpdateUserBannerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_websearch_interception_settings_update_websearch_interception_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebSearchInterceptionSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

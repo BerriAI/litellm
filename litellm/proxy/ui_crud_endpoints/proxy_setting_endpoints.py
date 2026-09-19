@@ -477,6 +477,35 @@ class MCPToolSearchSettingsResponse(SettingsResponse):
     """Response model for native MCP tool search settings"""
 
 
+class WebSearchInterceptionSettings(BaseModel):
+    """Configuration for server-side web search interception"""
+
+    enabled: bool = Field(
+        default=False,
+        description="Serve web search tool calls from a configured search tool instead of passing them upstream",
+    )
+
+    enabled_providers: list[str] = Field(
+        default_factory=list,
+        description="LLM providers to intercept for (e.g. 'bedrock', 'vertex_ai'). Empty intercepts Bedrock only.",
+    )
+
+    search_tool_name: str | None = Field(
+        default=None,
+        description="Name of the configured search tool to run searches through. Empty uses the first one available.",
+    )
+
+    max_agentic_loops: int | None = Field(
+        default=None,
+        ge=1,
+        description="How many follow-up model calls one intercepted request may chain. Empty applies the default of 3.",
+    )
+
+
+class WebSearchInterceptionSettingsResponse(SettingsResponse):
+    """Response model for web search interception settings"""
+
+
 @router.get(
     "/get/allowed_ips",
     tags=["Budget & Spend Tracking"],
@@ -875,7 +904,13 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
 
 
 async def _update_litellm_setting(
-    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings | MCPToolSearchSettings,
+    settings: (
+        DefaultInternalUserParams
+        | DefaultTeamSSOParams
+        | MCPSemanticFilterSettings
+        | MCPToolSearchSettings
+        | WebSearchInterceptionSettings
+    ),
     settings_key: str,
     success_message: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1395,6 +1430,77 @@ async def update_mcp_semantic_filter_settings(
             await proxy_config._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
     except Exception as e:
         verbose_proxy_logger.warning("Failed to reinitialize MCP semantic filter settings immediately: %s", e)
+
+    return result
+
+
+@router.get(
+    "/get/websearch_interception_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=WebSearchInterceptionSettingsResponse,
+)
+async def get_websearch_interception_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get web search interception configuration.
+
+    Returns the current settings plus their schema, for the Admin UI to render.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    config: Final = await proxy_config.get_config()
+
+    return await _get_settings_with_schema(
+        settings_key="websearch_interception_params",
+        settings_class=WebSearchInterceptionSettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/websearch_interception_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_websearch_interception_settings(
+    settings: WebSearchInterceptionSettings,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Update web search interception settings in database.
+
+    Settings will be picked up by all pods within approximately 10 seconds via background polling.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can update web search interception settings.",
+        )
+
+    result: Final = await _update_litellm_setting(
+        settings=settings,
+        settings_key="websearch_interception_params",
+        success_message=(
+            "Web search interception settings updated successfully. "
+            "Changes will be applied across all pods within 10 seconds."
+        ),
+        user_api_key_dict=user_api_key_dict,
+    )
+    try:
+        from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+        if prisma_client is not None:
+            await proxy_config.init_websearch_interception_settings_in_db(prisma_client=prisma_client)
+    except Exception as e:
+        verbose_proxy_logger.warning("Failed to reinitialize web search interception settings immediately: %s", e)
 
     return result
 

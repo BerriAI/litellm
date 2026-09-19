@@ -3127,6 +3127,77 @@ class TestMcpToolSearchSettingsEndpoints:
         assert mock_proxy_config["save_call_count"]() == 0
 
 
+class TestWebSearchInterceptionSettingsEndpoints:
+    @staticmethod
+    def _override_auth(role: LitellmUserRoles):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="u", api_key="hashed", user_role=role
+        )
+
+    def test_get_returns_stored_values_and_field_schema(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+            "enabled": True,
+            "enabled_providers": ["bedrock", "vertex_ai"],
+            "search_tool_name": "my-perplexity-search",
+        }
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"] == {
+            "enabled": True,
+            "enabled_providers": ["bedrock", "vertex_ai"],
+            "search_tool_name": "my-perplexity-search",
+            "max_agentic_loops": None,
+        }
+        assert resp.json()["field_schema"]["properties"]["enabled_providers"]["type"] == "array"
+
+    def test_update_requires_proxy_admin(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.INTERNAL_USER)
+        try:
+            resp = client.patch("/update/websearch_interception_settings", json={"enabled": True})
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 403
+        assert "proxy admin" in resp.json()["detail"].lower()
+
+    def test_update_persists_settings(self, mock_proxy_config, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        payload = {
+            "enabled": True,
+            "enabled_providers": ["bedrock"],
+            "search_tool_name": "my-perplexity-search",
+            "max_agentic_loops": 5,
+        }
+        try:
+            resp = client.patch("/update/websearch_interception_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert mock_proxy_config["save_call_count"]() == 1
+        assert mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] == payload
+
+    def test_update_rejects_zero_max_agentic_loops(self, mock_proxy_config, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        try:
+            resp = client.patch(
+                "/update/websearch_interception_settings",
+                json={"enabled": True, "max_agentic_loops": 0},
+            )
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 422
+        assert mock_proxy_config["save_call_count"]() == 0
+
+
 def test_upload_logo_requires_proxy_admin(monkeypatch):
     """Any authenticated key could previously write a file to the server's disk here."""
     from litellm.proxy._types import UserAPIKeyAuth

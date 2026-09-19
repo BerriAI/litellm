@@ -4888,6 +4888,7 @@ class ProxyConfig:
     def __init__(self) -> None:
         self.config: Mapping[str, object] = MappingProxyType({})
         self._last_semantic_filter_config: dict[str, object] | None = None
+        self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
@@ -7697,6 +7698,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="semantic_filter_settings"):
             await self._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="websearch_interception_settings"):
+            await self.init_websearch_interception_settings_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="config_overrides"):
             await self._init_hashicorp_vault_config_override(prisma_client=prisma_client)
             await self._init_cyberark_config_override(prisma_client=prisma_client)
@@ -7774,6 +7778,56 @@ class ProxyConfig:
 
         except Exception as e:
             verbose_proxy_logger.exception("Error initializing semantic filter settings from DB: %s", e)
+
+    async def init_websearch_interception_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize web search interception settings from database.
+        Called periodically (approximately every 10 seconds) by background task to hot-reload settings across all pods.
+        """
+        import json
+
+        import litellm
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+
+        try:
+            config_record: Final = await get_config_param(prisma_client, "litellm_settings")
+
+            if config_record is None or config_record.param_value is None:
+                return
+
+            litellm_settings = config_record.param_value
+            if isinstance(litellm_settings, str):
+                litellm_settings = json.loads(litellm_settings)
+
+            websearch_config: Final = litellm_settings.get("websearch_interception_params", None)
+
+            # Absent means nobody stored params, so a callbacks-list proxy keeps its callback.
+            if websearch_config is None:
+                return
+
+            enabled: Final = bool(websearch_config.get("enabled", True))
+            registered: Final = bool(
+                litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)
+            )
+            if self._last_websearch_interception_config == websearch_config and registered == enabled:
+                return
+
+            litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, WebSearchInterceptionLogger)
+
+            if enabled:
+                litellm.logging_callback_manager.add_litellm_callback(
+                    WebSearchInterceptionLogger.from_config_yaml(websearch_config)
+                )
+                verbose_proxy_logger.info("Web search interception reinitialized from DB")
+            else:
+                verbose_proxy_logger.info("Web search interception disabled")
+
+            self._last_websearch_interception_config = dict(websearch_config)
+
+        except Exception as e:
+            verbose_proxy_logger.exception("Error initializing web search interception settings from DB: %s", e)
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
         """
