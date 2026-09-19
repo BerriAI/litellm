@@ -5117,6 +5117,15 @@ class ProxyConfig:
             store.apply_db_row(cast(DbRow, section_name), wrote_section)
         await invalidate_config_param(section_name)
 
+    def reject_config_owned_deletes(self, *, section_name: str, keys: tuple[str, ...]) -> None:
+        """Refuse a delete of a setting the config file owns; unlike a write, the value never makes it allowed."""
+        store: Final = self._settings_stores.get(cast(Section, section_name))
+        if store is None:
+            return
+        owned: Final = tuple(sorted(key for key in keys if store.owned_by_config(key)))
+        if owned:
+            self._raise_config_owned(section_name=section_name, rejected=owned, store=store)
+
     def reject_config_owned_writes(self, *, section_name: str, changed_keys: Mapping[str, JsonValue]) -> None:
         """Refuse a write to a setting the config file owns, rather than storing a value that never applies."""
         store: Final = self._settings_stores.get(cast(Section, section_name))
@@ -5125,6 +5134,9 @@ class ProxyConfig:
         rejected: Final = store.rejected_writes(changed_keys)
         if not rejected:
             return
+        self._raise_config_owned(section_name=section_name, rejected=rejected, store=store)
+
+    def _raise_config_owned(self, *, section_name: str, rejected: tuple[str, ...], store: SettingsStore) -> None:
         subject: Final = (
             f"key '{rejected[0]}' is" if len(rejected) == 1 else f"keys {', '.join(repr(key) for key in rejected)} are"
         )
@@ -9684,10 +9696,12 @@ class ProxyStartupEvent:
         user_api_key_cache: UserApiKeyCache,
     ):
         """Initialize JWT auth on startup"""
-        if general_settings.get("litellm_jwtauth", None) is not None:
-            for k, v in general_settings["litellm_jwtauth"].items():
-                if isinstance(v, str) and v.startswith("os.environ/"):
-                    general_settings["litellm_jwtauth"][k] = get_secret(v)
+        declared_jwtauth: Final = general_settings.get("litellm_jwtauth", None)
+        if declared_jwtauth is not None:
+            resolved_jwtauth: Final = {
+                key: (get_secret(value) if isinstance(value, str) and value.startswith("os.environ/") else value)
+                for key, value in declared_jwtauth.items()
+            }
             # ``user_config_file_path`` is set by ``ProxyConfig._get_config_from_file``
             # during startup. Threading it through lets an operator-
             # configured ``custom_validate: s3://...`` resolve through
@@ -9695,7 +9709,7 @@ class ProxyStartupEvent:
             # file context) hit the gate and refuse remote loads.
             litellm_jwtauth = LiteLLM_JWTAuth(
                 config_file_path=user_config_file_path,
-                **general_settings["litellm_jwtauth"],
+                **resolved_jwtauth,
             )
         else:
             litellm_jwtauth = LiteLLM_JWTAuth()
@@ -17665,9 +17679,12 @@ async def get_config_general_settings(
             detail={"error": f"Field name={field_name} is not set"},
         )
 
+    declared: Final = (
+        settings.config_value(field_name) if settings.owned_by_config(field_name) else settings[field_name]
+    )
     field_value = _redact_general_setting_value(
         field_name,
-        settings[field_name],
+        declared,
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
     if field_name == "plugins" and isinstance(field_value, list):
@@ -18040,6 +18057,8 @@ async def delete_config_general_settings(
             status_code=400,
             detail={"error": f"Invalid field={data.field_name} passed in."},
         )
+
+    proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
 
     ## get general settings from db
     db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(
