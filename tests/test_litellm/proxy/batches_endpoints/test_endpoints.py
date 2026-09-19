@@ -51,6 +51,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.llms.openai import BatchJobStatus
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 from litellm.types.utils import CredentialItem, LiteLLMBatch
 
 from fastapi import Request, Response
@@ -1194,6 +1195,7 @@ def retrieve_harness():
     router.model_list = []
     router.aretrieve_batch = AsyncMock(return_value=make_batch())
     router.get_deployment_credentials_with_provider = MagicMock(side_effect=_creds_lookup)
+    router.get_credential_deployment = MagicMock(return_value=None)
 
     pre_call = AsyncMock(side_effect=lambda **kw: (data_holder["data"], MagicMock()))
     get_headers = MagicMock(return_value={})
@@ -1310,6 +1312,30 @@ async def test_retrieve__model_encoded_id(retrieve_harness):
     # write-back to the managed-object table happened, tagged as a retrieve.
     assert retrieve_harness.update_batch_in_db.call_count == 1
     assert retrieve_harness.update_batch_in_db.call_args.kwargs["operation"] == "retrieve"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__model_encoded_id__stamps_deployment_model_info_for_cost(retrieve_harness):
+    """Regression: this path calls litellm.aretrieve_batch directly, so nothing stamped the
+    deployment's model_info the way the router does for routed calls. Cost tracking then never
+    saw the deployment id, and a completed batch on a deployment with its own per-page pricing
+    was billed at the published rate with an empty model_id on the spend row."""
+    retrieve_harness.router.get_credential_deployment.return_value = Deployment(
+        model_name="azure-gpt",
+        litellm_params=LiteLLM_Params(model="azure/gpt-4o"),
+        model_info=ModelInfo(id="dep-123"),
+    )
+    retrieve_harness.pre_call.side_effect = lambda **kw: (
+        {**retrieve_harness.data["data"], "litellm_metadata": {"user_api_key_alias": "qa-key"}},
+        MagicMock(),
+    )
+
+    await call_retrieve(retrieve_harness, AZURE_BATCH_ID)
+
+    retrieve_harness.router.get_credential_deployment.assert_called_once_with(model_id="azure/gpt-4o")
+    litellm_metadata = retrieve_harness.aretrieve_kwargs()["litellm_metadata"]
+    assert litellm_metadata["model_info"]["id"] == "dep-123"
+    assert litellm_metadata["user_api_key_alias"] == "qa-key"
 
 
 @pytest.mark.asyncio

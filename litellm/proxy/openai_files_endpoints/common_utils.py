@@ -593,6 +593,25 @@ def add_internal_model_credentials(
     data["_litellm_internal_model_credentials"] = MappingProxyType(dict(credentials))
 
 
+def add_deployment_model_info(
+    data: dict,
+    llm_router: Optional["Router"],
+    model_id: str,
+) -> None:
+    """
+    Stamp the resolved deployment's `model_info` onto a direct (non-router) batch call
+    (in-place), the way the router does for routed calls, so the completed batch is
+    priced by its deployment id instead of the published model rate.
+    """
+    deployment: Final = llm_router.get_credential_deployment(model_id=model_id) if llm_router is not None else None
+    if deployment is None:
+        return
+    data["litellm_metadata"] = {
+        **(data.get("litellm_metadata") or {}),
+        "model_info": deployment.model_info.model_dump(),
+    }
+
+
 def prepare_data_with_credentials(
     data: dict,
     credentials: dict,

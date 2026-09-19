@@ -32,6 +32,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     _is_base64_encoded_unified_file_id,
+    add_deployment_model_info,
     add_internal_model_credentials,
     apply_team_provider_credentials,
     authorize_model_for_key,
@@ -580,6 +581,7 @@ async def retrieve_batch(
             # so litellm.aretrieve_batch can load BedrockBatchesConfig. Without
             # it the call falls into the legacy provider switch and 400s.
             data["model"] = model_from_id
+            add_deployment_model_info(data=data, llm_router=llm_router, model_id=model_from_id)
 
             # Retrieve batch using model credentials
             response = await litellm.aretrieve_batch(

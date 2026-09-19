@@ -5745,6 +5745,45 @@ async def test_router_unknown_model_error_message_renders_model_name_literally()
     assert "          " not in message  # no padding run from an expanded format field
 
 
+def test_get_credential_deployment_is_the_deployment_credentials_resolve_to():
+    """Regression: a batch retrieved with credentials resolved by model name was priced
+    without its deployment id, so per-deployment pricing never applied. The deployment
+    behind the credentials must be reachable by name and by id, carrying its model_info."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mistral-ocr",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "sk-ocr"},
+                "model_info": {"id": "ocr-dep", "ocr_cost_per_page_batches": 0.0123},
+            }
+        ]
+    )
+
+    by_name = router.get_credential_deployment(model_id="mistral-ocr")
+    by_id = router.get_credential_deployment(model_id="ocr-dep")
+
+    assert by_name is not None and by_id is not None
+    assert by_name.model_info.id == by_id.model_info.id == "ocr-dep"
+    assert by_name.model_info.model_dump()["ocr_cost_per_page_batches"] == 0.0123
+    assert router.get_deployment_credentials_with_provider(model_id="mistral-ocr")["api_key"] == "sk-ocr"
+    assert router.get_credential_deployment(model_id="no-such-model") is None
+
+
+def test_get_credential_deployment_skips_a_paused_deployment():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "paused-ocr",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "sk-ocr"},
+                "model_info": {"id": "paused-dep", "blocked": True},
+            }
+        ]
+    )
+
+    assert router.get_credential_deployment(model_id="paused-ocr") is None
+    assert router.get_credential_deployment(model_id="paused-dep") is None
+
+
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
     """
     Test that get_deployment_credentials_with_provider correctly copies
