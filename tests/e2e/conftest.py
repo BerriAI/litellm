@@ -28,6 +28,7 @@ from e2e_config import (
     FIXTURE_DIR,
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
+    MCP_OAUTH_LIVE_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROXY_BASE_URL,
     REDIS_CHAOS_OPT_IN_ENV,
@@ -56,6 +57,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
         "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
+        "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
     }
 )
 
@@ -131,6 +133,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
         "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "mcp_oauth_live: real Linear OAuth consent via a captured browser session; deselected unless "
+        "E2E_MCP_OAUTH_LIVE is set",
     )
 
 

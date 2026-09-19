@@ -18,20 +18,28 @@ import asyncio
 import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qsl
 
 import httpx
 import pytest
+from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
+from e2e_http import AuthHeaders, NoBody, unwrap
 from mcp import ClientSession
 from mcp.client.auth import OAuthClientProvider
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
-
-from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
+from mcp.types import TextContent
+from models import (
+    ChatBody,
+    ChatResponse,
+    McpOauthUserCredentialStatus,
+    McpServerCreateBody,
+    McpServerInfo,
+    McpServerUserCredentialListResponse,
+    McpServerUserCredentialRow,
+)
 from proxy_client import ProxyClient
-from e2e_http import AuthHeaders, NoBody, unwrap
-from models import ChatBody, ChatResponse, McpServerCreateBody, McpServerInfo
 
 if TYPE_CHECKING:
     from playwright.async_api import Route
@@ -44,8 +52,8 @@ OAUTH_CLIENT_REDIRECT_URI = "http://127.0.0.1:53682/e2e/callback"
 BROWSER_CONSENT_TIMEOUT = 60.0
 
 
-def _mcp_url(alias: str) -> str:
-    return f"{PROXY_BASE_URL}/{alias}/mcp"
+def _mcp_url(alias: str, base_url: str = PROXY_BASE_URL) -> str:
+    return f"{base_url.rstrip('/')}/{alias}/mcp"
 
 
 class InMemoryTokenStorage:
@@ -88,7 +96,7 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
         if url.startswith(OAUTH_CLIENT_REDIRECT_URI) and "url" not in captured:
             captured["url"] = url
 
-    async def _swallow_redirect(route: "Route") -> None:
+    async def _swallow_redirect(route: Route) -> None:
         await route.fulfill(status=200, content_type="text/plain", body="ok")
 
     async with async_playwright() as playwright:
@@ -128,16 +136,22 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
     return params["code"], params.get("state")
 
 
-def _oauth_provider(url: str, storage: InMemoryTokenStorage, storage_state_path: str) -> OAuthClientProvider:
+def _oauth_provider(url: str, storage: InMemoryTokenStorage, storage_state_path: str | None) -> OAuthClientProvider:
     """The SDK's real OAuth machinery (RFC 9728/8414 discovery, RFC 7591 DCR,
     PKCE, token exchange) with the browser leg driven by Playwright against the
     upstream's consent screen."""
     code_holder: dict[str, str | None] = {}  # mutable-ok: hand-off between the two SDK callbacks
 
-    async def redirect_handler(authorize_url: str) -> None:
+    async def _reject_redirect(_: str) -> None:
+        raise AssertionError("gateway demanded a fresh upstream consent; stored per-user token was not reused")
+
+    async def _follow_redirect(authorize_url: str) -> None:
+        assert storage_state_path is not None
         code, state = await _browser_follow_authorize(authorize_url, storage_state_path)
         code_holder["code"] = code
         code_holder["state"] = state
+
+    redirect_handler: Final = _reject_redirect if storage_state_path is None else _follow_redirect
 
     async def callback_handler() -> tuple[str, str | None]:
         code = code_holder.get("code")
@@ -167,24 +181,38 @@ class _HeaderInjectingTransport(httpx.AsyncBaseTransport):
     store the upstream token for from the key on the token exchange, exactly
     like a production MCP host configured with a LiteLLM key header."""
 
-    def __init__(self, inner: httpx.AsyncBaseTransport, headers: dict[str, str]) -> None:
+    def __init__(self, inner: httpx.AsyncBaseTransport, headers: dict[str, str], gateway_url: str) -> None:
         self._inner = inner
         self._headers = headers
+        self._gateway_url = httpx.URL(gateway_url)
+
+    @staticmethod
+    def _port(url: httpx.URL) -> int | None:
+        if url.port is not None:
+            return url.port
+        return {"http": 80, "https": 443}.get(url.scheme)
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        for name, value in self._headers.items():
-            if name not in request.headers:
-                request.headers[name] = value
+        same_origin: Final = (
+            request.url.scheme == self._gateway_url.scheme
+            and request.url.host == self._gateway_url.host
+            and self._port(request.url) == self._port(self._gateway_url)
+        )
+        if same_origin:
+            for name, value in self._headers.items():
+                if name not in request.headers:
+                    request.headers[name] = value
         return await self._inner.handle_async_request(request)
 
 
-def _oauth_http_client(headers: dict[str, str], auth: OAuthClientProvider) -> httpx.AsyncClient:
+def _oauth_http_client(
+    headers: dict[str, str], auth: OAuthClientProvider, gateway_url: str = PROXY_BASE_URL
+) -> httpx.AsyncClient:
     return httpx.AsyncClient(
-        headers=headers,
         auth=auth,
         timeout=httpx.Timeout(REQUEST_TIMEOUT),
         follow_redirects=True,
-        transport=_HeaderInjectingTransport(httpx.AsyncHTTPTransport(), headers),
+        transport=_HeaderInjectingTransport(httpx.AsyncHTTPTransport(), headers, gateway_url),
     )
 
 
@@ -197,6 +225,38 @@ async def _seed_via_dance(
                 await session.initialize()
                 listed = await session.list_tools()
                 return tuple(sorted(tool.name for tool in listed.tools))
+
+
+@dataclass(frozen=True, slots=True)
+class OauthToolRun:
+    tools: tuple[str, ...]
+    is_error: bool
+    text: str
+
+
+async def _list_and_call(
+    url: str,
+    headers: dict[str, str],
+    storage: InMemoryTokenStorage,
+    storage_state_path: str | None,
+    tool: str,
+    arguments: dict[str, str],
+    gateway_url: str = PROXY_BASE_URL,
+) -> OauthToolRun:
+    async with _oauth_http_client(
+        headers, _oauth_provider(url, storage, storage_state_path), gateway_url
+    ) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                listed: Final = await session.list_tools()
+                result: Final = await session.call_tool(tool, arguments)
+                text: Final = "".join(content.text for content in result.content if isinstance(content, TextContent))
+                return OauthToolRun(
+                    tools=tuple(sorted(tool_item.name for tool_item in listed.tools)),
+                    is_error=result.isError,
+                    text=text,
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,6 +310,58 @@ class ChatMcpClient:
         pytest.fail(
             f"authorize dance for {alias!r} never completed within {self.proxy.poll_timeout}s; "
             f"last error: {last_error!r}"
+        )
+
+    def list_and_call(
+        self,
+        alias: str,
+        headers: dict[str, str],
+        storage: InMemoryTokenStorage,
+        storage_state_path: str | None,
+        tool: str,
+        arguments: dict[str, str],
+        base_url: str = PROXY_BASE_URL,
+    ) -> OauthToolRun:
+        deadline: Final = time.monotonic() + self.proxy.poll_timeout
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                return asyncio.run(
+                    _list_and_call(
+                        _mcp_url(alias, base_url),
+                        headers,
+                        storage,
+                        storage_state_path,
+                        tool,
+                        arguments,
+                        base_url,
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001 - retried to the deadline; the last error surfaces below
+                last_error = exc
+                time.sleep(self.proxy.poll_interval)
+        pytest.fail(
+            f"list and call for {alias!r} never completed within {self.proxy.poll_timeout}s; last error: {last_error!r}"
+        )
+
+    def server_user_credentials(self, server_id: str) -> tuple[McpServerUserCredentialRow, ...]:
+        return unwrap(
+            self.proxy.transport.get(
+                f"/v1/mcp/server/{server_id}/user-credentials",
+                headers=self.proxy.transport.master,
+                params=NoBody(),
+                response_type=McpServerUserCredentialListResponse,
+            )
+        ).root
+
+    def revoke_user_token(self, server_id: str, headers: AuthHeaders) -> None:
+        _ = unwrap(
+            self.proxy.transport.delete(
+                f"/v1/mcp/server/{server_id}/oauth-user-credential",
+                headers=headers,
+                json=NoBody(),
+                response_type=McpOauthUserCredentialStatus,
+            )
         )
 
     def chat_with_mcp(self, headers: AuthHeaders, body: ChatBody) -> ChatResponse:

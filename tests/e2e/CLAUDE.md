@@ -14,7 +14,7 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 - `quota_management/` - quota enforcement and accounting, one subfolder per behavior: `ratelimit/` (rpm/tpm blocks, window reset, pacing headers on live traffic), `budgets/` (budget definition, enforcement, and reset windows: key, team, tag, soft, multi-window), and `spend_tracking/` (spend logging and cost attribution on `/spend/*`)
 - `management/` - key/team/user/organization management routes: create/update/delete persistence via the info routes, team membership, and llm-only-key route denials (API surface; not Playwright)
 - `a2a/` - the A2A (agent-to-agent) surface: admin registration via `/v1/agents`, proxy-fronted card discovery at `/.well-known/agent-card.json`, and JSON-RPC `message/send` invocation, driving agents backed by the litellm completion bridge (a real provider) and asserting protocol-version normalization (0.3 vs 1.0)
-- `mcp/` - the MCP server surface over api_key auth against the real Datadog remote MCP server (see "MCP suite: real Datadog only" below); plus the gateway-managed OAuth (authorization_code) path exercised through `/chat/completions`, the one behavior Datadog's static-header auth cannot reach, seeding the per-user upstream token via the interactive authorize dance driven with the mcp SDK's own OAuth client (headless-browser consent from a saved session) and asserting the completion lists and executes the server's tools with the stored per-user token
+- `mcp/` - the MCP server surface over api_key auth against the real Datadog remote MCP server (see "MCP suite: real Datadog only" below); plus the gateway-managed OAuth (authorization_code) path exercised through `/chat/completions` in `test_mcp_chat_completion_oauth_e2e.py` and direct MCP protocol operations in `test_mcp_oauth_happy_path_e2e.py`, the one behavior Datadog's static-header auth cannot reach, seeding the per-user upstream token via the interactive authorize dance driven with the mcp SDK's own OAuth client (headless-browser consent from a saved session) and asserting the completion or protocol call lists and executes the server's tools with the stored per-user token
 - `logging/` - logging-integration delivery (datadog and friends)
 - `security/` - secret handling and log-leak protection
 - `router/` - routing and reliability behavior (fallbacks, cooldowns) plus the memory regression test (`test_reliability_memory_e2e.py`: a few hundred failing requests with retries and fallbacks must not grow proxy RSS past a fixed budget nor store a request snapshot past a fixed size, the release-gate check for the v1.100.0 retry-breadcrumb leak)
@@ -26,14 +26,14 @@ Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family 
 
 ## MCP suite: real Datadog only
 
-Every test under `tests/e2e/mcp/` must exercise the proxy against the real Datadog remote MCP server. Do not add a compose service, FastMCP fixture, mock upstream, or any other fake MCP host for this suite
+Every test under `tests/e2e/mcp/` must exercise the proxy against the real Datadog remote MCP server, except the two Linear OAuth tests `test_mcp_chat_completion_oauth_e2e.py` and `test_mcp_oauth_happy_path_e2e.py`. Do not add a compose service, FastMCP fixture, mock upstream, or any other fake MCP host for this suite
 
 - Register via `register_datadog_mcp` in `tests/e2e/mcp/datadog_mcp.py` (or extend that helper if you need a different `toolsets=` / `allowed_tools` slice of the same Datadog endpoint). That posts `/v1/mcp/server` with `url=datadog_mcp_url(...)` and static headers `DD-API-KEY` / `DD-APPLICATION-KEY` from the process env
 - Auth is Datadog's documented CI/header path, not a browser OAuth authorize/token dance. Hard-fail when `DD_API_KEY` or `DD_APP_KEY` is missing (`assert_dd_mcp_creds`); never skip for a missing fake upstream
 - Prefer calling real Datadog tools that prove the product path (e.g. `search_datadog_logs` for list/call and permission denials). Seed a unique marker (`e2e-datadog-mcp-*`) in a chat completion when you need a log the tool can find; dual-read with `dd_logs` from conftest when delivery matters
 - Delete the MCP server (and any keys) through `resources.defer` the same way every other suite tears down
 - If a new MCP behavior cannot be covered with Datadog's tool surface, say so in the PR and get agreement before inventing another upstream; the default is always Datadog
-- The one standing exception is `test_mcp_chat_completion_oauth_e2e.py`. Datadog authenticates with the static `DD-API-KEY` / `DD-APPLICATION-KEY` headers and exposes no authorize/token dance at all, so it cannot exercise gateway-managed OAuth or per-user token seeding in any form. That test drives a real Linear MCP server instead; it is still a real remote upstream, so the no-mock, no-fixture rule above holds unchanged
+- The two standing exceptions are `test_mcp_chat_completion_oauth_e2e.py` and `test_mcp_oauth_happy_path_e2e.py`. Datadog authenticates with the static `DD-API-KEY` / `DD-APPLICATION-KEY` headers and exposes no authorize/token dance at all, so these tests drive a real Linear MCP server instead; they are still real remote upstreams, so the no-mock, no-fixture rule above holds unchanged
 
 ## Lay the pattern down in a class
 
@@ -152,7 +152,7 @@ MCPs - endpoint features with the protocol op as the variant
 mcp.<operation>.<auth_family>.<assertion>
   operation   : list_tools | call_tool | list_resources | read_resource | list_prompts | get_prompt
   auth_family : none | api_key | bearer | oauth
-  assertion   : succeeds | denied_without_permission
+  assertion   : succeeds | denied_without_permission | persists_across_processes
   e.g.  mcp.call_tool.oauth.succeeds
 ```
 
