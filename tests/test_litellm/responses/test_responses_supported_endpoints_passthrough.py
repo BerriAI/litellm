@@ -141,7 +141,8 @@ async def test_opt_in_forwards_responses_natively():
     assert chat_route.call_count == 0
     request = responses_route.calls.last.request
     assert request.headers["authorization"] == "Bearer sk-backend"
-    assert json.loads(request.content)["input"] == "hi"
+    # string input is normalized to the canonical list before native forwarding
+    assert json.loads(request.content)["input"] == [{"role": "user", "content": "hi"}]
     assert isinstance(result, ResponsesAPIResponse)
     assert result.output[0].content[0].text == "native"
 

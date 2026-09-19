@@ -1,12 +1,16 @@
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
+from typing import Any, Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm.responses import dispatch as responses_dispatch
 from litellm.responses import main as python_responses
+from litellm.responses.main import (
+    _normalize_responses_api_string_input,  # pyright: ignore[reportPrivateUsage]  # regression target
+)
 from litellm.responses.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
@@ -320,3 +324,54 @@ def test_responses_with_retries_uses_the_dispatch_entrypoint(monkeypatch: pytest
     assert result is expected
     assert calls[0]["num_retries"] == 0
     assert calls[0]["max_retries"] == 0
+
+class TestNormalizeResponsesApiStringInputForIssue41963:
+    """Regression tests for https://github.com/BerriAI/litellm/issues/41963."""
+
+    def test_string_input_becomes_canonical_list(self) -> None:
+        assert _normalize_responses_api_string_input("Reply with exactly ROUTE_OK.") == [
+            {"role": "user", "content": "Reply with exactly ROUTE_OK."}
+        ]
+
+    def test_empty_string_is_normalized(self) -> None:
+        assert _normalize_responses_api_string_input("") == [{"role": "user", "content": ""}]
+
+    def test_list_input_passes_through_untouched(self) -> None:
+        original: Final = [{"role": "user", "content": "Reply with exactly ROUTE_OK."}]
+        assert _normalize_responses_api_string_input(original) == original
+
+    def test_native_provider_receives_normalized_list_for_string_input(self) -> None:
+        captured: Final[dict[str, Any]] = {}
+
+        def capture_handler(**kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        with patch("litellm.responses.main.base_llm_http_handler") as mock_handler:  # test-quality-ok: the dispatch seam is the behavior under test; no DI seam exposes what input the provider receives
+            mock_handler.response_api_handler.side_effect = capture_handler
+            python_responses.responses(
+                input="Reply with exactly ROUTE_OK.",
+                model="gpt-4o",
+                litellm_logging_obj=MagicMock(),
+                api_key="sk-test",
+            )
+
+        assert captured["input"] == [{"role": "user", "content": "Reply with exactly ROUTE_OK."}]
+
+    def test_native_provider_receives_list_content_intact_for_list_input(self) -> None:
+        original: Final = [{"role": "user", "content": "Reply with exactly ROUTE_OK."}]
+        captured: Final[dict[str, Any]] = {}
+
+        def capture_handler(**kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        with patch("litellm.responses.main.base_llm_http_handler") as mock_handler:  # test-quality-ok: same dispatch seam as the string-input case
+            mock_handler.response_api_handler.side_effect = capture_handler
+            python_responses.responses(
+                input=original,
+                model="gpt-4o",
+                litellm_logging_obj=MagicMock(),
+                api_key="sk-test",
+            )
+
+        assert isinstance(captured["input"], list)
+        assert captured["input"] == original

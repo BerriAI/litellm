@@ -94,6 +94,9 @@ async def test_aresponses_context_management_and_shell_request_body_matches_expe
     assert the httpx POST request body matches the expected JSON.
     """
     expected_body = _load_expected_body("context_management_and_shell.json")
+    call_input = expected_body["input"]
+    # string input is normalized to the canonical list before dispatch
+    expected_body["input"] = [{"role": "user", "content": call_input}]
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -103,7 +106,7 @@ async def test_aresponses_context_management_and_shell_request_body_matches_expe
 
         await litellm.aresponses(
             model="openai/gpt-4o",
-            input=expected_body["input"],
+            input=call_input,
             context_management=expected_body["context_management"],
             tools=expected_body["tools"],
             tool_choice=expected_body["tool_choice"],
@@ -121,6 +124,9 @@ async def test_aresponses_azure_shell_tool_request_body_matches_expected():
     assert the httpx POST request body carries the shell tool verbatim.
     """
     expected_body = _load_expected_body("azure_shell_tool.json")
+    call_input = expected_body["input"]
+    # string input is normalized to the canonical list before dispatch
+    expected_body["input"] = [{"role": "user", "content": call_input}]
 
     with patch(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
@@ -135,7 +141,7 @@ async def test_aresponses_azure_shell_tool_request_body_matches_expected():
             api_base="https://fake-resource.openai.azure.com",
             api_key="fake-api-key",
             api_version="2025-03-01-preview",
-            input=expected_body["input"],
+            input=call_input,
             tools=expected_body["tools"],
             tool_choice=expected_body["tool_choice"],
             max_output_tokens=expected_body["max_output_tokens"],

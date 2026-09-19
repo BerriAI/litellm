@@ -321,7 +321,7 @@ def test_responses_call_keeps_a_developer_item_with_non_text_parts_in_place_as_a
     )
 
 
-def test_responses_call_forwards_string_input_and_instructions_unchanged() -> None:
+def test_responses_call_normalizes_string_input_and_forwards_instructions_unchanged() -> None:
     client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
     with patch(HTTPX_CLIENT_FACTORY, return_value=client):
         litellm.responses(
@@ -332,7 +332,8 @@ def test_responses_call_forwards_string_input_and_instructions_unchanged() -> No
         )
     _, _, body = _sent_request(client)
     assert body["instructions"] == "Answer with exactly one word."
-    assert body["input"] == "What is the capital of France?"
+    # string input is normalized to the canonical list before provider dispatch
+    assert body["input"] == [{"role": "user", "content": "What is the capital of France?"}]
 
 
 def test_transform_request_forwards_non_string_instructions_and_input_untouched() -> None:
