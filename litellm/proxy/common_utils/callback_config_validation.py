@@ -11,14 +11,17 @@ from typing import Final
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
+_LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
 
 
 def callback_config_error(callback_name: str | None, callback_vars: Mapping[str, str] | None) -> str | None:
     if not callback_vars:
         return None
-    env_error: Final = _langfuse_environment_error(callback_vars)
-    if env_error is not None:
-        return env_error
+    langfuse_error: Final = _langfuse_environment_error(callback_vars) or _langfuse_span_scope_error(
+        callback_name, callback_vars
+    )
+    if langfuse_error is not None:
+        return langfuse_error
     if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
@@ -39,6 +42,23 @@ def _langfuse_environment_error(callback_vars: Mapping[str, str]) -> str | None:
 
     try:
         validate_langfuse_environment_value(value)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
+def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
+    value: Final = callback_vars.get("langfuse_span_scope")
+    if value is None:
+        return None
+    if callback_name != _LANGFUSE_OTEL_CALLBACK:
+        return f"langfuse_span_scope applies to the {_LANGFUSE_OTEL_CALLBACK} callback only, not {callback_name!r}"
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_langfuse_span_scope_value,
+    )
+
+    try:
+        validate_langfuse_span_scope_value(value)
     except ValueError as e:
         return str(e)
     return None
