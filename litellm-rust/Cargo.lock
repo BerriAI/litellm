@@ -2135,10 +2135,14 @@ dependencies = [
 name = "litellm-http"
 version = "0.1.0"
 dependencies = [
+ "http 1.4.2",
+ "hyper-util",
  "reqwest 0.12.28",
  "rstest",
+ "rustls 0.23.42",
  "thiserror 2.0.19",
  "tokio",
+ "webpki-roots",
 ]
 
 [[package]]

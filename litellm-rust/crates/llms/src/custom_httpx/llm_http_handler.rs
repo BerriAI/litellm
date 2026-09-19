@@ -16,7 +16,7 @@ use crate::{
     },
     custom_httpx::{
         http_handler::{HeaderPolicy, execute_http_request, with_headers},
-        media::MediaFetcher,
+        media::{MediaFetcher, UrlPolicy},
         transport,
     },
 };
@@ -41,12 +41,13 @@ impl OcrClient {
     pub fn new(
         pool: &HttpClientPool,
         config: &HttpClientConfig,
+        url_policy: UrlPolicy,
         vertex_auth: VertexAuth,
     ) -> Result<Self, litellm_http::Error> {
         Ok(Self {
             provider_http: pool.client(config, ClientVariant::Provider)?,
             polling_http: pool.client(config, ClientVariant::NoRedirect)?,
-            document_fetcher: MediaFetcher::new(pool, config)?,
+            document_fetcher: MediaFetcher::new(pool, config, url_policy)?,
             vertex_auth,
         })
     }

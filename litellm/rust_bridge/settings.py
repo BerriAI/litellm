@@ -24,6 +24,12 @@ class UrlPolicy:
     user_url_allowed_hosts: Sequence[str]
 
 
+def warn(message: str) -> None:
+    from litellm._logging import verbose_logger
+
+    verbose_logger.warning("%s", message)
+
+
 def url_policy() -> UrlPolicy:
     import litellm
 

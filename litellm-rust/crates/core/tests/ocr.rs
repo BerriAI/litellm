@@ -12,7 +12,10 @@ use litellm_llms::{
         error::Error as OcrError,
         transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
     },
-    custom_httpx::{llm_http_handler::OcrClient, media::PublicDnsResolver},
+    custom_httpx::{
+        llm_http_handler::OcrClient,
+        media::{PublicDnsResolver, UrlPolicy},
+    },
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -181,7 +184,8 @@ async fn ocr_client_uses_the_injected_http_pool_configuration() {
     };
     let client = OcrClient::new(
         &HttpClientPool::new(Arc::new(PublicDnsResolver)),
-        &HttpClientConfig::resolve(&settings).unwrap(),
+        &HttpClientConfig::resolve(&settings).config,
+        UrlPolicy::default(),
         VertexAuth::default(),
     )
     .unwrap();
