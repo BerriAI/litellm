@@ -781,6 +781,63 @@ def test_upload_for_a_litellm_executed_model_goes_to_the_provider_unless_the_ser
     assert provider_upload.call_args.kwargs["api_base"] == "http://vllm.test/v1"
 
 
+@pytest.mark.parametrize(
+    "form",
+    [{}, {"target_model_names": "my-vllm"}, {"target_model_names": "gemini-2.0-flash"}],
+    ids=["no model", "litellm-executed model", "provider model"],
+)
+def test_upload_naming_litellm_db_as_target_storage_is_rejected(batch_upload_seams, form: dict[str, str]):
+    stored, provider_upload, upstream_files_route = batch_upload_seams
+
+    response = _upload_batch_file({}, {**form, "target_storage": "litellm_db"})
+
+    assert response.status_code == 400, response.text
+    error = response.json()["error"]
+    assert error["type"] == "invalid_request_error"
+    assert error["param"] == "target_storage"
+    assert "litellm_db" in error["message"]
+    assert upstream_files_route.call_count == 0
+    stored.assert_not_awaited()
+    provider_upload.assert_not_awaited()
+
+
+@pytest.mark.parametrize("purpose", ["user_data", "batch"])
+def test_upload_with_an_explicit_target_storage_goes_where_the_caller_said_without_probing_the_server(
+    batch_upload_seams, purpose: str
+):
+    stored, provider_upload, upstream_files_route = batch_upload_seams
+
+    response = _upload_batch_file(
+        {}, {"purpose": purpose, "target_model_names": "my-vllm", "target_storage": "azure_storage"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert upstream_files_route.call_count == 0
+    provider_upload.assert_not_awaited()
+    stored.assert_awaited_once()
+    kwargs = stored.call_args.kwargs
+    assert kwargs["target_storage"] == "azure_storage"
+    assert tuple(kwargs["target_model_names"]) == ("my-vllm",)
+    assert kwargs["purpose"] == purpose
+
+
+def test_upload_with_an_explicit_target_storage_still_refuses_a_key_without_the_executed_model(batch_upload_seams):
+    import litellm.proxy.proxy_server as ps
+
+    stored, provider_upload, upstream_files_route = batch_upload_seams
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="restricted-user", models=["gemini-2.0-flash"]
+    )
+
+    response = _upload_batch_file({}, {"target_model_names": "my-vllm", "target_storage": "azure_storage"})
+
+    assert response.status_code == 403, response.text
+    assert "my-vllm" in response.text
+    assert upstream_files_route.call_count == 0
+    stored.assert_not_awaited()
+    provider_upload.assert_not_awaited()
+
+
 def test_batch_upload_for_a_provider_model_still_goes_to_the_provider(batch_upload_seams):
     stored, provider_upload, _ = batch_upload_seams
 

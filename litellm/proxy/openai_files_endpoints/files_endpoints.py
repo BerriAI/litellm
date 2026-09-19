@@ -117,6 +117,7 @@ async def _litellm_executed_batch_input_model(
     model: str | None,
     target_model_names_list: Sequence[str],
     user_api_key_dict: UserAPIKeyAuth,
+    explicit_storage: str | None,
 ) -> str | None:
     if llm_router is None:
         return None
@@ -129,6 +130,8 @@ async def _litellm_executed_batch_input_model(
             if _names_a_litellm_executed_provider(llm_router, candidate, team_id)
         )
     )
+    if explicit_storage is not None:
+        return None
     providers: Final = await asyncio.gather(
         *(resolve_litellm_executed_provider(llm_router, candidate, team_id) for candidate in candidates)
     )
@@ -305,10 +308,21 @@ async def route_create_file(
     5. Else -> use custom_llm_provider with files_settings
     """
 
-    executed_model: Final = await _litellm_executed_batch_input_model(
-        llm_router, purpose, model, target_model_names_list, user_api_key_dict
-    )
     explicit_storage: Final = target_storage if target_storage and target_storage != "default" else None
+    if explicit_storage == LITELLM_DB_STORAGE_BACKEND_NAME:
+        raise ProxyException(
+            message=(
+                f"target_storage={LITELLM_DB_STORAGE_BACKEND_NAME} is not a storage a caller can pick: LiteLLM "
+                "chooses it on its own for the batch input files of a model whose batches it runs itself, so "
+                "upload with purpose=batch and name that model instead of target_storage"
+            ),
+            type="invalid_request_error",
+            param="target_storage",
+            code=400,
+        )
+    executed_model: Final = await _litellm_executed_batch_input_model(
+        llm_router, purpose, model, target_model_names_list, user_api_key_dict, explicit_storage
+    )
     storage: Final = explicit_storage or (LITELLM_DB_STORAGE_BACKEND_NAME if executed_model is not None else None)
     if storage is not None:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (

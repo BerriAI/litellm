@@ -1764,6 +1764,10 @@ async def test_post_call_hook_leaves_litellm_executed_batches_untouched(llm_batc
     assert managed_files.store_unified_object_id.await_count == (1 if stores else 0)
     if not stores:
         assert response.id == original_id
+
+
+@pytest.mark.asyncio
+async def test_afile_delete_passes_trusted_model_credentials_to_router():
     """
     afile_delete must hand the deployment's credential snapshot to the router
     call, since Bedrock validates the s3:// file id against the bucket in it.
