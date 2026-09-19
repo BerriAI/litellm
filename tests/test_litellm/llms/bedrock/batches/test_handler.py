@@ -585,8 +585,6 @@ class _JsonBody:
 
 
 class _AuthorizationRecorder:
-    """Stands in for botocore's HTTP session and records the Authorization header of every request it receives."""
-
     def __init__(self, body: Mapping[str, object]) -> None:
         self._payload: Final = json.dumps(body, default=str).encode()
         self.authorization_headers: tuple[str, ...] = ()
