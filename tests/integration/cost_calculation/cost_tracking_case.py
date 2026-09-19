@@ -35,7 +35,10 @@ class CostMapEntry(BaseModel):
     max_output_tokens: int | None = None
     supports_function_calling: bool | None = None
     input_cost_per_token: float | None = None
+    input_cost_per_query: float | None = None
     output_cost_per_token: float | None = None
+    output_vector_size: int | None = None
+    input_cost_per_token_batches: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
@@ -172,7 +175,8 @@ class CostTrackingTestCase(BaseModel):
         provider: Final = self.rates.litellm_provider
         prefix: Final = (
             "openai"
-            if provider == "openai" and self.rates.mode == "chat"
+            if provider == "openai"
+            and (self.endpoint == "/v1/responses" or self.rates.mode in {"chat", "embedding", "moderation"})
             else "openai/responses"
             if provider == "openai"
             else _PROVIDER_PREFIXES.get(provider)
@@ -207,7 +211,11 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "anthropic": "anthropic",
         "bedrock_converse": "bedrock/converse",
+        "text-completion-openai": "text-completion-openai",
+        "cohere": "cohere",
+        "bedrock": "bedrock",
         "vertex_ai-language-models": "vertex_ai",
+        "vertex_ai-embedding-models": "vertex_ai",
         "gemini": "",
         "together_ai": "",
         "fireworks_ai": "",
@@ -224,7 +232,19 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "aws_region_name": "us-east-1",
             }
         ),
+        "text-completion-openai": MappingProxyType({}),
+        "cohere": MappingProxyType({}),
+        "bedrock": MappingProxyType(
+            {
+                "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
+                "aws_secret_access_key": "scripted-secret",
+                "aws_region_name": "us-east-1",
+            }
+        ),
         "vertex_ai-language-models": MappingProxyType(
+            {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
+        ),
+        "vertex_ai-embedding-models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
         ),
         "gemini": MappingProxyType({}),

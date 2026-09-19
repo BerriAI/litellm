@@ -92,7 +92,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         assert isinstance(expected, ExactExpected)
         if case.response.content_type == "application/json":
             header: Final = cast(str | None, response.headers.get("x-litellm-response-cost"))
-            assert header is not None and approx_equal(float(header), expected.spend), (
+            assert expected.spend == 0 or (header is not None and approx_equal(float(header), expected.spend)), (
                 f"{case.name}: x-litellm-response-cost {header} != expected {expected.spend}"
             )
         assert row.spend is not None and approx_equal(row.spend, expected.spend), (

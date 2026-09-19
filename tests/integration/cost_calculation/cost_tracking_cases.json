@@ -408,6 +408,98 @@
       "mode": "chat",
       "output_cost_per_token": 3.6e-06,
       "supports_function_calling": true
+    },
+    "text-embedding-4-small": {
+      "input_cost_per_token": 1.01e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "openai",
+      "mode": "embedding"
+    },
+    "text-embedding-3-large-next": {
+      "input_cost_per_token": 1.02e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "openai",
+      "mode": "embedding"
+    },
+    "azure/text-embedding-4-large": {
+      "input_cost_per_token": 1.03e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "azure",
+      "mode": "embedding"
+    },
+    "embed-v5": {
+      "input_cost_per_token": 1.04e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "cohere",
+      "mode": "embedding"
+    },
+    "amazon.titan-embed-text-v2:0": {
+      "input_cost_per_token": 1.05e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "bedrock",
+      "mode": "embedding"
+    },
+    "cohere.embed-english-v4": {
+      "input_cost_per_token": 1.06e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "bedrock",
+      "mode": "embedding"
+    },
+    "text-embedding-006": {
+      "input_cost_per_token": 1.07e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "vertex_ai-embedding-models",
+      "mode": "embedding"
+    },
+    "gemini/gemini-embedding-002": {
+      "input_cost_per_token": 1.08e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "gemini",
+      "mode": "embedding"
+    },
+    "together_ai/together-embed-v1": {
+      "input_cost_per_token": 1.09e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "together_ai",
+      "mode": "embedding"
+    },
+    "fireworks_ai/fireworks-embed-v1": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "fireworks_ai",
+      "mode": "embedding"
+    },
+    "rerank-v4": {
+      "input_cost_per_token": 1.11e-06,
+      "output_cost_per_token": 0,
+      "input_cost_per_query": 0.0021,
+      "litellm_provider": "cohere",
+      "mode": "rerank"
+    },
+    "cohere.rerank-v4:0": {
+      "input_cost_per_token": 1.12e-06,
+      "output_cost_per_token": 0,
+      "input_cost_per_query": 0.0022,
+      "litellm_provider": "bedrock",
+      "mode": "rerank"
+    },
+    "gpt-3.5-turbo-instruct-next": {
+      "input_cost_per_token": 1.14e-06,
+      "output_cost_per_token": 2.14e-06,
+      "litellm_provider": "text-completion-openai",
+      "mode": "completion"
+    },
+    "omni-moderation-next": {
+      "input_cost_per_token": null,
+      "output_cost_per_token": 0,
+      "litellm_provider": "openai",
+      "mode": "moderation"
+    },
+    "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+      "input_cost_per_token": 1.16e-06,
+      "output_cost_per_token": 2.16e-06,
+      "litellm_provider": "together_ai",
+      "mode": "completion"
     }
   },
   "cases": [
@@ -25776,6 +25868,851 @@
         "output_cost": 0.01133,
         "prompt_tokens": 11056,
         "completion_tokens": 412
+      }
+    },
+    {
+      "name": "text-embeddings-4-small-single",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-4-small",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "one embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "text-embedding-4-small",
+          "usage": {
+            "prompt_tokens": 7,
+            "total_tokens": 7
+          }
+        }
+      },
+      "expected": {
+        "spend": 7.07e-06,
+        "input_cost": 7.07e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 7,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "text-embeddings-4-small-batch",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-4-small",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": [
+          "one",
+          "two",
+          "three"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            },
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 1
+            },
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 2
+            }
+          ],
+          "model": "text-embedding-4-small",
+          "usage": {
+            "prompt_tokens": 21,
+            "total_tokens": 21
+          }
+        }
+      },
+      "expected": {
+        "spend": 2.1210000000000002e-05,
+        "input_cost": 2.1210000000000002e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 21,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "text-embeddings-4-small-token-array",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-4-small",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "text-embedding-4-small",
+          "usage": {
+            "prompt_tokens": 9,
+            "total_tokens": 9
+          }
+        }
+      },
+      "expected": {
+        "spend": 9.090000000000001e-06,
+        "input_cost": 9.090000000000001e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 9,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "text-embeddings-3-large-dimensions",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-3-large-next",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "large embedding",
+        "dimensions": 3
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "text-embedding-3-large-next",
+          "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8
+          }
+        }
+      },
+      "expected": {
+        "spend": 8.16e-06,
+        "input_cost": 8.16e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 8,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "azure-text-embeddings-4-large-deployment",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure/text-embedding-4-large",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "azure embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "azure/text-embedding-4-large",
+          "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8
+          }
+        }
+      },
+      "expected": {
+        "spend": 8.24e-06,
+        "input_cost": 8.24e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 8,
+        "completion_tokens": 0
+      },
+      "deployment": {
+        "model": "azure/cc-pinned-embedding-deployment",
+        "base_model": "azure/text-embedding-4-large"
+      }
+    },
+    {
+      "name": "cohere-embeddings-v5",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "embed-v5",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "cohere embedding",
+        "input_type": "search_query"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "emb-1",
+          "embeddings": {
+            "float": [
+              [
+                0.1,
+                0.2,
+                0.3
+              ]
+            ]
+          },
+          "meta": {
+            "billed_units": {
+              "input_tokens": 11
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.144e-05,
+        "input_cost": 1.144e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 11,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "bedrock-embeddings-titan-v2",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "amazon.titan-embed-text-v2:0",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "titan embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "embedding": [
+            0.1,
+            0.2,
+            0.3
+          ],
+          "inputTextTokenCount": 10
+        }
+      },
+      "expected": {
+        "spend": 1.05e-05,
+        "input_cost": 1.05e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "bedrock-cohere-embeddings-v4",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "cohere.embed-english-v4",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "bedrock cohere embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "embeddings": [
+            [
+              0.1,
+              0.2,
+              0.3
+            ]
+          ],
+          "id": "emb-bedrock-cohere-1",
+          "response_type": "embeddings_floats",
+          "texts": [
+            "bedrock cohere embedding"
+          ]
+        }
+      },
+      "expected": {
+        "spend": 5.3e-06,
+        "input_cost": 5.3e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 5,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "vertex-embeddings-text-006",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-006",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "vertex embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "predictions": [
+            {
+              "embeddings": {
+                "values": [
+                  0.1,
+                  0.2,
+                  0.3
+                ],
+                "statistics": {
+                  "token_count": 7,
+                  "truncated": false
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 7.4899999999999994e-06,
+        "input_cost": 7.4899999999999994e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 7,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "gemini-embeddings-002",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-embedding-002",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "gemini embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "embeddings": [
+            {
+              "values": [
+                0.1,
+                0.2,
+                0.3
+              ]
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 7,
+            "totalTokenCount": 7
+          }
+        }
+      },
+      "expected": {
+        "spend": 3.24e-06,
+        "input_cost": 3.24e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 3,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "together-embeddings-v1",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "together_ai/together-embed-v1",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "together embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "together-embed-v1",
+          "usage": {
+            "prompt_tokens": 7,
+            "total_tokens": 7
+          }
+        }
+      },
+      "expected": {
+        "spend": 7.63e-06,
+        "input_cost": 7.63e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 7,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "fireworks-embeddings-v1",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "fireworks_ai/fireworks-embed-v1",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "fireworks embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "fireworks-embed-v1",
+          "usage": {
+            "prompt_tokens": 7,
+            "total_tokens": 7
+          }
+        }
+      },
+      "expected": {
+        "spend": 7.7e-06,
+        "input_cost": 7.7e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 7,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "cohere-rerank-v4-one",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "rerank-v4",
+      "endpoint": "/v1/rerank",
+      "request": {
+        "model": "$MODEL",
+        "query": "rank this",
+        "documents": [
+          "a",
+          "b"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "rr-$REQUEST_ID",
+          "results": [
+            {
+              "index": 0,
+              "relevance_score": 0.9
+            }
+          ],
+          "meta": {
+            "api_version": {
+              "version": "2"
+            },
+            "billed_units": {
+              "search_units": 1
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0021,
+        "input_cost": 0.0021,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "cohere-rerank-v4-three",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "rerank-v4",
+      "endpoint": "/v1/rerank",
+      "request": {
+        "model": "$MODEL",
+        "query": "rank this",
+        "documents": [
+          "a long document",
+          "another long document",
+          "third long document"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "rr-three-$REQUEST_ID",
+          "results": [
+            {
+              "index": 0,
+              "relevance_score": 0.9
+            }
+          ],
+          "meta": {
+            "api_version": {
+              "version": "2"
+            },
+            "billed_units": {
+              "search_units": 3
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0063,
+        "input_cost": 0.0063,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "cohere-rerank-v4-total-tokens-fallback",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "rerank-v4",
+      "endpoint": "/v1/rerank",
+      "request": {
+        "model": "$MODEL",
+        "query": "rank this",
+        "documents": [
+          "fallback a",
+          "fallback b"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "rr-fallback-$REQUEST_ID",
+          "results": [
+            {
+              "index": 0,
+              "relevance_score": 0.8
+            }
+          ],
+          "meta": {
+            "billed_units": {
+              "total_tokens": 99
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "bedrock-cohere-rerank-v4",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "cohere.rerank-v4:0",
+      "endpoint": "/v1/rerank",
+      "request": {
+        "model": "$MODEL",
+        "query": "rank this",
+        "documents": [
+          "a",
+          "b"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "results": [
+            {
+              "index": 0,
+              "relevanceScore": 0.9
+            }
+          ],
+          "response_id": "rr-3",
+          "token_count": 1
+        }
+      },
+      "expected": {
+        "spend": 0.0022,
+        "input_cost": 0.0022,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "text-completions-openai-basic",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-3.5-turbo-instruct-next",
+      "endpoint": "/v1/completions",
+      "request": {
+        "model": "$MODEL",
+        "prompt": "complete this"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "cmpl-basic-$REQUEST_ID",
+          "object": "text_completion",
+          "choices": [
+            {
+              "text": "done",
+              "index": 0,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 4,
+            "total_tokens": 13
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.882e-05,
+        "input_cost": 1.026e-05,
+        "output_cost": 8.56e-06,
+        "prompt_tokens": 9,
+        "completion_tokens": 4
+      }
+    },
+    {
+      "name": "text-completions-openai-stream-usage",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-3.5-turbo-instruct-next",
+      "endpoint": "/v1/completions",
+      "request": {
+        "model": "$MODEL",
+        "prompt": "complete this",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\": \"cmpl-$REQUEST_ID\", \"object\": \"text_completion\", \"created\": 1789789000, \"model\": \"gpt-3.5-turbo-instruct-next\", \"choices\": [{\"text\": \"done\", \"index\": 0, \"finish_reason\": null}], \"usage\": null}",
+          "data: {\"id\": \"cmpl-$REQUEST_ID\", \"object\": \"text_completion\", \"created\": 1789789000, \"model\": \"gpt-3.5-turbo-instruct-next\", \"choices\": [], \"usage\": {\"prompt_tokens\": 9, \"completion_tokens\": 4, \"total_tokens\": 13}}",
+          "data: [DONE]"
+        ]
+      },
+      "expected": {
+        "spend": 1.882e-05,
+        "input_cost": 1.026e-05,
+        "output_cost": 8.56e-06,
+        "prompt_tokens": 9,
+        "completion_tokens": 4
+      }
+    },
+    {
+      "name": "text-completions-openai-n-best",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-3.5-turbo-instruct-next",
+      "endpoint": "/v1/completions",
+      "request": {
+        "model": "$MODEL",
+        "prompt": "complete this twice",
+        "n": 2
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "cmpl-n-best-$REQUEST_ID",
+          "object": "text_completion",
+          "choices": [
+            {
+              "text": "done",
+              "index": 0,
+              "finish_reason": "stop"
+            },
+            {
+              "text": "also done",
+              "index": 1,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 8,
+            "total_tokens": 17
+          }
+        }
+      },
+      "expected": {
+        "spend": 2.738e-05,
+        "input_cost": 1.026e-05,
+        "output_cost": 1.712e-05,
+        "prompt_tokens": 9,
+        "completion_tokens": 8
+      }
+    },
+    {
+      "name": "together-completions-v1",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "endpoint": "/v1/completions",
+      "request": {
+        "model": "$MODEL",
+        "prompt": "together complete"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "cmpl-together-$REQUEST_ID",
+          "object": "text_completion",
+          "choices": [
+            {
+              "text": "done",
+              "index": 0,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 4,
+            "total_tokens": 13
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.908e-05,
+        "input_cost": 1.0439999999999998e-05,
+        "output_cost": 8.64e-06,
+        "prompt_tokens": 9,
+        "completion_tokens": 4
+      }
+    },
+    {
+      "name": "omni-moderations-next-single",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "omni-moderation-next",
+      "endpoint": "/v1/moderations",
+      "request": {
+        "model": "$MODEL",
+        "input": "safe text"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "modr-single-$REQUEST_ID",
+          "model": "omni-moderation-next",
+          "results": [
+            {
+              "flagged": false,
+              "categories": {},
+              "category_scores": {}
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "omni-moderations-next-list",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "omni-moderation-next",
+      "endpoint": "/v1/moderations",
+      "request": {
+        "model": "$MODEL",
+        "input": [
+          "safe text",
+          "more safe text"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "modr-list-$REQUEST_ID",
+          "model": "omni-moderation-next",
+          "results": [
+            {
+              "flagged": false,
+              "categories": {},
+              "category_scores": {}
+            },
+            {
+              "flagged": false,
+              "categories": {},
+              "category_scores": {}
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
       }
     }
   ]
