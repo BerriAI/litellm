@@ -47,6 +47,7 @@ from litellm.types.integrations.custom_logger import (
     AgenticLoopRequestPatch,
 )
 from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+from litellm.utils import token_counter
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -54,6 +55,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 BYPASS_HEADER: Final = "x-headroom-bypass"
+DEFAULT_MIN_TOKENS: Final = 1000
 _STREAM_CONVERTIBLE_CALL_TYPES: Final = frozenset(
     (CallTypes.completion, CallTypes.acompletion, CallTypes.responses, CallTypes.aresponses)
 )
@@ -495,6 +497,7 @@ class HeadroomGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         ccr_retrieval: bool = True,
+        min_tokens: int | None = None,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -509,6 +512,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
         self.ccr_retrieval = ccr_retrieval
+        self.min_tokens: int = DEFAULT_MIN_TOKENS if min_tokens is None else min_tokens
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -809,16 +813,47 @@ class HeadroomGuardrail(CustomGuardrail):
             return inputs
 
         model: Final = self.headroom_model or request_data.get("model")
-        start_time: Final = time.time()
-        result: Final = await self._call_compress(
-            messages=_flatten_messages_for_compression(compressible),
-            model=model if isinstance(model, str) else None,
+        flattened: Final = _flatten_messages_for_compression(compressible)
+        compressible_tokens: Final = token_counter(
+            model=model if isinstance(model, str) else "",
+            messages=flattened,
         )
-        end_time: Final = time.time()
-
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
         )
+
+        if self.min_tokens > 0 and compressible_tokens < self.min_tokens:
+            verbose_proxy_logger.debug(
+                "Headroom: %s compressible tokens below min_tokens=%s; skipping compression",
+                compressible_tokens,
+                self.min_tokens,
+            )
+            now: Final = time.time()
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response={
+                    "skipped": "below_min_tokens",
+                    "compressible_tokens": compressible_tokens,
+                    "min_tokens": self.min_tokens,
+                    "tokens_before": compressible_tokens,
+                    "tokens_after": compressible_tokens,
+                    "tokens_saved": 0,
+                },
+                request_data=request_data,
+                guardrail_status="success",
+                guardrail_provider=HEADROOM_GUARDRAIL_PROVIDER,
+                start_time=now,
+                end_time=now,
+                duration=0.0,
+            )
+            add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
+            return inputs
+
+        start_time: Final = time.time()
+        result: Final = await self._call_compress(
+            messages=flattened,
+            model=model if isinstance(model, str) else None,
+        )
+        end_time: Final = time.time()
 
         if not result.succeeded:
             self.add_standard_logging_guardrail_information_to_request_data(

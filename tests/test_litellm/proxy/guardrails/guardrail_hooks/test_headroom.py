@@ -34,6 +34,7 @@ from fastapi import HTTPException
 import litellm
 
 from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
+    DEFAULT_MIN_TOKENS,
     HeadroomGuardrail,
     has_headroom_retrieve_tool,
     HEADROOM_RETRIEVE_TOOL_NAME,
@@ -46,6 +47,7 @@ from litellm.types.utils import (
     CallTypes,
     GenericGuardrailAPIInputs,
 )
+from litellm.utils import token_counter
 
 FAKE_API_BASE = "https://headroom.example.com"
 FAKE_API_KEY = "test-key"
@@ -87,6 +89,7 @@ def _make_guardrail(**kwargs) -> HeadroomGuardrail:
         api_key=FAKE_API_KEY,
         guardrail_name="headroom",
         default_on=True,
+        min_tokens=0,
     )
     defaults.update(kwargs)
     return HeadroomGuardrail(**defaults)
@@ -228,6 +231,97 @@ def _recorded_guardrail_response(request_data: dict) -> dict:
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     assert len(entries) == 1
     return entries[0]["guardrail_response"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_skips_compress_below_min_tokens():
+    short_messages = [
+        ORIGINAL_MESSAGES[0],
+        {"role": "user", "content": "A short earlier turn."},
+        ORIGINAL_MESSAGES[2],
+        ORIGINAL_MESSAGES[3],
+    ]
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A short earlier turn."],
+        structured_messages=short_messages,
+    )
+    request_data = {"model": "gpt-4o"}
+    guardrail = _make_guardrail(min_tokens=1000)
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as post:
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert result is inputs
+    post.assert_not_awaited()
+    response = _recorded_guardrail_response(request_data)
+    assert response["skipped"] == "below_min_tokens"
+    assert response["tokens_saved"] == 0
+    entry = request_data["metadata"]["standard_logging_guardrail_information"][0]
+    assert entry["guardrail_status"] == "success"
+    assert entry["guardrail_provider"] == "headroom"
+    assert "headroom" in _applied_guardrails(request_data)
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_compresses_at_or_above_min_tokens():
+    short_messages = [
+        ORIGINAL_MESSAGES[0],
+        {"role": "user", "content": "A short earlier turn."},
+        ORIGINAL_MESSAGES[2],
+        ORIGINAL_MESSAGES[3],
+    ]
+    inputs = GenericGuardrailAPIInputs(
+        texts=["A short earlier turn."],
+        structured_messages=short_messages,
+    )
+    threshold = token_counter(model="gpt-4o", messages=[short_messages[1]])
+    guardrail = _make_guardrail(min_tokens=threshold)
+    request_data = {"model": "gpt-4o"}
+
+    with patch.object(
+        guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response([short_messages[1]]),
+    ) as post:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=request_data,
+            input_type="request",
+        )
+
+    post.assert_awaited_once()
+
+    one_token_messages = [
+        ORIGINAL_MESSAGES[0],
+        {"role": "user", "content": "A"},
+        ORIGINAL_MESSAGES[2],
+        ORIGINAL_MESSAGES[3],
+    ]
+    zero_threshold_guardrail = _make_guardrail(min_tokens=0)
+    zero_threshold_request_data = {"model": "gpt-4o"}
+    zero_threshold_inputs = GenericGuardrailAPIInputs(
+        texts=["A"],
+        structured_messages=one_token_messages,
+    )
+
+    with patch.object(
+        zero_threshold_guardrail.async_handler,
+        "post",
+        new_callable=AsyncMock,
+        return_value=_make_compress_response([one_token_messages[1]]),
+    ) as post:
+        await zero_threshold_guardrail.apply_guardrail(
+            inputs=zero_threshold_inputs,
+            request_data=zero_threshold_request_data,
+            input_type="request",
+        )
+
+    post.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -920,6 +1014,31 @@ async def test_ccr_retrieval_disabled_ignores_service_declared_hashes(monkeypatc
     assert result["structured_messages"][-1] == HASH_SHAPED_HISTORY[-1]
     assert not has_headroom_retrieve_tool(result.get("tools") or [])
     assert not guardrail._issued_hashes_by_call_id
+
+
+def test_initialize_guardrail_passes_min_tokens(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.guardrails.guardrail_hooks.headroom import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda callback: None)
+    configured_params = LitellmParams(
+        guardrail="headroom",
+        mode="pre_call",
+        api_base=FAKE_API_BASE,
+        min_tokens=42,
+    )
+    configured_guardrail = initialize_guardrail(
+        configured_params,
+        {"guardrail_name": "headroom", "litellm_params": configured_params},
+    )
+    default_params = LitellmParams(guardrail="headroom", mode="pre_call", api_base=FAKE_API_BASE)
+    default_guardrail = initialize_guardrail(
+        default_params,
+        {"guardrail_name": "headroom", "litellm_params": default_params},
+    )
+
+    assert configured_guardrail.min_tokens == 42
+    assert default_guardrail.min_tokens == DEFAULT_MIN_TOKENS
 
 
 @pytest.mark.asyncio

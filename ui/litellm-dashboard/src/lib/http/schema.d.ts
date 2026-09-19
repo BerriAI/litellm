@@ -32199,6 +32199,12 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /**
+             * Min Tokens
+             * @description Skip the compression round trip when the compressible messages total fewer than this many tokens. 0 always calls the compression service.
+             * @default 1000
+             */
+            min_tokens: number;
+            /**
              * Mock Redacted Text
              * @description Mock redacted text for testing
              */
