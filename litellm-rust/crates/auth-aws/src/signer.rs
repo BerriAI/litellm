@@ -9,8 +9,6 @@ use crate::{
     is_sigv4_computed_header, resolve_credentials, sign_post,
 };
 
-/// SigV4 over the serialized body. Credentials are resolved up front, since
-/// they do not depend on the body; the signature waits for the final bytes.
 #[derive(Clone, Debug)]
 pub struct SigV4Signer {
     region: String,
@@ -33,8 +31,6 @@ impl SigV4Signer {
         Self { clock, ..self }
     }
 
-    /// A host with its own resolution chain hands credentials down in
-    /// `optional_params`; only derive them here when it supplied none.
     pub async fn resolve(
         region: String,
         service: &'static str,
@@ -57,7 +53,6 @@ impl RequestSigner for SigV4Signer {
         &self,
         request: UnsignedRequest<'_>,
     ) -> Result<Vec<(String, String)>, litellm_http::Error> {
-        // Sending a caller's copy next to the computed one is rejected by AWS.
         if let Some((name, _)) = request
             .headers
             .iter()
