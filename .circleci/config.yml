@@ -2987,7 +2987,7 @@ jobs:
       - run:
           name: Run owned integration contracts
           command: bash .circleci/scripts/run_integration.sh << parameters.suite >>
-          no_output_timeout: 25m
+          no_output_timeout: 15m
       - run:
           name: Stop owned database and Redis
           when: always
