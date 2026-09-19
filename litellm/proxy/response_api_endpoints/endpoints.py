@@ -34,6 +34,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
 )
+from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
     ResponsesAPIOptionalRequestParams,
@@ -296,6 +297,7 @@ async def responses_api(
                 route_type="aresponses",
                 llm_router=llm_router,
             )
+            raise_if_required_body_param_missing(route_type="aresponses", data=data)
         except Exception as e:
             raise await processor._handle_llm_api_exception(
                 e=e,

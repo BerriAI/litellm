@@ -2662,6 +2662,55 @@ def test_delete_allowed_ip_writes_deleted_audit_log(monkeypatch):
         app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+@pytest.mark.parametrize("route", ["/add/allowed_ip", "/delete/allowed_ip"])
+def test_allowed_ip_routes_refuse_a_config_owned_list_with_a_clear_400(route, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.proxy_server as proxy_server_module
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.config_resolvers.settings_store import SettingsStore
+
+    store = SettingsStore("general_settings")
+    store.load_yaml({"allowed_ips": ["203.0.113.77"]})
+    saved = []
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_auditlog.create = AsyncMock()
+
+    async def _get_config():
+        return {"general_settings": {"allowed_ips": ["203.0.113.77"]}}
+
+    async def _save_config(new_config=None):
+        saved.append(new_config)
+        return new_config
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server_module, "general_settings", store)
+    monkeypatch.setattr(proxy_server_module.proxy_config, "get_config", _get_config)
+    monkeypatch.setattr(proxy_server_module.proxy_config, "save_config", _save_config)
+
+    async def _admin_auth():
+        return UserAPIKeyAuth(
+            user_id="config-admin",
+            api_key="hashed-admin-key",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+    try:
+        ip = "198.51.100.9" if route == "/add/allowed_ip" else "203.0.113.77"
+        resp = client.post(route, json={"ip": ip})
+
+        assert resp.status_code == 400, resp.text
+        assert "allowed_ips" in resp.text
+        assert list(store["allowed_ips"]) == ["203.0.113.77"]
+        assert saved == []
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
 def test_update_ui_theme_settings_writes_audit_log(mock_proxy_config, monkeypatch):
     """Updating the UI theme must be audited under ui_theme_config."""
     from unittest.mock import AsyncMock, MagicMock

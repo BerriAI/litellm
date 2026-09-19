@@ -474,7 +474,7 @@ class TestDetailedTiming:
         monkeypatch.setattr(response_metadata_mod, "LITELLM_DETAILED_TIMING", True)
 
         result = ModelResponse()
-        received_at = datetime.datetime.now(datetime.timezone.utc)
+        received_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
         start = received_at + datetime.timedelta(milliseconds=200)
         api_call_start = start.replace(tzinfo=None)
         end = start + datetime.timedelta(milliseconds=530)

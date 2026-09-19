@@ -5300,7 +5300,7 @@
         "supports_web_search": false
     },
     "azure/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -5334,7 +5334,7 @@
         "supports_vision": true
     },
     "azure/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.5e-08,
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_batches": 5e-08,
@@ -10207,7 +10207,7 @@
         "supports_web_search": false
     },
     "azure/us/gpt-4.1-nano-2025-04-14": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -14246,7 +14246,6 @@
         "source": "https://developers.openai.com/api/docs/pricing"
     },
     "claude-haiku-4-5-20251001": {
-        "deprecation_date": "2026-10-15",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -14270,7 +14269,6 @@
         "prompt_cache_min_tokens": 4096
     },
     "claude-haiku-4-5": {
-        "deprecation_date": "2026-10-15",
         "cache_creation_input_token_cost": 1.25e-06,
         "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
@@ -14420,7 +14418,6 @@
         "prompt_cache_min_tokens": 1024
     },
     "claude-sonnet-4-5": {
-        "deprecation_date": "2026-09-29",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
@@ -14455,7 +14452,6 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-4-5-20250929": {
-        "deprecation_date": "2026-09-29",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
@@ -14491,7 +14487,6 @@
         "source": "https://docs.anthropic.com/en/docs/about-claude/pricing"
     },
     "claude-sonnet-5": {
-        "deprecation_date": "2027-06-30",
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
         "cache_read_input_token_cost": 2e-07,
@@ -14530,7 +14525,6 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-sonnet-4-6": {
-        "deprecation_date": "2027-02-17",
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
@@ -14684,7 +14678,6 @@
         "prompt_cache_min_tokens": 1024
     },
     "claude-opus-4-5-20251101": {
-        "deprecation_date": "2026-11-24",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -14714,7 +14707,6 @@
         "prompt_cache_min_tokens": 4096
     },
     "claude-opus-4-5": {
-        "deprecation_date": "2026-11-24",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -14745,7 +14737,6 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-6": {
-        "deprecation_date": "2027-02-05",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -14783,7 +14774,6 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-6-20260205": {
-        "deprecation_date": "2027-02-05",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -14820,7 +14810,6 @@
         "prompt_cache_min_tokens": 4096
     },
     "claude-opus-4-7": {
-        "deprecation_date": "2027-04-16",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -14859,7 +14848,6 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-7-20260416": {
-        "deprecation_date": "2027-04-16",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -14897,7 +14885,6 @@
         "prompt_cache_min_tokens": 2048
     },
     "claude-fable-5": {
-        "deprecation_date": "2027-06-09",
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 1e-06,
@@ -14937,7 +14924,6 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-fable-5-1": {
-        "deprecation_date": "2027-09-01",
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -14978,7 +14964,6 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-5": {
-        "deprecation_date": "2027-07-24",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -15020,7 +15005,6 @@
         "source": "https://platform.claude.com/docs/en/about-claude/pricing"
     },
     "claude-opus-4-8": {
-        "deprecation_date": "2027-05-28",
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
@@ -59567,6 +59551,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59593,6 +59605,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59619,6 +59659,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59645,6 +59713,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 2.2e-08,
+            "input_cost_per_token": 6.6e-07,
+            "output_cost_per_token": 1.98e-06,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 3.96e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59671,6 +59767,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59697,6 +59821,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59723,6 +59875,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 1.2e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -59749,6 +59929,34 @@
         "max_output_tokens": 393216,
         "max_tokens": 393216,
         "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 2.2e-08,
+            "input_cost_per_token": 6.6e-07,
+            "output_cost_per_token": 1.98e-06,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
         "output_cost_per_token": 3.96e-06,
         "source": "https://api-docs.deepseek.com/quick_start/pricing",
         "supported_endpoints": [
@@ -60154,7 +60362,6 @@
         }
     },
     "claude-mythos-5-1": {
-        "deprecation_date": "2027-09-01",
         "cache_creation_input_token_cost": 1.25e-05,
         "cache_creation_input_token_cost_above_1hr": 2e-05,
         "cache_read_input_token_cost": 2.5e-07,
@@ -69114,7 +69321,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/eu/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,
@@ -69468,7 +69675,7 @@
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
     },
     "azure/us/gpt-4.1-nano": {
-        "deprecation_date": "2026-10-14",
+        "deprecation_date": "2027-04-14",
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 1.1e-07,
         "input_cost_per_token_batches": 5.5e-08,

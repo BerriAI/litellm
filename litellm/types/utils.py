@@ -4020,6 +4020,7 @@ class LlmProviders(str, Enum):
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     REDUCTO = "reducto"
+    AWS_TEXTRACT = "aws_textract"
     RUNWAYML = "runwayml"
     AWS_POLLY = "aws_polly"
     TRANSCRIBE = "transcribe"
