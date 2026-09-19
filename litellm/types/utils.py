@@ -3913,6 +3913,7 @@ all_litellm_params = (
         "enable_tag_filtering",
         "enable_json_schema_validation",
         "use_xai_oauth",
+        "chatgpt_auth_file",
         "auto_router_config_path",
         "auto_router_config",
         "auto_router_default_model",

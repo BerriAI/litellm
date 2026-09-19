@@ -3,7 +3,8 @@ import json
 import os
 import time
 from collections.abc import Mapping
-from typing import Final, TypeAlias
+from functools import lru_cache
+from typing import TYPE_CHECKING, Final, TypeAlias
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -24,6 +25,9 @@ from .common_utils import (
     RefreshAccessTokenError,
 )
 
+if TYPE_CHECKING:
+    from litellm.types.router import GenericLiteLLMParams
+
 TOKEN_EXPIRY_SKEW_SECONDS: Final = 60
 DEVICE_CODE_TIMEOUT_SECONDS: Final = 15 * 60
 DEVICE_CODE_COOLDOWN_SECONDS: Final = 5 * 60
@@ -40,13 +44,32 @@ def _optional_str(value: JsonValue | None) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def get_chatgpt_auth_file(
+    litellm_params: "Mapping[str, object] | GenericLiteLLMParams | None",
+) -> str | None:
+    if litellm_params is None:
+        return None
+    value: Final = (
+        litellm_params.get("chatgpt_auth_file")
+        if isinstance(litellm_params, Mapping)
+        else litellm_params.chatgpt_auth_file
+    )
+    return value if isinstance(value, str) and value else None
+
+
+@lru_cache(maxsize=128)
+def get_cached_authenticator(auth_file: str) -> "Authenticator":
+    return Authenticator(auth_file=auth_file)
+
+
 class Authenticator:
-    def __init__(self) -> None:
-        self.token_dir = os.getenv(
-            "CHATGPT_TOKEN_DIR",
-            os.path.expanduser("~/.config/litellm/chatgpt"),
+    def __init__(self, auth_file: str | None = None) -> None:
+        default_auth_file: Final = os.path.join(
+            os.getenv("CHATGPT_TOKEN_DIR", os.path.expanduser("~/.config/litellm/chatgpt")),
+            os.getenv("CHATGPT_AUTH_FILE", "auth.json"),
         )
-        self.auth_file = os.path.join(self.token_dir, os.getenv("CHATGPT_AUTH_FILE", "auth.json"))
+        self.auth_file = os.path.expanduser(auth_file or default_auth_file)
+        self.token_dir = os.path.dirname(self.auth_file)
         self._ensure_token_dir()
 
     def get_api_base(self) -> str:

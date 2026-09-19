@@ -60,6 +60,7 @@ OPTIONAL_KWARGS_KEYS: Final = (
             "itpm",
             "otpm",
             "use_xai_oauth",
+            "chatgpt_auth_file",
         }
     )
     | AWS_CREDENTIAL_KWARGS_KEYS
