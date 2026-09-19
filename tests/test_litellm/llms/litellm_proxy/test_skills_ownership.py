@@ -337,6 +337,27 @@ async def test_should_hide_skill_from_different_owner(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_should_return_skill_to_its_owner(monkeypatch):
+    table = AsyncMock()
+    table.find_unique.return_value = _skill("litellm_skill_mine", "user-1")
+    prisma_client = type(
+        "Prisma", (), {"db": type("DB", (), {"litellm_skillstable": table})()}
+    )()
+    monkeypatch.setattr(
+        LiteLLMSkillsHandler,
+        "_get_prisma_client",
+        AsyncMock(return_value=prisma_client),
+    )
+
+    skill = await LiteLLMSkillsHandler.get_skill(
+        "litellm_skill_mine",
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+    )
+
+    assert skill.skill_id == "litellm_skill_mine"
+
+
+@pytest.mark.asyncio
 async def test_should_hide_unowned_skill_by_default(monkeypatch):
     table = AsyncMock()
     table.find_unique.return_value = _skill("litellm_skill_unowned", None)
