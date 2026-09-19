@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import time
@@ -6,6 +7,7 @@ from unittest.mock import mock_open, patch
 import pytest
 
 from litellm.llms.chatgpt.authenticator import Authenticator
+from litellm.llms.chatgpt.common_utils import GetAccessTokenError
 
 
 def _make_jwt(payload: dict) -> str:
@@ -54,10 +56,29 @@ class TestChatGPTAuthenticator:
             token = authenticator.get_access_token()
             assert token == "token-new"
 
+    def test_get_access_token_inside_event_loop_fails_fast_without_device_login(self, authenticator, tmp_path):
+        authenticator.auth_file = str(tmp_path / "missing.json")
+
+        async def _get_token_on_loop() -> str:
+            return authenticator.get_access_token()
+
+        with patch.object(authenticator, "_request_device_code") as mock_device_code:
+            with pytest.raises(GetAccessTokenError) as exc_info:
+                asyncio.run(_get_token_on_loop())
+            mock_device_code.assert_not_called()
+
+        assert exc_info.value.status_code == 401
+        assert "event loop" in str(exc_info.value)
+
+    def test_get_access_token_outside_event_loop_runs_device_login(self, authenticator, tmp_path):
+        authenticator.auth_file = str(tmp_path / "missing.json")
+
+        with patch.object(authenticator, "_login_device_code", return_value={"access_token": "token-dev"}) as login:
+            assert authenticator.get_access_token() == "token-dev"
+            login.assert_called_once()
+
     def test_get_account_id_from_id_token(self, authenticator):
-        id_token = _make_jwt(
-            {"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}}
-        )
+        id_token = _make_jwt({"https://api.openai.com/auth": {"chatgpt_account_id": "acct-123"}})
         auth_data = json.dumps({"id_token": id_token})
 
         with (

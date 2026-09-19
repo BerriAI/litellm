@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import os
@@ -40,6 +41,14 @@ def _optional_str(value: JsonValue | None) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _event_loop_is_running() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 class Authenticator:
     def __init__(self) -> None:
         self.token_dir = os.getenv(
@@ -65,6 +74,16 @@ class Authenticator:
                     return refreshed["access_token"]
                 except RefreshAccessTokenError as exc:
                     verbose_logger.warning("ChatGPT refresh token failed, re-login required: %s", exc)
+
+        if _event_loop_is_running():
+            raise GetAccessTokenError(
+                message=(
+                    "No usable cached ChatGPT credentials, and the interactive device code login cannot run inside "
+                    "a running event loop. Sign in once from a synchronous session (for example litellm.completion "
+                    "in a terminal) so the tokens are cached in CHATGPT_TOKEN_DIR, then retry."
+                ),
+                status_code=401,
+            )
 
         cooldown_remaining: Final = self._get_device_code_cooldown_remaining(auth_data)
         if cooldown_remaining > 0:
