@@ -467,6 +467,9 @@ def test_reasoning_with_forced_tool_choice_switches_to_auto():
         ("global.xai.grok-4.6", "max_completion_tokens", 1, 16),
         ("us.xai.grok-4.6", "max_tokens", 32, 32),
         ("anthropic.claude-sonnet-4-5-20250929-v1:0", "max_tokens", 1, 1),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.openai.gpt-6-astra", "max_tokens", 1, 16),
+        ("arn:aws:bedrock:us-east-1:123456789012:inference-profile/global.xai.grok-4.6", "max_tokens", 1, 16),
+        ("arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123xyz", "max_tokens", 1, 1),
     ],
 )
 def test_map_openai_params_enforces_minimum_max_tokens_for_openai_compat_models(

@@ -382,12 +382,6 @@ class AmazonConverseConfig(BaseConfig):
     def _requires_min_max_tokens(model: str) -> bool:
         return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
 
-    @staticmethod
-    def _enforce_min_max_tokens(max_tokens: object) -> object:
-        if isinstance(max_tokens, int) and max_tokens < BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS:
-            return BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS
-        return max_tokens
-
     def _is_nova_2_model(self, model: str) -> bool:
         """
         Check if the model is a Nova 2 model that supports reasoningConfig.
@@ -1011,8 +1005,8 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["maxTokens"] = (
-                    self._enforce_min_max_tokens(value)
-                    if self._requires_min_max_tokens(model) and isinstance(value, int)
+                    max(value, BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS)
+                    if isinstance(value, int) and self._requires_min_max_tokens(model)
                     else value
                 )
             if param == "stream":
