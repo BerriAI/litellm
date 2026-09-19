@@ -3364,6 +3364,7 @@ async def team_member_add(
 
     ```
     """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         premium_user,
@@ -3458,6 +3459,10 @@ async def team_member_add(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
+    await evict_and_broadcast(
+        cache_keys=tuple(sorted(user.user_id for user in updated_users)),
+        user_api_key_cache=user_api_key_cache,
+    )
     await _evict_created_membership_caches(
         user_ids=(tm.user_id for tm in updated_team_memberships),
         team_id=data.team_id,

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
@@ -914,6 +915,32 @@ async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context(
             )
 
     assert isinstance(exc_info.value.__context__, ConnectionError)
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
+    """A database-only read is never answered by the per-worker negative memo: a row created after a miss on
+    this worker is returned within db_cache_expiry seconds instead of raising UserNotFoundError, so the token
+    exchange mints for a user JWT auth just accepted."""
+    from litellm.proxy.auth import auth_checks
+
+    user_id = "memo-probe-user"
+    monkeypatch.setitem(auth_checks.last_db_access_time, f"user_id:{user_id}", (None, time.time()))
+    db_row = LiteLLM_UserTable(user_id=user_id, user_email=None, user_role="internal_user")
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
+
+    result = await get_user_object(
+        user_id=user_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+        user_id_upsert=False,
+        check_db_only=True,
+    )
+
+    assert result is not None
+    assert result.user_id == user_id
+    mock_prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -8802,6 +8829,23 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
             ) is True
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
 
+
+def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
+    """The RFC 8693 token exchange authorizes the IdP JWT against ``POST /token`` itself, and JWT
+    auth only binds a team from a multi-team claim when that team may call the route, so the
+    default team allowlist has to cover the gateway's token endpoint or the exchange would mint
+    teamless credentials for every ``team_ids_jwt_field`` deployment."""
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert allowed_routes_check(
+        user_role=LitellmUserRoles.TEAM, user_route="/token", litellm_proxy_roles=LiteLLM_JWTAuth()
+    )
+    assert not allowed_routes_check(
+        user_role=LitellmUserRoles.TEAM,
+        user_route="/token",
+        litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=[]),
+    )
 
 def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/models") is True
