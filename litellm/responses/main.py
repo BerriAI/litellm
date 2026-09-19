@@ -621,7 +621,9 @@ async def aresponses(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model,
+                api_base=local_vars.get("base_url", None),
+                litellm_params=GenericLiteLLMParams(chatgpt_auth_file=kwargs.get("chatgpt_auth_file")),
             )
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
@@ -1197,7 +1199,9 @@ def responses(
 
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model,
+                api_base=local_vars.get("base_url", None),
+                litellm_params=GenericLiteLLMParams(chatgpt_auth_file=kwargs.get("chatgpt_auth_file")),
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
 
@@ -2079,7 +2083,9 @@ async def acompact_responses(
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=model,
+                api_base=local_vars.get("base_url", None),
+                litellm_params=GenericLiteLLMParams(chatgpt_auth_file=kwargs.get("chatgpt_auth_file")),
             )
             # Update local_vars with detected provider (fixes #19782)
             local_vars["custom_llm_provider"] = custom_llm_provider
