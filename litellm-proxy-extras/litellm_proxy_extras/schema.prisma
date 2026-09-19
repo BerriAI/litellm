@@ -1107,6 +1107,12 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   @@index([team_id, created_at(sort: Desc)])
 }
 
+model LiteLLM_ManagedFileContentTable {
+  id         String   @id @default(uuid())
+  content    Bytes
+  created_at DateTime @default(now())
+}
+
 model LiteLLM_ManagedVectorStoreTable {
   id String @id @default(uuid())
   unified_resource_id String @unique // The base64 encoded unified vector store ID
@@ -1545,6 +1551,36 @@ model LiteLLM_AdaptiveRouterSession {
   @@index([last_activity_at], map: "idx_adaptive_router_session_activity")
 }
 
+model LiteLLM_AutoRouterBaselineComparison {
+  scope               String   @id
+  api_key             String
+  session_id          String
+  router_name         String
+  initial_equivalent  Boolean
+  revision            BigInt   @default(0)
+  published_revision  BigInt   @default(0)
+  history             String?
+  attempted_at        DateTime?
+  retired             Boolean  @default(false)
+  updated_at          DateTime @default(now())
+
+  @@index([api_key, session_id, router_name], map: "idx_autorouter_baseline_scope")
+  @@index([updated_at], map: "idx_autorouter_baseline_updated")
+}
+
+model LiteLLM_AutoRouterBaselineObservation {
+  request_id  String  @id
+  scope       String
+  started_at  Float
+  revision    BigInt
+  data        String
+  publication String?
+  conflicted  Boolean @default(false)
+
+  @@index([scope, started_at, request_id], map: "idx_autorouter_baseline_event_order")
+  @@index([scope, revision, started_at], map: "idx_autorouter_baseline_event_revision")
+}
+
 model LiteLLM_AutoRouterSession {
   api_key               String
   session_id            String
@@ -1571,6 +1607,10 @@ model LiteLLM_AutoRouterSession {
   total_tokens          BigInt   @default(0)
   spend                 Float    @default(0)
   saved_spend           Float    @default(0)
+  savings_estimated_turns Int    @default(0)
+  savings_estimated_actual_spend Float @default(0)
+  savings_estimated_saved_spend Float @default(0)
+  savings_estimated_baseline_models Json @default("{}")
   classifier_cost       Float    @default(0)
   classifier_cost_recorded_turns Int @default(0)
   tier_turns            Json     @default("{}")

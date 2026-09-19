@@ -1,7 +1,13 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { RoutingDecisionCard, type RoutingDecision } from "./RoutingDecisionCard";
+
+vi.mock("@/components/ui/badge", () => ({
+  Badge: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+}));
+
+vi.mock("lucide-react", () => ({ Waypoints: () => null }));
 
 const heuristic: RoutingDecision = {
   router_model_name: "smart-router",
@@ -12,6 +18,13 @@ const heuristic: RoutingDecision = {
   score: 0.82,
   signals: ["long (900 tokens)", "code (python, function)"],
   tier_boundaries: { simple_medium: 0.15, medium_complex: 0.35, complex_reasoning: 0.6 },
+};
+
+const forecast = {
+  probabilities: { MEDIUM: 0.69321, SIMPLE: 0, COMPLEX: 0.81234, REASONING: 0.92345 },
+  threshold: 0.69,
+  predicted_tier: "MEDIUM",
+  request_type: "code_generation",
 };
 
 describe("RoutingDecisionCard", () => {
@@ -30,7 +43,75 @@ describe("RoutingDecisionCard", () => {
     expect(screen.getByText("(at or above 0.6, REASONING)")).toBeInTheDocument();
     expect(screen.getByText("claude-sonnet")).toBeInTheDocument();
     expect(screen.getByText("long (900 tokens)")).toBeInTheDocument();
+    expect(screen.queryByText("Heuristic v2 estimates")).not.toBeInTheDocument();
   });
+
+  it("shows recorded v2 success estimates, including zero, when signals were redacted", () => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          cause: "heuristic_v2",
+          tier: "MEDIUM",
+          tier_label: "Balanced",
+          heuristic_v2_forecast: forecast,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Heuristic v2 estimates")).toBeInTheDocument();
+    expect(screen.getByText("Success by tier")).toBeInTheDocument();
+    expect(
+      screen.getAllByText(/^(SIMPLE|MEDIUM|COMPLEX|REASONING) \d+\.\d%$/).map((badge) => badge.textContent),
+    ).toEqual(["SIMPLE 0.0%", "MEDIUM 69.3%", "COMPLEX 81.2%", "REASONING 92.3%"]);
+    expect(screen.getByText("Threshold")).toBeInTheDocument();
+    expect(screen.getByText("69.0%")).toBeInTheDocument();
+    expect(screen.getByText("Predicted tier")).toBeInTheDocument();
+    expect(screen.getByText("MEDIUM")).toBeInTheDocument();
+    expect(screen.getByText("Balanced")).toBeInTheDocument();
+    expect(screen.getByText("code_generation")).toBeInTheDocument();
+    expect(screen.queryByText("Score")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { threshold: 0, predicted_tier: "SIMPLE", expectedThreshold: "0.0%" },
+    { threshold: 0.99, predicted_tier: "REASONING", expectedThreshold: "99.0%" },
+  ])("keeps the prediction separate from an overridden tier at threshold $threshold", (scenario) => {
+    render(
+      <RoutingDecisionCard
+        decision={{
+          cause: "modality_escalation",
+          tier: "REASONING",
+          tier_label: "Vision",
+          signals: ["modality:image"],
+          heuristic_v2_forecast: {
+            ...forecast,
+            threshold: scenario.threshold,
+            predicted_tier: scenario.predicted_tier,
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Vision")).toBeInTheDocument();
+    expect(screen.getByText("Escalated for image input")).toBeInTheDocument();
+    expect(screen.getByText("Predicted tier")).toBeInTheDocument();
+    expect(screen.getByText(scenario.predicted_tier)).toBeInTheDocument();
+    expect(screen.getByText(scenario.expectedThreshold)).toBeInTheDocument();
+    expect(screen.getByText("modality:image")).toBeInTheDocument();
+  });
+
+  it.each([undefined, ["request-type:code_generation", "tier-probability:simple=0.100000"]])(
+    "preserves legacy v2 rows without inventing a forecast when signals are %j",
+    (signals) => {
+      render(<RoutingDecisionCard decision={{ cause: "heuristic_v2", tier: "SIMPLE", signals }} />);
+
+      expect(screen.getByText("Heuristic v2")).toBeInTheDocument();
+      expect(screen.getByText("SIMPLE")).toBeInTheDocument();
+      expect(screen.queryByText("Heuristic v2 estimates")).not.toBeInTheDocument();
+      expect(screen.queryByText("Threshold")).not.toBeInTheDocument();
+      for (const signal of signals ?? []) expect(screen.getByText(signal)).toBeInTheDocument();
+    },
+  );
 
   it("uses the persisted boundary snapshot, not today's defaults", () => {
     // Same score, boundaries the operator had configured lower: it lands in a
