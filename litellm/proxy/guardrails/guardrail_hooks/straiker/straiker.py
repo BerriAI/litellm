@@ -47,7 +47,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.straiker import (
     StraikerWebhookStream,
     StraikerWebhookUsage,
 )
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, ModelResponse
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -438,12 +438,14 @@ def _v3_request_body(request_data: Mapping[str, object]) -> Mapping[str, object]
     metadata subset the Straiker LiteLLM adapter reads.
     """
     identity: Final = _v3_identity_metadata(request_data)
+    as_chat: Final = _v3_text_completion_route(request_data) and "messages" not in request_data
     provider: Final = (
         (key, _v3_without_credentials(value) if key in _V3_REDACTED_KEYS else value)
         for key, value in request_data.items()
-        if key in _V3_PROVIDER_BODY_KEYS
+        if key in _V3_PROVIDER_BODY_KEYS and not (as_chat and key == "prompt")
     )
-    return _frozen((*provider, *((("metadata", identity),) if identity else ())))
+    prompt_turns: Final = (("messages", _v3_prompt_as_messages(request_data.get("prompt"))),) if as_chat else ()
+    return _frozen((*provider, *prompt_turns, *((("metadata", identity),) if identity else ())))
 
 
 def _v3_without_credentials(entries: object) -> object:
@@ -460,13 +462,28 @@ def _v3_without_credentials(entries: object) -> object:
     )
 
 
-def _v3_anthropic_messages_route(request_data: Mapping[str, object]) -> bool:
+def _v3_route_is(request_data: Mapping[str, object], call_type: CallTypes) -> bool:
     from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 
     route: Final = _merged_metadata(request_data).get("user_api_key_request_route")
     if not isinstance(route, str) or not route:
         return False
-    return CallTypes.anthropic_messages in (get_call_types_for_route(route) or ())
+    return call_type in (get_call_types_for_route(route) or ())
+
+
+def _v3_anthropic_messages_route(request_data: Mapping[str, object]) -> bool:
+    return _v3_route_is(request_data, CallTypes.anthropic_messages)
+
+
+def _v3_text_completion_route(request_data: Mapping[str, object]) -> bool:
+    return _v3_route_is(request_data, CallTypes.text_completion)
+
+
+def _v3_prompt_as_messages(prompt: object) -> tuple[Mapping[str, object], ...]:
+    prompts: Final = prompt if isinstance(prompt, (list, tuple)) else (prompt,)
+    return tuple(
+        _frozen((("role", "user"), ("content", str(text)))) for text in prompts if isinstance(text, (str, int, float))
+    )
 
 
 def _v3_answer(request_data: Mapping[str, object], model: str | None) -> Mapping[str, object] | None:
@@ -477,6 +494,8 @@ def _v3_answer(request_data: Mapping[str, object], model: str | None) -> Mapping
     turn sent as a chat completion scores nothing; the proxy's own adapter turns it back.
     """
     response: Final = request_data.get("response")
+    if isinstance(response, TextCompletionResponse):
+        return _v3_text_completion_as_chat(response)
     if not isinstance(response, ModelResponse) or not _v3_anthropic_messages_route(request_data):
         return _jsonable_dict(response)
     from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
@@ -486,6 +505,36 @@ def _v3_answer(request_data: Mapping[str, object], model: str | None) -> Mapping
     translated: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response=response)
     re_keyed: Final = dict(translated, model=response.model or model)  # mutable-ok: adapter TypedDict re-keyed
     return _jsonable_dict(re_keyed)
+
+
+def _v3_text_completion_as_chat(response: TextCompletionResponse) -> Mapping[str, object]:
+    """A legacy completion answer in the chat shape the platform scores.
+
+    Straiker has no reader for a `text_completion` answer on a gateway: the request phase
+    of a /v1/completions call is scored, the response phase is refused. A completion is one
+    user turn and one assistant turn, so both phases are presented as that exchange.
+    """
+    choices: Final = tuple(
+        _frozen(
+            (
+                ("index", index),
+                ("finish_reason", getattr(choice, "finish_reason", None)),
+                ("message", _frozen((("role", "assistant"), ("content", getattr(choice, "text", "") or "")))),
+            )
+        )
+        for index, choice in enumerate(response.choices)
+    )
+    usage: Final = _jsonable_dict(getattr(response, "usage", None))
+    return _frozen(
+        (
+            ("id", response.id),
+            ("object", "chat.completion"),
+            ("created", response.created),
+            ("model", response.model),
+            ("choices", choices),
+            *((("usage", usage),) if usage else ()),
+        )
+    )
 
 
 def _v3_answer_json(
@@ -586,7 +635,7 @@ def _v3_system_text(request_body: Mapping[str, object]) -> str | None:
 
 def _v3_first_message_text(request_body: Mapping[str, object]) -> str:
     messages: Final = request_body.get("messages") or request_body.get("input")
-    if isinstance(messages, list) and messages and isinstance(messages[0], Mapping):
+    if isinstance(messages, (list, tuple)) and messages and isinstance(messages[0], Mapping):
         content: Final = messages[0].get("content")
         if isinstance(content, str):
             return content
@@ -1059,21 +1108,13 @@ class StraikerGuardrail(CustomGuardrail):
             )
 
         parsed, failure = await self._post_webhook(payload, headers)
-        if failure is not None:
+        if failure is not None or parsed is None:
             return self._fail(
                 inputs=inputs,
                 request_data=request_data,
                 input_type=input_type,
-                error=failure.message,
-                is_unreachable=failure.is_unreachable,
-            )
-        if parsed is None:
-            return self._fail(
-                inputs=inputs,
-                request_data=request_data,
-                input_type=input_type,
-                error="empty response from Straiker",
-                is_unreachable=False,
+                error=failure.message if failure is not None else "empty response from Straiker",
+                is_unreachable=failure.is_unreachable if failure is not None else False,
             )
         self._record(request_data=request_data, logging_obj=logging_obj, parsed=parsed)
         if parsed.action == "BLOCKED":
