@@ -1,3 +1,7 @@
+//! The runtime-neutral v1 callback contract: envelopes and their sequencing, credential
+//! redaction, handler selection and validated wire patches. No PyO3 and no registry; a
+//! language host marshals these values to its own subscribers.
+
 mod envelope;
 mod patch;
 mod policy;

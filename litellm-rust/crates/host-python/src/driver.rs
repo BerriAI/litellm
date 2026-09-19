@@ -46,7 +46,6 @@ enum Stage {
 
 #[derive(Clone, Copy)]
 enum Expect {
-    Started,
     Arguments,
     Wire,
     Emitted,
@@ -159,13 +158,7 @@ where
         match (self.pending.take(), result) {
             (None, None) => {
                 self.started_at = epoch_seconds();
-                let started = LifecycleEvent::Started {
-                    start_time: self.started_at,
-                };
-                match self.adapter.emit(py, started) {
-                    Ok(step) => self.on_adapter(py, step, Expect::Started),
-                    Err(error) => self.adapter_failed(py, error),
-                }
+                self.begin(py)
             }
             (Some(Pending::Native), Some(Ok(_))) => {
                 let result = self.take_native_result()?;
@@ -201,7 +194,6 @@ where
                 self.pending = Some(Pending::Adapter(expect));
                 Ok(ExecutionStep::Await(awaitable))
             }
-            (Expect::Started, LifecycleStep::Done) => self.begin(py),
             (Expect::Arguments, LifecycleStep::Arguments(arguments)) => {
                 self.arguments = Some(arguments);
                 self.stage = Stage::Call;
@@ -795,7 +787,6 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 
         fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
             self.log.push(match event {
-                LifecycleEvent::Started { .. } => "started".into(),
                 LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
                     format!("response:{}", raw.body)
                 }
@@ -927,7 +918,6 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 assert_eq!(
                     log,
                     [
-                        "started",
                         "begin",
                         "route:project",
                         "before_send",
@@ -973,7 +963,6 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 assert_eq!(
                     log,
                     [
-                        "started",
                         "begin",
                         "route:project",
                         "classify:provider exploded",
@@ -1007,7 +996,6 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             assert_eq!(
                 log,
                 [
-                    "started",
                     "begin",
                     "route:project",
                     "classify:op rejected",
@@ -1039,7 +1027,6 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             assert_eq!(
                 log,
                 [
-                    "started",
                     "begin",
                     "route:project",
                     "failed:Call:op failed",
@@ -1077,7 +1064,6 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             assert_eq!(
                 log,
                 [
-                    "started",
                     "begin",
                     "route:project",
                     "classify:provider exploded",
@@ -1108,7 +1094,6 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             assert_eq!(
                 log,
                 [
-                    "started",
                     "begin",
                     "failed:Host:begin failed",
                     "adapter.close",
@@ -1239,10 +1224,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             )
             .unwrap_err();
             assert!(!error.is_instance_of::<pyo3::exceptions::PyException>(py));
-            assert_eq!(
-                log.entries(),
-                ["started", "begin", "route", "adapter.close"]
-            );
+            assert_eq!(log.entries(), ["begin", "route", "adapter.close"]);
         });
     }
 

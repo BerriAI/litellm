@@ -5,6 +5,26 @@
   - `RouteHost::invoke` receives the keyword view the adapter's `begin` returned, not the caller's dict; a route host that projects from it inherits that adapter's rewrites (for the legacy adapter: setup, deployment hooks, credential inheritance)
   - A native failure, including one a host op returns as `InvokeError::Native`, is classified exactly once through the route's `classify`; a Python exception raised inside the call, and a failure in `begin` or `after_success`, is raised as is
   - A failing `classify` is raised with the native error's text as its `__context__`, never swallowed
+- Terms; the callback crates build on these and never redefine them
+  - Machine: the native call; it never calls out, it yields a `HostOp` (`Route`, `BeforeSend`, `Emit`, `Open`, `Deliver`) and waits for the `HostResult`
+  - Host: whatever answers those ops; the Python host is two capabilities the driver composes: `RouteHost` (route ops, argument and response projection) and `PythonLifecycle` (callbacks)
+  - Host language = callback language: a lifecycle speaks `Py<...>` and `PyErr` directly; another host language gets its own crate of this shape and reuses only `litellm-host` and `litellm-callbacks-v1`
+  - Driver: runs one call; owns the machine, one route host and exactly one lifecycle
+  - Lifecycle: one implementation of `PythonLifecycle`, one callback contract's view of a call; chain: several lifecycles behind one, in a fixed order
+  - Step: one driver-to-lifecycle method call, answered with a `LifecycleStep`; a threading step (`begin`, `before_send`, `after_success`) returns the value the call continues with and defaults to returning what it was given; an observing step (`emit`, `opened`, `delivered`) returns nothing to the call
+  - Suspension: a step answered with `Await`; the driver awaits it in the caller's task and continues the same step through `resume`
+  - Terminal event: `Succeeded` or `Failed`, exactly once, last
+  - Cancellation: a raised `BaseException` that is not an `Exception`; `is_cancellation` is the only definition; never reported, never swallowed, never followed by dispatch
+  - Keyword view: the kwargs dict as rewritten so far; `begin` threads it and the route projects from the result
+  - Wire: the `WireRequest` (URL, headers, body) about to be sent; `before_send` threads it
+  - Surface: the static facts a route declares about itself to a contract (`call_type`, ...)
+  - Python contract: a crate's `python.rs` enum, its `python_contract.json` and the one `litellm/rust_bridge/*.py` module behind them, tested from both sides
+- `PythonLifecycle` is the whole callback boundary: the driver holds exactly one and never learns how many contracts are behind it
+  - `LifecycleChain` composes several in a fixed order: `begin`, `before_send` and `after_success` thread their value forward, events reach each in turn, any error ends the step with no further dispatch
+  - `begin` carries the call's start time and is the first thing a lifecycle hears of a call; there is no separate started event
+  - A lifecycle whose `begin` was never reached receives nothing of that call; the terminal event goes to the ones `begin` reached
+  - A suspension resumes the lifecycle that suspended, then continues the same step with the ones after it; a retained failure is the raised exception object itself
+  - Ordering policy (which contract runs first) belongs to whoever builds the chain, never to this crate
 - Use standard PyO3 ownership and conversion APIs
   - Prefer `Bound<'py, T>` for attached operations/results, `Py<T>` for retention; binding/unbinding does not copy payloads
   - Use `pythonize` for selected Serde data, never a JSON-text round trip; share conversion with `Pythonized<T>`

@@ -1,3 +1,4 @@
+mod callbacks;
 mod credentials;
 mod diagnostics;
 mod errors;

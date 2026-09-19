@@ -1,3 +1,6 @@
+//! The Python contract of this crate: every function of
+//! `litellm/rust_bridge/callbacks_legacy_python.py` that Rust calls, by name.
+
 use pyo3::prelude::*;
 use strum::{IntoStaticStr, VariantArray};
 
@@ -153,7 +156,7 @@ mod tests {
     use crate::test_support::PYTHON_CONTRACT;
 
     #[test]
-    fn every_borrowed_function_is_in_the_python_contract() {
+    fn every_function_is_in_the_python_contract() {
         let contract: serde_json::Map<String, serde_json::Value> =
             serde_json::from_str(PYTHON_CONTRACT).unwrap();
         let declared: BTreeSet<&str> = contract.keys().map(String::as_str).collect();
@@ -177,7 +180,7 @@ mod tests {
             )
             .map(LegacyPython::name)
             .collect();
-        assert_eq!(called.len(), declared.len(), "a function is borrowed twice");
+        assert_eq!(called.len(), declared.len(), "a function is listed twice");
         assert_eq!(called.into_iter().collect::<BTreeSet<_>>(), declared);
     }
 }

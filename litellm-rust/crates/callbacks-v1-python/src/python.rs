@@ -1,3 +1,6 @@
+//! The Python contract of this crate: every function of
+//! `litellm/rust_bridge/callbacks_v1_python.py` that Rust calls, by name.
+
 use pyo3::prelude::*;
 use strum::{IntoStaticStr, VariantArray};
 
@@ -35,17 +38,19 @@ mod tests {
     use strum::VariantArray;
 
     use super::V1Python;
+    use crate::test_support::PYTHON_CONTRACT;
 
     #[test]
     fn every_function_is_in_the_python_contract() {
         let contract: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(include_str!("../python_contract.json")).unwrap();
+            serde_json::from_str(PYTHON_CONTRACT).unwrap();
         let declared: BTreeSet<&str> = contract.keys().map(String::as_str).collect();
-        let called: BTreeSet<&str> = V1Python::VARIANTS
+        let called: Vec<&str> = V1Python::VARIANTS
             .iter()
             .copied()
             .map(V1Python::name)
             .collect();
-        assert_eq!(called, declared);
+        assert_eq!(called.len(), declared.len(), "a function is listed twice");
+        assert_eq!(called.into_iter().collect::<BTreeSet<_>>(), declared);
     }
 }

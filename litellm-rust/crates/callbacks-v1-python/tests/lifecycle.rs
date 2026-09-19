@@ -10,9 +10,9 @@ use serde_json::{Value, json};
 
 use crate::adapter::V1PythonLifecycle;
 use crate::call::V1PythonSurface;
-use crate::registry::{Handler, Subscriber};
+use crate::subscribers::{Handler, Subscriber};
 use crate::test_support::{local, namespace};
-use litellm_callbacks_v1::{EventKind, SCHEMA_V1};
+use litellm_callbacks_v1::EventKind;
 
 const TIMING: Timing = Timing {
     start_time: 10.0,
@@ -38,7 +38,6 @@ fn subscriber(
     };
     Subscriber {
         name: name.to_string(),
-        schema: SCHEMA_V1,
         events: events.iter().copied().collect::<BTreeSet<_>>(),
         observe: handler(observe),
         intercept: handler(intercept),
@@ -51,15 +50,6 @@ fn lifecycle(subscribers: Vec<Subscriber>, asynchronous: bool) -> V1PythonLifecy
         subscribers,
         asynchronous,
     )
-}
-
-fn started(adapter: &mut V1PythonLifecycle, py: Python<'_>) {
-    assert!(matches!(
-        adapter
-            .emit(py, LifecycleEvent::Started { start_time: 10.0 })
-            .unwrap(),
-        LifecycleStep::Done
-    ));
 }
 
 fn context(secret: &str) -> RequestContext {
@@ -111,7 +101,6 @@ response = {'id': 'response'}
             None,
         );
         let mut adapter = lifecycle(vec![observer], false);
-        started(&mut adapter, py);
         let arguments = PyDict::new(py);
         arguments.set_item("litellm_call_id", "call-123").unwrap();
         let LifecycleStep::Arguments(returned) =
@@ -202,7 +191,6 @@ def record(event):
             subscriber(&locals, "recorder", &event, Some(("record", false)), None),
         ];
         let mut adapter = lifecycle(subscribers, false);
-        started(&mut adapter, py);
         adapter.begin(py, PyDict::new(py).unbind(), 10.0).unwrap();
         let LifecycleStep::Wire(sent) = adapter
             .before_send(py, Box::new(wire("secret")), &context("secret"))
@@ -248,7 +236,6 @@ def record(event):
             ),
         ];
         let mut adapter = lifecycle(subscribers, false);
-        started(&mut adapter, py);
         assert!(matches!(
             adapter.begin(py, PyDict::new(py).unbind(), 10.0).unwrap(),
             LifecycleStep::Arguments(_)
@@ -299,7 +286,6 @@ def record(event):
             ),
         ];
         let mut adapter = lifecycle(subscribers, false);
-        started(&mut adapter, py);
         let error = match adapter.begin(py, PyDict::new(py).unbind(), 10.0) {
             Err(error) => error,
             Ok(_) => panic!("cancellation was swallowed"),
@@ -337,7 +323,6 @@ def second(event):
             ),
         ];
         let mut adapter = lifecycle(subscribers, true);
-        started(&mut adapter, py);
         let arguments = PyDict::new(py).unbind();
         assert!(matches!(
             adapter.begin(py, arguments.clone_ref(py), 10.0).unwrap(),
@@ -387,7 +372,6 @@ def observe(event):
             ),
         ];
         let mut adapter = lifecycle(subscribers, false);
-        started(&mut adapter, py);
         adapter.begin(py, PyDict::new(py).unbind(), 10.0).unwrap();
         let LifecycleStep::Wire(sent) = adapter
             .before_send(py, Box::new(wire("secret")), &context("secret"))
@@ -440,7 +424,6 @@ def observe(event):
             ),
         ];
         let mut adapter = lifecycle(subscribers, false);
-        started(&mut adapter, py);
         adapter.begin(py, PyDict::new(py).unbind(), 10.0).unwrap();
         let error = match adapter.before_send(py, Box::new(wire("secret")), &context("secret")) {
             Err(error) => error,
@@ -474,7 +457,6 @@ response = Broken()
             None,
         );
         let mut adapter = lifecycle(vec![observer], false);
-        started(&mut adapter, py);
         adapter.begin(py, PyDict::new(py).unbind(), 10.0).unwrap();
         adapter.opened(py).unwrap();
         let response = local(&locals, "response").unbind();

@@ -6,6 +6,7 @@
 mod adapter;
 mod argument;
 mod callable;
+mod chain;
 mod driver;
 mod execution;
 mod gil;
@@ -13,10 +14,12 @@ mod handle;
 mod marshal;
 
 pub use adapter::{
-    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, missing_state,
+    InvokeError, LifecycleEvent, LifecycleStep, PythonLifecycle, RouteHost, is_cancellation,
+    missing_state,
 };
 pub use argument::lookup;
 pub use callable::wrap_failure;
+pub use chain::LifecycleChain;
 pub use driver::run_call;
 pub use execution::{poll_async_value, run_async, run_async_value, run_sync, run_sync_value};
 pub use gil::{release_count, release_gil};
