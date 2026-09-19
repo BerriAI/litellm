@@ -2008,7 +2008,7 @@ def client(original_function):
                         result=result,
                         call_type=call_type,
                     )
-            elif call_type == CallTypes.arealtime.value:
+            elif call_type in (CallTypes.arealtime.value, CallTypes.aresponses_websocket.value):
                 return result
             ### POST-CALL RULES ###
             post_call_processing(
@@ -8730,6 +8730,10 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsAudioTranscriptionConfig()
+        elif litellm.LlmProviders.XAI == provider:
+            from litellm.llms.xai.audio_transcription.transformation import XAIAudioTranscriptionConfig
+
+            return XAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             if "gpt-4o" in model:
                 return litellm.OpenAIGPTAudioTranscriptionConfig()

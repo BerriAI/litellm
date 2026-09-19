@@ -3727,6 +3727,10 @@ def is_server_derived_pricing_key(key: str) -> bool:
     return key in SERVER_DERIVED_PRICING_FIELDS or ABOVE_THRESHOLD_COST_KEY_PATTERN.search(key) is not None
 
 
+PRICING_OVERRIDES_KEY: Final = "pricing_overrides"
+COST_MAP_LOOKUP_KEY: Final = "key"
+
+
 def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str, Any]:
     """Drop the pricing ``/model/info`` derives for display, keeping everything else.
 
@@ -3736,7 +3740,32 @@ def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str
     deployment at that day's price where no cost map refresh can reach it. A deployment's
     own pricing belongs on ``litellm_params``, which is unaffected.
     """
-    return MappingProxyType({k: v for k, v in model_info.items() if not is_server_derived_pricing_key(k)})
+    return MappingProxyType(
+        {k: v for k, v in model_info.items() if k != PRICING_OVERRIDES_KEY and not is_server_derived_pricing_key(k)}
+    )
+
+
+def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, ...]:
+    """Pricing fields a stored ``model_info`` blob copied from a ``/model/info`` response.
+
+    Only ``litellm.get_model_info`` emits ``key`` (the resolved cost-map entry), so a stored
+    blob carrying it alongside pricing fields holds the cost map as it stood on the day the
+    row was saved, not a price anyone typed. Rows saved before 1.102 through the Admin UI
+    edit form look exactly like this, and a price typed into ``litellm_params`` never does.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
+
+
+def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            frozenset(
+                k for source in sources for k, v in source.items() if v is not None and is_server_derived_pricing_key(k)
+            )
+        )
+    )
 
 
 # Server-controlled fields that bound or drive an interceptor's agentic loop

@@ -39,6 +39,7 @@ async def test_proxy_metadata_remains_python_owned(ocr_server: RecordingServer) 
     )
     events: Final = await recorder.wait_for_async("async_log_success_event")
     assert response.pages[0].markdown == "native OCR response"
+    assert response._hidden_params["additional_headers"]["x-litellm-rust"] == "true"
     assert events[0].kwargs["litellm_params"]["metadata"]["user_api_key_auth"].user_id == "ocr-user"
     assert "metadata" not in ocr_server.requests[0].body
 

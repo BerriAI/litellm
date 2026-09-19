@@ -1,9 +1,8 @@
-use std::{sync::OnceLock, time::Duration};
-
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use litellm_auth_gcp::VertexAuth;
 use litellm_host::event::WireRequest;
+use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
@@ -11,14 +10,13 @@ use crate::{
     base_llm::ocr::{
         error::Error,
         transformation::{
-            BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OCR_CONNECT_TIMEOUT_SECS,
-            OcrDocument, OcrResponseContext, PreparedOcrRequest, decode_request_value,
-            decode_response,
+            BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
+            PreparedOcrRequest, decode_request_value, decode_response,
         },
     },
     custom_httpx::{
         http_handler::{HeaderPolicy, execute_http_request, with_headers},
-        media::MediaFetcher,
+        media::{MediaFetcher, UrlPolicy},
         transport,
     },
 };
@@ -40,28 +38,18 @@ pub struct OcrClient {
 }
 
 impl OcrClient {
-    pub fn new(provider_http: reqwest::Client) -> Result<Self, transport::Error> {
-        let document_fetcher = MediaFetcher::new().map_err(transport::Error::from)?;
+    pub fn new(
+        pool: &HttpClientPool,
+        config: &HttpClientConfig,
+        url_policy: UrlPolicy,
+        vertex_auth: VertexAuth,
+    ) -> Result<Self, litellm_http::Error> {
         Ok(Self {
-            provider_http,
-            polling_http: no_redirect_http()?,
-            document_fetcher,
-            vertex_auth: VertexAuth::default(),
+            provider_http: pool.client(config, ClientVariant::Provider)?,
+            polling_http: pool.client(config, ClientVariant::NoRedirect)?,
+            document_fetcher: MediaFetcher::new(pool, config, url_policy)?,
+            vertex_auth,
         })
-    }
-
-    pub fn shared() -> Result<Self, Error> {
-        static CLIENT: OnceLock<Result<OcrClient, transport::Error>> = OnceLock::new();
-        let client = CLIENT
-            .get_or_init(|| {
-                reqwest::Client::builder()
-                    .connect_timeout(Duration::from_secs(OCR_CONNECT_TIMEOUT_SECS))
-                    .build()
-                    .map_err(transport::Error::from)
-                    .and_then(OcrClient::new)
-            })
-            .clone()?;
-        Ok(client)
     }
 
     pub fn provider_http(&self) -> &reqwest::Client {
@@ -84,19 +72,14 @@ impl OcrClient {
     pub fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
         Self {
             provider_http,
-            polling_http: no_redirect_http().expect("test polling client builds"),
+            polling_http: reqwest::Client::builder()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("test polling client builds"),
             document_fetcher: MediaFetcher::for_test(document_http),
             vertex_auth: VertexAuth::default(),
         }
     }
-}
-
-fn no_redirect_http() -> Result<reqwest::Client, transport::Error> {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(OCR_CONNECT_TIMEOUT_SECS))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(transport::Error::from)
 }
 
 /// Rust counterpart of `BaseLLMHTTPHandler.async_ocr`: prepare the provider request,
@@ -296,6 +279,8 @@ pub fn body_document(body: &Value) -> Result<OcrDocument, Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[tokio::test]
