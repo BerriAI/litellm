@@ -4066,6 +4066,30 @@ class TestModelInfoCostMapEchoFilter:
         assert info["mode"] == entry["mode"]
         assert "max_input_tokens" not in info
 
+    def test_resetting_an_override_to_the_cost_map_value_removes_it(self):
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        entry = litellm.get_model_info("gpt-5.6")
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="dep-echo-4", mode="chat", max_input_tokens=2048),
+        )
+        echo = {**entry, "id": "dep-echo-4", "db_model": True, "access_groups": ["staging"]}
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**echo)),
+        )
+
+        info = json.loads(result["model_info"])
+        assert "max_input_tokens" not in info
+        assert info["mode"] == "chat"
+        assert info["access_groups"] == ["staging"]
+
 
 class TestUpdateDBModelClearCacheControlInjectionPoints:
     def test_explicit_null_removes_stored_injection_points(self):

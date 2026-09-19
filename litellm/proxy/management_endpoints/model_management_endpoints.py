@@ -919,6 +919,9 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
                 )
             )
         )
+        for k in echoed_fields:
+            if k in merged_model_info and merged_model_info[k] != incoming_model_info[k]:
+                del merged_model_info[k]
 
     # Honor explicit-null clears LAST, after both merges, so a model_info blob a client
     # passes through cannot silently undo a litellm_params clear via .update().
