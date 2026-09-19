@@ -1,4 +1,5 @@
-"""Proxy-wide allow-list of team-settings fields a team admin may change on /team/update."""
+"""Proxy-wide allow-list of what a team admin may do on the teams they administer: team-settings fields on
+/team/update, plus the ``projects`` permission for /project/new and /project/update."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -21,6 +22,10 @@ TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING: Final = "team_admin_editable_team_field
 
 # TODO(LIT-5722): add the remaining team settings one per PR, each with its value-diff tests and dashboard field
 SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset({"tpm_limit", "rpm_limit", "max_budget"})
+TEAM_ADMIN_PROJECTS_PERMISSION: Final = "projects"
+SUPPORTED_TEAM_ADMIN_PERMISSIONS: Final[frozenset[str]] = SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS | {
+    TEAM_ADMIN_PROJECTS_PERMISSION
+}
 
 _FIELD_LIST: Final = TypeAdapter(list[str])
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
@@ -67,15 +72,21 @@ def resolve_team_admin_editable_fields(
             "%s must be a list of field names; ignoring %r", TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING, raw
         )
         return frozenset()
-    unsupported: Final = configured - supported
+    unsupported: Final = configured - supported - SUPPORTED_TEAM_ADMIN_PERMISSIONS
     if unsupported:
         verbose_proxy_logger.warning(
             "%s ignores unsupported field(s) %s; supported: %s",
             TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
             sorted(unsupported),
-            sorted(supported),
+            sorted(supported | SUPPORTED_TEAM_ADMIN_PERMISSIONS),
         )
     return configured & supported
+
+
+def team_admin_may_manage_projects(general_settings: Mapping[str, object]) -> bool:
+    return TEAM_ADMIN_PROJECTS_PERMISSION in resolve_team_admin_editable_fields(
+        general_settings, frozenset({TEAM_ADMIN_PROJECTS_PERMISSION})
+    )
 
 
 def _as_object(value: object) -> Mapping[str, object]:

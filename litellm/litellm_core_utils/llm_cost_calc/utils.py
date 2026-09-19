@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
     tier_rate,
 )
+from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -70,6 +71,12 @@ _INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
 
 def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
     return custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
+
+
+def apply_provider_cache_read_default(model_info: ModelInfo, custom_llm_provider: str | None) -> ModelInfo:
+    if custom_llm_provider == "fireworks_ai":
+        return with_default_cache_read_rate(model_info)
+    return model_info
 
 
 def _get_token_detail_value(details: object, key: str) -> int | None:
@@ -1170,8 +1177,10 @@ def generic_cost_per_token(
     # rather than handing back a name for this to re-resolve. A name cannot express a
     # per-deployment override: those are registered under the deployment id and kept off
     # the shared model-name key, so resolving from the name here reads the public rate.
-    if model_info is None:
-        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    resolved_model_info: Final = apply_provider_cache_read_default(
+        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_info is None else model_info,
+        custom_llm_provider,
+    )
 
     ## CALCULATE INPUT COST
     ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
@@ -1236,7 +1245,7 @@ def generic_cost_per_token(
         cache_creation_cost_above_1hr,
         cache_read_cost,
     ) = _get_token_base_cost(
-        model_info=model_info,
+        model_info=resolved_model_info,
         usage=usage,
         service_tier=service_tier,
         current_time=billing_time,
@@ -1245,7 +1254,7 @@ def generic_cost_per_token(
 
     prompt_cost = _calculate_input_cost(
         prompt_tokens_details=prompt_tokens_details,
-        model_info=model_info,
+        model_info=resolved_model_info,
         prompt_base_cost=prompt_base_cost,
         cache_read_cost=cache_read_cost,
         cache_creation_cost=cache_creation_cost,
@@ -1290,7 +1299,7 @@ def generic_cost_per_token(
 
     ## AUDIO COST
     if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
-        _output_cost_per_audio_token = _get_cost_per_unit(model_info, "output_cost_per_audio_token", None)
+        _output_cost_per_audio_token = _get_cost_per_unit(resolved_model_info, "output_cost_per_audio_token", None)
         _output_cost_per_audio_token = (
             _output_cost_per_audio_token if _output_cost_per_audio_token is not None else completion_base_cost
         )
@@ -1299,7 +1308,7 @@ def generic_cost_per_token(
     ## REASONING COST
     if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
         completion_cost += float(reasoning_tokens) * _resolve_billed_reasoning_rate(
-            model_info=model_info,
+            model_info=resolved_model_info,
             usage=usage,
             service_tier=service_tier,
             completion_base_cost=completion_base_cost,
@@ -1308,7 +1317,7 @@ def generic_cost_per_token(
 
     ## IMAGE COST
     if not is_text_tokens_total and image_tokens and image_tokens > 0:
-        _output_cost_per_image_token = _get_cost_per_unit(model_info, "output_cost_per_image_token", None)
+        _output_cost_per_image_token = _get_cost_per_unit(resolved_model_info, "output_cost_per_image_token", None)
         _output_cost_per_image_token = (
             _output_cost_per_image_token if _output_cost_per_image_token is not None else completion_base_cost
         )
@@ -1316,7 +1325,7 @@ def generic_cost_per_token(
 
     ## VIDEO COST
     if not is_text_tokens_total and video_tokens and video_tokens > 0:
-        _output_cost_per_video_token = _get_cost_per_unit(model_info, "output_cost_per_video_token", None)
+        _output_cost_per_video_token = _get_cost_per_unit(resolved_model_info, "output_cost_per_video_token", None)
         _output_cost_per_video_token = (
             _output_cost_per_video_token if _output_cost_per_video_token is not None else completion_base_cost
         )
@@ -1325,12 +1334,12 @@ def generic_cost_per_token(
     ## REGIONAL DATA-RESIDENCY UPLIFT
     # Applied as a flat multiplier across all token costs for the request
     # when the upstream is a regionalized OpenAI host (eu./us.api.openai.com).
-    uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency)
+    uplift: Final = _get_regional_uplift_multiplier(resolved_model_info, data_residency)
     if uplift != 1.0:
         prompt_cost *= uplift
         completion_cost *= uplift
 
-    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
+    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(resolved_model_info, vertex_location)
     if vertex_uplift != 1.0:
         prompt_cost *= vertex_uplift
         completion_cost *= vertex_uplift
@@ -1487,7 +1496,10 @@ def get_billed_token_rates(
     if custom_cost_per_token is not None:
         return _custom_pricing_rates(custom_cost_per_token)
     try:
-        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        model_info: Final = apply_provider_cache_read_default(
+            get_model_info(model=model, custom_llm_provider=custom_llm_provider),
+            custom_llm_provider,
+        )
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
         return None
     return _cost_map_billed_rates(
@@ -1578,8 +1590,9 @@ def calculate_prompt_caching_savings(
     ``billed_at`` is the request's completion time, so off-peak windows resolve as the
     biller saw them rather than at the later spend write.
     """
+    model_info_with_cache_read_default: Final = apply_provider_cache_read_default(model_info, custom_llm_provider)
     prompt_base_cost, _, cache_creation_cost, cache_creation_cost_above_1hr, cache_read_cost = _get_token_base_cost(
-        model_info=model_info,
+        model_info=model_info_with_cache_read_default,
         usage=usage,
         service_tier=service_tier,
         current_time=billed_at,
@@ -1848,6 +1861,9 @@ class CostCalculatorUtils:
             return azure_ai_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                size=resolved_size,
+                n=resolved_n,
+                optional_params=optional_params,
             )
         elif custom_llm_provider == litellm.LlmProviders.FAL_AI.value:
             from litellm.llms.fal_ai.cost_calculator import (

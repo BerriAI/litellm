@@ -1794,6 +1794,7 @@ async def test_process_team_members_single_member():
     mock_team = MagicMock(spec=LiteLLM_TeamTable)
     mock_team.metadata = {"team_member_budget_id": "budget-123"}
     mock_team.default_team_member_models = None
+    mock_team.members_with_roles = []
 
     # Mock user and membership objects
     mock_user = MagicMock(spec=LiteLLM_UserTable)
@@ -1854,6 +1855,7 @@ async def test_process_team_members_multiple_members():
     mock_team = MagicMock(spec=LiteLLM_TeamTable)
     mock_team.metadata = None
     mock_team.default_team_member_models = None
+    mock_team.members_with_roles = []
 
     # Create multiple members as dictionaries (they will be converted to Member objects)
     members = [
@@ -2086,7 +2088,7 @@ async def test_add_team_members_runs_member_writes_on_the_lock_holding_transacti
     tx.litellm_usertable.upsert = AsyncMock(return_value=added_user)
     tx.litellm_usertable.update_many = AsyncMock()
     tx.litellm_budgettable.create = AsyncMock(return_value=created_budget)
-    tx.litellm_teammembership.create = AsyncMock(return_value=membership)
+    tx.litellm_teammembership.upsert = AsyncMock(return_value=membership)
 
     tx_cm = MagicMock()
     tx_cm.__aenter__ = AsyncMock(return_value=tx)
@@ -2112,6 +2114,75 @@ async def test_add_team_members_runs_member_writes_on_the_lock_holding_transacti
 
     assert [user.user_id for user in updated_users] == ["bob"]
     assert [tm.budget_id for tm in updated_team_memberships] == ["budget-pool"]
+
+
+@pytest.mark.asyncio
+async def test_add_team_members_skips_budget_and_membership_writes_for_members_already_on_the_roster():
+    """
+    Regression pin for orphaned budgets on a mixed /team/member_add list.
+
+    A list naming one member already on the team and one new member must only create a
+    budget and membership row for the new member. Running add_new_member for the existing
+    member would create a per-member budget that nothing links to, since their membership
+    row (and the budget it already carries) is left untouched.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        _add_team_members_to_team,
+    )
+
+    added_user = MagicMock()
+    added_user.user_id = "bob"
+    added_user.model_dump.return_value = {"user_id": "bob", "teams": ["team-mixed"]}
+    created_budget = MagicMock()
+    created_budget.budget_id = "budget-bob"
+    membership = MagicMock()
+    membership.model_dump.return_value = {
+        "team_id": "team-mixed",
+        "user_id": "bob",
+        "budget_id": "budget-bob",
+        "litellm_budget_table": None,
+    }
+
+    tx = MagicMock()
+    tx.query_raw = AsyncMock(
+        return_value=[{"members_with_roles": [{"user_id": "alice", "user_email": None, "role": "user"}]}]
+    )
+    tx.litellm_teamtable.update = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-mixed", members_with_roles=[])
+    )
+    tx.litellm_usertable.upsert = AsyncMock(return_value=added_user)
+    tx.litellm_usertable.update_many = AsyncMock()
+    tx.litellm_budgettable.create = AsyncMock(return_value=created_budget)
+    tx.litellm_teammembership.upsert = AsyncMock(return_value=membership)
+
+    tx_cm = MagicMock()
+    tx_cm.__aenter__ = AsyncMock(return_value=tx)
+    tx_cm.__aexit__ = AsyncMock(return_value=None)
+
+    prisma_client = MagicMock()
+    prisma_client.tx = MagicMock(return_value=tx_cm)
+
+    _, updated_users, updated_team_memberships = await _add_team_members_to_team(
+        data=TeamMemberAddRequest(
+            team_id="team-mixed",
+            member=[Member(user_id="alice", role="user"), Member(user_id="bob", role="user")],
+            max_budget_in_team=50.0,
+        ),
+        complete_team_data=LiteLLM_TeamTable(team_id="team-mixed", members_with_roles=[]),
+        prisma_client=cast(object, prisma_client),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_proxy_admin_name="admin",
+    )
+
+    tx.litellm_budgettable.create.assert_awaited_once()
+    tx.litellm_teammembership.upsert.assert_awaited_once()
+    assert tx.litellm_teammembership.upsert.call_args.kwargs["where"] == {
+        "user_id_team_id": {"user_id": "bob", "team_id": "team-mixed"}
+    }
+    assert [user.user_id for user in updated_users] == ["bob"]
+    assert [tm.user_id for tm in updated_team_memberships] == ["bob"]
+    written_ids = [m["user_id"] for m in json.loads(tx.litellm_teamtable.update.call_args.kwargs["data"]["members_with_roles"])]
+    assert written_ids == ["alice", "bob"]
 
 
 @pytest.mark.asyncio
@@ -5772,7 +5843,7 @@ async def test_new_team_max_budget_within_user_limit():
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
-        mock_prisma.db.litellm_teammembership.create = AsyncMock(
+        mock_prisma.db.litellm_teammembership.upsert = AsyncMock(
             return_value=mock_membership
         )
 
@@ -5915,7 +5986,7 @@ async def test_new_team_org_scoped_budget_bypasses_user_limit():
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
-        mock_prisma.db.litellm_teammembership.create = AsyncMock(
+        mock_prisma.db.litellm_teammembership.upsert = AsyncMock(
             return_value=mock_membership
         )
 
@@ -6063,7 +6134,7 @@ async def test_new_team_org_scoped_models_bypasses_user_limit():
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
-        mock_prisma.db.litellm_teammembership.create = AsyncMock(
+        mock_prisma.db.litellm_teammembership.upsert = AsyncMock(
             return_value=mock_membership
         )
 
@@ -9525,7 +9596,7 @@ async def test_new_team_soft_budget_validation(
             "budget_id": None,
         }
         mock_prisma.db.litellm_teammembership = MagicMock()
-        mock_prisma.db.litellm_teammembership.create = AsyncMock(
+        mock_prisma.db.litellm_teammembership.upsert = AsyncMock(
             return_value=mock_membership
         )
 
@@ -13243,6 +13314,77 @@ async def test_team_member_add_audits_a_user_created_from_a_list_payload(monkeyp
 
     mock_audit.assert_called_once()
     assert created_user_id not in mock_audit.call_args.kwargs["existing_user_ids"]
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_evicts_the_new_members_cached_user_row_on_every_worker(monkeypatch):
+    """Auth admits a team-bound credential off the teams list of the cached user row. The add wrote the
+    new team to the database row only, so a worker still holding the old row refused the member's
+    credential with 403 until the management-object TTL expired. The add now evicts the row here and
+    broadcasts the eviction to the other workers, the way /team/member_delete already does."""
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_id = "team-b"
+    user_id = "dev-1"
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key=user_id, value=LiteLLM_UserTable(user_id=user_id, teams=["team-a"]), model_type=LiteLLM_UserTable
+    )
+    broadcast = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation", broadcast
+    )
+
+    updated_team = MagicMock()
+    updated_team.model_dump.return_value = {
+        "team_id": team_id,
+        "members_with_roles": [{"user_id": user_id, "role": "user"}],
+    }
+
+    async def fake_add_team_members_to_team(**kwargs):
+        return updated_team, [LiteLLM_UserTable(user_id=user_id, teams=["team-a", team_id])], []
+
+    with (
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=LiteLLM_TeamTable(team_id=team_id, members_with_roles=[]),
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._validate_team_member_add_permissions",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._validate_and_populate_member_user_info",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._resolve_existing_member_user_ids",
+            new_callable=AsyncMock,
+            return_value=frozenset({user_id}),
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._add_team_members_to_team",
+            side_effect=fake_add_team_members_to_team,
+        ),
+        patch(  # test-quality-ok: team_member_add has no injection seam for its prisma-backed helpers
+            "litellm.proxy.management_endpoints.team_endpoints._create_team_member_add_audit_logs",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await team_member_add(
+            data=TeamMemberAddRequest(team_id=team_id, member=Member(user_id=user_id, role="user")),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+        )
+
+    assert await cache.async_get_cache(key=user_id, model_type=LiteLLM_UserTable) is None
+    broadcast.assert_awaited_once_with(cache_key=user_id)
 
 
 def test_validate_member_user_id_provisioning_caps_the_ids_it_echoes_back():

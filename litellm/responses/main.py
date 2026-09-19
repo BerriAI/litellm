@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+import json
 from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -8,7 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
 import litellm
@@ -53,6 +54,7 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
+from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import all_litellm_params
 from litellm.utils import (
@@ -2261,6 +2263,52 @@ def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
     return metadata
 
 
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
+
+
+def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | dict[str, object] | None:
+    if kwargs.get("reasoning") is not None:
+        return None
+    reasoning_effort: Final = kwargs.get("reasoning_effort")
+    if isinstance(reasoning_effort, str):
+        return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+    return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort) if isinstance(reasoning_effort, Mapping) else None
+
+
+_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id"})
+
+
+def _first_ws_frame_with_routed_input(first_message: str, routed_input: object) -> str:
+    try:
+        frame: Final = _JSON_OBJECT_ADAPTER.validate_json(first_message)
+    except ValidationError:
+        return first_message
+    if frame is None or routed_input is None:
+        return first_message
+    raw_nested: Final = frame.get("response")
+    nested: Final = _JSON_OBJECT_ADAPTER.validate_python(raw_nested) if isinstance(raw_nested, Mapping) else None
+    if nested is not None and nested.get("input") is not None:
+        if nested["input"] == routed_input:
+            return first_message
+        return json.dumps({**frame, "response": {**nested, "input": routed_input}})
+    if frame.get("input") == routed_input:
+        return first_message
+    return json.dumps({**frame, "input": routed_input})
+
+
+def _build_responses_websocket_request_defaults(kwargs: Mapping[str, object]) -> ResponsesWebSocketRequestDefaults:
+    default_reasoning: Final = _deployment_reasoning_default(kwargs)
+    candidate_params: Final[dict[str, object]] = {
+        **kwargs,
+        **({"reasoning": default_reasoning} if default_reasoning is not None else {}),
+    }
+    fill_missing: Final = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(candidate_params)
+    return ResponsesWebSocketRequestDefaults(
+        fill_missing=MappingProxyType(dict(fill_missing)),
+        overrides=MappingProxyType(_JSON_OBJECT_ADAPTER.validate_python(kwargs.get("extra_body")) or {}),
+    )
+
+
 @client
 async def _aresponses_websocket(
     model: str,
@@ -2269,11 +2317,11 @@ async def _aresponses_websocket(
     api_key: str | None = None,
     timeout: float | None = None,
     **kwargs,
-):
+) -> Exception | None:
     """
     Private function to handle the Responses API WebSocket mode.
 
-    For PROXY use only.
+    For PROXY use only. Returns the provider failure that ended the connection, if any.
 
     Resolves the LLM provider from ``model``, looks up the matching
     ``BaseResponsesAPIConfig``, and hands off to
@@ -2338,10 +2386,14 @@ async def _aresponses_websocket(
         "api_base",
         "api_key",
         "timeout",
+        "first_message",
+        *_RESPONSES_WS_ROUTING_HINT_KEYS,
     }
     remaining_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
+    deployment_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _RESPONSES_WS_ROUTING_HINT_KEYS}
+    first_message: Final = kwargs.get("first_message")
 
-    await base_llm_http_handler.async_responses_websocket(
+    return await base_llm_http_handler.async_responses_websocket(
         model=resolved_model,
         websocket=websocket,
         logging_obj=litellm_logging_obj,
@@ -2349,8 +2401,14 @@ async def _aresponses_websocket(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         timeout=timeout,
+        first_message=(
+            _first_ws_frame_with_routed_input(first_message, kwargs.get("input"))
+            if isinstance(first_message, str)
+            else None
+        ),
         user_api_key_dict=kwargs.get("user_api_key_dict"),
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
+        request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
         **remaining_kwargs,
     )
