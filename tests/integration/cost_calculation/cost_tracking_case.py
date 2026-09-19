@@ -71,6 +71,7 @@ class JsonResponse(BaseModel):
 
     content_type: Literal["application/json"]
     body: dict[str, JsonValue]
+    status: int = 200
 
 
 class SseResponse(BaseModel):
@@ -108,6 +109,10 @@ class ExactExpected(BaseModel):
     output_cost: float
     prompt_tokens: int
     completion_tokens: int
+    cache_read_cost: float | None = None
+    cache_creation_cost: float | None = None
+    reasoning_cost: float | None = None
+    tool_usage_cost: float | None = None
 
 
 class RecountRates(BaseModel):
@@ -123,7 +128,19 @@ class RecountExpected(BaseModel):
     recount: RecountRates
 
 
-Expected: TypeAlias = ExactExpected | RecountExpected
+class FailureDetails(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: int
+
+
+class FailureExpected(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    failure: FailureDetails
+
+
+Expected: TypeAlias = ExactExpected | RecountExpected | FailureExpected
 
 
 class CostTrackingTestCase(BaseModel):
@@ -132,6 +149,15 @@ class CostTrackingTestCase(BaseModel):
     name: str
     covers: str
     model: str
+    endpoint: Literal[
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/messages",
+        "/v1/embeddings",
+        "/v1/rerank",
+        "/v1/completions",
+        "/v1/moderations",
+    ] = "/v1/chat/completions"
     deployment: Deployment | None = None
     request: dict[str, JsonValue]
     response: StoredResponse
@@ -240,6 +266,44 @@ def data_errors() -> tuple[str, ...]:
             or case.expected.recount.output_cost_per_token != (COST_MAP[case.model].output_cost_per_token or 0.0)
         )
     )
+    component_mismatches: Final = sorted(
+        case.name
+        for case in CASES
+        if isinstance(case.expected, ExactExpected)
+        and any(
+            component is not None
+            for component in (
+                case.expected.cache_read_cost,
+                case.expected.cache_creation_cost,
+                case.expected.reasoning_cost,
+                case.expected.tool_usage_cost,
+            )
+        )
+        and (
+            (case.expected.cache_read_cost or 0.0) + (case.expected.cache_creation_cost or 0.0)
+            > case.expected.input_cost
+            or (case.expected.reasoning_cost or 0.0) > case.expected.output_cost
+            or not _approx_equal(
+                case.expected.input_cost
+                + case.expected.output_cost
+                + (case.expected.tool_usage_cost or 0.0),
+                case.expected.spend,
+            )
+        )
+    )
+    failure_response_mismatches: Final = sorted(
+        case.name
+        for case in CASES
+        if (
+            isinstance(case.expected, FailureExpected)
+            and (not isinstance(case.response, JsonResponse) or case.response.status < 400)
+        )
+        or (
+            not isinstance(case.expected, FailureExpected)
+            and isinstance(case.response, JsonResponse)
+            and case.response.status != 200
+        )
+    )
     return tuple(
         message
         for message in (
@@ -248,6 +312,14 @@ def data_errors() -> tuple[str, ...]:
             f"duplicate case names: {duplicate_names}" if duplicate_names else None,
             f"cost-map entries share input_cost_per_token: {shared_input_rates}" if shared_input_rates else None,
             f"recount rates differ from cost-map rates: {recount_mismatches}" if recount_mismatches else None,
+            f"breakdown components are inconsistent: {component_mismatches}" if component_mismatches else None,
+            f"failure response statuses are inconsistent: {failure_response_mismatches}"
+            if failure_response_mismatches
+            else None,
         )
         if message is not None
     )
+
+
+def _approx_equal(actual: float, expected: float) -> bool:
+    return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)

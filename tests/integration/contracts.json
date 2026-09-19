@@ -382,6 +382,15 @@
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-stream_full_usage]": [
       "quota_management.spend_tracking.scripted_wire.logs_cost"
     ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_native_json]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_500_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_429_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-input_text]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
