@@ -11,19 +11,17 @@ pub struct EnvironmentProxies {
 
 impl EnvironmentProxies {
     pub fn from_environment(env: &impl Lookup) -> Self {
-        if env.get("REQUEST_METHOD").is_some() {
-            return Self::default();
-        }
-        let first = |upper: &str, lower: &str| {
-            env.get(upper)
-                .or_else(|| env.get(lower))
+        let lowercase_first = |upper: Option<&str>, lower: &str| {
+            env.get(lower)
+                .or_else(|| upper.and_then(|name| env.truthy(name)))
                 .unwrap_or_default()
         };
+        let is_cgi = env.get("REQUEST_METHOD").is_some();
         Self {
-            all: first("ALL_PROXY", "all_proxy"),
-            http: first("HTTP_PROXY", "http_proxy"),
-            https: first("HTTPS_PROXY", "https_proxy"),
-            no: first("NO_PROXY", "no_proxy"),
+            all: lowercase_first(Some("ALL_PROXY"), "all_proxy"),
+            http: lowercase_first((!is_cgi).then_some("HTTP_PROXY"), "http_proxy"),
+            https: lowercase_first(Some("HTTPS_PROXY"), "https_proxy"),
+            no: lowercase_first(Some("NO_PROXY"), "no_proxy"),
         }
     }
 
@@ -78,8 +76,6 @@ mod tests {
     #[case::all_covers_https(&[("ALL_PROXY", "http://proxy:3128")], "https://api.test/", true)]
     #[case::lowercase(&[("https_proxy", "http://proxy:3128")], "https://api.test/", true)]
     #[case::no_proxy_bypass(&[("HTTPS_PROXY", "http://proxy:3128"), ("NO_PROXY", "api.test")], "https://api.test/", false)]
-    #[case::cgi_ignores_everything(&[("HTTPS_PROXY", "http://proxy:3128"), ("REQUEST_METHOD", "GET")], "https://api.test/", false)]
-    #[case::uppercase_wins_even_when_empty(&[("HTTPS_PROXY", ""), ("https_proxy", "http://proxy:3128")], "https://api.test/", false)]
     fn proxies_follow_the_injected_environment(
         #[case] env: &'static [(&'static str, &'static str)],
         #[case] target: &str,
@@ -87,6 +83,34 @@ mod tests {
     ) {
         let proxies = EnvironmentProxies::from_environment(&env_of(env));
         assert_eq!(proxies.apply_to(&url(target)), expected);
+    }
+
+    #[rstest]
+    #[case::lowercase_wins(&[("HTTPS_PROXY", "http://upper:3128"), ("https_proxy", "http://lower:3128")], &[("https_proxy", "http://lower:3128")])]
+    #[case::empty_uppercase_falls_through_to_lowercase(&[("HTTPS_PROXY", ""), ("https_proxy", "http://lower:3128")], &[("https_proxy", "http://lower:3128")])]
+    #[case::empty_uppercase_alone_is_unset(&[("HTTPS_PROXY", "")], &[])]
+    #[case::empty_lowercase_clears_the_uppercase_value(&[("HTTPS_PROXY", "http://upper:3128"), ("https_proxy", "")], &[])]
+    #[case::lowercase_no_proxy_wins(&[("NO_PROXY", "upper.test"), ("no_proxy", "lower.test")], &[("no_proxy", "lower.test")])]
+    #[case::cgi_forgets_the_client_settable_http_proxy(&[("REQUEST_METHOD", "GET"), ("HTTP_PROXY", "http://attacker:3128")], &[])]
+    #[case::cgi_keeps_lowercase_http_proxy(&[("REQUEST_METHOD", "GET"), ("HTTP_PROXY", "http://attacker:3128"), ("http_proxy", "http://lower:3128")], &[("http_proxy", "http://lower:3128")])]
+    #[case::cgi_keeps_every_other_variable(&[("REQUEST_METHOD", "GET"), ("HTTPS_PROXY", "http://proxy:3128"), ("ALL_PROXY", "http://all:3128"), ("NO_PROXY", "internal.test")], &[("HTTPS_PROXY", "http://proxy:3128"), ("ALL_PROXY", "http://all:3128"), ("NO_PROXY", "internal.test")])]
+    fn variables_resolve_like_urllib_getproxies_environment(
+        #[case] env: &'static [(&'static str, &'static str)],
+        #[case] equivalent: &'static [(&'static str, &'static str)],
+    ) {
+        assert_eq!(
+            EnvironmentProxies::from_environment(&env_of(env)),
+            EnvironmentProxies::from_environment(&env_of(equivalent))
+        );
+    }
+
+    #[test]
+    fn a_cgi_request_still_proxies_https_through_the_configured_proxy() {
+        let proxies = EnvironmentProxies::from_environment(&env_of(&[
+            ("REQUEST_METHOD", "GET"),
+            ("HTTPS_PROXY", "http://proxy:3128"),
+        ]));
+        assert!(proxies.apply_to(&url("https://api.test/")));
     }
 
     #[test]
