@@ -33,16 +33,32 @@ pub(crate) const CONTRACT: &str = include_str!("../python_settings.json");
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::{collections::BTreeSet, ffi::CString};
+
+    use pyo3::{prelude::*, types::PyDict};
 
     use super::{CONTRACT, PythonSettings};
 
     #[test]
     fn every_settings_group_is_in_the_python_contract() {
-        let contract: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(CONTRACT).unwrap();
-        let declared: BTreeSet<&str> = contract.keys().map(String::as_str).collect();
-        let read: BTreeSet<&str> = PythonSettings::ALL.map(PythonSettings::name).into();
-        assert_eq!(read, declared);
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = PyDict::new(py);
+            locals.set_item("contract", CONTRACT).unwrap();
+            let source = CString::new("import json\nkeys = list(json.loads(contract))").unwrap();
+            py.run(&source, Some(&locals), Some(&locals)).unwrap();
+            let declared: BTreeSet<String> = locals
+                .get_item("keys")
+                .unwrap()
+                .unwrap()
+                .extract::<Vec<String>>()
+                .unwrap()
+                .into_iter()
+                .collect();
+            let read: BTreeSet<String> = PythonSettings::ALL
+                .map(|group| group.name().to_owned())
+                .into();
+            assert_eq!(read, declared);
+        });
     }
 }
