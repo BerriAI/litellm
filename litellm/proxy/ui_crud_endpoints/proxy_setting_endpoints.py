@@ -497,12 +497,10 @@ def _store_allowed_ips(general_settings: MutableMapping[str, object], allowed_ip
         raise HTTPException(
             status_code=400,
             detail={  # mutable-ok: HTTPException serializes its detail as json
-                "error": f"{owned.section} key '{owned.key}' is set in the config file and cannot be changed here",
+                "error": str(owned),
                 "keys": (owned.key,),
                 "section": owned.section,
-                "resolution": (
-                    "edit the config file to change it, or remove it from the file to let the database own it"
-                ),
+                "stored_database_value_ignored": owned.shadows_db_value,
             },
         ) from owned
 

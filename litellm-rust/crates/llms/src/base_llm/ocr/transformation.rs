@@ -6,6 +6,7 @@ use litellm_core_utils::{
     serde_compat::{FiniteF64, LaxI64},
     settings::ProcessEnvironment,
 };
+use litellm_http::outbound::{OutboundRequest, RequestSigner};
 use serde::{
     Deserialize, Serialize,
     de::{DeserializeOwned, IntoDeserializer},
@@ -394,6 +395,10 @@ const HEALTH_CHECK_PDF_DATA_URI: &str = "data:application/pdf;base64,JVBERi0xLjQ
 /// (headers at minimum; Vertex also carries the project id).
 pub trait OcrEnvironment: Send + Sync {
     fn headers(&self) -> &[(String, String)];
+
+    fn signer(&self) -> Option<&dyn RequestSigner> {
+        None
+    }
 }
 
 impl OcrEnvironment for Vec<(String, String)> {
@@ -536,7 +541,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> impl Future<Output = Result<reqwest::Request, Error>> + Send {
+    ) -> impl Future<Output = Result<OutboundRequest, Error>> + Send {
         async move {
             let params = self.map_ocr_params(&request.optional_params, &request.model)?;
             let environment = self.validate_environment(request, client).await?;
@@ -554,7 +559,16 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
                     },
                 )
                 .await?;
-            transform_request_body(self, client, request, &url, headers, body, hooks).await
+            transform_request_body(
+                self,
+                request,
+                &url,
+                headers,
+                body,
+                environment.signer(),
+                hooks,
+            )
+            .await
         }
     }
 }
