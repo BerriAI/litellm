@@ -60,7 +60,8 @@ class QualifireGuardrail(CustomGuardrail):
 
         Args:
             api_key: API key for Qualifire (or use QUALIFIRE_API_KEY env var)
-            api_base: Optional custom API base URL (defaults to https://api.qualifire.ai)
+            api_base: Optional custom API base URL. Falls back to the QUALIFIRE_BASE_URL
+                environment variable, then to https://proxy.qualifire.ai
             evaluation_id: Pre-configured evaluation ID from Qualifire dashboard
             prompt_injections: Enable prompt injection detection (default if no other checks)
             hallucinations_check: Enable hallucination detection
