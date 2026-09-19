@@ -7,7 +7,6 @@ from itertools import pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
-from fastapi import HTTPException
 from openai.types.batch import Errors
 from openai.types.batch_error import BatchError
 from openai.types.batch_request_counts import BatchRequestCounts
@@ -23,7 +22,7 @@ from litellm.llms.base_llm.files.litellm_db_storage_backend import LITELLM_DB_ST
 from litellm.llms.base_llm.files.storage_backend import BaseFileStorageBackend
 from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.openai_files_endpoints.common_utils import (
     LITELLM_EXECUTED_BATCH_ID_PREFIX,
@@ -234,16 +233,16 @@ def parse_batch_input(content: bytes, endpoint: BatchEndpoint) -> tuple[BatchInp
     return lines
 
 
-def batch_http_error(status_code: int, message: str) -> HTTPException:
-    detail: Final = {"error": message}  # mutable-ok: HTTPException detail must be a plain mapping
-    return HTTPException(status_code=status_code, detail=detail)
+def batch_error(status_code: int, message: str) -> ProxyException:
+    error_type: Final = "invalid_request_error" if status_code < 500 else ProxyErrorTypes.internal_server_error.value
+    return ProxyException(message=message, type=error_type, param=None, code=status_code)
 
 
 def _validate_endpoint(endpoint: object) -> BatchEndpoint:
     try:
         return _BATCH_ENDPOINT_ADAPTER.validate_python(endpoint)
     except ValidationError:
-        raise batch_http_error(400, f"endpoint {endpoint!r} is not supported for a LiteLLM-executed batch")
+        raise batch_error(400, f"endpoint {endpoint!r} is not supported for a LiteLLM-executed batch")
 
 
 def _status_code_of(error: Exception) -> int:
@@ -350,7 +349,7 @@ class LiteLLMExecutedBatchRunner:
         content: Final = await self._download_input(unified_input_file_id, user_api_key_dict)
         parsed: Final = parse_batch_input(content, endpoint)
         if isinstance(parsed, InvalidBatchInput):
-            raise batch_http_error(400, f"Invalid batch input file: {parsed.describe()}")
+            raise batch_error(400, f"Invalid batch input file: {parsed.describe()}")
         llm_batch_id: Final = f"{LITELLM_EXECUTED_BATCH_ID_PREFIX}{uuid_module.uuid4().hex}"
         model_id: Final = next(iter(self.llm_router.get_model_ids(model_name=model)), model)
         unified_batch_id: Final = self.managed_files.get_unified_batch_id(batch_id=llm_batch_id, model_id=model_id)
@@ -397,9 +396,9 @@ class LiteLLMExecutedBatchRunner:
     async def cancel(self, unified_batch_id: str, user_api_key_dict: UserAPIKeyAuth) -> LiteLLMBatch:
         current: Final = await self._load_batch(unified_batch_id)
         if current is None:
-            raise batch_http_error(404, f"Batch {unified_batch_id} not found")
+            raise batch_error(404, f"Batch {unified_batch_id} not found")
         if current.status in TERMINAL_BATCH_STATUSES:
-            raise batch_http_error(400, f"Cannot cancel a batch with status '{current.status}'")
+            raise batch_error(400, f"Cannot cancel a batch with status '{current.status}'")
         if current.status == "cancelling":
             return current
         cancelling: Final = current.model_copy(
@@ -413,7 +412,7 @@ class LiteLLMExecutedBatchRunner:
             unified_input_file_id, litellm_parent_otel_span=user_api_key_dict.parent_otel_span
         )
         if stored is None or not stored.storage_backend or not stored.storage_url:
-            raise batch_http_error(
+            raise batch_error(
                 400,
                 f"LiteLLM does not hold the content of input file {unified_input_file_id}: "
                 f"{LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE}",
@@ -422,7 +421,7 @@ class LiteLLMExecutedBatchRunner:
             backend: Final = self.storage_backend_factory(stored.storage_backend, prisma_client=self.prisma_client)
             return await backend.download_file(stored.storage_url)
         except ValueError as e:
-            raise batch_http_error(400, str(e))
+            raise batch_error(400, str(e))
 
     async def _run(self, run: _BatchRun) -> None:
         try:
