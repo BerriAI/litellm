@@ -1747,31 +1747,80 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert events[5]["response"]["output"][0]["content"][0]["text"] == "hello [MASKED]"
 
     @pytest.mark.asyncio
-    async def test_fallback_rewrite_with_delivery_expected_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_fallback_rewrite_with_delivery_expected_lands_in_the_delta_and_done_events(self):
         handler = OpenAIResponsesHandler()
         events = [
             {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
             {"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": "hello world"},
         ]
 
-        with pytest.raises(UndeliverableStreamRewrite):
-            await handler.process_output_streaming_response(
-                responses_so_far=events,
-                guardrail_to_apply=self._masking_guardrail(),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
-            )
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert events[0]["delta"] == "hello [MASKED]"
+        assert events[1]["text"] == "hello [MASKED]"
 
     @pytest.mark.asyncio
-    async def test_fallback_delta_only_rewrite_with_delivery_expected_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_fallback_delta_only_rewrite_with_delivery_expected_spreads_over_the_deltas(self):
         handler = OpenAIResponsesHandler()
         events = [
             {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
             {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "world"},
+        ]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert [event["delta"] for event in events] == ["hello [MASKED]", ""]
+
+    @pytest.mark.asyncio
+    async def test_fallback_rewrite_across_parts_lands_whole_on_the_first_part(self):
+        handler = OpenAIResponsesHandler()
+        events = [
+            {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hello "},
+            {"type": "response.output_text.done", "output_index": 0, "content_index": 0, "text": "hello "},
+            {"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "wor"},
+            {"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "ld"},
+        ]
+        guardrail = MockRecordingGuardrail(guardrail_name="test")
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+        assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["hello world"]]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert events[0]["delta"] == "hello [MASKED]"
+        assert events[1]["text"] == "hello [MASKED]"
+        assert [event["delta"] for event in events[2:]] == ["", ""]
+
+    @pytest.mark.asyncio
+    async def test_fallback_rewrite_over_an_unplaceable_scanned_event_fails_open(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        handler = OpenAIResponsesHandler()
+        events = [
+            {"type": "response.reasoning_summary_text.delta", "output_index": 0, "summary_index": 0, "delta": "hello "},
+            {"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "world"},
         ]
 
         with pytest.raises(UndeliverableStreamRewrite):
@@ -1781,21 +1830,26 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
                 litellm_logging_obj=None,
                 deliver_ended_stream_rewrites=True,
             )
+        assert [event["delta"] for event in events] == ["hello ", "world"]
 
     @pytest.mark.asyncio
-    async def test_output_item_done_last_rewrite_with_delivery_expected_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_output_item_done_last_rewrite_with_delivery_expected_syncs_every_text_event(self):
         handler = OpenAIResponsesHandler()
         events = self._ended_stream_events()[:-1]
 
-        with pytest.raises(UndeliverableStreamRewrite):
-            await handler.process_output_streaming_response(
-                responses_so_far=events,
-                guardrail_to_apply=self._masking_guardrail(),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
-            )
+        result = await handler.process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is events
+        assert events[0]["delta"] == "hello [MASKED]"
+        assert events[1]["delta"] == ""
+        assert events[2]["text"] == "hello [MASKED]"
+        assert events[3]["part"]["text"] == "hello [MASKED]"
+        assert events[4]["item"]["content"][0]["text"] == "hello [MASKED]"
 
     @pytest.mark.asyncio
     async def test_output_item_done_last_scans_text_with_delivery_expected(self):

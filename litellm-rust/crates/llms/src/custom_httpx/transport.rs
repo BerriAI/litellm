@@ -11,7 +11,7 @@ pub enum Error {
 impl Error {
     pub fn from_reqwest_before_dispatch(error: reqwest::Error) -> Self {
         let before_dispatch = !error.is_timeout() && (error.is_connect() || error.is_builder());
-        let message = error.without_url().to_string();
+        let message = describe(error);
         if before_dispatch {
             Self::Connect(message)
         } else {
@@ -22,8 +22,16 @@ impl Error {
 
 impl From<reqwest::Error> for Error {
     fn from(error: reqwest::Error) -> Self {
-        Self::Network(error.without_url().to_string())
+        Self::Network(describe(error))
     }
+}
+
+fn describe(error: reqwest::Error) -> String {
+    let error = error.without_url();
+    std::iter::successors(std::error::Error::source(&error), |cause| cause.source())
+        .fold(error.to_string(), |message, cause| {
+            format!("{message}: {cause}")
+        })
 }
 
 #[cfg(test)]
@@ -45,6 +53,32 @@ mod tests {
         ));
         assert!(!error.to_string().contains("secret"));
         assert!(!error.to_string().contains("private"));
+    }
+
+    fn root_cause(error: &dyn std::error::Error) -> Option<String> {
+        match error.source() {
+            Some(cause) => root_cause(cause).or_else(|| Some(cause.to_string())),
+            None => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn network_error_message_names_the_underlying_cause() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let address = listener.local_addr().expect("address");
+        drop(listener);
+        let error = reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client")
+            .get(format!("http://{address}/private?api_key=secret"))
+            .send()
+            .await
+            .expect_err("nothing listens on the port");
+        let root_cause = root_cause(&error).expect("reqwest reports a cause");
+        let message = crate::custom_httpx::transport::Error::from(error).to_string();
+        assert!(message.contains(&root_cause), "{message}");
+        assert!(!message.contains("secret"));
     }
 
     #[tokio::test]

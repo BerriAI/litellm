@@ -3967,3 +3967,17 @@ def test_aiohttp_openai_warns_only_when_http2_enabled(
     assert handler_completion.called
     warned: Final = "aiohttp_openai/ always uses aiohttp" in caplog.text
     assert warned is http2_on
+
+
+@pytest.mark.parametrize("tool_choice", [{"type": "bogus"}, {"name": "lookup_fruit"}, {"type": "file_search"}])
+def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Which fruit is red?"}],
+            tools=[{"type": "function", "function": {"name": "lookup_fruit", "parameters": {"type": "object"}}}],
+            tool_choice=tool_choice,
+            api_key="sk-unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert f"tool_choice={tool_choice}" in str(exc_info.value)

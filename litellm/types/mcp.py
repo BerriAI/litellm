@@ -91,6 +91,22 @@ class MCPPublicServer(BaseModel):
     mcp_info: dict[str, Any] | None = None
 
 
+class MCPAllowedClient(BaseModel):
+    """One entry of `general_settings.mcp_allowed_clients`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    alias: str = Field(
+        min_length=1,
+        description="Human-readable name for this client application, shown in the dashboard and in gateway logs.",
+    )
+    value: str = Field(
+        min_length=1,
+        description="Exact value of the JWT claim named in litellm_jwtauth.mcp_client_id_jwt_field, or of the "
+        "mcp_client_id_header header, that identifies this client application. Matched case-sensitively.",
+    )
+
+
 class MCPToolSearchSettings(BaseModel):
     """`litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools."""
 

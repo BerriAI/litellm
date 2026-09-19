@@ -1,16 +1,21 @@
 use std::sync::{Arc, Mutex};
 
+use litellm_auth_gcp::VertexAuth;
 use litellm_host::{
     event::{CallEvent, MachineEvent, WireRequest},
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
 };
+use litellm_http::{HttpClientPool, HttpSettings, Resolution};
 use litellm_llms::{
     base_llm::ocr::{
         error::Error as OcrError,
         transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
     },
-    custom_httpx::llm_http_handler::OcrClient,
+    custom_httpx::{
+        llm_http_handler::OcrClient,
+        media::{PublicDnsResolver, UrlPolicy},
+    },
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -171,25 +176,24 @@ async fn facade_retains_native_response_when_requested() {
 }
 
 #[tokio::test]
-async fn facade_uses_the_injected_http_client() {
+async fn ocr_client_uses_the_injected_http_pool_configuration() {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
-    let mut default_headers = reqwest::header::HeaderMap::new();
-    default_headers.insert(
-        "x-transport-owner",
-        reqwest::header::HeaderValue::from_static("host"),
-    );
-    let provider_http = reqwest::Client::builder()
-        .default_headers(default_headers)
-        .build()
-        .unwrap();
-    crate::ocr::client::perform(
-        &OcrClient::new(provider_http).unwrap(),
-        wire_request("mistral/model", &base, json!({})),
+    let settings = HttpSettings {
+        user_agent: Some("host-owned/1".into()),
+        ..HttpSettings::default()
+    };
+    let client = OcrClient::new(
+        &HttpClientPool::new(Arc::new(PublicDnsResolver)),
+        &Resolution::from(&settings).config,
+        UrlPolicy::default(),
+        VertexAuth::default(),
     )
-    .await
     .unwrap();
+    crate::ocr::client::perform(&client, wire_request("mistral/model", &base, json!({})))
+        .await
+        .unwrap();
     server.await.unwrap();
-    assert!(seen.lock().unwrap()[0].contains("x-transport-owner: host"));
+    assert!(seen.lock().unwrap()[0].contains("user-agent: host-owned/1"));
 }
 
 fn event_name(event: &CallEvent) -> &'static str {

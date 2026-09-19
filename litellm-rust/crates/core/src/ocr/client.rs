@@ -14,7 +14,3 @@ pub async fn perform(
 ) -> Result<LiteLLMOcrResponse, Error> {
     litellm_host::run::run(ocr_machine(client.clone()), &LocalOcrHost::new(request)).await
 }
-
-pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-    perform(&OcrClient::shared()?, request).await
-}
