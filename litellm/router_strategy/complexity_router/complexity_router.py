@@ -1856,7 +1856,7 @@ class ComplexityRouter(CustomLogger):
         if self.config.classifier_type == "custom":
             return await self._classify_with_plugin(prompt, system_prompt, request_kwargs, raw_messages)
         if self.config.classifier_type == "jev":
-            return await self._jev_classifier_outcome(prompt, system_prompt)
+            return await self._jev_classifier_outcome(prompt, system_prompt, request_kwargs, messages)
         if self.config.classifier_type in ("heuristic_first", "hybrid") and _encrypted_classifier_task(
             request_kwargs, self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
         ):
@@ -2091,7 +2091,13 @@ class ComplexityRouter(CustomLogger):
                 f"LLM classifier failed ({type(e).__name__})", prompt, system_prompt, scored
             )
 
-    async def _jev_classifier_outcome(self, prompt: str, system_prompt: str | None) -> ClassificationOutcome:
+    async def _jev_classifier_outcome(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+    ) -> ClassificationOutcome:
         config: Final = self.config.jev_classifier_config
         client: Final = self._jev_client
         if config is None or client is None:
@@ -2120,14 +2126,14 @@ class ComplexityRouter(CustomLogger):
         )
         timeout_s: Final = config.timeout_ms / 1000
         request: Final = build_jev_request(
-            prompt=prompt,
-            system_prompt=system_prompt,
+            prompt=self._classifier_context_payload(prompt, system_prompt, request_kwargs, messages),
+            system_prompt=None,
             model=config.model,
             instructions=config.instructions or DEFAULT_JEV_INSTRUCTIONS,
             criteria=criteria,
         )
         try:
-            response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s), timeout_s)
+            response: Final = await asyncio.wait_for(client.evaluate(request, timeout_s, request_kwargs), timeout_s)
             answer: Final = response.answers.get("tier")
             if answer is None:
                 raise ValueError("Jev response is missing the 'tier' answer")
@@ -2324,6 +2330,45 @@ class ComplexityRouter(CustomLogger):
             else system_prompt
         )
 
+    def _classifier_context_payload(
+        self,
+        prompt: str,
+        system_prompt: str | None,
+        request_kwargs: Mapping[str, object] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        *,
+        encrypted_task: bool = False,
+    ) -> str:
+        include_assistant: Final = self.config.classifier_context_include_assistant_turns
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
+        prior_turns: Final = (
+            _extract_prior_turns(
+                messages,
+                current_ask=prompt,
+                window_size=self.config.classifier_context_window_size,
+                budget_chars=self.config.classifier_context_budget_chars,
+                per_turn_chars=self.config.classifier_context_per_turn_chars,
+                include_assistant=include_assistant,
+                marker_pairs=marker_pairs,
+            )
+            if context_enabled
+            else ()
+        )
+        has_prior_conversation: Final = (
+            context_enabled
+            and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))
+            > 1
+        )
+        return self._build_classifier_user_payload(
+            prompt="The delegated task in the following agent_message." if encrypted_task else prompt,
+            system_prompt=self._classifier_caller_constraints(system_prompt, request_kwargs),
+            prior_turns=prior_turns,
+            messages=messages,
+            has_prior_conversation=has_prior_conversation,
+            label_roles=include_assistant,
+        )
+
     async def _classify_with_llm(
         self,
         prompt: str,
@@ -2350,37 +2395,10 @@ class ComplexityRouter(CustomLogger):
         if llm_config is None or classifier_system_prompt is None or classifier_response_format is None:
             raise ValueError("classifier_llm_config is not set")
 
-        include_assistant: Final = self.config.classifier_context_include_assistant_turns
         marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or {})
-        context_enabled: Final = bool(messages) and self.config.classifier_context_window_size > 0
-        prior_turns: Final = (
-            _extract_prior_turns(
-                messages,
-                current_ask=prompt,
-                window_size=self.config.classifier_context_window_size,
-                budget_chars=self.config.classifier_context_budget_chars,
-                per_turn_chars=self.config.classifier_context_per_turn_chars,
-                include_assistant=include_assistant,
-                marker_pairs=marker_pairs,
-            )
-            if context_enabled
-            else ()
-        )
-        has_prior_conversation: Final = (
-            context_enabled
-            and len(tuple(islice(_iter_context_turns_newest_first(messages or (), include_assistant, marker_pairs), 2)))
-            > 1
-        )
-
         encrypted_task: Final = _encrypted_classifier_task(request_kwargs, marker_pairs)
-        caller_system_prompt: Final = self._classifier_caller_constraints(system_prompt, request_kwargs)
-        user_payload: Final = self._build_classifier_user_payload(
-            prompt="The delegated task in the following agent_message." if encrypted_task is not None else prompt,
-            system_prompt=caller_system_prompt,
-            prior_turns=prior_turns,
-            messages=messages,
-            has_prior_conversation=has_prior_conversation,
-            label_roles=include_assistant,
+        user_payload: Final = self._classifier_context_payload(
+            prompt, system_prompt, request_kwargs, messages, encrypted_task=encrypted_task is not None
         )
 
         image_parts: Final = self._classifier_image_parts(messages)

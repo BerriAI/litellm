@@ -149,7 +149,9 @@ class _StaticJevClient:
         self.calls = 0
         self.last_request: JevSystemOneRequest | None = None
 
-    async def evaluate(self, request: JevSystemOneRequest, timeout_s: float) -> JevSystemOneResponse:
+    async def evaluate(
+        self, request: JevSystemOneRequest, timeout_s: float, request_kwargs: Mapping[str, object] | None = None
+    ) -> JevSystemOneResponse:
         self.calls += 1
         self.last_request = request
         if isinstance(self.response, BaseException):
@@ -161,7 +163,9 @@ class _TimeoutJevClient:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def evaluate(self, request: JevSystemOneRequest, timeout_s: float) -> JevSystemOneResponse:
+    async def evaluate(
+        self, request: JevSystemOneRequest, timeout_s: float, request_kwargs: Mapping[str, object] | None = None
+    ) -> JevSystemOneResponse:
         self.calls += 1
         await asyncio.sleep(timeout_s * 2)
         raise AssertionError("timeout should cancel the Jev call")
@@ -1953,6 +1957,33 @@ class TestRouterComplexityDeploymentMethods:
                 ],
                 auto_router_capability_limit=lambda: 1,
             )
+
+    @pytest.mark.parametrize("instructions", [None, "Pick the lowest suitable tier"])
+    @pytest.mark.parametrize("limit", [1, None])
+    def test_jev_instructions_share_the_existing_custom_tier_quota(
+        self, instructions: str | None, limit: int | None
+    ) -> None:
+        rows: Final = [
+            self._POOL,
+            self._custom_tier_row("tiers-a", "id-a"),
+            {
+                "model_name": "jev-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "jev",
+                        "jev_classifier_config": {"api_key": "test", "instructions": instructions},
+                        "tiers": {"SIMPLE": "gpt-4o-mini"},
+                    },
+                },
+            },
+        ]
+        if instructions is not None and limit is not None:
+            with pytest.raises(ValueError, match="operator-written classifier prompt"):
+                Router(model_list=rows, auto_router_capability_limit=lambda: limit)
+            return
+        router: Final = Router(model_list=rows, auto_router_capability_limit=lambda: limit)
+        assert set(router.complexity_routers) == {"tiers-a", "jev-router"}
 
     def test_the_shipped_rubric_and_default_prompt_stay_free(self) -> None:
         """Only an operator-written prompt is gated: picking a shipped rubric preset, or writing no
