@@ -9,10 +9,12 @@ import contextlib
 import contextvars
 import hashlib
 import json
+import os
 import time
 import traceback
 import types
 import uuid
+from collections import Counter
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
@@ -26,7 +28,10 @@ from starlette.types import Message, Receive, Scope, Send
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
+from litellm.constants import (
+    MAXIMUM_TRACEBACK_LINES_TO_LOG,
+    MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -35,6 +40,12 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     _is_mcp_admitted_user_subject,
+)
+from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+    byok_credential_cache,
+    byok_credential_cache_key,
+    cache_byok_credential,
+    get_cached_byok_credential,
 )
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     get_request_base_url,
@@ -49,9 +60,14 @@ from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_gateway_server_name,
     _mcp_proxy_mode,  # pyright: ignore[reportPrivateUsage]  # server-owned request mode
 )
-from litellm.proxy._experimental.mcp_server.mcp_debug import MCPDebug
+from litellm.proxy._experimental.mcp_server.mcp_debug import (
+    MCP_AUTH_DIAGNOSTICS_SCOPE_KEY,
+    MCPAuthDiagnostics,
+    MCPDebug,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     _redact_mcp_resource_url,
+    get_byok_www_authenticate,
     get_passthrough_www_authenticate,
     get_route_relative_request_path,
     well_known_root_suffix,
@@ -75,11 +91,21 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    publish_auth_cache_invalidation,
+)
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,
 )
-from litellm.types.mcp import MCPAuth, MCPSpecVersion
+from litellm.types.mcp import (
+    MCPAuth,
+    MCPGatewaySession,
+    MCPGatewaySessionGroupCount,
+    MCPGatewaySessionsResponse,
+    MCPGatewaySessionsTerminateResponse,
+    MCPSpecVersion,
+)
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
 from litellm.utils import Rules, client, function_setup
@@ -89,13 +115,6 @@ if TYPE_CHECKING:
 
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 
-# Short-lived in-memory cache for BYOK credentials.
-# Keyed by (user_id, server_id); value is (credential_or_None, monotonic_timestamp).
-# Storing the credential value (not just a bool) means _get_byok_credential and
-# _check_byok_credential share a single DB round-trip per TTL window.
-_byok_cred_cache: Final[dict[tuple[str, str], tuple[str | None, float]]] = {}
-_BYOK_CRED_CACHE_TTL: Final = 60  # seconds
-_BYOK_CRED_CACHE_MAX_SIZE: Final = 4096  # cap to prevent unbounded growth
 _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS: Final = 30 * 60
 # Upper bound on concurrent stateful sessions a single caller may hold. Each
 # `initialize` creates a session that survives until the idle timeout, so
@@ -114,20 +133,11 @@ _MCP_TRANSPORT_SPAN_SCOPE_KEY: Final = "litellm_otel_transport_span"
 _MCP_DESTINATIONS_SCOPE_KEY: Final = "litellm_otel_request_destinations"
 
 
-def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
-    """Remove a (user_id, server_id) entry from the BYOK credential cache.
-
-    Call this after storing or deleting a credential so subsequent calls
-    see the fresh value rather than a stale cached result.
-    """
-    _byok_cred_cache.pop((user_id, server_id), None)
-
-
-def _write_byok_cred_cache(user_id: str, server_id: str, credential: str | None) -> None:
-    """Write a credential value to the cache, evicting all entries if at capacity."""
-    if len(_byok_cred_cache) >= _BYOK_CRED_CACHE_MAX_SIZE:
-        _byok_cred_cache.clear()
-    _byok_cred_cache[(user_id, server_id)] = (credential, time.monotonic())
+async def _invalidate_byok_cred_cache(user_id: str, server_id: str) -> None:
+    """Drop a stored-or-deleted BYOK credential from this worker's cache and from every peer worker's."""
+    cache_key: Final = byok_credential_cache_key(user_id, server_id)
+    byok_credential_cache.delete_cache(cache_key)
+    await publish_auth_cache_invalidation(cache_key=cache_key)
 
 
 # Check if MCP is available
@@ -449,6 +459,8 @@ if MCP_AVAILABLE:
         StreamableHTTPSessionManager = None
     from mcp.types import (
         CallToolResult,
+        Implementation,
+        InitializeRequest,
         ListToolsResult,
         Prompt,
         TextContent,
@@ -602,6 +614,8 @@ if MCP_AVAILABLE:
     # still reading the shared object.
     _stateful_session_locks: Final[dict[str, asyncio.Lock]] = {}
     _stateful_session_active_request_counts: Final[dict[str, int]] = {}
+    _stateful_session_client_info: Final[dict[str, Implementation]] = {}  # mutable-ok: cleared on session teardown
+    _admin_terminated_session_ids: Final[dict[str, float]] = {}  # mutable-ok: admin-closed id -> last replay
 
     class _TerminableTransport(Protocol):
         async def terminate(self) -> None: ...
@@ -620,6 +634,7 @@ if MCP_AVAILABLE:
         _stateful_session_owners.pop(session_id, None)
         _stateful_session_locks.pop(session_id, None)
         _stateful_session_active_request_counts.pop(session_id, None)
+        _stateful_session_client_info.pop(session_id, None)
 
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless
@@ -672,6 +687,7 @@ if MCP_AVAILABLE:
         for session_id in list(_stateful_session_auth_context_last_seen):
             if session_id not in _stateful_session_auth_contexts:
                 _remove_stateful_session_tracking(session_id)
+        _forget_expired_admin_terminated_session_ids(now)
 
     async def _enforce_stateful_session_cap_for_owner(owner: str) -> bool:
         """
@@ -1053,7 +1069,7 @@ if MCP_AVAILABLE:
                                 route="/mcp/call_tool",
                                 traceback_str=failure_traceback,
                             )
-                    except Exception:
+                    except Exception:  # noqa: BLE001  # a failing failure hook must not mask the tool call's own error
                         verbose_logger.exception("Error logging failed MCP proxy tool call")
                 raise
             if proxy_logging_obj is not None:
@@ -2044,18 +2060,44 @@ if MCP_AVAILABLE:
             return texts[0][1]
         return "\n\n---\n\n".join(f"[{lbl}]\n{txt}" for lbl, txt in texts)
 
+    async def _raise_if_initialize_grants_no_mcp_servers(
+        allowed: Sequence[MCPServer],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_servers: Sequence[str] | None,
+        client_ip: str | None,
+    ) -> None:
+        if allowed or user_api_key_auth is None or not user_api_key_auth.api_key:
+            return
+        if mcp_servers:
+            await raise_denied_scoped_mcp_access(
+                requested_names=mcp_servers,
+                user_api_key_auth=user_api_key_auth,
+                client_ip=client_ip,
+            )
+        no_servers_denial: Final[_McpDeniedDetail] = {
+            "error": (
+                "The key has no MCP servers granted, or none of its granted servers is loaded and allowed for "
+                "this client IP. Grant servers or access groups to the key, its team, or its organization "
+                "(object_permission.mcp_servers), check the server's allowed IPs, and reconnect."
+            )
+        }
+        raise HTTPException(status_code=403, detail=no_servers_denial)
+
     @contextlib.asynccontextmanager
     async def _gateway_initialize_instructions_request_scope(
         user_api_key_auth: UserAPIKeyAuth | None,
         mcp_servers: list[str] | None,
         client_ip: str | None,
         scoped_server_endpoint: bool = False,
+        is_initialize: bool = False,
     ) -> AsyncIterator[None]:
         allowed: Final = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
+        if is_initialize:
+            await _raise_if_initialize_grants_no_mcp_servers(allowed, user_api_key_auth, mcp_servers, client_ip)
         if allowed:
             # return_exceptions=True: a per-server probe failure (incl. CancelledError
             # bubbled from anyio task group teardown on connection refused) must not
@@ -2768,35 +2810,28 @@ if MCP_AVAILABLE:
         mcp_server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
     ) -> str | None:
-        """Retrieve the stored BYOK credential for a user+server pair.
-
-        Uses the shared _byok_cred_cache to avoid a DB round-trip on every
-        tool call within the TTL window.
-        """
+        """Retrieve the stored BYOK credential for a user+server pair, served from the worker cache within its TTL."""
         if not mcp_server.is_byok:
             return None
         user_id: Final = (user_api_key_auth.user_id if user_api_key_auth else None) or ""
         if not user_id:
             return None
 
-        cache_key: Final = (user_id, mcp_server.server_id)
-        cached: Final = _byok_cred_cache.get(cache_key)
+        cached: Final = get_cached_byok_credential(user_id, mcp_server.server_id)
         if cached is not None:
-            credential, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                return credential
+            return cached.credential
 
         from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
 
         if prisma_client is None:
             return None
-        credential = await get_user_credential(
+        credential: Final = await get_user_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
-        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
+        cache_byok_credential(user_id, mcp_server.server_id, credential)
         return credential
 
     async def _check_byok_credential(
@@ -2822,32 +2857,26 @@ if MCP_AVAILABLE:
                     "server_name": mcp_server.server_name or mcp_server.name,
                     "message": "User identity is required for BYOK servers",
                 },
-                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+                headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
-        # Check shared credential cache before hitting the DB.
-        cache_key: Final = (user_id, mcp_server.server_id)
-        cached: Final = _byok_cred_cache.get(cache_key)
+        cached: Final = get_cached_byok_credential(user_id, mcp_server.server_id)
         if cached is not None:
-            cached_cred, ts = cached
-            if time.monotonic() - ts < _BYOK_CRED_CACHE_TTL:
-                if cached_cred is None:
-                    raise HTTPException(
-                        status_code=401,
-                        detail={
-                            "error": "byok_auth_required",
-                            "server_id": mcp_server.server_id,
-                            "server_name": mcp_server.server_name or mcp_server.name,
-                            "message": (
-                                "No stored credential found for this BYOK server. "
-                                "Complete the OAuth authorization flow to provide your API key."
-                            ),
-                        },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
-                    )
-                return
+            if cached.credential is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "byok_auth_required",
+                        "server_id": mcp_server.server_id,
+                        "server_name": mcp_server.server_name or mcp_server.name,
+                        "message": (
+                            "No stored credential found for this BYOK server. "
+                            "Complete the OAuth authorization flow to provide your API key."
+                        ),
+                    },
+                    headers={"WWW-Authenticate": get_byok_www_authenticate()},
+                )
+            return
 
         from litellm.proxy._experimental.mcp_server.db import get_user_credential
         from litellm.proxy.proxy_server import prisma_client
@@ -2871,7 +2900,7 @@ if MCP_AVAILABLE:
             user_id=user_id,
             server_id=mcp_server.server_id,
         )
-        _write_byok_cred_cache(user_id, mcp_server.server_id, credential)
+        cache_byok_credential(user_id, mcp_server.server_id, credential)
         if credential is None:
             raise HTTPException(
                 status_code=401,
@@ -2884,7 +2913,7 @@ if MCP_AVAILABLE:
                         "Complete the OAuth authorization flow to provide your API key."
                     ),
                 },
-                headers={"WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'},
+                headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
     async def execute_mcp_tool(
@@ -2898,6 +2927,7 @@ if MCP_AVAILABLE:
         oauth2_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         host_progress_callback: Callable | None = None,
+        guardrail_context: Mapping[str, object] | None = None,
         **kwargs: Any,
     ) -> CallToolResult:
         """
@@ -3038,9 +3068,7 @@ if MCP_AVAILABLE:
                                 "Complete the OAuth authorization flow to provide your API key."
                             ),
                         },
-                        headers={
-                            "WWW-Authenticate": 'Bearer resource_metadata="/.well-known/oauth-protected-resource"'
-                        },
+                        headers={"WWW-Authenticate": get_byok_www_authenticate()},
                     )
                 mcp_auth_header = byok_cred
             elif mcp_server.is_byok:
@@ -3088,6 +3116,7 @@ if MCP_AVAILABLE:
                 server=mcp_server,
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
+                guardrail_context=guardrail_context,
             )
             # `pre_call_tool_check` may return guardrail-modified
             # arguments; honor them on the local path too.
@@ -3141,6 +3170,7 @@ if MCP_AVAILABLE:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 litellm_logging_obj=litellm_logging_obj,
+                guardrail_context=guardrail_context,
                 host_progress_callback=host_progress_callback,
             )
 
@@ -3194,6 +3224,7 @@ if MCP_AVAILABLE:
                     server=prefix_server,
                     raw_headers=raw_headers,
                     litellm_logging_obj=litellm_logging_obj,
+                    guardrail_context=guardrail_context,
                 )
                 if "arguments" in hook_result:
                     arguments = hook_result["arguments"]  # pyright: ignore[reportAny]  # hook returns untyped args
@@ -3309,6 +3340,43 @@ if MCP_AVAILABLE:
             )
         return result
 
+    async def fire_mcp_tool_call_failure_logging(
+        logging_obj: LiteLLMLoggingObj | None,
+        exception: Exception,
+        start_time: datetime,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        request_data: Mapping[str, object],
+    ) -> None:
+        """Failure logging shared by the ``/mcp`` path and the REST endpoint. Call from
+        inside the ``except`` block so the traceback is still available.
+
+        The failure handlers run first because ``_ProxyDBLogger.async_post_call_failure_hook``
+        builds the failure spend-log row from the ``standard_logging_object`` they produce;
+        both gate on ``should_run_logging``, so the ``@client`` wrapper does not log twice.
+        A relayed upstream 401 (``MCPUpstreamAuthError``) is an expected caller-must-reauth
+        signal and skips ``post_call_failure_hook``, which fires the ``llm_exceptions`` alert.
+        """
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
+        if logging_obj is not None:
+            end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match `start_time`, which it is subtracted from
+            logging_obj.failure_handler(exception, traceback_str, start_time, end_time)
+            await logging_obj.async_failure_handler(exception, traceback_str, start_time, end_time)
+
+        if isinstance(exception, MCPUpstreamAuthError) or not proxy_logging_obj or user_api_key_auth is None:
+            return
+        sanitized_request_data: Final = {
+            key: value for key, value in request_data.items() if key not in _MCP_CREDENTIAL_REQUEST_FIELDS
+        }
+        await proxy_logging_obj.post_call_failure_hook(
+            request_data=sanitized_request_data,
+            original_exception=exception,
+            user_api_key_dict=user_api_key_auth,
+            route="/mcp/call_tool",
+            traceback_str=traceback_str,
+        )
+
     @client
     async def call_mcp_tool(
         name: str,
@@ -3375,40 +3443,8 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 **kwargs,
             )
-        except MCPUpstreamAuthError:
-            # A client-forwarded pass-through upstream 401 is an expected caller-must-reauth signal, so
-            # re-raise it without post_call_failure_hook, which fires the proxy's llm_exceptions alert.
-            # mcp_server_tool_call then downgrades it to an informational isError result for the
-            # streamable client. Note: this function is @client-decorated, so the decorator's standard
-            # failure logging still records the event (spend log / OTel); only the extra alert sink is
-            # skipped here.
-            raise
         except Exception as e:
-            traceback_str: Final = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
-            from litellm.proxy.proxy_server import proxy_logging_obj
-
-            # Ordering is load-bearing. ``_ProxyDBLogger.async_post_call_failure_hook``,
-            # reached below, writes the failure spend-log row from this logger's
-            # ``standard_logging_object``, which only exists once the failure handlers
-            # have run. Flush them first or the row lands with
-            # ``guardrail_information=None`` and a guardrail block is never counted.
-            #
-            # Not double-logged: both handlers gate on ``should_run_logging`` and then
-            # mark it, so the ``@client`` wrapper's own post-raise logging no-ops on this
-            # logger, same as ``_fire_mcp_tool_call_logging`` does for ``isError=True``.
-            if litellm_logging_obj is not None:
-                end_time: Final = datetime.now()  # noqa: DTZ005  # naive to match `start_time`, which it is subtracted from
-                litellm_logging_obj.failure_handler(e, traceback_str, start_time, end_time)
-                await litellm_logging_obj.async_failure_handler(e, traceback_str, start_time, end_time)
-
-            if proxy_logging_obj and user_api_key_auth:
-                await proxy_logging_obj.post_call_failure_hook(
-                    request_data=kwargs,
-                    original_exception=e,
-                    user_api_key_dict=user_api_key_auth,
-                    route="/mcp/call_tool",
-                    traceback_str=traceback_str,
-                )
+            await fire_mcp_tool_call_failure_logging(litellm_logging_obj, e, start_time, user_api_key_auth, kwargs)
             raise
 
         if litellm_logging_obj:
@@ -3566,6 +3602,7 @@ if MCP_AVAILABLE:
         raw_headers: dict[str, str] | None = None,
         litellm_logging_obj: LiteLLMLoggingObj | None = None,
         host_progress_callback: Callable | None = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -3583,6 +3620,7 @@ if MCP_AVAILABLE:
             proxy_logging_obj=proxy_logging_obj,
             host_progress_callback=host_progress_callback,
             litellm_logging_obj=litellm_logging_obj,
+            guardrail_context=guardrail_context,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
@@ -3778,6 +3816,129 @@ if MCP_AVAILABLE:
         except (json.JSONDecodeError, TypeError):
             return False
 
+    def _extract_initialize_client_info(body: bytes) -> Implementation | None:
+        try:
+            return InitializeRequest.model_validate_json(body).params.clientInfo
+        except ValidationError:
+            return None
+
+    def _group_session_counts(
+        sessions: Sequence[MCPGatewaySession],
+        label_for: Callable[[MCPGatewaySession], str | None],
+    ) -> tuple[MCPGatewaySessionGroupCount, ...]:
+        counts: Final = types.MappingProxyType(Counter(label_for(session) for session in sessions))
+        return tuple(
+            sorted(
+                (MCPGatewaySessionGroupCount(label=label, count=count) for label, count in counts.items()),
+                key=lambda group: (-group.count, group.label is None, group.label or ""),
+            )
+        )
+
+    def _gateway_session_for(session_id: str, auth_user: MCPAuthenticatedUser, now: float) -> MCPGatewaySession:
+        client_info: Final = _stateful_session_client_info.get(session_id)
+        key_auth: Final = auth_user.user_api_key_auth
+        return MCPGatewaySession(
+            session_id_prefix=session_id[:MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH],
+            client_name=client_info.name if client_info is not None else None,
+            client_version=client_info.version if client_info is not None else None,
+            user_id=key_auth.user_id if key_auth is not None else None,
+            user_email=key_auth.user_email if key_auth is not None else None,
+            key_alias=key_auth.key_alias if key_auth is not None else None,
+            team_id=key_auth.team_id if key_auth is not None else None,
+            team_alias=key_auth.team_alias if key_auth is not None else None,
+            client_ip=auth_user.client_ip,
+            idle_seconds=max(0.0, now - _stateful_session_auth_context_last_seen.get(session_id, now)),
+            in_flight_requests=_stateful_session_active_request_counts.get(session_id, 0),
+        )
+
+    def get_mcp_gateway_sessions_report(now: float | None = None) -> MCPGatewaySessionsResponse:
+        """Live stateful Streamable HTTP sessions held by this worker process.
+
+        Only sessions whose transport is still registered with the stateful
+        session manager are reported; SSE and stateless requests hold no
+        session and are never counted.
+        """
+        report_time: Final = time.monotonic() if now is None else now
+        live_session_ids: Final = frozenset(_stateful_server_instances())
+        sessions: Final = tuple(
+            _gateway_session_for(session_id, auth_user, report_time)
+            for session_id, auth_user in tuple(_stateful_session_auth_contexts.items())
+            if session_id in live_session_ids
+        )
+        return MCPGatewaySessionsResponse(
+            worker_pid=os.getpid(),
+            total_sessions=len(sessions),
+            by_client=_group_session_counts(sessions, lambda session: session.client_name),
+            by_user=_group_session_counts(sessions, lambda session: session.user_id),
+            sessions=sessions,
+        )
+
+    def _session_matches_admin_selector(
+        session_id: str,
+        auth_user: MCPAuthenticatedUser,
+        session_id_prefix: str | None,
+        user_id: str | None,
+    ) -> bool:
+        if session_id_prefix is not None and not session_id.startswith(session_id_prefix):
+            return False
+        if user_id is None:
+            return True
+        key_auth: Final = auth_user.user_api_key_auth
+        return key_auth is not None and key_auth.user_id == user_id
+
+    def _forget_expired_admin_terminated_session_ids(now: float) -> None:
+        for session_id in [
+            session_id
+            for session_id, last_replayed in _admin_terminated_session_ids.items()
+            if now - last_replayed >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
+        ]:
+            del _admin_terminated_session_ids[session_id]
+
+    def _is_admin_terminated_session_id(session_id: str, now: float) -> bool:
+        last_replayed: Final = _admin_terminated_session_ids.get(session_id)
+        if last_replayed is None:
+            return False
+        if now - last_replayed >= _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS:
+            del _admin_terminated_session_ids[session_id]
+            return False
+        _admin_terminated_session_ids[session_id] = now
+        return True
+
+    async def terminate_mcp_gateway_sessions(
+        *,
+        session_id_prefix: str | None = None,
+        user_id: str | None = None,
+    ) -> MCPGatewaySessionsTerminateResponse:
+        """Force-close every live stateful session on this worker matching the selector.
+
+        The transport is terminated (open streams close), all per-session
+        tracking is dropped, and the id is remembered so a client that keeps
+        sending it receives 404 and has to ``initialize`` again, which re-runs
+        admission. Only sessions held by this worker process are affected.
+        """
+        now: Final = time.monotonic()
+        _forget_expired_admin_terminated_session_ids(now)
+        server_instances: Final = _stateful_server_instances()
+        targets: Final = tuple(
+            (session_id, auth_user)
+            for session_id, auth_user in tuple(_stateful_session_auth_contexts.items())
+            if session_id in server_instances
+            and _session_matches_admin_selector(session_id, auth_user, session_id_prefix, user_id)
+        )
+        terminated: Final = tuple(_gateway_session_for(session_id, auth_user, now) for session_id, auth_user in targets)
+        for session_id, _ in targets:
+            _admin_terminated_session_ids[session_id] = now
+            transport = server_instances.pop(session_id, None)
+            _remove_stateful_session_tracking(session_id)
+            if transport is not None:
+                await transport.terminate()
+            verbose_logger.warning("MCP session '%s' terminated by an administrator.", session_id)
+        return MCPGatewaySessionsTerminateResponse(
+            worker_pid=os.getpid(),
+            terminated_sessions=len(terminated),
+            sessions=terminated,
+        )
+
     async def _read_request_body_for_routing(
         receive: Receive,
     ) -> tuple[list[Message], bytes]:
@@ -3900,6 +4061,17 @@ if MCP_AVAILABLE:
                 content={"message": "Session terminated successfully"},
             )
             await success_response(scope, receive, send)
+            return True
+
+        if _is_admin_terminated_session_id(_session_id, time.monotonic()):
+            terminated_response: Final = JSONResponse(
+                status_code=404,
+                content={  # mutable-ok: JSONResponse content must be a plain dict
+                    "error": "Not Found",
+                    "details": "mcp-session-id was terminated by an administrator. Send initialize to start a new session.",
+                },
+            )
+            await terminated_response(scope, receive, send)
             return True
 
         # Non-DELETE: strip stale session ID to allow new session creation
@@ -4225,20 +4397,6 @@ if MCP_AVAILABLE:
             return None
         return _get_authorization_header_from_scope(scope)
 
-    def _is_delegate_upstream_probe_target(server: MCPServer) -> bool:
-        """Whether ``server`` is an interactive delegate-auth server whose client-supplied
-        token should be preflighted upstream.
-
-        Mirrors the anonymous-delegate gate in ``get_allowed_mcp_servers``: the flow is
-        resolved via ``effective_oauth2_flow`` so an unstamped M2M-shape row fails closed
-        (its stored client credentials drive egress; the caller's bearer is irrelevant).
-        """
-        return (
-            server.auth_type == MCPAuth.oauth2
-            and server.delegate_auth_to_upstream is True
-            and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
-        )
-
     async def _probe_upstream_auth(
         url: str,
         auth_header: str,
@@ -4299,7 +4457,7 @@ if MCP_AVAILABLE:
         mcp_servers: list[str] | None,
         client_ip: str | None,
     ) -> None:
-        """Probe pass-through and delegate-auth upstream servers in parallel before the MCP session starts.
+        """Probe pass-through upstream servers in parallel before the MCP session starts.
 
         Only servers the caller's key is already authorized to reach are probed —
         the list is derived from _get_allowed_mcp_servers so that a user cannot
@@ -4311,38 +4469,9 @@ if MCP_AVAILABLE:
         if the upstream accepts it but forbids the caller.
         Fails-open: network errors are logged and the request is allowed through.
 
-        Delegate-auth servers (``auth_type=oauth2`` + ``delegate_auth_to_upstream``)
-        are probed with the caller's bare ``Authorization`` bearer. That bearer is only
-        an upstream token (never a LiteLLM key) when admission took the delegate bypass,
-        so the delegate target is resolved through ``get_mcp_server_by_name`` -- the same
-        resolver admission used -- rather than the wider allowed-server prefix/access-group
-        matching. A name that only reaches a delegate server via server_id or an access
-        group would have been admitted as a real LiteLLM key, so probing it would leak that
-        key upstream; requiring the admission-resolver match closes that gap. Without the
-        probe a rejected token is absorbed by the tools/list handler and masked as an empty
-        tool list. Gated to single-server routes so one rejected token cannot 401 a
-        multi-server aggregate connect, matching the OBO preflight gating; the challenge
-        echoes the requested name so aliased routes get the same resource_metadata URL as
-        the tokenless preemptive challenge.
         """
         forwarded_auth: Final = _get_forwarded_auth_from_scope(scope)
-        requested_single_target: Final = mcp_servers[0] if mcp_servers is not None and len(mcp_servers) == 1 else None
-        # The bare Authorization header (no x-litellm-api-key) is a valid upstream token
-        # only when admission classified it as one, i.e. the single requested name resolves
-        # to a delegate server under admission's own resolver. Resolve it the same way here
-        # so a server_id- or access-group-named delegate (which admission would have treated
-        # as a LiteLLM key) is never probed with that key.
-        delegate_server: Final = (
-            global_mcp_server_manager.get_mcp_server_by_name(requested_single_target, client_ip=client_ip)
-            if requested_single_target
-            else None
-        )
-        delegate_auth: Final = (
-            _get_authorization_header_from_scope(scope)
-            if delegate_server is not None and _is_delegate_upstream_probe_target(delegate_server)
-            else None
-        )
-        if not forwarded_auth and not delegate_auth:
+        if not forwarded_auth:
             return
 
         # Use the authorized server set, not the raw user-supplied names, so that
@@ -4352,35 +4481,20 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        passthrough_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = (
-            tuple(
-                (srv, forwarded_auth, srv.name)
-                for srv in allowed_servers
-                # Restrict to genuine OAuth pass-through servers (auth_type none +
-                # Authorization in extra_headers). Gateway-managed OAuth2 servers
-                # must not receive the ``resource_metadata=`` challenge emitted
-                # below — they require ``authorization_uri=`` pointing at the
-                # gateway AS metadata. ``is_oauth_passthrough`` already requires
-                # ``auth_type in (None, MCPAuth.none)``, which is mutually
-                # exclusive with ``has_client_credentials`` (oauth2 + M2M flow),
-                # so M2M servers are implicitly excluded here.
-                if srv.is_oauth_passthrough
-            )
-            if forwarded_auth
-            else ()
+        passthrough_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
+            (srv, forwarded_auth, srv.name)
+            for srv in allowed_servers
+            # Restrict to genuine OAuth pass-through servers (auth_type none +
+            # Authorization in extra_headers). Gateway-managed OAuth2 servers
+            # must not receive the ``resource_metadata=`` challenge emitted
+            # below — they require ``authorization_uri=`` pointing at the
+            # gateway AS metadata. ``is_oauth_passthrough`` already requires
+            # ``auth_type in (None, MCPAuth.none)``, which is mutually
+            # exclusive with ``has_client_credentials`` (oauth2 + M2M flow),
+            # so M2M servers are implicitly excluded here.
+            if srv.is_oauth_passthrough
         )
-        # Probe the admission-resolved delegate server only when the caller is actually
-        # authorized for it (present in the IP-filtered allowed set), keyed by server_id.
-        delegate_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = (
-            tuple(
-                (srv, delegate_auth, requested_single_target)
-                for srv in allowed_servers
-                if delegate_server is not None and srv.server_id == delegate_server.server_id
-            )
-            if delegate_auth and requested_single_target
-            else ()
-        )
-        probe_targets: Final = passthrough_targets + delegate_targets
+        probe_targets: Final = passthrough_targets
         if not probe_targets:
             return
 
@@ -4472,13 +4586,15 @@ if MCP_AVAILABLE:
                 raw_headers=raw_headers,
                 scope=dict(scope),
                 mcp_servers=mcp_servers,
-                mcp_auth_header=mcp_auth_header,
-                mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 client_ip=_client_ip,
             )
-            if _debug_headers:
-                send = MCPDebug.wrap_send_with_debug_headers(send, _debug_headers)
+            diagnostics: Final = MCPAuthDiagnostics() if _debug_headers else None
+            if diagnostics is not None:
+                scope[MCP_AUTH_DIAGNOSTICS_SCOPE_KEY] = diagnostics
+                send = MCPDebug.wrap_send_with_debug_headers(
+                    send, _debug_headers, diagnostics.headers, request_method=scope.get("method")
+                )
 
             # Ensure session managers are initialized
             if not _SESSION_MANAGERS_INITIALIZED:
@@ -4670,6 +4786,7 @@ if MCP_AVAILABLE:
                         auth_user,
                         _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip),
                         _track_initialized_stateful_session,
+                        client_info=_extract_initialize_client_info(body),
                     )
 
                 async with _gateway_initialize_instructions_request_scope(
@@ -4677,6 +4794,7 @@ if MCP_AVAILABLE:
                     mcp_servers,
                     _client_ip,
                     scoped_server_endpoint=scoped_server_endpoint,
+                    is_initialize=is_initialize,
                 ):
                     await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":
@@ -4813,6 +4931,7 @@ if MCP_AVAILABLE:
                 mcp_servers,
                 _sse_client_ip,
                 scoped_server_endpoint=scoped_server_endpoint,
+                is_initialize=scope.get("method") == "GET",
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:
@@ -4981,6 +5100,7 @@ if MCP_AVAILABLE:
         auth_user: MCPAuthenticatedUser,
         owner_fingerprint: str,
         on_session_registered: Callable[[str], None] | None = None,
+        client_info: Implementation | None = None,
     ) -> Send:
         async def wrapped_send(message: Message) -> None:
             if message.get("type") == "http.response.start":
@@ -4995,6 +5115,8 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
                         _stateful_session_owners[session_id] = owner_fingerprint
+                        if client_info is not None:
+                            _stateful_session_client_info[session_id] = client_info
                         break
             await send(message)
 

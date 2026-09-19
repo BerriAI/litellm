@@ -4,7 +4,7 @@ import { Organization } from "../networking";
 
 interface OrganizationDropdownProps {
   organizations?: Organization[] | null;
-  value?: string;
+  value?: string | null;
   onChange?: (value: string | null) => void;
   disabled?: boolean;
   loading?: boolean;
@@ -32,7 +32,7 @@ const OrganizationDropdown: React.FC<OrganizationDropdownProps> = ({
           sublabel: org.organization_id,
         }))}
         value={value}
-        onValueChange={(organizationId) => onChange?.(organizationId || null)}
+        onValueChange={(organizationId) => onChange?.(organizationId)}
         placeholder={placeholder}
         emptyText={loading ? "Loading organizations…" : "No organizations found"}
         disabled={disabled}

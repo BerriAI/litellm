@@ -21,6 +21,7 @@ import litellm
 from litellm import token_counter
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.types.router import RouterCacheEnum, RouterErrors
 from litellm.utils import get_utc_datetime
 
@@ -466,7 +467,7 @@ async def async_io_token_pre_call_check(
 
     request_kwargs: Final = get_io_token_rate_limit_request_kwargs()
     _model: Final = (deployment.get("litellm_params") or {}).get("model") or ""
-    estimated_input: Final = _estimate_input_tokens(request_kwargs, model=_model)
+    estimated_input: Final = await offload_token_count(_estimate_input_tokens)(request_kwargs, model=_model)
     max_tokens: Final = _resolve_max_tokens(request_kwargs, deployment)
 
     dt: Final = get_utc_datetime()

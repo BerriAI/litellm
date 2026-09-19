@@ -1,7 +1,6 @@
 from unittest.mock import Mock
 
 import httpx
-import pytest
 
 import litellm
 from litellm.llms.xai.chat.transformation import (
@@ -26,11 +25,7 @@ class TestXAIReasoningTokenFolding:
         total_tokens: int,
         reasoning_tokens: int = 0,
     ) -> ModelResponse:
-        details = (
-            CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens)
-            if reasoning_tokens
-            else None
-        )
+        details = CompletionTokensDetailsWrapper(reasoning_tokens=reasoning_tokens) if reasoning_tokens else None
         usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
@@ -124,6 +119,24 @@ class TestXAIParallelToolCalls:
         assert result["messages"][0]["role"] == "user"
 
 
+class TestXAIChatWebSearchOptions:
+    """XAI answers /chat/completions requests carrying web_search_options with a 410 (Live Search retired)"""
+
+    def test_transform_request_drops_web_search_options(self):
+        config = XAIChatConfig()
+
+        result = config.transform_request(
+            model="xai/grok-4.6",
+            messages=[{"role": "user", "content": "newest litellm version?"}],
+            optional_params={"web_search_options": {"search_context_size": "medium"}, "temperature": 0.5},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "web_search_options" not in result
+        assert result["temperature"] == 0.5
+
+
 class TestXAIUsageNormalization:
     def test_preserves_reasoning_tokens_in_total_usage(self):
         usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=200)
@@ -176,30 +189,10 @@ class TestXAIChatWebSearchBilling:
     def test_enhance_noop_without_details(self):
         response = self._response_with_usage()
 
-        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(
-            response, {"usage": {"prompt_tokens": 100}}
-        )
+        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(response, {"usage": {"prompt_tokens": 100}})
 
         assert response.usage.prompt_tokens_details is None
         assert getattr(response.usage, "server_side_tool_usage_details", None) is None
-
-    def test_completion_cost_bills_chat_web_search_calls(self):
-        billed = self._response_with_usage()
-        XAIChatConfig()._enhance_usage_with_xai_web_search_fields(
-            billed,
-            {"usage": {"server_side_tool_usage_details": self._TOOL_DETAILS}},
-        )
-
-        with_search = litellm.completion_cost(
-            completion_response=billed, model="xai/grok-4", custom_llm_provider="xai"
-        )
-        without_search = litellm.completion_cost(
-            completion_response=self._response_with_usage(),
-            model="xai/grok-4",
-            custom_llm_provider="xai",
-        )
-
-        assert with_search - without_search == pytest.approx(3 * 5.0 / 1000.0)
 
 
 class TestXAIReportedCost:
@@ -257,9 +250,7 @@ class TestXAIReportedCost:
         assert cost_per_token(model="grok-4-latest", usage=usage) == (0.0, 0.0037756)
 
     def test_usage_without_a_reported_cost_is_left_alone(self):
-        usage = self._transformed_usage(
-            {"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300}
-        )
+        usage = self._transformed_usage({"prompt_tokens": 100, "completion_tokens": 200, "total_tokens": 300})
 
         assert getattr(usage, "cost", None) is None
 
@@ -282,9 +273,7 @@ class TestXAIReportedCost:
         Chunk aggregation rebuilds usage from the fields it models plus ``cost``, so a
         chunk still carrying only ``cost_in_usd_ticks`` loses the reported amount.
         """
-        handler = XAIChatCompletionStreamingHandler(
-            streaming_response=iter([]), sync_stream=True
-        )
+        handler = XAIChatCompletionStreamingHandler(streaming_response=iter([]), sync_stream=True)
 
         parsed = handler.chunk_parser(
             {

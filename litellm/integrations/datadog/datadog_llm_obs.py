@@ -165,16 +165,52 @@ def _metadata_without_prompt_carriers(standard_logging_metadata: Mapping[str, An
     )
 
 
-def _redact_messages(messages: Sequence[Message]) -> tuple[Message, ...]:
-    """Each message's shape with its content replaced and tool payloads dropped; no message is invented."""
-    return tuple(
-        {
-            "role": role if isinstance(role, str) and role in _SAFE_REDACTED_MESSAGE_ROLES else "",
-            "content": REDACTED_BY_LITELLM,
-        }
-        for message in messages
-        for role in (message.get("role", ""),)
+def _safe_identifier(value: object) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _redact_tool_call(tool_call: ToolCall) -> ToolCall:
+    return ToolCall(
+        name=_safe_identifier(tool_call.get("name")),
+        arguments=REDACTED_BY_LITELLM,
+        tool_id=_safe_identifier(tool_call.get("tool_id")),
+        type=_safe_identifier(tool_call.get("type")),
     )
+
+
+def _redact_tool_result(tool_result: ToolResult) -> ToolResult:
+    return ToolResult(
+        name=_safe_identifier(tool_result.get("name")),
+        result=REDACTED_BY_LITELLM,
+        tool_id=_safe_identifier(tool_result.get("tool_id")),
+        type=_safe_identifier(tool_result.get("type")),
+    )
+
+
+def _redact_message(message: Message) -> Message:
+    role: Final = message.get("role", "")
+    tool_calls: Final = message.get("tool_calls", ())
+    tool_results: Final = message.get("tool_results", ())
+    redacted: Final[Message] = {
+        "role": role if isinstance(role, str) and role in _SAFE_REDACTED_MESSAGE_ROLES else "",
+        "content": REDACTED_BY_LITELLM,
+        **({"tool_calls": tuple(_redact_tool_call(call) for call in tool_calls)} if tool_calls else {}),
+        **({"tool_results": tuple(_redact_tool_result(result) for result in tool_results)} if tool_results else {}),
+    }
+    return redacted
+
+
+def _redact_messages(messages: Sequence[Message]) -> tuple[Message, ...]:
+    return tuple(_redact_message(message) for message in messages)
+
+
+def _tool_output_tokens(messages: Sequence[Message], model: str) -> float | None:
+    results: Final = tuple(
+        result.get("result", "") for message in messages for result in message.get("tool_results", ())
+    )
+    if not results:
+        return None
+    return float(sum(litellm.token_counter(model=model, text=result) for result in results))
 
 
 def _cost_dimension_tags(
@@ -583,6 +619,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             standard_logging_payload=standard_logging_payload,
             call_type=standard_logging_payload.get("call_type"),
         )
+        tool_output_tokens: Final = _tool_output_tokens(input_messages, standard_logging_payload.get("model") or "")
         input_meta: Final = InputMeta(messages=_redact_messages(input_messages) if redact_payload else input_messages)
         output_meta: Final = OutputMeta(
             messages=_redact_messages(output_messages) if redact_payload else output_messages
@@ -618,7 +655,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             **({"tool_definitions": tool_definitions} if tool_definitions else {}),
         }
 
-        metrics: Final = self._assemble_metrics(standard_logging_payload)
+        metrics: Final = self._assemble_metrics(standard_logging_payload, tool_output_tokens)
 
         payload: Final[LLMObsPayload] = LLMObsPayload(
             parent_id=metadata_parent_id if metadata_parent_id else "undefined",
@@ -676,6 +713,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 )
         return error_info
 
+    def redacts_messages_itself(self) -> bool:
+        return True
+
     def _payload_logging_is_off(self, kwargs: Mapping[str, Any]) -> bool:
         return (
             bool(self.turn_off_message_logging)
@@ -683,7 +723,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             or should_redact_message_logging(dict(kwargs))
         )
 
-    def _assemble_metrics(self, standard_logging_payload: StandardLoggingPayload) -> LLMMetrics:
+    def _assemble_metrics(
+        self, standard_logging_payload: StandardLoggingPayload, tool_output_tokens: float | None
+    ) -> LLMMetrics:
         """
         Build the span metrics, including the prompt-cache counts LLM Obs charts cache savings from.
 
@@ -721,6 +763,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 else {}
             ),
             **({"reasoning_output_tokens": reasoning_output_tokens} if reasoning_output_tokens else {}),
+            **({"tool_output_tokens": tool_output_tokens} if tool_output_tokens is not None else {}),
         }
         return metrics
 

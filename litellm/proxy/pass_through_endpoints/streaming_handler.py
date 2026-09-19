@@ -8,6 +8,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
@@ -60,7 +61,7 @@ class PassThroughStreamingHandler:
             litellm_logging_obj._update_completion_start_time(completion_start_time=datetime.now())
 
     @staticmethod
-    def schedule_stream_failure_logging(
+    async def schedule_stream_failure_logging(
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
         request_body: dict[str, object],
@@ -68,7 +69,7 @@ class PassThroughStreamingHandler:
         exception: Exception,
         stream_context: PassThroughStreamContext | None = None,
     ) -> None:
-        PassThroughStreamingHandler._record_partial_usage_for_failure(
+        await asyncify(PassThroughStreamingHandler._record_partial_usage_for_failure)(
             litellm_logging_obj=litellm_logging_obj,
             endpoint_type=endpoint_type,
             request_body=request_body,
@@ -222,7 +223,7 @@ class PassThroughStreamingHandler:
             verbose_proxy_logger.error("Error in chunk_processor: %s", e)
             if response.status_code < 400:
                 logging_scheduled = True
-                PassThroughStreamingHandler.schedule_stream_failure_logging(
+                await PassThroughStreamingHandler.schedule_stream_failure_logging(
                     litellm_logging_obj=litellm_logging_obj,
                     endpoint_type=endpoint_type,
                     request_body=resolved_request_body,
@@ -270,11 +271,29 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
+        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            _is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection
+            _is_provider_error_chunk,  # pyright: ignore[reportPrivateUsage]  # provider errors must not become cache evidence
+        )
+
+        # Transport reads can split event names and JSON payloads. Recognize terminal
+        # events only after the shared SSE framer has reassembled the collected bytes.
+        complete_frames, incomplete_tail = split_complete_sse_frames(
+            b"".join(raw_bytes) if endpoint_type == EndpointType.ANTHROPIC else b""
+        )
+        litellm_logging_obj.model_call_details[  # rebind-ok: stamp evidence on the per-request state read by callbacks
+            "prompt_cache_response_complete"
+        ] = (
+            endpoint_type == EndpointType.ANTHROPIC
+            and not incomplete_tail.strip()
+            and _is_message_stop_chunk(complete_frames)
+            and not _is_provider_error_chunk(complete_frames)
+        )
         try:
             (
                 standard_logging_response_object,
                 kwargs,
-            ) = PassThroughStreamingHandler._build_passthrough_logging_result(
+            ) = await asyncify(PassThroughStreamingHandler._build_passthrough_logging_result)(
                 litellm_logging_obj=litellm_logging_obj,
                 passthrough_success_handler_obj=passthrough_success_handler_obj,
                 url_route=url_route,
@@ -316,8 +335,8 @@ class PassThroughStreamingHandler:
         Synchronous, CPU-bound reconstruction of the standard logging payload
         from collected raw SSE bytes. Extracted from
         _route_streaming_logging_to_handler so the per-endpoint dispatch can
-        be unit-tested in isolation. Still invoked synchronously on the event
-        loop; an off-loop dispatch is a future change, not part of this PR.
+        be unit-tested in isolation. The async callers run it in a worker
+        thread so the token counts inside stay off the event loop.
         """
         all_chunks: Final = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None

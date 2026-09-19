@@ -299,6 +299,10 @@ def test_azure_entra_mint_writes_an_encoded_url_into_the_db_url_env_var(azure_en
             "connection_limit=20&pgbouncer=true&max_idle_connection_lifetime=45",
             {"connection_limit": ["20"], "pgbouncer": ["true"], "max_idle_connection_lifetime": ["45"]},
         ),
+        (
+            "sslmode=require&sslcert=/certs/root.pem&sslaccept=strict&schema=tenant",
+            {"sslmode": ["require"], "sslcert": ["/certs/root.pem"], "sslaccept": ["strict"]},
+        ),
     ],
 )
 def test_token_refresh_keeps_the_connection_params_of_the_url_it_replaces(
