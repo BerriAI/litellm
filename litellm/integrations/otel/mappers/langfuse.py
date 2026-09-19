@@ -27,7 +27,6 @@ from litellm.integrations.otel.model.payloads import (
     LLMRequestParams,
     LLMUsage,
 )
-from litellm.integrations.otel.model.semconv import GenAIOperation
 from litellm.integrations.otel.model.trace_controls import TraceControls
 
 LANGFUSE_OBSERVATION_INPUT: Final = "langfuse.observation.input"
@@ -40,9 +39,7 @@ LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
 
 class LangfuseMapper:
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
-        "langfuse.observation.type": lambda d: (
-            "embedding" if d.operation is GenAIOperation.EMBEDDINGS else "generation"
-        ),
+        "langfuse.observation.type": lambda _: "generation",
         "langfuse.observation.model.name": lambda d: d.request_model or None,
         "langfuse.observation.metadata.provider": lambda d: d.provider or None,
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
