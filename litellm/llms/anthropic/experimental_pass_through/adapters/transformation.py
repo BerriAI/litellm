@@ -513,6 +513,24 @@ class LiteLLMAnthropicMessagesAdapter:
                             )
                             self._add_cache_control_if_applicable(content, tool_result, model)
                             tool_message_list.append(tool_result)
+                        elif content.get("type") == "container_upload" and custom_llm_provider not in (
+                            None,
+                            "anthropic",
+                            "anthropic_text",
+                        ):
+                            # custom_llm_provider is None for guardrail scanning and context-compaction
+                            # token counting, which reuse this converter without knowing the real target;
+                            # raising there would break requests actually bound for Anthropic.
+                            raise litellm.BadRequestError(
+                                message=(
+                                    "'container_upload' content blocks reference a file uploaded to Anthropic's "
+                                    "server-side container and are only supported when the target model is "
+                                    "Anthropic. Remove this content block, or route this request to an "
+                                    "Anthropic model."
+                                ),
+                                model=model or "",
+                                llm_provider=custom_llm_provider,
+                            )
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)

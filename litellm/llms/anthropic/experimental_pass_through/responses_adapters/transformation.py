@@ -10,6 +10,7 @@ from collections.abc import Iterable, Mapping
 from itertools import groupby
 from typing import Any, Final, cast
 
+import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
@@ -220,6 +221,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_messages_to_responses_input(
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
+        *,
+        model: str = "",
+        custom_llm_provider: str | None = None,
     ) -> list[dict[str, object]]:
         """
         Convert Anthropic messages list to Responses API `input` items.
@@ -336,6 +340,17 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                     "call_id": tool_use_id,
                                     "output": self._tool_result_output_value(output_text, tool_file_parts),
                                 }
+                            )
+                        elif btype == "container_upload":
+                            raise litellm.BadRequestError(
+                                message=(
+                                    "'container_upload' content blocks reference a file uploaded to "
+                                    "Anthropic's server-side container and are only supported when the "
+                                    "target model is Anthropic. Remove this content block, or route this "
+                                    "request to an Anthropic model."
+                                ),
+                                model=model,
+                                llm_provider=custom_llm_provider or "openai",
                             )
                     if tool_image_parts:
                         boundary_part = {  # mutable-ok: json content part
@@ -506,6 +521,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
+        *,
+        custom_llm_provider: str | None = None,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -522,7 +539,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             anthropic_request["messages"],
         )
 
-        input_items: Final = self.translate_messages_to_responses_input(messages_list)
+        input_items: Final = self.translate_messages_to_responses_input(
+            messages_list, model=model, custom_llm_provider=custom_llm_provider
+        )
         system: Final = anthropic_request.get("system")
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)

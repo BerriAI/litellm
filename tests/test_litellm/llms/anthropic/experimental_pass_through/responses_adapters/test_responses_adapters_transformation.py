@@ -10,6 +10,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import litellm
+
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -491,6 +493,24 @@ class TestTranslateMessagesToResponsesInput:
         ]
         result = _translate_messages(messages)
         assert result[0]["output"] == ""
+
+    def test_user_container_upload_raises(self):
+        """A container_upload block can't be represented in Responses API input and must not be dropped.
+
+        Regression test for https://github.com/BerriAI/litellm/issues/41912 (case 3): before this fix,
+        the block vanished from the translated input list, so LiteLLM sent OpenAI an empty `input`
+        instead of surfacing an error naming the unsupported block. This adapter builds Responses API
+        input exclusively for OpenAI/Azure targets (see module docstring), so the block can never be
+        resolved by the target regardless of which provider it is.
+        """
+        messages = [
+            {
+                "role": "user",
+                "content": [{"type": "container_upload", "file_id": "file-g1-controlled"}],
+            }
+        ]
+        with pytest.raises(litellm.BadRequestError, match="container_upload"):
+            _translate_messages(messages)
 
     def test_assistant_string_content(self):
         """Plain string assistant message becomes a message with output_text."""

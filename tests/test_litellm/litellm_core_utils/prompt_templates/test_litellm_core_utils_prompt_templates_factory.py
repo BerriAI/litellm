@@ -2166,6 +2166,34 @@ def test_anthropic_messages_pt_file_block_cache_control_with_explicit_provider()
     assert text_block["cache_control"]["type"] == "ephemeral"
 
 
+def test_anthropic_messages_pt_rejects_input_audio_block():
+    """
+    Anthropic has no audio input support, so an input_audio block must be rejected explicitly
+    rather than silently dropped.
+    Regression test for https://github.com/BerriAI/litellm/issues/41912 (case 2): before this fix,
+    the block vanished and `messages` was sent to Anthropic empty, surfacing as an opaque
+    "at least one message is required" error instead of naming the unsupported block.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": "UklGRiQAAAA=", "format": "wav"},
+                }
+            ],
+        }
+    ]
+
+    with pytest.raises(litellm.BadRequestError, match="audio"):
+        anthropic_messages_pt(
+            messages=messages,
+            model="claude-sonnet-4-6",
+            llm_provider="anthropic",
+        )
+
+
 def test_anthropic_messages_pt_file_block_without_cache_control():
     """
     Test that file blocks without cache_control still work correctly.
