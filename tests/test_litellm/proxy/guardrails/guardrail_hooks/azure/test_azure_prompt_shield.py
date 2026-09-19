@@ -640,9 +640,6 @@ def test_update_in_memory_litellm_params_dead_env_credential_rejected_untouched(
 
 @pytest.mark.asyncio
 async def test_config_without_api_version_calls_documented_azure_api_version():
-    """A config.yaml entry that omits api_version must reach Azure at the documented
-    default. LitellmParams inherits every provider's config model, so a sibling
-    provider's api_version default used to leak into the Azure URL and 404."""
     handler = InMemoryGuardrailHandler()
     registered = handler.initialize_guardrail(
         guardrail={
@@ -670,9 +667,6 @@ async def test_config_without_api_version_calls_documented_azure_api_version():
 
 @pytest.mark.asyncio
 async def test_update_without_api_version_keeps_documented_azure_api_version():
-    """The DB update path copies every LitellmParams attribute onto the live
-    instance, api_version included, so an update that omits it must still leave
-    the request on the documented default rather than a None or leaked value."""
     guardrail = _shield_guardrail()
     guardrail.update_in_memory_litellm_params(
         LitellmParams(

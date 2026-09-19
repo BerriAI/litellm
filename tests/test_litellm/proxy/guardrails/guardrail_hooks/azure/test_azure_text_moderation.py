@@ -468,9 +468,6 @@ async def test_apply_guardrail_handles_missing_texts_key():
 
 @pytest.mark.asyncio
 async def test_config_without_api_version_calls_documented_azure_api_version():
-    """A config.yaml entry that omits api_version must reach Azure at the documented
-    default. LitellmParams inherits every provider's config model, so a sibling
-    provider's api_version default used to leak into the Azure URL and 404."""
     handler = InMemoryGuardrailHandler()
     registered = handler.initialize_guardrail(
         guardrail={
@@ -502,10 +499,6 @@ async def test_config_without_api_version_calls_documented_azure_api_version():
 )
 @pytest.mark.asyncio
 async def test_guardrail_loaded_with_stored_api_version_calls_azure_at(stored_api_version, expected_api_version):
-    """Releases before the api_version default fix saved every guardrail created
-    through the API or dashboard with Javelin's "v1", which Azure always answers
-    with 404. A row like that must reach Azure at the documented default, while a
-    real Azure version an admin chose is sent as written."""
     handler = InMemoryGuardrailHandler()
     registered = handler.initialize_guardrail(
         guardrail={
