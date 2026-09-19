@@ -19,7 +19,7 @@ _JPEG_AND_PNG_SIGNATURES: Final = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")
 def _reencode_as_jpeg(raw_image: bytes, original: str) -> str:
     try:
         from PIL import Image
-    except ImportError:
+    except Exception:
         raise Exception("ollama image conversion failed please run `pip install Pillow`")
 
     try:

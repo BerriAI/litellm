@@ -565,7 +565,10 @@ def _transform_image_request(image_base64: str, mime_subtype: str) -> dict:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "What colour is this?"},
-                    {"type": "image_url", "image_url": {"url": f"data:image/{mime_subtype};base64,{image_base64}"}},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/{mime_subtype};base64,{image_base64}"},
+                    },
                 ],
             }
         ],
