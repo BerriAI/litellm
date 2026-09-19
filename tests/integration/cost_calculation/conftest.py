@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict
 from integration._support.client import JSON_OBJECT, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.upstream import delete_scenario, register_scenario
-from integration.cost_calculation.cost_matrix import Case, FrontierModel
+from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase
 
 
 class CostBreakdown(BaseModel):
@@ -118,25 +118,23 @@ def _vertex_service_account_json(url: str) -> str:
 
 def register_scenario_deployment(
     scenario: Scenario,
-    model: FrontierModel,
-    case: Case,
+    case: CostTrackingTestCase,
     marker: str,
+    key: str,
 ) -> str:
     control_url: Final = os.environ["INTEGRATION_UPSTREAM_URL"].rstrip("/")
-    sidecar_scenario: Final = case.scenario(
-        scenario_id=f"sc-{marker}", model=model, text=f"scripted answer {marker}"
-    )
-    handle: Final = register_scenario(sidecar_scenario)
+    run_marker: Final = sha256(key.encode()).hexdigest()[:12]
+    handle: Final = register_scenario(f"sc-{marker}-{run_marker}", case.response)
     scenario.cleanups.callback(delete_scenario, handle)
-    model_name: Final = f"{model.model_name}-{marker}"
+    model_name: Final = f"cost-{marker}-{run_marker}"
     parameters: Final = {
-        "model": model.litellm_model,
-        "api_key": model.api_key,
+        "model": case.litellm_model,
+        "api_key": case.api_key,
         "api_base": handle.api_base(),
-        **model.litellm_params,
+        **case.litellm_params,
         **(
             {"vertex_credentials": _vertex_service_account_json(control_url)}
-            if model.llm_provider == "vertex_ai"
+            if case.rates.litellm_provider == "vertex_ai-language-models"
             else {}
         ),
     }
@@ -145,7 +143,11 @@ def register_scenario_deployment(
         JSON_OBJECT.validate_python({
             "model_name": model_name,
             "litellm_params": parameters,
-            "model_info": {"base_model": model.base_model},
+            "model_info": (
+                {"base_model": case.base_model}
+                if case.base_model is not None
+                else {}
+            ),
         }),
     )
     identity: Final = string_value(object_value(created["model_info"])["id"])
