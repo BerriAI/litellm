@@ -16,6 +16,7 @@ from typing import Final
 import pytest
 from e2e_config import (
     LINEAR_MCP_URL,
+    LINEAR_READONLY_TOOL,
     LINEAR_STORAGE_STATE,
     PROXY_BASE_URL,
     PROXY_REPLICA_URLS,
@@ -34,7 +35,6 @@ pytest.importorskip(
 
 from idp import Identity, Keycloak  # noqa: E402
 from oauth_chat_client import ChatMcpClient, InMemoryTokenStorage, build_chat_client  # noqa: E402
-from test_mcp_chat_completion_oauth_e2e import LINEAR_READONLY_TOOL  # noqa: E402
 
 pytestmark = [pytest.mark.e2e, pytest.mark.mcp_oauth_live]
 
