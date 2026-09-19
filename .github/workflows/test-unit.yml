@@ -55,7 +55,7 @@ jobs:
             workers: 2
             reruns: 0
             timeout-minutes: 20
-            job-timeout-minutes: 65
+            job-timeout-minutes: 60
 
           - shard: core-utils
             artifact-name: core-utils
