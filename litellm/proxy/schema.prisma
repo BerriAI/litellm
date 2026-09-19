@@ -1107,6 +1107,12 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   @@index([team_id, created_at(sort: Desc)])
 }
 
+model LiteLLM_ManagedFileContentTable {
+  id         String   @id @default(uuid())
+  content    Bytes
+  created_at DateTime @default(now())
+}
+
 model LiteLLM_ManagedVectorStoreTable {
   id String @id @default(uuid())
   unified_resource_id String @unique // The base64 encoded unified vector store ID
