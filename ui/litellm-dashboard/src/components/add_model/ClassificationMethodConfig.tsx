@@ -666,9 +666,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
-              Number of prior user turns (tool output and harness reminders excluded) sent to the classifier as context,
-              so a referring follow-up like &quot;now do the same for the streaming path&quot; is classified against
-              what it refers to. Set to 0 to send only the current message.
+              Number of prior user turns sent to the classifier provider, excluding tool output and harness reminders.
+              LLM and JEV default to 3 turns; JEV sends them to the configured TypeSafe endpoint. Set to 0 to omit
+              conversation history. The current message and selected system text are still sent.
             </span>
           </div>
           <div>
