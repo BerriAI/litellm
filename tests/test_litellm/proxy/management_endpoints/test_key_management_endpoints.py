@@ -13189,6 +13189,11 @@ async def _process_single_key_update_under_policy(prisma_client: AsyncMock, data
             "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_updated_hook",
             new_callable=AsyncMock,
         ),
+        patch(  # test-quality-ok: the existing key's team is outside the policy path, as in the /key/update tests
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         return await _process_single_key_update(
             update_key_request=data,
