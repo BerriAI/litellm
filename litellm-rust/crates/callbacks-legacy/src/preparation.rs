@@ -3,6 +3,8 @@ use pyo3::{
     types::{PyDict, PyList},
 };
 
+use crate::legacy_python::Wrapper;
+
 struct CredentialEntry<'py>(Bound<'py, PyAny>);
 
 impl<'py> CredentialEntry<'py> {
@@ -22,18 +24,19 @@ pub fn prepare<'py>(
 ) -> PyResult<Bound<'py, PyDict>> {
     let arguments = kwargs.copy()?;
     arguments.set_item("litellm_logging_obj", logger.object(py))?;
-    let litellm = py.import("litellm")?;
-    inherit_credentials(py, &litellm, &arguments)?;
-    py.import("litellm.rust_bridge.legacy_callbacks")?
-        .getattr("check_limits")?
-        .call1((&arguments,))?;
+    inherit_credentials(py, &arguments, || {
+        Ok(Wrapper::CredentialList
+            .call(py, ())?
+            .cast_into::<PyList>()?)
+    })?;
+    Wrapper::CheckLimits.call(py, (&arguments,))?;
     Ok(arguments)
 }
 
-fn inherit_credentials(
-    py: Python<'_>,
-    litellm: &Bound<'_, PyModule>,
-    arguments: &Bound<'_, PyDict>,
+fn inherit_credentials<'py>(
+    py: Python<'py>,
+    arguments: &Bound<'py, PyDict>,
+    credential_list: impl FnOnce() -> PyResult<Bound<'py, PyList>>,
 ) -> PyResult<()> {
     let Some(requested) = arguments
         .get_item("litellm_credential_name")?
@@ -45,16 +48,13 @@ fn inherit_credentials(
         return Ok(());
     }
     let requested: String = requested.extract()?;
-    let credentials = litellm.getattr("credential_list")?.cast_into::<PyList>()?;
+    let credentials = credential_list()?;
     let names = credentials
         .iter()
         .map(|credential| CredentialEntry(credential).name())
         .collect::<PyResult<Vec<_>>>()?;
     let Some(index) = names.iter().position(|name| *name == requested) else {
-        py.import("litellm._logging")?.getattr("verbose_logger")?.call_method1(
-            "warning",
-            ("litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it", requested, names.len()),
-        )?;
+        Wrapper::WarnUnknownCredential.call(py, (requested, names.len()))?;
         return Ok(());
     };
     let selected = CredentialEntry(credentials.get_item(index)?);
@@ -80,19 +80,19 @@ mod tests {
     }
 
     fn inherit(py: Python<'_>, locals: &Bound<'_, PyDict>) -> PyResult<()> {
-        let litellm = PyModule::new(py, "credential_host")?;
-        litellm.setattr(
-            "credential_list",
-            locals.get_item("credentials").unwrap().unwrap(),
-        )?;
         inherit_credentials(
             py,
-            &litellm,
             &locals
                 .get_item("arguments")
                 .unwrap()
                 .unwrap()
                 .cast_into::<PyDict>()?,
+            || {
+                Ok(locals
+                    .get_item("credentials")?
+                    .unwrap()
+                    .cast_into::<PyList>()?)
+            },
         )
     }
 
@@ -304,11 +304,11 @@ arguments = {'litellm_credential_name': 'ocr-test'}
     fn falsy_credential_names_return_before_loading_credentials() {
         Python::initialize();
         Python::attach(|py| {
-            let litellm = PyModule::new(py, "credential_host").unwrap();
             for name in [py.None(), py.eval(c"''", None, None).unwrap().unbind()] {
                 let arguments = PyDict::new(py);
                 arguments.set_item("litellm_credential_name", name).unwrap();
-                inherit_credentials(py, &litellm, &arguments).unwrap();
+                inherit_credentials(py, &arguments, || panic!("credentials must not be loaded"))
+                    .unwrap();
             }
         });
     }

@@ -16,7 +16,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -134,20 +134,14 @@ def test__scrub_db_overlay_remote_module_loads_invalid_non_dict_returns_input():
 
 def test_resolve_complexity_router_plugins_no_plugins_key_is_a_noop():
     config: Dict[str, Any] = {"tiers": {"SIMPLE": "gpt-4o-mini"}}
-    resolve_complexity_router_plugins(
-        model_name="smart-router", complexity_router_config=config, config_file_path=None
-    )
+    resolve_complexity_router_plugins(model_name="smart-router", complexity_router_config=config, config_file_path=None)
     assert config == {"tiers": {"SIMPLE": "gpt-4o-mini"}}
 
 
 def test_resolve_complexity_router_plugins_resolves_dotted_path_to_live_instance(tmp_path):
     plugin_file = tmp_path / "my_plugin.py"
     plugin_file.write_text(
-        "class _Plugin:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "my_plugin_instance = _Plugin()\n"
+        "class _Plugin:\n    async def run(self, context):\n        return context\n\nmy_plugin_instance = _Plugin()\n"
     )
     config: Dict[str, Any] = {"plugins": ["my_plugin.my_plugin_instance"]}
 
@@ -262,9 +256,18 @@ def _custom_prompt_row(model_name: str) -> dict[str, object]:
     [
         ([_heuristic_v2_row("a"), _heuristic_v2_row("b"), _heuristic_v2_row("c", "heuristic")], "heuristic_v2"),
         ([_custom_tier_row("a"), _custom_tier_row("b"), _heuristic_v2_row("c", "heuristic")], "tier_definitions"),
-        ([_custom_prompt_row("a"), _custom_prompt_row("b"), _heuristic_v2_row("c", "heuristic")], "operator-written classifier prompt"),
-        ([_custom_tier_row("a"), _custom_prompt_row("b"), _heuristic_v2_row("c", "heuristic")], "operator-written classifier prompt"),
-        ([_operator_examples_row("a"), _custom_tier_row("b"), _heuristic_v2_row("c", "heuristic")], "operator-written classifier prompt"),
+        (
+            [_custom_prompt_row("a"), _custom_prompt_row("b"), _heuristic_v2_row("c", "heuristic")],
+            "operator-written classifier prompt",
+        ),
+        (
+            [_custom_tier_row("a"), _custom_prompt_row("b"), _heuristic_v2_row("c", "heuristic")],
+            "operator-written classifier prompt",
+        ),
+        (
+            [_operator_examples_row("a"), _custom_tier_row("b"), _heuristic_v2_row("c", "heuristic")],
+            "operator-written classifier prompt",
+        ),
     ],
 )
 def test_validate_auto_router_capability_limits_refuses_to_start_over_the_limit(
@@ -339,20 +342,17 @@ async def test_ProxyConfig_load_config_takes_the_classifier_limit_from_the_licen
         ),
     }
     config_yaml = _TWO_HEURISTIC_V2_ROUTERS_YAML.replace(
-        "classifier_type: heuristic_v2\n", f"classifier_type: {classifier_type}\n{forecast_settings.get(classifier_type, '')}"
+        "classifier_type: heuristic_v2\n",
+        f"classifier_type: {classifier_type}\n{forecast_settings.get(classifier_type, '')}",
     ).replace("tiers: {SIMPLE: gpt-4o-mini}", "tiers: {SIMPLE: gpt-4o-mini, REASONING: gpt-4o}")
     f.write_text(config_yaml)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server._license_check.auto_router_capability_limit", lambda: license_limit
-    )
+    monkeypatch.setattr("litellm.proxy.proxy_server._license_check.auto_router_capability_limit", lambda: license_limit)
 
     if license_limit is None:
-        router, _model_list, _general_settings = await ProxyConfig().load_config(
-            router=None, config_file_path=str(f)
-        )
+        router, _model_list, _general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(f))
         assert router.auto_router_capability_limit is not None
         assert router.auto_router_capability_limit() is None
         assert sorted(router.complexity_routers) == ["v2-a", "v2-b"]
@@ -371,10 +371,12 @@ async def test_ProxyConfig_load_config_router_refuses_a_db_heuristic_v2_router_b
     from litellm.types.router import Deployment
 
     f = tmp_path / "c.yaml"
-    f.write_text(_TWO_HEURISTIC_V2_ROUTERS_YAML.replace("  - model_name: v2-b\n", "  - model_name: v1-b\n", 1).replace(
-        "classifier_type: heuristic_v2\n        tiers: {SIMPLE: gpt-4o-mini}\nrouter_settings",
-        "classifier_type: heuristic\n        tiers: {SIMPLE: gpt-4o-mini}\nrouter_settings",
-    ))
+    f.write_text(
+        _TWO_HEURISTIC_V2_ROUTERS_YAML.replace("  - model_name: v2-b\n", "  - model_name: v1-b\n", 1).replace(
+            "classifier_type: heuristic_v2\n        tiers: {SIMPLE: gpt-4o-mini}\nrouter_settings",
+            "classifier_type: heuristic\n        tiers: {SIMPLE: gpt-4o-mini}\nrouter_settings",
+        )
+    )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
@@ -557,9 +559,7 @@ def test_resolve_complexity_router_plugins_leaves_live_classifier_instance_alone
 
     instance = _Classifier()
     config: dict[str, Any] = {"classifier_plugin": instance}
-    resolve_complexity_router_plugins(
-        model_name="smart-router", complexity_router_config=config, config_file_path=None
-    )
+    resolve_complexity_router_plugins(model_name="smart-router", complexity_router_config=config, config_file_path=None)
     assert config["classifier_plugin"] is instance
 
 
@@ -571,11 +571,7 @@ def test_resolve_complexity_router_plugins_leaves_live_classifier_instance_alone
 def test_resolve_routing_plugins_resolves_dotted_paths(tmp_path):
     plugin_file = tmp_path / "rs_plugin.py"
     plugin_file.write_text(
-        "class _Plugin:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "rs_plugin_instance = _Plugin()\n"
+        "class _Plugin:\n    async def run(self, context):\n        return context\n\nrs_plugin_instance = _Plugin()\n"
     )
 
     resolved = resolve_routing_plugins(
@@ -1527,7 +1523,7 @@ async def test_ProxyConfig_get_config_missing_file_raises(monkeypatch):
 # ProxyConfig._initialize_secret_manager_from_raw_config
 # ---------------------------------------------------------------------------
 
-VAULT_SECRET_MANAGER_MODULE = '''
+VAULT_SECRET_MANAGER_MODULE = """
 import os
 
 from litellm.integrations.custom_secret_manager import CustomSecretManager
@@ -1548,7 +1544,7 @@ class VaultSecretManager(CustomSecretManager):
 
     async def async_read_secret(self, secret_name, optional_params=None, timeout=None, **kwargs):
         return VAULT.get(secret_name)
-'''
+"""
 
 VAULT_BACKED_CONFIG = """
 model_list:
@@ -1649,9 +1645,7 @@ async def test_ProxyConfig_get_config_reuses_an_already_initialized_secret_manag
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_get_config_without_key_management_system_leaves_secret_manager_unset(
-    tmp_path, monkeypatch
-):
+async def test_ProxyConfig_get_config_without_key_management_system_leaves_secret_manager_unset(tmp_path, monkeypatch):
     """No ``key_management_system`` means no manager, an unresolvable reference stays None, and
     nothing is warned about: with no manager there is nothing to have been absent from."""
     config_yaml = VAULT_BACKED_CONFIG.replace("  key_management_system: custom\n", "")
@@ -1670,9 +1664,7 @@ async def test_ProxyConfig_get_config_without_key_management_system_leaves_secre
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_get_config_warns_when_a_reference_is_missing_from_the_secret_manager(
-    tmp_path, monkeypatch
-):
+async def test_ProxyConfig_get_config_warns_when_a_reference_is_missing_from_the_secret_manager(tmp_path, monkeypatch):
     """A reference the manager cannot resolve is logged, instead of silently becoming None."""
     config_yaml = VAULT_BACKED_CONFIG.replace("MY_PROVIDER_KEY", "NOT_IN_VAULT")
     config_file_path = _write_vault_backed_config(tmp_path, monkeypatch, config_yaml)
@@ -2109,10 +2101,7 @@ async def test_ProxyConfig_load_config_minimal_yaml(tmp_path, monkeypatch):
 async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monkeypatch, caplog, setting):
     config_file = tmp_path / "budget.yaml"
     flag = f"  disable_budget_reservation: {setting}\n" if setting is not None else ""
-    config_file.write_text(
-        "model_list: []\nlitellm_settings: {}\ngeneral_settings:\n"
-        "  master_key: null\n" + flag
-    )
+    config_file.write_text("model_list: []\nlitellm_settings: {}\ngeneral_settings:\n  master_key: null\n" + flag)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.setattr("litellm.constants.budget_reservation_disabled_info_emitted", False)
@@ -2123,10 +2112,7 @@ async def test_load_config_logs_disabled_budget_reservation_once(tmp_path, monke
         for _ in range(3):
             await config.load_config(router=None, config_file_path=str(config_file))
 
-    records = [
-        record for record in caplog.records
-        if "disable_budget_reservation is enabled" in record.message
-    ]
+    records = [record for record in caplog.records if "disable_budget_reservation is enabled" in record.message]
     assert [record.levelno for record in records] == ([logging.INFO] if setting == "true" else [])
 
 
@@ -2138,11 +2124,7 @@ async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path
     to `await "some.string".run(context)`."""
     plugin_file = tmp_path / "rs_plugin.py"
     plugin_file.write_text(
-        "class _Plugin:\n"
-        "    async def run(self, context):\n"
-        "        return context\n"
-        "\n"
-        "rs_plugin_instance = _Plugin()\n"
+        "class _Plugin:\n    async def run(self, context):\n        return context\n\nrs_plugin_instance = _Plugin()\n"
     )
     f = tmp_path / "c.yaml"
     f.write_text(
@@ -2157,9 +2139,7 @@ async def test_ProxyConfig_load_config_resolves_router_settings_plugins(tmp_path
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
 
-    router, _model_list, _general_settings = await ProxyConfig().load_config(
-        router=None, config_file_path=str(f)
-    )
+    router, _model_list, _general_settings = await ProxyConfig().load_config(router=None, config_file_path=str(f))
 
     assert len(router.routing_plugins) == 1
     assert type(router.routing_plugins[0]).__name__ == "_Plugin"
@@ -2226,10 +2206,7 @@ async def test_ProxyConfig_load_config_wires_config_reload_interval(tmp_path, mo
 
     f = tmp_path / "c.yaml"
     f.write_text(
-        "model_list: []\n"
-        "general_settings:\n"
-        "  proxy_config_reload_interval_seconds: 47\n"
-        "litellm_settings: {}\n"
+        "model_list: []\ngeneral_settings:\n  proxy_config_reload_interval_seconds: 47\nlitellm_settings: {}\n"
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
@@ -2371,13 +2348,9 @@ async def test_ProxyConfig__init_non_llm_configs_premium_invalid_worker_registry
 async def test_ProxyConfig__init_non_llm_configs_worker_registry_requires_premium(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     pc = ProxyConfig()
-    with pytest.raises(ValueError, match='Trying to use `worker_registry`You must be a LiteLLM') as exc_info:
+    with pytest.raises(ValueError, match="Trying to use `worker_registry`You must be a LiteLLM") as exc_info:
         await pc._init_non_llm_configs(
-            config={
-                "worker_registry": [
-                    {"worker_id": "worker-a", "name": "Worker A", "url": "http://localhost:4001"}
-                ]
-            },
+            config={"worker_registry": [{"worker_id": "worker-a", "name": "Worker A", "url": "http://localhost:4001"}]},
             config_file_path=None,
         )
     message = str(exc_info.value)
@@ -2607,9 +2580,7 @@ def test_ProxyConfig__warn_on_misplaced_jwt_keys_warns_even_when_also_under_gene
 
 def test_ProxyConfig__warn_on_misplaced_jwt_keys_silent_when_correctly_placed():
     """Keys living only under general_settings are valid, so no warning fires."""
-    result, warnings = _capture_proxy_warnings(
-        {"general_settings": {"enable_jwt_auth": True, "litellm_jwtauth": {}}}
-    )
+    result, warnings = _capture_proxy_warnings({"general_settings": {"enable_jwt_auth": True, "litellm_jwtauth": {}}})
 
     assert result == ()
     assert warnings == []
@@ -2636,7 +2607,7 @@ def test_ProxyConfig_initialize_secret_manager_none_noop():
 
 def test_ProxyConfig_initialize_secret_manager_invalid_kms_raises():
     pc = ProxyConfig()
-    with pytest.raises(ValueError, match='Invalid Key Management System selected'):
+    with pytest.raises(ValueError, match="Invalid Key Management System selected"):
         pc.initialize_secret_manager(key_management_system="not-a-real-kms")
 
 
@@ -2660,6 +2631,113 @@ def test_ProxyConfig_get_model_info_with_id_returns_router_model_info():
         "blocked": dumped.get("blocked"),
     }
     assert snapshot == {"id": "m-1", "db_model": True, "blocked": False}
+
+
+PINNED_MODEL_INFO: Final = MappingProxyType(
+    {
+        "id": "pinned-row",
+        "key": "gpt-5.6",
+        "mode": "chat",
+        "access_groups": ["prod"],
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2e-05,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-07,
+    }
+)
+
+
+def test_ProxyConfig_get_model_info_with_id_ignores_cost_map_pricing_echoed_into_model_info():
+    """LIT-8064. A pre-1.102 Admin UI save wrote the whole ``/model/info`` response back into
+    the row's ``model_info``, cost-map pricing included. Only that response carries ``key``, so
+    a stored blob with it holds a copy of the map, not a price anyone typed, and the deployment
+    must keep following the live cost map."""
+    pc = ProxyConfig()
+    model = SimpleNamespace(model_id="pinned-row", model_info=dict(PINNED_MODEL_INFO), blocked=False)
+    out = pc.get_model_info_with_id(model=model, db_model=True).model_dump(exclude_none=True)
+    assert out["access_groups"] == ["prod"]
+    assert out["mode"] == "chat"
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost_above_272k_tokens"):
+        assert field not in out, f"{field} still pins the deployment to the cost map of the day it was saved"
+
+
+def test_ProxyConfig_get_model_info_with_id_keeps_pricing_typed_into_model_info():
+    """A custom-priced deployment the cost map does not know never got ``key``, so its
+    ``model_info`` pricing is the operator's own and stays."""
+    pc = ProxyConfig()
+    model = SimpleNamespace(
+        model_id="custom-row",
+        model_info={"id": "custom-row", "input_cost_per_token": 7e-06, "output_cost_per_token": 9e-06},
+        blocked=False,
+    )
+    out = pc.get_model_info_with_id(model=model, db_model=True).model_dump(exclude_none=True)
+    assert (out["input_cost_per_token"], out["output_cost_per_token"]) == (7e-06, 9e-06)
+
+
+def test_ProxyConfig__add_deployment_pinned_row_follows_the_cost_map_across_reloads(monkeypatch, local_model_cost_map):
+    """The customer's symptom end to end: a row pinned before 1.102 must bill at the live cost
+    map price on boot and again after Reload Price Data, while a price typed on
+    ``litellm_params`` keeps overriding it."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    pinned = SimpleNamespace(
+        model_id="pinned-row",
+        model_name="gpt-5.6",
+        model_info=dict(PINNED_MODEL_INFO),
+        litellm_params={"model": "openai/gpt-5.6", "api_key": "sk-test"},
+        blocked=False,
+    )
+    typed = SimpleNamespace(
+        model_id="typed-row",
+        model_name="gpt-5.6-typed",
+        model_info={"id": "typed-row", "key": "gpt-5.6", "input_cost_per_token": 4e-06},
+        litellm_params={"model": "openai/gpt-5.6", "api_key": "sk-test", "input_cost_per_token": 3e-06},
+        blocked=False,
+    )
+
+    assert ProxyConfig()._add_deployment(db_models=[pinned, typed]) == 2
+
+    monkeypatch.setitem(litellm.model_cost["gpt-5.6"], "input_cost_per_token", 1e-06)
+    router._replay_model_cost_registrations()
+
+    assert litellm.model_cost.get("pinned-row", {}).get("input_cost_per_token") is None
+    assert router.get_deployment(model_id="pinned-row").model_info.input_cost_per_token is None
+    assert litellm.get_model_info("openai/gpt-5.6")["input_cost_per_token"] == 1e-06
+    assert litellm.model_cost["typed-row"]["input_cost_per_token"] == 3e-06
+
+
+def test_ProxyConfig__add_deployment_ptu_row_with_a_cost_map_copy_still_bills_zero(monkeypatch, local_model_cost_map):
+    """A PTU deployment bills nothing per token: the proxy writes zeros to both blobs. When such
+    a row also carries the echoed cost map, dropping the ``model_info`` copy must not send it
+    back to the per-token price, because the ``litellm_params`` zeros are the operator's."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    ptu = SimpleNamespace(
+        model_id="ptu-row",
+        model_name="gpt-5.6-ptu",
+        model_info={**PINNED_MODEL_INFO, "id": "ptu-row", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+        litellm_params={
+            "model": "openai/gpt-5.6",
+            "api_key": "sk-test",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+        blocked=False,
+    )
+
+    assert ProxyConfig()._add_deployment(db_models=[ptu]) == 1
+    router._replay_model_cost_registrations()
+
+    assert litellm.model_cost["ptu-row"]["input_cost_per_token"] == 0.0
+    assert litellm.model_cost["ptu-row"]["output_cost_per_token"] == 0.0
+    assert router.get_deployment(model_id="ptu-row").model_info.input_cost_per_token == 0.0
 
 
 def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch):
@@ -3141,28 +3219,6 @@ async def test_ProxyConfig__update_llm_router_no_models_smoke(monkeypatch):
     assert snapshot == {"raised": False, "called": True, "models": "empty"}
 
 
-@pytest.mark.asyncio
-async def test_ProxyConfig__update_llm_router_bad_proxy_logging_raises(monkeypatch):
-    pc = ProxyConfig()
-
-    async def fake_get_config():
-        # alerting present + non-list general_settings to trigger the alerting branch.
-        return {"general_settings": {"alerting": ["slack"]}}
-
-    fake_router = MagicMock()
-    fake_router.update_settings = MagicMock()
-    monkeypatch.setattr(pc, "get_config", fake_get_config)
-    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", fake_router)
-    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-x")
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"alerting": ["email"]})
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", pc)
-    # Passing None for proxy_logging_obj triggers AttributeError in _add_general_settings_from_db_config
-    # when it calls proxy_logging_obj.update_values.
-    with pytest.raises(AttributeError):
-        await pc._update_llm_router(new_models=[], proxy_logging_obj=None)  # type: ignore[arg-type]
-
-
 # ---------------------------------------------------------------------------
 # ProxyConfig._add_callback_from_db_to_in_memory_litellm_callbacks
 # ---------------------------------------------------------------------------
@@ -3450,9 +3506,8 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
     fake_prisma.db.litellm_config.find_first = AsyncMock(
         return_value=SimpleNamespace(param_value={"timeout": 30, "retries": 2, "fallbacks": []})
     )
-    config_data = {"router_settings": {"timeout": 10}}
+    pc.router_settings.load_yaml({"timeout": 10})
     await pc._add_router_settings_from_db_config(
-        config_data=config_data,
         llm_router=fake_router,
         prisma_client=fake_prisma,
     )
@@ -3472,7 +3527,7 @@ async def test_ProxyConfig__add_router_settings_from_db_config_updates_router():
 async def test_ProxyConfig__add_router_settings_from_db_config_none_router_noop():
     pc = ProxyConfig()
     # No router and no prisma — should silently return.
-    await pc._add_router_settings_from_db_config(config_data={}, llm_router=None, prisma_client=None)
+    await pc._add_router_settings_from_db_config(llm_router=None, prisma_client=None)
     # Error-style: bad call signature raises.
     with pytest.raises(TypeError):
         await pc._add_router_settings_from_db_config()  # type: ignore[call-arg]
@@ -3638,43 +3693,6 @@ async def test_ProxyConfig_get_credentials_reads_from_writer_not_replica(monkeyp
 
 
 # ---------------------------------------------------------------------------
-# ProxyConfig._add_general_settings_from_db_config
-# ---------------------------------------------------------------------------
-
-
-def test_ProxyConfig__add_general_settings_from_db_config_merges_alerting():
-    pc = ProxyConfig()
-    proxy_logging = MagicMock()
-    general = {"alerting": ["slack"]}
-    config_data = {"general_settings": {"alerting": ["email", "slack"]}}
-    pc._add_general_settings_from_db_config(
-        config_data=config_data,
-        general_settings=general,
-        proxy_logging_obj=proxy_logging,
-    )
-    snapshot = {
-        "alerting": sorted(general["alerting"]),
-        "logging_called": proxy_logging.update_values.called,
-        "merged_count": len(general["alerting"]),
-    }
-    assert snapshot == {
-        "alerting": ["email", "slack"],
-        "logging_called": True,
-        "merged_count": 2,
-    }
-
-
-def test_ProxyConfig__add_general_settings_from_db_config_bad_config_raises():
-    pc = ProxyConfig()
-    with pytest.raises(AttributeError):
-        pc._add_general_settings_from_db_config(
-            config_data=None,  # type: ignore[arg-type]
-            general_settings={},
-            proxy_logging_obj=MagicMock(),
-        )
-
-
-# ---------------------------------------------------------------------------
 # ProxyConfig._reschedule_spend_log_cleanup_job
 # ---------------------------------------------------------------------------
 
@@ -3736,7 +3754,9 @@ async def test_ProxyConfig__update_general_settings_updates_health_check_retenti
     reschedule = AsyncMock()
     monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
     await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})
-    assert settings["maximum_health_check_retention_period"] == "30d"
+    from litellm.proxy import proxy_server
+
+    assert proxy_server.general_settings["maximum_health_check_retention_period"] == "30d"
     reschedule.assert_awaited_once()
 
 
@@ -3790,7 +3810,6 @@ async def test_ProxyConfig__update_general_settings_yaml_max_batch_file_size_mb_
         {"max_batch_file_size_mb": 3},
     )
     pc = ProxyConfig()
-    pc._yaml_general_settings_keys = {"max_batch_file_size_mb"}
     await pc._update_general_settings({"max_batch_file_size_mb": 5})
     from litellm.proxy import proxy_server as ps
 
@@ -3807,7 +3826,7 @@ async def test_ProxyConfig__update_general_settings_cleared_db_max_batch_file_si
     await pc._update_general_settings({"max_parallel_requests": 1})
     from litellm.proxy import proxy_server as ps
 
-    assert ps.general_settings.get("max_batch_file_size_mb") is None
+    assert ps.general_settings.get("max_batch_file_size_mb") == 8
 
 
 @pytest.mark.asyncio
@@ -3827,11 +3846,31 @@ async def test_ProxyConfig__update_general_settings_yaml_allowed_file_extensions
         {"allowed_file_extensions": [".pdf"]},
     )
     pc = ProxyConfig()
-    pc._yaml_general_settings_keys = {"allowed_file_extensions"}
     await pc._update_general_settings({"allowed_file_extensions": [".jsonl"]})
     from litellm.proxy import proxy_server as ps
 
     assert ps.general_settings.get("allowed_file_extensions") == [".pdf"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_applies_db_transcribe_media_buckets(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    pc = ProxyConfig()
+    await pc._update_general_settings({"transcribe_media_buckets": ["team-audio"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("transcribe_media_buckets") == ["team-audio"]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_yaml_transcribe_media_buckets_wins_over_db(monkeypatch):
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"transcribe_media_buckets": ["yaml-audio"]})
+    pc = ProxyConfig()
+    pc._yaml_general_settings_keys = {"transcribe_media_buckets"}
+    await pc._update_general_settings({"transcribe_media_buckets": ["team-audio"]})
+    from litellm.proxy import proxy_server as ps
+
+    assert ps.general_settings.get("transcribe_media_buckets") == ["yaml-audio"]
 
 
 @pytest.mark.asyncio
@@ -3845,27 +3884,195 @@ async def test_ProxyConfig__update_general_settings_none_input_noop():
         await pc._update_general_settings(db_general_settings=12345)  # type: ignore[arg-type]
 
 
-# ---------------------------------------------------------------------------
-# ProxyConfig._update_config_fields
-# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_skips_redundant_retention_reschedule(monkeypatch):
+    from litellm.proxy import proxy_server
 
-
-def test_ProxyConfig__update_config_fields_merges_dict():
     pc = ProxyConfig()
-    current = {"general_settings": {"a": 1, "b": 2}}
-    out = pc._update_config_fields(
-        current_config=current,
-        param_name="general_settings",
-        db_param_value={"b": 3, "c": 4, "d": 5},
+    reschedule: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
+
+    await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})
+    reschedule.assert_awaited_once()
+    reschedule.reset_mock()
+
+    await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})
+
+    reschedule.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_reschedules_after_retention_key_deletion(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    reschedule: Final = AsyncMock()
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
+
+    await pc._update_general_settings({"maximum_health_check_retention_period": "30d"})
+    reschedule.reset_mock()
+
+    await pc._update_general_settings({})
+
+    reschedule.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_dispatches_every_side_effect_handler(monkeypatch):
+    pc = ProxyConfig()
+    handlers: Final = (
+        ("_apply_alerting_settings", AsyncMock()),
+        ("_apply_pass_through_settings", AsyncMock()),
+        ("_apply_boolean_settings", AsyncMock()),
+        ("_apply_store_model_in_db_setting", AsyncMock()),
+        ("_apply_retention_settings", AsyncMock()),
+        ("_apply_ssrf_settings", AsyncMock()),
+        ("_apply_cache_size_setting", AsyncMock()),
     )
-    assert out == {"general_settings": {"a": 1, "b": 3, "c": 4, "d": 5}}
+    for name, handler in handlers:
+        monkeypatch.setattr(pc, name, handler)
+
+    await pc._apply_general_settings_side_effects({}, False, (), None)
+
+    for name, handler in handlers:
+        if name == "_apply_cache_size_setting":
+            handler.assert_awaited_once_with({}, cache_size_was_db=False)
+        elif name == "_apply_retention_settings":
+            handler.assert_awaited_once_with({}, previous_retention_values=())
+        elif name == "_apply_pass_through_settings":
+            handler.assert_awaited_once_with({}, previous_endpoints=None)
+        else:
+            handler.assert_awaited_once_with({})
 
 
-def test_ProxyConfig__update_config_fields_invalid_param_raises():
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_runtime_effect(monkeypatch):
+    from litellm.proxy import proxy_server
+
     pc = ProxyConfig()
-    with pytest.raises(TypeError):
-        # Missing required arg.
-        pc._update_config_fields(current_config={}, param_name="general_settings")  # type: ignore[call-arg]
+    initialize_endpoints: Final = AsyncMock()
+    reschedule: Final = AsyncMock()
+    cache: Final = MagicMock()
+    proxy_logging: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "initialize_pass_through_endpoints", initialize_endpoints)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
+
+    await pc._update_general_settings({"unrelated": "value"})
+
+    initialize_endpoints.assert_not_awaited()
+    reschedule.assert_not_awaited()
+    cache.update_in_memory_max_size.assert_not_called()
+    proxy_logging.update_values.assert_not_called()
+    proxy_logging.slack_alerting_instance.update_values.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stores(monkeypatch):
+    pc = ProxyConfig()
+    config = {
+        "general_settings": {
+            "max_file_size_mb": 7,
+            "max_parallel_requests": 3,
+            "alerting": ["config"],
+            "pass_through_endpoints": [{"path": "/config"}],
+            "maximum_spend_logs_cleanup_batch_size": 10,
+        },
+        "router_settings": {"fallbacks": ["config"], "num_retries": 1},
+    }
+    db_values = {
+        "general_settings": {
+            "max_file_size_mb": 9,
+            "max_parallel_requests": 11,
+            "alerting": ["db"],
+            "pass_through_endpoints": [{"path": "/db"}],
+            "maximum_spend_logs_cleanup_batch_size": None,
+        },
+        "router_settings": {"fallbacks": [], "num_retries": 2},
+    }
+
+    async def get_config_param(_, param_name):
+        value = db_values.get(param_name)
+        return SimpleNamespace(param_name=param_name, param_value=value) if value is not None else None
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
+    pc._load_yaml_settings_stores(config)
+
+    resolved = await pc._update_config_from_db(MagicMock(), config, store_model_in_db=True)
+
+    assert resolved["general_settings"] == {
+        "max_file_size_mb": 7,
+        "max_parallel_requests": 3,
+        "alerting": ["config"],
+        "pass_through_endpoints": [{"path": "/config"}],
+        "maximum_spend_logs_cleanup_batch_size": 10,
+    }
+    assert resolved["router_settings"] == {"fallbacks": ["config"], "num_retries": 1}
+    assert pc.settings.source("max_file_size_mb") == "config"
+    assert pc.settings.source("max_parallel_requests") == "config"
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omits(monkeypatch):
+    pc = ProxyConfig()
+    config = {"general_settings": {"max_file_size_mb": 7}, "router_settings": {"num_retries": 1}}
+    db_values = {
+        "general_settings": {"max_file_size_mb": 9, "max_parallel_requests": 11},
+        "router_settings": {"fallbacks": ["db"], "num_retries": 2},
+    }
+
+    async def get_config_param(_, param_name):
+        value = db_values.get(param_name)
+        return SimpleNamespace(param_name=param_name, param_value=value) if value is not None else None
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.get_config_param", get_config_param)
+    pc._load_yaml_settings_stores(config)
+
+    resolved = await pc._update_config_from_db(MagicMock(), config, store_model_in_db=True)
+
+    assert resolved["general_settings"] == {"max_file_size_mb": 7, "max_parallel_requests": 11}
+    assert resolved["router_settings"] == {"num_retries": 1, "fallbacks": ["db"]}
+    assert pc.settings.source("max_parallel_requests") == "db"
+
+
+def test_ProxyConfig_load_yaml_settings_stores_keeps_db_endpoints_out_of_config_baseline():
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    config_endpoint: Final = {"path": "/config", "target": "https://config.example"}
+    db_endpoint: Final = {"id": "db-endpoint", "path": "/db", "target": "https://db.example"}
+
+    pc._load_yaml_settings_stores({"general_settings": {"pass_through_endpoints": [config_endpoint]}})
+    pc.settings.apply_db_row("general_settings", {"pass_through_endpoints": [db_endpoint]})
+
+    assert proxy_server.config_passthrough_endpoints == [config_endpoint]
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch):
+    from litellm.proxy import proxy_server
+
+    pc = ProxyConfig()
+    non_llm_initialization = AsyncMock()
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
+    monkeypatch.setattr(
+        proxy_server,
+        "get_config_param",
+        AsyncMock(return_value=SimpleNamespace(param_value={"pass_through_endpoints": None})),
+    )
+    monkeypatch.setattr(proxy_server, "sync_ui_settings_to_general_settings", AsyncMock())
+    monkeypatch.setattr(pc, "_should_load_db_object", lambda *, object_type: False)
+    monkeypatch.setattr(pc, "get_credentials", AsyncMock())
+    monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", non_llm_initialization)
+
+    await pc.add_deployment(prisma_client=MagicMock(), proxy_logging_obj=MagicMock())
+
+    non_llm_initialization.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

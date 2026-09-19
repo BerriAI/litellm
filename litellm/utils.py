@@ -2008,7 +2008,7 @@ def client(original_function):
                         result=result,
                         call_type=call_type,
                     )
-            elif call_type == CallTypes.arealtime.value:
+            elif call_type in (CallTypes.arealtime.value, CallTypes.aresponses_websocket.value):
                 return result
             ### POST-CALL RULES ###
             post_call_processing(
@@ -3154,6 +3154,22 @@ def reapply_runtime_model_cost_registrations() -> None:
         _LiveDeploymentReplay.callback()
     if _runtime_registered_model_cost:
         register_model(model_cost=dict(_runtime_registered_model_cost))  # mutable-ok: snapshot, replay rewrites it
+
+
+def cost_map_omits_token_price(*keys: object) -> bool:
+    """Whether the raw ``litellm.model_cost`` entries under ``keys`` exist but none carries a per-token price.
+
+    ``get_model_info`` substitutes 0 for a missing price, which reads exactly like a declared
+    zero. Surfaces that report pricing use this to keep an unpriced deployment at ``None``.
+    """
+    entries: Final = tuple(
+        entry
+        for entry in (litellm.model_cost.get(key) for key in keys if isinstance(key, str))
+        if isinstance(entry, dict)
+    )
+    return len(entries) > 0 and not any(
+        "input_cost_per_token" in entry or "output_cost_per_token" in entry for entry in entries
+    )
 
 
 def register_model(
@@ -4510,7 +4526,7 @@ def get_optional_params(
                     drop_params=bool(drop_params),
                 )
             else:
-                optional_params = litellm.MistralConfig().map_openai_params(
+                optional_params = litellm.VertexAIMistralConfig().map_openai_params(
                     model=model,
                     non_default_params=non_default_params,
                     optional_params=optional_params,
@@ -8380,7 +8396,7 @@ class ProviderConfigManager:
         elif model in litellm.vertex_mistral_models:
             if "codestral" in model:
                 return litellm.CodestralTextCompletionConfig()
-            return litellm.MistralConfig()
+            return litellm.VertexAIMistralConfig()
         elif model in litellm.vertex_ai_ai21_models:
             return litellm.VertexAIAi21Config()
         else:
@@ -8714,6 +8730,10 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsAudioTranscriptionConfig()
+        elif litellm.LlmProviders.XAI == provider:
+            from litellm.llms.xai.audio_transcription.transformation import XAIAudioTranscriptionConfig
+
+            return XAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             if "gpt-4o" in model:
                 return litellm.OpenAIGPTAudioTranscriptionConfig()

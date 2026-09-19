@@ -61,6 +61,7 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
+    calculate_max_parallel_requests,
     client,
     get_non_default_completion_params,
     get_optional_params_image_gen,
@@ -902,6 +903,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/speech",
                             "/v1/ocr",
                             "/vertex_ai/live",
+                            "/v1/listen",
                             "/v1beta/interactions",
                         ],
                     },
@@ -1058,7 +1060,7 @@ def test_max_tokens_consistency():
         if len(inconsistencies) > 10:
             error_msg += f"\n  ... and {len(inconsistencies) - 10} more\n"
 
-        error_msg += "\nTo fix these inconsistencies, run: poetry run python fix_max_tokens_inconsistencies.py"
+        error_msg += "\nTo fix these inconsistencies, run: uv run python fix_max_tokens_inconsistencies.py"
         raise AssertionError(error_msg)
 
 
@@ -5692,3 +5694,30 @@ def test_get_model_info_gemini(monkeypatch):
             assert info.get("rpm") is not None, f"{model} does not have rpm"
 
 
+@pytest.mark.parametrize(
+    ("max_parallel_requests", "rpm", "tpm", "default_max_parallel_requests", "expected"),
+    [
+        (3, 100, 100_000, 7, 3),
+        (None, 100, 100_000, 7, 100),
+        (None, None, 100_000, 7, 600),
+        (None, None, 50, 7, 1),
+        (None, None, None, 7, 7),
+        (None, None, None, None, None),
+    ],
+)
+def test_calculate_max_parallel_requests_precedence(
+    max_parallel_requests: int | None,
+    rpm: int | None,
+    tpm: int | None,
+    default_max_parallel_requests: int | None,
+    expected: int | None,
+) -> None:
+    assert (
+        calculate_max_parallel_requests(
+            max_parallel_requests=max_parallel_requests,
+            rpm=rpm,
+            tpm=tpm,
+            default_max_parallel_requests=default_max_parallel_requests,
+        )
+        == expected
+    )

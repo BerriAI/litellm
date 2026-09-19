@@ -262,7 +262,12 @@ async def _reload_active_user_by_id(user_id: str) -> "_KeyResolutionFailure | No
     return loaded if isinstance(loaded, str) else None
 
 
-async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResolutionFailure":
+UserRowSource = Literal["cache", "database"]
+
+
+async def load_active_user_by_id(
+    user_id: str, source: UserRowSource = "cache"
+) -> "LiteLLM_UserTable | _KeyResolutionFailure":
     """Load a live litellm user by id, returning the record when the user is active or a precise
     failure otherwise. The interactive DCR client authenticates via SSO, so its refresh envelope seals a
     user subject; renewing it must re-check the user is still live (present and not SCIM-deactivated) so a
@@ -273,7 +278,11 @@ async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResol
     ``HTTPException``, a SCIM-deactivated user, and, unlike the key path, a missing user. ``get_user_object``
     catches every DB failure and re-raises a bare ``ValueError`` (a deleted user and a real outage look
     identical, the original error surviving only as ``__context__``), so the outage check walks the cause
-    chain, and a missing user falls through to ``no_active_key`` rather than an opaque gateway fault."""
+    chain, and a missing user falls through to ``no_active_key`` rather than an opaque gateway fault.
+    ``source="database"`` reads the row from the database, never the cache, so the credential mint refuses
+    a user that a writer deactivated or deleted without evicting the cached row, and it leaves the fresh
+    row in the cache for the requests the credential makes next. Every other caller keeps the cache read,
+    so introspection, which a resource server may call per request, stays off the database."""
     from litellm.proxy._types import (
         ProxyException,  # noqa: PLC0415  # inline import avoids a module-load circular import
     )
@@ -296,6 +305,7 @@ async def load_active_user_by_id(user_id: str) -> "LiteLLM_UserTable | _KeyResol
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             user_id_upsert=False,
+            check_db_only=source == "database",
         )
     except (ProxyException, HTTPException):
         return "no_active_key"

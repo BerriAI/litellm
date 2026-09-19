@@ -59,6 +59,7 @@ Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
     Rule(Route.OCR, Rollout.RUST_OPT_OUT),
+    Rule(Route.MESSAGES, Rollout.RUST_OPT_IN),
     Rule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
 )
 

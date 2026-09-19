@@ -47,6 +47,7 @@ const TEAM_ADMIN_FIELD_LABELS: ReadonlyMap<string, string> = new Map([
   ["tpm_limit", "Tokens per minute Limit (TPM)"],
   ["rpm_limit", "Requests per minute Limit (RPM)"],
   ["max_budget", "Max Budget (USD)"],
+  ["projects", "Create and update projects"],
 ]);
 
 export const teamAdminFieldLabel = (field: string): string => TEAM_ADMIN_FIELD_LABELS.get(field) ?? field;

@@ -51,6 +51,14 @@ def app_with_middleware():
     async def embeddings():
         return {"msg": "embeddings OK"}
 
+    @app.post("/claude_code_gateway/v1/metrics")
+    async def gateway_telemetry():
+        return {"msg": "gateway telemetry OK"}
+
+    @app.get("/metrics/detail")
+    async def metrics_detail():
+        return {"msg": "metrics detail OK"}
+
     return app
 
 
@@ -240,3 +248,63 @@ def test_non_metrics_requests_dont_trigger_auth(app_with_middleware, monkeypatch
     response = client.get("/embeddings")
     assert response.status_code == 200, response.text
     assert response.json() == {"msg": "embeddings OK"}
+
+
+def test_gateway_telemetry_path_is_not_treated_as_the_metrics_endpoint(app_with_middleware, monkeypatch):
+    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
+
+    def should_not_be_called(*args, **kwargs):
+        raise Exception("Auth should not be called for the gateway telemetry route")
+
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        should_not_be_called,
+    )
+
+    client = TestClient(app_with_middleware)
+
+    response = client.post("/claude_code_gateway/v1/metrics", content=b"\x0a\x05hello")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"msg": "gateway telemetry OK"}
+
+
+@pytest.mark.parametrize("path", ["/metrics", "/metrics/", "/metrics/detail"])
+def test_metrics_paths_still_require_auth(app_with_middleware, monkeypatch, path):
+    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
+
+    async def reject(*args, **kwargs):
+        raise Exception("Invalid API key")
+
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        reject,
+    )
+
+    client = TestClient(app_with_middleware)
+
+    response = client.get(path)
+    assert response.status_code == 401, response.text
+
+
+def test_metrics_under_a_root_path_still_requires_auth(monkeypatch):
+    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
+
+    async def reject(*args, **kwargs):
+        raise Exception("Invalid API key")
+
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        reject,
+    )
+
+    app = FastAPI(root_path="/litellm")
+    app.add_middleware(PrometheusAuthMiddleware)
+
+    @app.get("/metrics")
+    async def metrics():
+        return {"msg": "metrics OK"}
+
+    client = TestClient(app, root_path="/litellm")
+
+    response = client.get("/metrics")
+    assert response.status_code == 401, response.text

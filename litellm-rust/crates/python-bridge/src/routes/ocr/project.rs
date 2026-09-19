@@ -1,17 +1,21 @@
-use litellm_core::ocr::wire::{
-    OcrWireRequest, consumed_optional_params, decode_document, decode_request_input,
+use litellm_auth::SecretValue;
+use litellm_core::ocr::{
+    types::{LiteLLMOcrRequest, OcrDocumentInput},
+    wire::{OcrWireRequest, consumed_optional_params, decode_document, decode_request_input},
 };
-use litellm_core::ocr::{LiteLLMOcrRequest, OcrDocumentInput};
 use litellm_host_python::from_py;
-use pyo3::exceptions::PyValueError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use litellm_llms::base_llm::ocr::error::Error;
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
-use super::document::{FileDocumentInput, PythonFileReader};
-use super::errors::to_pyerr as ocr_error_to_pyerr;
-use crate::credentials::{self, CallerTokenProvider};
-use crate::marshal::{project_optional_fields, python_timeout_seconds, request_input_sources};
+use super::{
+    document::{FileDocumentInput, PythonFileReader},
+    errors::to_pyerr as ocr_error_to_pyerr,
+};
+use crate::{
+    credentials::{self, CallerTokenProvider},
+    marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
+};
 
 /// What the host keeps after projection: the caller's callables that answer the document
 /// read and token operations, and the provider name the failure mapping reports.
@@ -28,7 +32,7 @@ struct OcrArguments<'a, 'py> {
 
 impl<'py> OcrArguments<'_, 'py> {
     fn lookup(&self, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        litellm_callbacks_legacy::lookup(self.kwargs, self.request, name)?
+        litellm_host_python::lookup(self.kwargs, self.request, name)?
             .ok_or_else(|| PyValueError::new_err(format!("missing argument: {name}")))
     }
 
@@ -44,8 +48,11 @@ impl<'py> OcrArguments<'_, 'py> {
         self.lookup("document")
     }
 
-    fn api_key(&self) -> PyResult<Option<String>> {
-        self.lookup("api_key")?.extract()
+    fn api_key(&self) -> PyResult<Option<SecretValue>> {
+        Ok(self
+            .lookup("api_key")?
+            .extract::<Option<String>>()?
+            .map(SecretValue::new))
     }
 
     fn api_base(&self) -> PyResult<Option<String>> {
@@ -84,7 +91,7 @@ impl ProjectedDocument {
                 if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
                     || error.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
                 {
-                    ocr_error_to_pyerr(litellm_core::ocr::Error::RequestField {
+                    ocr_error_to_pyerr(Error::RequestField {
                         path: "document.type".into(),
                     })
                 } else {
@@ -155,6 +162,7 @@ pub(super) fn project_request(
 
 #[cfg(test)]
 mod tests {
+    use litellm_llms::base_llm::ocr::transformation::OcrDocument;
     use pyo3::exceptions::PyValueError;
 
     use super::*;
@@ -179,7 +187,7 @@ mod tests {
     }
 
     fn url_document(url: &str) -> OcrDocumentInput {
-        litellm_core::ocr::OcrDocument::DocumentUrl {
+        OcrDocument::DocumentUrl {
             document_url: url.into(),
             extra_fields: Default::default(),
         }

@@ -2,8 +2,10 @@ use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResp
 use pyo3::prelude::*;
 use serde_json::Value;
 
-use crate::errors::responses_error_to_pyerr;
-use crate::marshal::{marshal_headers, optional_timeout};
+use crate::{
+    errors::responses_error_to_pyerr,
+    marshal::{marshal_headers, optional_timeout},
+};
 
 #[pyclass]
 pub(crate) struct ResponsesWebSocketConnection {
@@ -58,12 +60,10 @@ impl ResponsesWebSocketConnection {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CString;
-    use std::time::Duration;
+    use std::{ffi::CString, time::Duration};
 
     use futures_util::{SinkExt, StreamExt};
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::{prelude::*, types::PyDict};
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
