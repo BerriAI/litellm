@@ -792,7 +792,6 @@ class StraikerGuardrail(CustomGuardrail):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        # v3 relays the provider body and has no envelope dialect to declare.
         if self.api_version != "v3":
             headers["X-Straiker-Webhook-Format"] = "litellm"
         return {**headers, **extra}
