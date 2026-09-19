@@ -38,8 +38,13 @@ fn run_ocr(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let config = http::call_config(py, &kwargs, asynchronous)?;
-    let client = OcrClient::new(http::pool(), &config, VERTEX_AUTH.clone())
-        .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
+    let client = OcrClient::new(
+        http::pool(),
+        &config,
+        http::url_policy(py)?,
+        VERTEX_AUTH.clone(),
+    )
+    .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
     run_legacy_call(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },

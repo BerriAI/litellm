@@ -6,8 +6,12 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+http.workspace = true
+hyper-util.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
 thiserror.workspace = true
+webpki-roots.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

@@ -2,11 +2,6 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
 pub enum Error {
-    #[error("{setting} cannot be expressed with rustls: {reason}")]
-    Unsupported {
-        setting: &'static str,
-        reason: String,
-    },
     #[error("could not read {}: {message}", path.display())]
     Read { path: PathBuf, message: String },
     #[error("{} is not a PEM file: {message}", path.display())]

@@ -13,6 +13,7 @@ pub enum ClientVariant {
     Provider,
     NoRedirect,
     Media,
+    UnpinnedMedia,
 }
 
 const CLIENT_TTL: Duration = Duration::from_secs(3600);
@@ -54,6 +55,10 @@ impl HttpClientPool {
                 trust_proxy_env: false,
                 ..config.clone()
             },
+            ClientVariant::UnpinnedMedia => HttpClientConfig {
+                client_certificate: None,
+                ..config.clone()
+            },
             ClientVariant::Provider | ClientVariant::NoRedirect => config.clone(),
         };
         let key = (effective, variant);
@@ -84,7 +89,9 @@ impl HttpClientPool {
     ) -> reqwest::ClientBuilder {
         match variant {
             ClientVariant::Provider => builder,
-            ClientVariant::NoRedirect => builder.redirect(reqwest::redirect::Policy::none()),
+            ClientVariant::NoRedirect | ClientVariant::UnpinnedMedia => {
+                builder.redirect(reqwest::redirect::Policy::none())
+            }
             ClientVariant::Media => builder
                 .redirect(reqwest::redirect::Policy::none())
                 .dns_resolver2(Arc::clone(&self.media_resolver)),
@@ -125,7 +132,7 @@ mod tests {
     fn config(user_agent: &str) -> HttpClientConfig {
         HttpClientConfig {
             user_agent: Some(user_agent.into()),
-            ..HttpClientConfig::resolve(&HttpSettings::default()).unwrap()
+            ..HttpClientConfig::resolve(&HttpSettings::default()).config
         }
     }
 
@@ -233,6 +240,10 @@ mod tests {
                 .is_err()
         );
         assert!(pool.client(&with_identity, ClientVariant::Media).is_ok());
+        assert!(
+            pool.client(&with_identity, ClientVariant::UnpinnedMedia)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -275,6 +286,20 @@ mod tests {
         .await;
         assert_eq!(response.status(), 302);
         assert_eq!(response.headers()["location"], "/elsewhere");
+    }
+
+    #[tokio::test]
+    async fn unpinned_media_variant_uses_the_system_resolver_and_returns_redirects() {
+        let (address, _, _) = serve("HTTP/1.1 302 Found").await;
+        let pool = HttpClientPool::new(Arc::new(FixedResolver(([192, 0, 2, 1], 80).into())));
+        let response = get(
+            &pool,
+            &config("a"),
+            ClientVariant::UnpinnedMedia,
+            &format!("http://localhost:{}/doc", address.port()),
+        )
+        .await;
+        assert_eq!(response.status(), 302);
     }
 
     #[tokio::test]

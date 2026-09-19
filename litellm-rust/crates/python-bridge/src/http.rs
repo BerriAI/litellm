@@ -1,16 +1,19 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, Mutex, PoisonError},
 };
 
-use litellm_http::{HttpClientConfig, HttpClientPool, HttpSettings, SslVerify};
-use litellm_llms::custom_httpx::media::PublicDnsResolver;
+use litellm_http::{HttpClientConfig, HttpClientPool, HttpSettings, SslVerify, Unsupported};
+use litellm_llms::custom_httpx::media::{PublicDnsResolver, UrlPolicy};
 use pyo3::{prelude::*, types::PyDict};
 
 use crate::{errors::RustBridgeDeclined, python_settings::PythonSettings};
 
 static POOL: LazyLock<HttpClientPool> =
     LazyLock::new(|| HttpClientPool::new(Arc::new(PublicDnsResolver)));
+
+static REPORTED_UNSUPPORTED: LazyLock<Mutex<HashSet<Unsupported>>> = LazyLock::new(Mutex::default);
 
 pub(crate) fn pool() -> &'static HttpClientPool {
     &POOL
@@ -21,22 +24,48 @@ pub(crate) fn call_config(
     kwargs: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<HttpClientConfig> {
-    decline_live_client(kwargs)?;
-    decline_custom_url_policy(&PythonSettings::UrlPolicy.read(py)?)?;
     let configured = settings(&PythonSettings::Http.read(py)?)?
         .with_environment(&|name| std::env::var(name).ok());
     let settings = for_call(configured, call_ssl_verify(kwargs)?, asynchronous)
         .without_missing_files(&|path: &Path| path.exists());
-    HttpClientConfig::resolve(&settings)
-        .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))
+    let resolution = HttpClientConfig::resolve(&settings);
+    for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
+        PythonSettings::warn(py, &unsupported.to_string())?;
+    }
+    Ok(resolution.config)
+}
+
+fn unreported(
+    reported: &Mutex<HashSet<Unsupported>>,
+    unsupported: Vec<Unsupported>,
+) -> Vec<Unsupported> {
+    let mut reported = reported.lock().unwrap_or_else(PoisonError::into_inner);
+    unsupported
+        .into_iter()
+        .filter(|unsupported| reported.insert(unsupported.clone()))
+        .collect()
+}
+
+pub(crate) fn url_policy(py: Python<'_>) -> PyResult<UrlPolicy> {
+    let policy: PythonUrlPolicy =
+        PythonSettings::UrlPolicy
+            .read(py)?
+            .extract()
+            .map_err(|error: PyErr| {
+                RustBridgeDeclined::new_err(format!(
+                    "litellm URL policy cannot be used by the Rust route: {error}"
+                ))
+            })?;
+    Ok(UrlPolicy {
+        validate: policy.user_url_validation,
+        allowed_hosts: policy.user_url_allowed_hosts,
+    })
 }
 
 fn call_ssl_verify(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<SslVerify>> {
-    kwargs
+    Ok(kwargs
         .get_item("ssl_verify")?
-        .filter(|value| !value.is_none())
-        .map(|value| ssl_verify(&value, "the ssl_verify argument"))
-        .transpose()
+        .and_then(|value| ssl_verify(&value)))
 }
 
 fn for_call(
@@ -51,33 +80,10 @@ fn for_call(
     }
 }
 
-fn decline_live_client(kwargs: &Bound<'_, PyDict>) -> PyResult<()> {
-    if kwargs
-        .get_item("client")?
-        .is_some_and(|value| !value.is_none())
-    {
-        return Err(RustBridgeDeclined::new_err(
-            "client is a live Python HTTP client and cannot be used by the Rust route",
-        ));
-    }
-    Ok(())
-}
-
 #[derive(FromPyObject)]
 struct PythonUrlPolicy {
     user_url_validation: bool,
     user_url_allowed_hosts: Vec<String>,
-}
-
-fn decline_custom_url_policy(value: &Bound<'_, PyAny>) -> PyResult<()> {
-    match value.extract::<PythonUrlPolicy>() {
-        Ok(policy) if policy.user_url_validation && policy.user_url_allowed_hosts.is_empty() => {
-            Ok(())
-        }
-        Ok(_) | Err(_) => Err(RustBridgeDeclined::new_err(
-            "litellm.user_url_validation / user_url_allowed_hosts are applied by the Python route",
-        )),
-    }
 }
 
 #[derive(FromPyObject)]
@@ -101,7 +107,7 @@ fn settings(value: &Bound<'_, PyAny>) -> PyResult<HttpSettings> {
         ))
     })?;
     Ok(HttpSettings {
-        ssl_verify: Some(ssl_verify(&python.ssl_verify, "litellm.ssl_verify")?),
+        ssl_verify: ssl_verify(&python.ssl_verify),
         ssl_certificate: python.ssl_certificate.map(PathBuf::from),
         ssl_security_level: python.ssl_security_level,
         ssl_ecdh_curve: python.ssl_ecdh_curve,
@@ -115,20 +121,18 @@ fn settings(value: &Bound<'_, PyAny>) -> PyResult<HttpSettings> {
     })
 }
 
-fn ssl_verify(value: &Bound<'_, PyAny>, source: &str) -> PyResult<SslVerify> {
+fn ssl_verify(value: &Bound<'_, PyAny>) -> Option<SslVerify> {
     if let Ok(enabled) = value.extract::<bool>() {
-        return Ok(if enabled {
+        return Some(if enabled {
             SslVerify::Enabled
         } else {
             SslVerify::Disabled
         });
     }
-    if let Ok(path) = value.extract::<String>() {
-        return Ok(SslVerify::parse(&path));
-    }
-    Err(RustBridgeDeclined::new_err(format!(
-        "{source} is a live Python object and cannot be used by the Rust route"
-    )))
+    value
+        .extract::<String>()
+        .ok()
+        .map(|path| SslVerify::parse(&path))
 }
 
 #[cfg(test)]
@@ -247,50 +251,30 @@ user_agent='litellm/9.9.9',
         Python::initialize();
         Python::attach(|py| {
             let settings = settings(&python_settings(py, overrides)).unwrap();
-            let config = HttpClientConfig::resolve(&settings).unwrap();
+            let config = HttpClientConfig::resolve(&settings).config;
             assert_eq!(config.verify, expected);
         });
     }
 
     #[test]
-    fn ssl_context_global_declines_instead_of_being_dropped() {
+    fn ssl_context_global_is_ignored_so_environment_and_defaults_apply() {
         Python::initialize();
         Python::attach(|py| {
-            let error = settings(&python_settings(py, "ssl_verify=object()")).unwrap_err();
-            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
-            assert!(error.value(py).to_string().contains("litellm.ssl_verify"));
+            let settings = settings(&python_settings(py, "ssl_verify=object()")).unwrap();
+            assert_eq!(settings.ssl_verify, None);
         });
-    }
-
-    fn url_policy<'py>(py: Python<'py>, fields: &str) -> Bound<'py, PyAny> {
-        let source = std::ffi::CString::new(format!(
-            "import types\npolicy = types.SimpleNamespace({fields})"
-        ))
-        .unwrap();
-        let locals = PyDict::new(py);
-        py.run(&source, Some(&locals), Some(&locals)).unwrap();
-        locals.get_item("policy").unwrap().unwrap()
     }
 
     #[test]
-    fn default_url_policy_stays_on_the_rust_route() {
-        Python::initialize();
-        Python::attach(|py| {
-            let policy = url_policy(py, "user_url_validation=True, user_url_allowed_hosts=[]");
-            decline_custom_url_policy(&policy).unwrap();
-        });
-    }
-
-    #[rstest]
-    #[case::validation_off("user_url_validation=False, user_url_allowed_hosts=[]")]
-    #[case::allowlist("user_url_validation=True, user_url_allowed_hosts=['docs.internal']")]
-    #[case::mistyped("user_url_validation=True, user_url_allowed_hosts=None")]
-    fn custom_url_policy_declines_so_python_applies_it(#[case] fields: &str) {
-        Python::initialize();
-        Python::attach(|py| {
-            let error = decline_custom_url_policy(&url_policy(py, fields)).unwrap_err();
-            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
-        });
+    fn unsupported_settings_are_reported_once_per_process() {
+        let reported = Mutex::default();
+        let curve = Unsupported::EcdhCurve("secp521r1".into());
+        let level = Unsupported::SecurityLevel("@SECLEVEL=1".into());
+        assert_eq!(
+            unreported(&reported, vec![curve.clone(), level.clone()]),
+            [curve.clone(), level]
+        );
+        assert_eq!(unreported(&reported, vec![curve]), []);
     }
 
     #[test]
@@ -333,15 +317,19 @@ user_agent='litellm/9.9.9',
     }
 
     #[test]
-    fn live_ssl_context_argument_declines() {
+    fn live_ssl_context_argument_is_ignored_so_the_configured_value_applies() {
         Python::initialize();
         Python::attach(|py| {
             let kwargs = PyDict::new(py);
             kwargs
                 .set_item("ssl_verify", py.eval(c"object()", None, None).unwrap())
                 .unwrap();
-            let error = call_ssl_verify(&kwargs).unwrap_err();
-            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
+            let configured = HttpSettings {
+                ssl_verify: Some(SslVerify::Disabled),
+                ..HttpSettings::default()
+            };
+            let settings = for_call(configured.clone(), call_ssl_verify(&kwargs).unwrap(), true);
+            assert_eq!(settings, configured);
         });
     }
 
@@ -357,33 +345,7 @@ user_agent='litellm/9.9.9',
             ..HttpSettings::default()
         };
         let settings = for_call(opted_out, None, asynchronous);
-        let config = HttpClientConfig::resolve(&settings).unwrap();
+        let config = HttpClientConfig::resolve(&settings).config;
         assert_eq!(config.trust_proxy_env, expected);
-    }
-
-    #[test]
-    fn live_python_client_declines_before_dispatch() {
-        Python::initialize();
-        Python::attach(|py| {
-            let kwargs = PyDict::new(py);
-            kwargs
-                .set_item("client", py.eval(c"object()", None, None).unwrap())
-                .unwrap();
-            let error = decline_live_client(&kwargs).unwrap_err();
-            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
-        });
-    }
-
-    #[rstest]
-    #[case::absent_client("{}")]
-    #[case::none_client("{'client': None}")]
-    #[case::proxy_shared_session("{'shared_session': object()}")]
-    fn calls_without_a_python_client_stay_on_the_rust_route(#[case] kwargs: &str) {
-        Python::initialize();
-        Python::attach(|py| {
-            let source = std::ffi::CString::new(kwargs).unwrap();
-            let kwargs = py.eval(&source, None, None).unwrap();
-            decline_live_client(kwargs.cast::<PyDict>().unwrap()).unwrap();
-        });
     }
 }

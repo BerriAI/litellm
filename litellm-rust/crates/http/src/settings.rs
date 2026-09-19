@@ -20,6 +20,13 @@ impl SslVerify {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TcpKeepalive {
+    pub idle: Duration,
+    pub interval: Duration,
+    pub retries: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpSettings {
     pub ssl_verify: Option<SslVerify>,
@@ -34,6 +41,8 @@ pub struct HttpSettings {
     pub trust_proxy_env: bool,
     pub ignore_proxy_env: bool,
     pub connect_timeout: Duration,
+    pub tcp_keepalive: Option<TcpKeepalive>,
+    pub pool_idle_timeout: Duration,
 }
 
 impl Default for HttpSettings {
@@ -51,6 +60,8 @@ impl Default for HttpSettings {
             trust_proxy_env: false,
             ignore_proxy_env: false,
             connect_timeout: Duration::from_secs(10),
+            tcp_keepalive: None,
+            pool_idle_timeout: Duration::from_secs(120),
         }
     }
 }
@@ -59,6 +70,10 @@ impl HttpSettings {
     pub fn with_environment(self, env: &(dyn Fn(&str) -> Option<String> + Sync)) -> Self {
         let enabled =
             |name: &str| env(name).is_some_and(|value| value.trim().eq_ignore_ascii_case("true"));
+        let number = |name: &str| env(name).and_then(|value| value.trim().parse::<u32>().ok());
+        let seconds = |name: &str, default: u32| {
+            Duration::from_secs(u64::from(number(name).unwrap_or(default)))
+        };
         Self {
             ssl_verify: env("SSL_VERIFY")
                 .map(|value| SslVerify::parse(&value))
@@ -81,6 +96,17 @@ impl HttpSettings {
             user_agent: env("LITELLM_USER_AGENT").or(self.user_agent),
             trust_proxy_env: self.trust_proxy_env || enabled("AIOHTTP_TRUST_ENV"),
             ignore_proxy_env: self.ignore_proxy_env || enabled("DISABLE_AIOHTTP_TRUST_ENV"),
+            tcp_keepalive: enabled("AIOHTTP_SO_KEEPALIVE")
+                .then(|| TcpKeepalive {
+                    idle: seconds("AIOHTTP_TCP_KEEPIDLE", 60),
+                    interval: seconds("AIOHTTP_TCP_KEEPINTVL", 30),
+                    retries: number("AIOHTTP_TCP_KEEPCNT").unwrap_or(5),
+                })
+                .or(self.tcp_keepalive),
+            pool_idle_timeout: number("AIOHTTP_KEEPALIVE_TIMEOUT")
+                .map_or(self.pool_idle_timeout, |timeout| {
+                    Duration::from_secs(u64::from(timeout))
+                }),
             ..self
         }
     }
@@ -186,6 +212,32 @@ mod tests {
         assert_eq!(settings.ssl_certificate, None);
         assert_eq!(settings.ssl_security_level, None);
         assert_eq!(settings.ssl_ecdh_curve, None);
+    }
+
+    #[test]
+    fn socket_keepalive_follows_the_aiohttp_variables_with_python_defaults() {
+        let tuned = HttpSettings::default().with_environment(&env_of(&[
+            ("AIOHTTP_SO_KEEPALIVE", "True"),
+            ("AIOHTTP_TCP_KEEPIDLE", "45"),
+            ("AIOHTTP_KEEPALIVE_TIMEOUT", "30"),
+        ]));
+        assert_eq!(
+            tuned.tcp_keepalive,
+            Some(TcpKeepalive {
+                idle: Duration::from_secs(45),
+                interval: Duration::from_secs(30),
+                retries: 5,
+            })
+        );
+        assert_eq!(tuned.pool_idle_timeout, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn socket_keepalive_stays_off_unless_enabled() {
+        let settings =
+            HttpSettings::default().with_environment(&env_of(&[("AIOHTTP_TCP_KEEPIDLE", "45")]));
+        assert_eq!(settings.tcp_keepalive, None);
+        assert_eq!(settings.pool_idle_timeout, Duration::from_secs(120));
     }
 
     #[test]

@@ -1,12 +1,13 @@
 use std::{
     net::{IpAddr, Ipv4Addr},
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::Duration,
 };
 
 use crate::{
     error::Error,
-    settings::{HttpSettings, SslVerify},
+    settings::{HttpSettings, SslVerify, TcpKeepalive},
+    tls::{self, KeyExchangeGroup, Tls12CipherSuite, Unsupported},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -20,27 +21,38 @@ pub enum Verify {
 pub struct HttpClientConfig {
     pub verify: Verify,
     pub client_certificate: Option<PathBuf>,
+    pub key_exchange_group: Option<KeyExchangeGroup>,
+    pub tls12_cipher_suites: Option<Vec<Tls12CipherSuite>>,
     pub force_ipv4: bool,
     pub http2: bool,
     pub user_agent: Option<String>,
     pub trust_proxy_env: bool,
     pub connect_timeout: Duration,
+    pub tcp_keepalive: Option<TcpKeepalive>,
+    pub pool_idle_timeout: Duration,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Resolution {
+    pub config: HttpClientConfig,
+    pub unsupported: Vec<Unsupported>,
 }
 
 impl HttpClientConfig {
-    pub fn resolve(settings: &HttpSettings) -> Result<Self, Error> {
-        if let Some(level) = &settings.ssl_security_level {
-            return Err(Error::Unsupported {
-                setting: "ssl_security_level",
-                reason: format!("OpenSSL cipher string {level:?} has no rustls equivalent"),
-            });
-        }
-        if let Some(curve) = &settings.ssl_ecdh_curve {
-            return Err(Error::Unsupported {
-                setting: "ssl_ecdh_curve",
-                reason: format!("key exchange group {curve:?} is fixed by the rustls provider"),
-            });
-        }
+    pub fn resolve(settings: &HttpSettings) -> Resolution {
+        let (key_exchange_group, unsupported_curve) = match settings
+            .ssl_ecdh_curve
+            .as_deref()
+            .map(KeyExchangeGroup::from_openssl_name)
+        {
+            None => (None, None),
+            Some(Ok(group)) => (Some(group), None),
+            Some(Err(unsupported)) => (None, Some(unsupported)),
+        };
+        let ciphers = settings
+            .ssl_security_level
+            .as_deref()
+            .map(tls::parse_cipher_string);
         let verify = match &settings.ssl_verify {
             Some(SslVerify::Disabled) => Verify::Disabled,
             Some(SslVerify::CaBundle(path)) => Verify::CaBundle(path.clone()),
@@ -49,62 +61,50 @@ impl HttpClientConfig {
                 .clone()
                 .map_or(Verify::BuiltInRoots, Verify::CaBundle),
         };
-        Ok(Self {
-            verify,
-            client_certificate: settings.ssl_certificate.clone(),
-            force_ipv4: settings.force_ipv4,
-            http2: settings.http2,
-            user_agent: settings.user_agent.clone(),
-            trust_proxy_env: !settings.ignore_proxy_env
-                || settings.trust_proxy_env
-                || settings.http2
-                || settings.httpx_transport,
-            connect_timeout: settings.connect_timeout,
-        })
+        let (tls12_cipher_suites, unsupported_ciphers) = ciphers
+            .map_or((None, Vec::new()), |ciphers| {
+                (ciphers.tls12_cipher_suites, ciphers.unsupported)
+            });
+        Resolution {
+            config: Self {
+                verify,
+                client_certificate: settings.ssl_certificate.clone(),
+                key_exchange_group,
+                tls12_cipher_suites,
+                force_ipv4: settings.force_ipv4,
+                http2: settings.http2,
+                user_agent: settings.user_agent.clone(),
+                trust_proxy_env: !settings.ignore_proxy_env
+                    || settings.trust_proxy_env
+                    || settings.http2
+                    || settings.httpx_transport,
+                connect_timeout: settings.connect_timeout,
+                tcp_keepalive: settings.tcp_keepalive,
+                pool_idle_timeout: settings.pool_idle_timeout,
+            },
+            unsupported: unsupported_curve
+                .into_iter()
+                .chain(unsupported_ciphers)
+                .collect(),
+        }
     }
 
     pub fn client_builder(&self) -> Result<reqwest::ClientBuilder, Error> {
-        let base = reqwest::Client::builder().connect_timeout(self.connect_timeout);
-        let with_roots = match &self.verify {
-            Verify::Disabled => base.danger_accept_invalid_certs(true),
-            Verify::BuiltInRoots => base,
-            Verify::CaBundle(path) => {
-                let pem = read(path)?;
-                let certificates =
-                    reqwest::Certificate::from_pem_bundle(&pem).map_err(|error| {
-                        Error::InvalidPem {
-                            path: path.clone(),
-                            message: error.without_url().to_string(),
-                        }
-                    })?;
-                if certificates.is_empty() {
-                    return Err(Error::InvalidPem {
-                        path: path.clone(),
-                        message: "no certificates found".into(),
-                    });
-                }
-                certificates.into_iter().fold(
-                    base.tls_built_in_root_certs(false),
-                    |builder, certificate| builder.add_root_certificate(certificate),
-                )
-            }
-        };
-        let with_identity = match &self.client_certificate {
-            None => with_roots,
-            Some(path) => {
-                let identity = reqwest::Identity::from_pem(&read(path)?).map_err(|error| {
-                    Error::InvalidPem {
-                        path: path.clone(),
-                        message: error.without_url().to_string(),
-                    }
-                })?;
-                with_roots.identity(identity)
-            }
+        let base = reqwest::Client::builder()
+            .use_preconfigured_tls(tls::client_config(self)?)
+            .connect_timeout(self.connect_timeout)
+            .pool_idle_timeout(self.pool_idle_timeout);
+        let with_keepalive = match self.tcp_keepalive {
+            None => base,
+            Some(keepalive) => base
+                .tcp_keepalive(keepalive.idle)
+                .tcp_keepalive_interval(keepalive.interval)
+                .tcp_keepalive_retries(keepalive.retries),
         };
         let with_address = if self.force_ipv4 {
-            with_identity.local_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+            with_keepalive.local_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
         } else {
-            with_identity
+            with_keepalive
         };
         let with_protocol = if self.http2 {
             with_address
@@ -121,13 +121,6 @@ impl HttpClientConfig {
             with_agent.no_proxy()
         })
     }
-}
-
-fn read(path: &Path) -> Result<Vec<u8>, Error> {
-    std::fs::read(path).map_err(|error| Error::Read {
-        path: path.to_path_buf(),
-        message: error.to_string(),
-    })
 }
 
 #[cfg(test)]
@@ -168,7 +161,7 @@ mod tests {
         #[case] settings: HttpSettings,
         #[case] expected: Verify,
     ) {
-        let config = HttpClientConfig::resolve(&settings).unwrap();
+        let config = HttpClientConfig::resolve(&settings).config;
         assert_eq!(config.verify, expected);
     }
 
@@ -179,42 +172,88 @@ mod tests {
             ..HttpSettings::default()
         }
         .with_environment(&|name: &str| (name == "SSL_VERIFY").then(|| "true".to_string()));
-        let config = HttpClientConfig::resolve(&settings).unwrap();
+        let config = HttpClientConfig::resolve(&settings).config;
         assert_eq!(config.verify, Verify::BuiltInRoots);
     }
 
+    #[rstest]
+    #[case::x25519("X25519", Some(KeyExchangeGroup::X25519))]
+    #[case::openssl_p256("prime256v1", Some(KeyExchangeGroup::Secp256r1))]
+    #[case::p384("secp384r1", Some(KeyExchangeGroup::Secp384r1))]
+    fn ecdh_curve_selects_the_single_key_exchange_group(
+        #[case] curve: &str,
+        #[case] expected: Option<KeyExchangeGroup>,
+    ) {
+        let settings = HttpSettings {
+            ssl_ecdh_curve: Some(curve.into()),
+            ..HttpSettings::default()
+        };
+        let resolution = HttpClientConfig::resolve(&settings);
+        assert_eq!(resolution.config.key_exchange_group, expected);
+        assert_eq!(resolution.unsupported, []);
+    }
+
     #[test]
-    fn cipher_strings_are_rejected_rather_than_ignored() {
+    fn unsupported_ecdh_curve_keeps_the_defaults_and_is_reported() {
+        let settings = HttpSettings {
+            ssl_ecdh_curve: Some("secp521r1".into()),
+            ..HttpSettings::default()
+        };
+        let resolution = HttpClientConfig::resolve(&settings);
+        assert_eq!(resolution.config.key_exchange_group, None);
+        assert_eq!(
+            resolution.unsupported,
+            [Unsupported::EcdhCurve("secp521r1".into())]
+        );
+    }
+
+    #[test]
+    fn legacy_security_level_keeps_every_suite_and_is_reported_unsupported() {
         let settings = HttpSettings {
             ssl_security_level: Some("DEFAULT@SECLEVEL=1".into()),
             ..HttpSettings::default()
         };
-        assert!(matches!(
-            HttpClientConfig::resolve(&settings),
-            Err(Error::Unsupported {
-                setting: "ssl_security_level",
-                ..
-            })
-        ));
+        let resolution = HttpClientConfig::resolve(&settings);
+        assert_eq!(resolution.config.tls12_cipher_suites, None);
+        assert_eq!(
+            resolution.unsupported,
+            [Unsupported::SecurityLevel("@SECLEVEL=1".into())]
+        );
     }
 
     #[test]
-    fn ecdh_curves_are_rejected_rather_than_ignored() {
+    fn named_suites_restrict_tls12_and_unsupported_entries_are_reported() {
         let settings = HttpSettings {
-            ssl_ecdh_curve: Some("X25519".into()),
+            ssl_security_level: Some(
+                "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES128-GCM-SHA256:!aNULL:AES256-SHA@SECLEVEL=2"
+                    .into(),
+            ),
             ..HttpSettings::default()
         };
-        assert!(matches!(
-            HttpClientConfig::resolve(&settings),
-            Err(Error::Unsupported {
-                setting: "ssl_ecdh_curve",
-                ..
-            })
-        ));
+        let resolution = HttpClientConfig::resolve(&settings);
+        assert_eq!(
+            resolution.config.tls12_cipher_suites,
+            Some(vec![
+                Tls12CipherSuite::EcdheEcdsaAes128Gcm,
+                Tls12CipherSuite::EcdheRsaAes256Gcm
+            ])
+        );
+        assert_eq!(
+            resolution.unsupported,
+            [
+                Unsupported::CipherToken("!aNULL".into()),
+                Unsupported::CipherToken("AES256-SHA".into())
+            ]
+        );
     }
 
     #[test]
     fn connection_settings_carry_over_unchanged() {
+        let keepalive = TcpKeepalive {
+            idle: Duration::from_secs(60),
+            interval: Duration::from_secs(30),
+            retries: 5,
+        };
         let settings = HttpSettings {
             ssl_certificate: Some("/client.pem".into()),
             force_ipv4: true,
@@ -222,19 +261,25 @@ mod tests {
             user_agent: Some("litellm/1.0".into()),
             trust_proxy_env: true,
             connect_timeout: Duration::from_secs(7),
+            tcp_keepalive: Some(keepalive),
+            pool_idle_timeout: Duration::from_secs(45),
             ..HttpSettings::default()
         };
-        let config = HttpClientConfig::resolve(&settings).unwrap();
+        let config = HttpClientConfig::resolve(&settings).config;
         assert_eq!(
             config,
             HttpClientConfig {
                 verify: Verify::BuiltInRoots,
                 client_certificate: Some("/client.pem".into()),
+                key_exchange_group: None,
+                tls12_cipher_suites: None,
                 force_ipv4: true,
                 http2: true,
                 user_agent: Some("litellm/1.0".into()),
                 trust_proxy_env: true,
                 connect_timeout: Duration::from_secs(7),
+                tcp_keepalive: Some(keepalive),
+                pool_idle_timeout: Duration::from_secs(45),
             }
         );
     }
@@ -258,7 +303,7 @@ mod tests {
         #[case] settings: HttpSettings,
         #[case] expected: bool,
     ) {
-        let config = HttpClientConfig::resolve(&settings).unwrap();
+        let config = HttpClientConfig::resolve(&settings).config;
         assert_eq!(config.trust_proxy_env, expected);
     }
 
@@ -267,7 +312,7 @@ mod tests {
         let path = std::env::temp_dir().join("litellm-http-missing-bundle.pem");
         let config = HttpClientConfig {
             verify: Verify::CaBundle(path.clone()),
-            ..HttpClientConfig::resolve(&HttpSettings::default()).unwrap()
+            ..HttpClientConfig::resolve(&HttpSettings::default()).config
         };
         assert!(matches!(
             config.client_builder(),
@@ -282,7 +327,7 @@ mod tests {
         std::fs::write(&path, b"not a certificate").unwrap();
         let config = HttpClientConfig {
             verify: Verify::CaBundle(path.clone()),
-            ..HttpClientConfig::resolve(&HttpSettings::default()).unwrap()
+            ..HttpClientConfig::resolve(&HttpSettings::default()).config
         };
         let result = config.client_builder().map(drop);
         std::fs::remove_file(&path).unwrap();

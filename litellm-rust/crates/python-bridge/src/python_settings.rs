@@ -22,6 +22,11 @@ impl PythonSettings {
     pub(crate) fn read(self, py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         py.import(MODULE)?.getattr(self.name())?.call0()
     }
+
+    pub(crate) fn warn(py: Python<'_>, message: &str) -> PyResult<()> {
+        py.import(MODULE)?.getattr("warn")?.call1((message,))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
