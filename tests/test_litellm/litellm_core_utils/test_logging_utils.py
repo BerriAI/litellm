@@ -19,7 +19,7 @@ from litellm.litellm_core_utils.logging_utils import (
 
 
 class TestSetDurationInModelCallDetails:
-    def test_accumulates_provider_attempts_in_shared_metadata(self):
+    def test_records_provider_attempt_windows_in_shared_metadata(self):
         metadata = {"request_id": "test"}
         logging_obj = MagicMock()
         logging_obj.model_call_details = {"litellm_params": {"metadata": metadata}}
@@ -31,7 +31,10 @@ class TestSetDurationInModelCallDetails:
         _set_duration_in_model_call_details(logging_obj, first_start, first_end)
         _set_duration_in_model_call_details(logging_obj, second_start, second_end)
 
-        assert metadata["llm_api_duration_ms_total"] == pytest.approx(1000.0)
+        assert metadata["llm_api_timing_windows"] == (
+            (first_start.timestamp(), first_end.timestamp()),
+            (second_start.timestamp(), second_end.timestamp()),
+        )
         assert logging_obj.model_call_details["llm_api_duration_ms"] == pytest.approx(700.0)
 
 
