@@ -8,6 +8,7 @@ Mistral only accepts ``fine-tune``, ``batch`` and ``ocr`` as upload purposes.
 
 import time
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 import httpx
@@ -32,6 +33,14 @@ from litellm.types.utils import LlmProviders
 from ..common_utils import get_mistral_api_base, get_mistral_auth_headers, mistral_error
 
 MistralFilePurpose: TypeAlias = Literal["fine-tune", "batch", "ocr"]
+
+_OPENAI_PURPOSE_BY_MISTRAL: Final[Mapping[MistralFilePurpose, OpenAIFilesPurpose]] = MappingProxyType(
+    {"fine-tune": "fine-tune", "batch": "batch", "ocr": "user_data"}
+)
+_MISTRAL_PURPOSE_BY_OPENAI: Final[Mapping[str, MistralFilePurpose]] = MappingProxyType(
+    {"fine-tune": "fine-tune", "batch": "batch", "ocr": "ocr", "user_data": "ocr"}
+)
+_SUPPORTED_PURPOSES: Final = ", ".join(_MISTRAL_PURPOSE_BY_OPENAI)
 
 _NO_QUERY_PARAMS: Final[dict[str, str]] = {}  # mutable-ok: BaseFilesConfig request transforms return tuple[str, dict]
 
@@ -81,22 +90,18 @@ def _to_openai_file_object(file: MistralFile) -> OpenAIFileObject:
 
 
 def _to_openai_purpose(purpose: MistralFilePurpose) -> OpenAIFilesPurpose:
-    match purpose:
-        case "fine-tune" | "batch":
-            return purpose
-        case "ocr":
-            return "user_data"
+    return _OPENAI_PURPOSE_BY_MISTRAL[purpose]
 
 
 def _to_mistral_purpose(purpose: str) -> MistralFilePurpose:
-    """Only Mistral's own purposes pass through. Silently mapping anything else to ``batch``
-    would let an upload skip the proxy's batch-file validation and guardrails, which only
-    run when the caller says ``purpose=batch``."""
-    match purpose:
-        case "batch" | "fine-tune" | "ocr":
-            return purpose
-        case _:
-            raise ValueError(f"Mistral does not support purpose={purpose!r}. Use one of: batch, fine-tune, ocr")
+    """``user_data`` is what an OCR file reads back as, since OpenAI's purpose literal has no ``ocr``,
+    so it maps back onto ``ocr``. Every other purpose Mistral lacks is rejected: silently rewriting
+    it to ``batch`` would let an upload skip the proxy's batch-file validation and guardrails, which
+    only run when the caller says ``purpose=batch``."""
+    mistral_purpose: Final = _MISTRAL_PURPOSE_BY_OPENAI.get(purpose)
+    if mistral_purpose is None:
+        raise ValueError(f"Mistral does not support purpose={purpose!r}. Use one of: {_SUPPORTED_PURPOSES}")
+    return mistral_purpose
 
 
 def _api_base_from(litellm_params: Mapping[str, object]) -> str:

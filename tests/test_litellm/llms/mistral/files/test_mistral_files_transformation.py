@@ -102,7 +102,17 @@ def test_upload_request_passes_mistral_purposes_through(config, purpose):
     assert body["purpose"] == (None, purpose)
 
 
-@pytest.mark.parametrize("purpose", ["assistants", "user_data", "vision", "evals"])
+def test_upload_request_maps_user_data_onto_ocr(config):
+    body = config.transform_create_file_request(
+        model="",
+        create_file_data=CreateFileRequest(file=("scan.pdf", b"%PDF"), purpose="user_data"),
+        optional_params={},
+        litellm_params={},
+    )
+    assert body["purpose"] == (None, "ocr")
+
+
+@pytest.mark.parametrize("purpose", ["assistants", "vision", "evals"])
 def test_upload_request_rejects_purposes_mistral_lacks(config, purpose):
     """Regression: these used to be silently rewritten to ``batch``, so an upload that skipped the
     proxy's batch-only validation and guardrails still landed on Mistral as a batch input file."""
@@ -189,6 +199,16 @@ def test_list_request_filters_by_mapped_purpose(config):
     assert params == {"purpose": "batch"}
     _, no_params = config.transform_list_files_request(purpose=None, optional_params={}, litellm_params={})
     assert no_params == {}
+
+
+def test_list_request_accepts_the_purpose_an_ocr_file_reads_back_as(config):
+    """Regression: an OCR file reads back as ``purpose=user_data``, and listing with that purpose
+    used to raise, so ``files.list(purpose=file.purpose)`` could never find OCR files."""
+    ocr_file = config.transform_retrieve_file_response(
+        raw_response=_response(_file(purpose="ocr")), logging_obj=None, litellm_params={}
+    )
+    _, params = config.transform_list_files_request(purpose=ocr_file.purpose, optional_params={}, litellm_params={})
+    assert params == {"purpose": "ocr"}
 
 
 def test_list_request_rejects_purposes_mistral_lacks(config):
