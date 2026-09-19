@@ -5,6 +5,8 @@ import pytest
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.exceptions import APIError
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    _coerce_missing_choices_status,
+    _get_missing_choices_error_args,
     _handle_invalid_parallel_tool_calls,
     _should_convert_tool_call_to_json_mode,
     convert_to_model_response_object,
@@ -36,7 +38,7 @@ OPENAI_CUSTOM_TOOL_CALL_RESPONSE = {
                         "type": "custom",
                         "custom": {
                             "name": "ApplyPatch",
-                            "input": "*** Begin Patch\n*** Update File: main.py\n@@\n+def hello():\n+    print(\"Hello\")\n*** End Patch\n",
+                            "input": '*** Begin Patch\n*** Update File: main.py\n@@\n+def hello():\n+    print("Hello")\n*** End Patch\n',
                         },
                     }
                 ],
@@ -107,6 +109,42 @@ def test_non_openai_error_ignores_non_decimal_unicode_status():
     assert "Provider returned an invalid status" in exc_info.value.message
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (True, None),
+        (200, 200),
+        (99, None),
+        (" 201 ", 201),
+        ("²00", None),
+        ("99", None),
+        (None, None),
+        (3.14, None),
+    ],
+)
+def test_coerce_missing_choices_status(value: object, expected: int | None) -> None:
+    assert _coerce_missing_choices_status(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("response_object", "expected"),
+    [
+        ({"status": 429, "response": "Too many requests"}, (429, "Too many requests")),
+        ({"status": None, "status_code": " 430 ", "message": "Service unavailable"}, (430, "Service unavailable")),
+        (
+            {"error": {"status_code": 431, "message": "Nested failure"}, "response": ""},
+            (431, "Nested failure"),
+        ),
+        ({"error": {"status": 432, "response": "Nested response"}}, (432, "Nested response")),
+        ({"error": "Provider request failed"}, (500, "Provider request failed")),
+        ({"error": object()}, (500, "LiteLLM: provider returned a response with no 'choices'. Raw keys: ['error']")),
+        ({"message": "  "}, (500, "LiteLLM: provider returned a response with no 'choices'. Raw keys: ['message']")),
+    ],
+)
+def test_get_missing_choices_error_args(response_object: dict, expected: tuple[int, str]) -> None:
+    assert _get_missing_choices_error_args(response_object) == expected
+
+
 @pytest.mark.parametrize("code", [401, "401"])
 def test_non_openai_error_uses_nested_error_object(code):
     with pytest.raises(APIError) as exc_info:
@@ -142,11 +180,7 @@ def test_non_openai_error_uses_nested_error_message_variants(error, expected_sta
 
 def test_streaming_non_openai_error_uses_provider_status_and_message():
     with pytest.raises(APIError) as exc_info:
-        next(
-            convert_to_streaming_response(
-                {"error": {"message": "Invalid credentials", "code": 401}, "choices": None}
-            )
-        )
+        next(convert_to_streaming_response({"error": {"message": "Invalid credentials", "code": 401}, "choices": None}))
 
     assert exc_info.value.status_code == 401
     assert "Invalid credentials" in exc_info.value.message
