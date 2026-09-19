@@ -41,6 +41,7 @@ export type FlagVerdict =
 
 export const MIN_CONFIDENCE = 0.95;
 export const NOTICE_MARKER_PREFIX = "<!-- litellm:potential-duplicate candidates=";
+export const WORKFLOW_LOGIN = "github-actions[bot]";
 export const CLEAR_LABEL = labelName("dup", "clear");
 
 const skip = (reason: string): { readonly kind: "skip"; readonly reason: string } => ({ kind: "skip", reason });
@@ -104,7 +105,7 @@ export async function flagIssue(api: GitHubApi, config: FlagConfig, verdict: Ver
   const target = flagTarget(verdict, config.issueNumber);
   const issuePath = `/repos/${config.repo}/issues/${config.issueNumber}`;
   const comments = await listAll<Comment>(api, `${issuePath}/comments`);
-  if (comments.some((comment) => comment.body.includes(NOTICE_MARKER_PREFIX))) {
+  if (comments.some((comment) => comment.user.login === WORKFLOW_LOGIN && comment.body.includes(NOTICE_MARKER_PREFIX))) {
     return skip("already carries a duplicate notice");
   }
   if (target.kind === "clear") {

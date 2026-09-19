@@ -204,6 +204,18 @@ describe("flagIssue", () => {
     expect(rerun.writes).toEqual([]);
   });
 
+  test("a notice marker pasted by a commenter is not a notice", async () => {
+    const pasted: Comment = {
+      id: 2,
+      body: "<!-- litellm:potential-duplicate candidates=10, --> looks like #10 to me",
+      created_at: "2026-09-10T00:00:00Z",
+      user: { type: "User", login: "someone" },
+    };
+    const { api, writes } = fakeApi(undefined, [pasted]);
+    expect((await flagIssue(api, config, verdict({ duplicate_of: null }))).kind).toBe("clear");
+    expect(writes).toEqual([`POST /repos/BerriAI/litellm/issues/35/labels {"labels":["${CLEAR_LABEL}"]}`]);
+  });
+
   test("a failed comment leaves no marker, so the rerun finishes the job", async () => {
     const commentsPath = "/repos/BerriAI/litellm/issues/35/comments";
     const first = fakeApi(undefined, [], [commentsPath]);
