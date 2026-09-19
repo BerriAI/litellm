@@ -5906,7 +5906,15 @@ class BaseLLMHTTPHandler:
                         callback.__class__.__name__,
                         plan.stop_reason,
                     )
-                    return self._maybe_wrap_in_fake_stream(response, logging_obj, api_surface)
+                    return self._maybe_wrap_in_fake_stream(
+                        await callback.async_post_agentic_loop_response_hook(
+                            response=self._finalize_refused_agentic_response(response=response, tool_calls=tool_calls),
+                            plan=plan,
+                            kwargs=kwargs_with_provider,
+                        ),
+                        logging_obj,
+                        api_surface,
+                    )
                 if not plan.run_agentic_loop:
                     continue
 
