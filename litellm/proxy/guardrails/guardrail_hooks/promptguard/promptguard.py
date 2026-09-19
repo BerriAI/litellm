@@ -7,9 +7,10 @@ before and after LLM calls.
 """
 
 import os
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypedDict
+from typing import TYPE_CHECKING, Final, Literal, Optional, TypedDict
 
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, Unpack
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -53,6 +54,12 @@ class PromptGuardHTTPView(TypedDict):
     guard_response: ReadOnly[PromptGuardGuardAPIResponse]
 
 
+class _CustomGuardrailOptions(ExtraItemsTypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+    supported_event_hooks: ReadOnly[list[GuardrailEventHooks] | None]
+
+
 class PromptGuardMissingCredentials(Exception):
     pass
 
@@ -63,7 +70,7 @@ class PromptGuardGuardrail(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         block_on_error: bool | None = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         self.api_key = api_key or os.environ.get(
             "PROMPTGUARD_API_KEY",
@@ -92,9 +99,12 @@ class PromptGuardGuardrail(CustomGuardrail):
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
 
-        kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        options: Final[_CustomGuardrailOptions] = {
+            "supported_event_hooks": list(self.get_supported_event_hooks()),
+            **kwargs,
+        }
 
-        super().__init__(**kwargs)
+        super().__init__(**options)
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

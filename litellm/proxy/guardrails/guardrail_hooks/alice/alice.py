@@ -11,14 +11,13 @@ from collections.abc import Mapping
 from itertools import islice
 from typing import (
     TYPE_CHECKING,
-    Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__; see ruff-strict.toml
     Final,
     Literal,
     Optional,
 )
 
 import httpx
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException, Timeout
@@ -92,6 +91,10 @@ class AliceVerdict(TypedDict):
     replacements: ReadOnly[NotRequired["tuple[AliceReplacement, ...]"]]
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
 class AliceGuardrailMissingSecrets(Exception):
     """Raised when the Alice API key is not configured."""
 
@@ -144,7 +147,9 @@ class AliceGuardrail(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
-        **kwargs: Any,  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__, whose param list is wide and evolving
+        **kwargs: Unpack[  # kwargs-ok: forwarded verbatim to CustomGuardrail.__init__, whose param list is wide and evolving
+            _CustomGuardrailOptions
+        ],
     ) -> None:
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
 

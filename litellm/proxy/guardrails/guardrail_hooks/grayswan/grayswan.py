@@ -2,10 +2,10 @@
 
 import os
 import time
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol
 
 from fastapi import HTTPException
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
@@ -36,6 +36,10 @@ class _GraySwanMonitorResponse(TypedDict):
     violated_rule_descriptions: ReadOnly[NotRequired[list[object]]]
     mutation: ReadOnly[NotRequired[bool | None]]
     ipi: ReadOnly[NotRequired[bool | None]]
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
 
 
 class _GraySwanMonitorHTTPResponse(Protocol):
@@ -103,7 +107,7 @@ class GraySwanGuardrail(CustomGuardrail):
         streaming_sampling_rate: int = 5,
         fail_open: bool | None = True,
         guardrail_timeout: float | None = 30.0,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         self.async_handler: _GraySwanMonitorHTTPClient = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
