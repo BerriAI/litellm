@@ -76,6 +76,21 @@ _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
 
+def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.utils import supports_prompt_caching
+
+    try:
+        provider: Final = custom_llm_provider if custom_llm_provider is not None else get_llm_provider(model=model)[1]
+    except Exception:  # noqa: BLE001  # Optional caching must not block an unroutable request
+        return False
+    return (
+        provider in ("anthropic", "bedrock", "vertex_ai", "azure_ai")
+        and "claude" in model.lower()
+        and supports_prompt_caching(model=model, custom_llm_provider=provider)
+    )
+
+
 def is_claude_code_user_agent(user_agent: str) -> bool:
     """Claude Code sends its API calls through the Anthropic SDK as `claude-cli/<version>` and its own
     fetches, such as gateway model discovery, as `claude-code/<version>`"""
