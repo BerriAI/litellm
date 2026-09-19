@@ -68,19 +68,6 @@ still resolve to a deployment in `model_list`; this configuration does not creat
             - abc
 ```
 
-### Context-window escalation
-
-Context-window escalation is opt-in. Omit `enable_context_window_escalation` or set it to
-`false` to keep the complexity-selected model without context-window replacement or filtering
-
-Set `enable_context_window_escalation: true` inside `complexity_router_config` to restrict the
-selected tier to models whose declared windows fit the prompt, or move to the lowest configured
-tier with a fitting model when none in the selected tier fit. Unknown windows do not justify
-moving a request. `context_window_escalation_buffer` defaults to `0.95`
-
-Existing saved configurations with explicit `true` keep escalation enabled. Configurations that
-omit the setting now default to disabled; set it to `true` to retain their previous behavior
-
 ### Capability forecasting
 
 Set `classifier_type: capability` to use
