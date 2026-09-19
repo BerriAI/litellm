@@ -1,5 +1,6 @@
 import asyncio
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, TypeAlias
@@ -38,6 +39,28 @@ class TableCleanupResult:
 
     rows_deleted: int
     stop_reason: StopReason
+
+
+class _RunProgress:
+    """How far one cleanup run has got, reported if that run is cancelled"""
+
+    def __init__(self) -> None:
+        self.rows_deleted: int = 0
+        self.batches: int = 0
+
+    def record_batch(self, rows_deleted: int) -> None:
+        self.rows_deleted += rows_deleted
+        self.batches += 1
+
+
+_run_progress: ContextVar[_RunProgress] = ContextVar("spend_log_cleanup_run_progress")
+
+
+def _record_run_batch(rows_deleted: int) -> None:
+    """Count a batch towards the run in progress, if a run is what issued it"""
+    progress: Final = _run_progress.get(None)
+    if progress is not None:
+        progress.record_batch(rows_deleted)
 
 
 class _RemainingRow(BaseModel):
@@ -422,6 +445,7 @@ class SpendLogCleanup:
 
             total_deleted += deleted_count
             run_count += 1
+            _record_run_batch(deleted_count)
 
             # Add a small sleep to prevent overwhelming the database
             await asyncio.sleep(0.1)
@@ -590,6 +614,9 @@ class SpendLogCleanup:
         If no pod_lock_manager, runs cleanup without distributed locking.
         """
         lock_acquired = False
+        run_started_at: Final = time.monotonic()
+        progress: Final = _RunProgress()
+        progress_token: Final = _run_progress.set(progress)
         try:
             verbose_proxy_logger.info("Cleanup job triggered at %s", datetime.now())
             self._refresh_bounds()
@@ -670,6 +697,15 @@ class SpendLogCleanup:
                 self._run_outcome(spend_log_results + session_results + health_check_results)
             )
 
+        except asyncio.CancelledError:
+            verbose_proxy_logger.error(
+                "Spend log cleanup cancelled after %.2fs (rows_deleted=%d, batches=%d); the next run resumes from here",
+                time.monotonic() - run_started_at,
+                progress.rows_deleted,
+                progress.batches,
+            )
+            SpendLogCleanupMetrics.record_run("aborted")
+            raise
         except Exception as e:
             # .exception() captures the traceback; str(e) alone on a Prisma/DB
             # timeout is often empty and gives operators no signal to diagnose.
@@ -681,6 +717,7 @@ class SpendLogCleanup:
             SpendLogCleanupMetrics.record_run("aborted")
             return  # Return after error handling
         finally:
+            _run_progress.reset(progress_token)
             # Only release the lock if it was actually acquired
             if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
                 await self.pod_lock_manager.release_lock(cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME)
