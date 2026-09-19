@@ -35,10 +35,9 @@ def test_v1_golden_envelopes_match_the_typed_contract() -> None:
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="Items .*ReadOnly.*", category=UserWarning)
         adapter: Final = TypeAdapter(callbacks.EnvelopeV1)
-        events: Final = {
-            adapter.validate_json(path.read_text(), strict=True)["event"]["type"] for path in GOLDEN_PATH.glob("*.json")
-        }
-    assert events == callbacks.EVENTS
+        envelopes: Final = [adapter.validate_json(path.read_text(), strict=True) for path in GOLDEN_PATH.glob("*.json")]
+    assert {envelope["event"]["type"] for envelope in envelopes} == callbacks.EVENTS
+    assert {envelope["schema"] for envelope in envelopes} == callbacks.SUPPORTED_SCHEMAS
 
 
 class ValidCallback:

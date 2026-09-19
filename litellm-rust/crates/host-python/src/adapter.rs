@@ -1,15 +1,22 @@
 use litellm_host::event::{FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest};
 use litellm_host::route::Route;
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+
+/// Whether an error ends the call outright: anything that is not a `PyException`, such
+/// as `CancelledError` or `KeyboardInterrupt`. A cancellation is never reported, never
+/// swallowed and never followed by further dispatch.
+pub fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
+    !error.is_instance_of::<PyException>(py)
+}
 
 pub fn missing_state() -> PyErr {
     PyRuntimeError::new_err("missing native call state")
 }
 
-/// What an adapter step produced: either the value the driver asked for, or a Python
+/// What a lifecycle step produced: either the value the driver asked for, or a Python
 /// awaitable the driver hands back to the caller's task before asking again.
 pub enum LifecycleStep {
     Await(Py<PyAny>),
@@ -19,12 +26,10 @@ pub enum LifecycleStep {
     Done,
 }
 
-/// What a lifecycle observes: the driver's start, the machine's own events, and one
-/// terminal event carrying the public value the caller receives.
+/// What a lifecycle observes: the machine's own events, and one terminal event
+/// carrying the public value the caller receives.
+#[derive(Clone, Copy)]
 pub enum LifecycleEvent<'a> {
-    Started {
-        start_time: f64,
-    },
     Machine(&'a MachineEvent),
     Succeeded {
         timing: Timing,
@@ -37,46 +42,73 @@ pub enum LifecycleEvent<'a> {
     },
 }
 
-/// One consumer of a call's lifecycle on the Python side. The driver calls the steps in
-/// order: `begin` before the machine starts, `before_send` and `emit` while it runs,
-/// `after_success` and one terminal `emit` after it completes. Whenever a step returns
-/// [`LifecycleStep::Await`], the driver awaits it in the caller's task and continues the
-/// same step through `resume`.
+/// One consumer of a call's lifecycle on the Python side: the callback capability of the
+/// Python host, next to [`RouteHost`], the route capability.
+///
+/// The steps come in two kinds. A threading step receives a value and returns the value
+/// the call continues with, so a lifecycle may rewrite it; each defaults to returning
+/// what it was given. An observing step receives an event or a notice and returns
+/// nothing to the call. Two steps answer an operation the machine raised
+/// ([`HostOp`](litellm_host::host::HostOp)); the rest the driver originates around it:
+///
+/// | step | kind | raised by |
+/// |---|---|---|
+/// | `begin` | threads the keyword view | driver, before the machine starts |
+/// | `before_send` | threads the wire request | machine, `HostOp::BeforeSend` |
+/// | `emit(Machine)` | observes | machine, `HostOp::Emit` |
+/// | `opened`, `delivered` | observe | driver, answering `HostOp::Open` and `Deliver` |
+/// | `after_success` | threads the public response | driver, after the machine completes |
+/// | `emit(Succeeded \| Failed)` | observes | driver, exactly once, last |
+///
+/// Whenever a step returns [`LifecycleStep::Await`], the driver awaits it in the caller's
+/// task and continues the same step through `resume`.
 ///
 /// A step that fails with an ordinary exception fails the call with that exception,
-/// except on a terminal event, where the adapter is expected to report and swallow its
-/// own errors. An exception that is not a `PyException`, such as a cancellation, ends
-/// the call without further dispatch.
+/// except on a terminal event, where the lifecycle is expected to report and swallow its
+/// own errors. A cancellation ([`is_cancellation`]) ends the call without further
+/// dispatch.
 pub trait PythonLifecycle: Send + Sync {
+    /// `start_time` is the call's start in epoch seconds, the same value the terminal
+    /// event's `Timing` carries.
     fn begin(
         &mut self,
-        py: Python<'_>,
+        _py: Python<'_>,
         arguments: Py<PyDict>,
-        started_at: f64,
-    ) -> PyResult<LifecycleStep>;
+        _start_time: f64,
+    ) -> PyResult<LifecycleStep> {
+        Ok(LifecycleStep::Arguments(arguments))
+    }
 
     fn before_send(
         &mut self,
-        py: Python<'_>,
+        _py: Python<'_>,
         wire: Box<WireRequest>,
-        context: &RequestContext,
-    ) -> PyResult<LifecycleStep>;
+        _context: &RequestContext,
+    ) -> PyResult<LifecycleStep> {
+        Ok(LifecycleStep::Wire(wire))
+    }
 
     fn after_success(
         &mut self,
-        py: Python<'_>,
+        _py: Python<'_>,
         response: Py<PyAny>,
-        timing: Timing,
-    ) -> PyResult<LifecycleStep>;
+        _timing: Timing,
+    ) -> PyResult<LifecycleStep> {
+        Ok(LifecycleStep::Response(response))
+    }
 
     fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep>;
 
     /// The call streams and its stream was handed to the caller. The caller is not
     /// inside an await here, so this step and `delivered` cannot suspend.
-    fn opened(&mut self, py: Python<'_>) -> PyResult<()>;
+    fn opened(&mut self, _py: Python<'_>) -> PyResult<()> {
+        Ok(())
+    }
 
     /// One chunk of an open stream is about to reach the caller.
-    fn delivered(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()>;
+    fn delivered(&mut self, _py: Python<'_>, _chunk: &Py<PyAny>) -> PyResult<()> {
+        Ok(())
+    }
 
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep>;
 

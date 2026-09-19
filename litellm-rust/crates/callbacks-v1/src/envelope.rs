@@ -1,3 +1,7 @@
+//! The v1 envelope: what a subscriber receives. An [`Envelope`] is the schema version, the
+//! call's identity, a sequence number and one [`Event`]; every `*Facts` type is a
+//! redacted, serializable projection that never holds a runtime object of the call.
+
 use litellm_host::event::{FailureOrigin, RequestContext, Timing, WireRequest};
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -75,14 +79,16 @@ pub struct CallFacts {
     pub metadata_dropped: Vec<String>,
 }
 
+/// The request as a subscriber may see it. The fields are private so that
+/// [`RequestFacts::new`], which redacts, is the only way to build one.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RequestFacts {
-    pub model: String,
-    pub custom_llm_provider: String,
-    pub optional_params: Value,
-    pub url: String,
-    pub headers: Vec<(String, String)>,
-    pub body: Value,
+    model: String,
+    custom_llm_provider: String,
+    optional_params: Value,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Value,
 }
 
 impl RequestFacts {
@@ -243,21 +249,26 @@ mod tests {
         }
     }
 
-    #[rstest::rstest]
-    #[case(EventKind::CallStarted, 0, include_str!("../golden/v1/call.started.json"))]
-    #[case(EventKind::RequestSending, 1, include_str!("../golden/v1/request.sending.json"))]
-    #[case(EventKind::ResponseReceived, 2, include_str!("../golden/v1/response.received.json"))]
-    #[case(EventKind::CallSucceeded, 3, include_str!("../golden/v1/call.succeeded.json"))]
-    #[case(EventKind::CallFailed, 4, include_str!("../golden/v1/call.failed.json"))]
-    fn serialized_v1_envelopes_match_golden_contract(
-        #[case] kind: EventKind,
-        #[case] seq: u32,
-        #[case] expected: &str,
-    ) {
-        assert_eq!(
-            serde_json::to_value(golden(kind, seq)).unwrap(),
-            serde_json::from_str::<Value>(expected).unwrap()
-        );
+    /// Exhaustive on purpose: a new event kind does not compile without a golden file,
+    /// and Python's `EVENTS` and `SUPPORTED_SCHEMAS` are pinned to the golden files.
+    fn golden_json(kind: EventKind) -> &'static str {
+        match kind {
+            EventKind::CallStarted => include_str!("../golden/v1/call.started.json"),
+            EventKind::RequestSending => include_str!("../golden/v1/request.sending.json"),
+            EventKind::ResponseReceived => include_str!("../golden/v1/response.received.json"),
+            EventKind::CallSucceeded => include_str!("../golden/v1/call.succeeded.json"),
+            EventKind::CallFailed => include_str!("../golden/v1/call.failed.json"),
+        }
+    }
+
+    #[test]
+    fn serialized_v1_envelopes_match_golden_contract() {
+        for (seq, &kind) in EventKind::VARIANTS.iter().enumerate() {
+            assert_eq!(
+                serde_json::to_value(golden(kind, seq as u32)).unwrap(),
+                serde_json::from_str::<Value>(golden_json(kind)).unwrap()
+            );
+        }
     }
 
     #[test]

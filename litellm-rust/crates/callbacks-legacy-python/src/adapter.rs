@@ -6,10 +6,10 @@ use litellm_host::event::{
     FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest, epoch_seconds,
 };
 use litellm_host_python::{
-    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, missing_state, to_py,
+    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, is_cancellation, missing_state, to_py,
 };
 use pyo3::{
-    exceptions::{PyBaseException, PyException},
+    exceptions::PyBaseException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDateTime, PyDict, PyList},
@@ -17,7 +17,8 @@ use pyo3::{
 use serde_json::Value;
 
 use crate::{
-    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
+    PublicCall, PythonLogger, after_deployment_failure, after_deployment_success,
+    before_deployment_call,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call, prepare,
     python::Streaming,
@@ -78,10 +79,6 @@ pub struct LegacyPythonLifecycle {
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
     PyDateTime::from_timestamp(py, epoch_seconds, None).map(|value| value.into_any().unbind())
-}
-
-fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
-    !error.is_instance_of::<PyException>(py)
 }
 
 impl LegacyPythonLifecycle {
@@ -154,7 +151,7 @@ impl LegacyPythonLifecycle {
 
     fn dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
         match self.try_dispatch_success(py) {
-            Err(error) if error.is_instance_of::<PyException>(py) => {
+            Err(error) if !is_cancellation(py, &error) => {
                 error.write_unraisable(py, self.logger.as_ref().map(|logger| logger.object(py)));
                 Ok(())
             }
@@ -213,7 +210,7 @@ impl LegacyPythonLifecycle {
             ),
         );
         match billed {
-            Err(error) if error.is_instance_of::<PyException>(py) => {
+            Err(error) if !is_cancellation(py, &error) => {
                 error.write_unraisable(py, Some(logger.object(py)));
                 Ok(())
             }
@@ -288,10 +285,10 @@ impl PythonLifecycle for LegacyPythonLifecycle {
         &mut self,
         py: Python<'_>,
         arguments: Py<PyDict>,
-        started_at: f64,
+        start_time: f64,
     ) -> PyResult<LifecycleStep> {
         self.call.set_kwargs(arguments);
-        self.start = datetime(py, started_at)?;
+        self.start = datetime(py, start_time)?;
         self.internal = is_internal_call(py)?;
         let result = setup(
             py,
@@ -305,7 +302,7 @@ impl PythonLifecycle for LegacyPythonLifecycle {
         self.call.set_kwargs(result.kwargs()?);
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPreCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::before_call(
+            return Ok(LifecycleStep::Await(before_deployment_call(
                 py,
                 self.call.kwargs(),
                 self.surface.call_type,
@@ -368,7 +365,7 @@ impl PythonLifecycle for LegacyPythonLifecycle {
         self.response = Some(response);
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPostCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::after_success(
+            return Ok(LifecycleStep::Await(after_deployment_success(
                 py,
                 self.call.kwargs(),
                 &self.response,
@@ -380,7 +377,6 @@ impl PythonLifecycle for LegacyPythonLifecycle {
 
     fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
         match event {
-            LifecycleEvent::Started { .. } => Ok(LifecycleStep::Done),
             LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
                 let api_key = self
                     .context
@@ -421,7 +417,7 @@ impl PythonLifecycle for LegacyPythonLifecycle {
                 {
                     let error = self.error.as_ref().ok_or_else(missing_state)?;
                     self.pending = Some(Pending::DeploymentFailure);
-                    return Ok(LifecycleStep::Await(DeploymentHooks::after_failure(
+                    return Ok(LifecycleStep::Await(after_deployment_failure(
                         py,
                         self.call.kwargs(),
                         error,
@@ -478,7 +474,11 @@ impl PythonLifecycle for LegacyPythonLifecycle {
         {
             error.write_unraisable(py, None);
         }
+        self.pending = None;
+        self.response = None;
+        self.error = None;
         self.body = None;
+        self.headers = None;
         self.context = None;
         self.stream = None;
     }
@@ -496,7 +496,8 @@ impl PythonLifecycle for LegacyPythonLifecycle {
             visit.call(&stream.chunks)?;
             visit.call(&stream.first_chunk)?;
         }
-        visit.call(&self.body)
+        visit.call(&self.body)?;
+        visit.call(&self.headers)
     }
 }
 

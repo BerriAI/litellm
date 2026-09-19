@@ -1,3 +1,6 @@
+//! The contract's credential redaction: credential headers by name, optional params by
+//! the route's secret fields. Redaction replaces values and never changes shape.
+
 use serde_json::{Map, Value};
 
 pub const REDACTED: &str = "[REDACTED]";

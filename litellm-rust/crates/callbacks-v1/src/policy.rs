@@ -1,3 +1,6 @@
+//! Which of a subscriber's handlers a call uses: an async call prefers the async handler
+//! and falls back to the sync one; a sync call never selects an async handler.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExecutionMode {
     Sync,
