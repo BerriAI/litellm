@@ -111,7 +111,7 @@ describe("MCPServerView", () => {
   it("opens the tools viewer on the MCP Tools tab", async () => {
     renderView();
 
-    await userEvent.click(screen.getByRole("tab", { name: "MCP Tools" }));
+    await userEvent.click(screen.getByRole("tab", { name: "MCP Catalog" }));
 
     expect(await screen.findByText("tools viewer")).toBeInTheDocument();
   });

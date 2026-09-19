@@ -495,6 +495,8 @@ def test_virtual_key_llm_api_routes_rejects_mcp_multi_segment_admin_subpaths(
         ("/mcp/tools/call", "POST"),
         ("/mcp-rest/tools/list", "GET"),
         ("/mcp-rest/tools/call", "POST"),
+        ("/mcp-rest/prompts/list", "GET"),
+        ("/mcp-rest/resources/list", "GET"),
         ("/v1/mcp/tools", "GET"),
     ],
 )

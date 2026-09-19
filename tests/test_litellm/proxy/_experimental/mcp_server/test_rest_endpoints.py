@@ -2366,6 +2366,220 @@ class TestListToolsRestAPI:
         assert result["error"] is None
 
 
+class TestListPromptsAndResourcesRestAPI:
+    """LIT-2011: the dashboard lists a server's prompts and resources through /mcp-rest, gated
+    by the same server admission and upstream credential resolution as /mcp-rest/tools/list."""
+
+    pytestmark = pytest.mark.asyncio
+
+    @staticmethod
+    def _stub_server() -> MCPServer:
+        server = MCPServer(server_id="catalog-server-id", name="catalog-server", transport=MCPTransport.http)
+        server.alias = "catalog"
+        server.server_name = "catalog-server"
+        server.available_on_public_internet = True
+        return server
+
+    def _grant(self, monkeypatch: pytest.MonkeyPatch, server: MCPServer, allowed: list[str]) -> None:
+        async def fake_contexts(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args: object, **kwargs: object) -> list[str]:
+            return allowed
+
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda sid: server if sid == server.server_id else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_name",
+            lambda name, client_ip=None: server if name == server.alias else None,
+            raising=False,
+        )
+
+    @pytest.mark.parametrize("route_name", ["list_prompts_rest_api", "list_resources_rest_api"])
+    async def test_rejects_server_outside_caller_grant(self, monkeypatch: pytest.MonkeyPatch, route_name: str) -> None:
+        server = self._stub_server()
+        self._grant(monkeypatch, server, allowed=["some-other-server"])
+        upstream = AsyncMock()
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_prompts_from_server", upstream)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_resources_from_server", upstream)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_resource_templates_from_server", upstream)
+
+        request = _build_request(path=f"/mcp-rest/{route_name}", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await getattr(rest_endpoints, route_name)(
+                request, server_id=server.server_id, user_api_key_dict=UserAPIKeyAuth()
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail["error"] == "access_denied"
+        upstream.assert_not_awaited()
+
+    async def test_lists_prompts_with_upstream_names_and_server_credential(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcp.types import Prompt, PromptArgument
+
+        server = self._stub_server()
+        self._grant(monkeypatch, server, allowed=[server.server_id])
+        upstream_prompts = [
+            Prompt(
+                name="summarize",
+                description="Summarize text",
+                arguments=[PromptArgument(name="text", required=True)],
+            )
+        ]
+        get_prompts = AsyncMock(return_value=upstream_prompts)
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_prompts_from_server", get_prompts)
+
+        request = _build_request(
+            headers={"x-mcp-catalog-authorization": "Bearer per-server-token"},
+            path="/mcp-rest/prompts/list",
+            method="GET",
+        )
+        result = await rest_endpoints.list_prompts_rest_api(
+            request, server_id=server.alias, user_api_key_dict=UserAPIKeyAuth(user_id="user-123")
+        )
+
+        assert [prompt.name for prompt in result.prompts] == ["summarize"]
+        assert result.prompts[0].arguments[0].name == "text"
+        get_prompts.assert_awaited_once()
+        call = get_prompts.await_args
+        assert call.args[0] is server
+        assert call.kwargs["add_prefix"] is False
+        assert call.kwargs["mcp_auth_header"] == {"Authorization": "Bearer per-server-token"}
+        assert call.kwargs["raw_headers"]["x-mcp-catalog-authorization"] == "Bearer per-server-token"
+        assert call.kwargs["user_api_key_auth"].user_id == "user-123"
+
+    async def test_lists_resources_and_templates_for_allowed_server(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from mcp.types import Resource, ResourceTemplate
+
+        server = self._stub_server()
+        self._grant(monkeypatch, server, allowed=[server.server_id])
+        get_resources = AsyncMock(return_value=[Resource(name="readme", uri="demo://readme", mimeType="text/markdown")])
+        get_templates = AsyncMock(
+            return_value=[ResourceTemplate(name="user_profile", uriTemplate="demo://users/{user_id}/profile")]
+        )
+        monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, "get_resources_from_server", get_resources)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager, "get_resource_templates_from_server", get_templates
+        )
+
+        request = _build_request(path="/mcp-rest/resources/list", method="GET")
+        result = await rest_endpoints.list_resources_rest_api(
+            request, server_id=server.server_id, user_api_key_dict=UserAPIKeyAuth()
+        )
+
+        assert [str(resource.uri) for resource in result.resources] == ["demo://readme"]
+        assert result.resources[0].mime_type == "text/markdown"
+        assert [template.uri_template for template in result.resource_templates] == ["demo://users/{user_id}/profile"]
+        assert result.model_dump(by_alias=True)["resources"][0]["mimeType"] == "text/markdown"
+        assert result.model_dump(by_alias=True)["resource_templates"][0]["uriTemplate"] == "demo://users/{user_id}/profile"
+        for upstream in (get_resources, get_templates):
+            upstream.assert_awaited_once()
+            assert upstream.await_args.args[0] is server
+            assert upstream.await_args.kwargs["add_prefix"] is False
+
+    @pytest.mark.parametrize(
+        ("route_name", "manager_method", "catalog"),
+        [
+            ("list_prompts_rest_api", "get_prompts_from_server", "prompts"),
+            ("list_resources_rest_api", "get_resources_from_server", "resources"),
+            ("list_resources_rest_api", "get_resource_templates_from_server", "resources"),
+        ],
+    )
+    async def test_upstream_fault_relays_truthful_status_instead_of_empty_success(
+        self, monkeypatch: pytest.MonkeyPatch, route_name: str, manager_method: str, catalog: str
+    ) -> None:
+        """A broken upstream must answer like /mcp-rest/tools/list does (a gateway status), not as
+        an empty catalog the dashboard would render as "this server has no prompts"."""
+        from litellm.proxy._experimental.mcp_server.exceptions import MCPServerListError
+        from litellm.proxy._experimental.mcp_server.faults.list_outcomes import ServerListFault
+
+        server = self._stub_server()
+        self._grant(monkeypatch, server, allowed=[server.server_id])
+        failing = AsyncMock(side_effect=MCPServerListError(ServerListFault(tag="unreachable"), server.name))
+        for method in ("get_prompts_from_server", "get_resources_from_server", "get_resource_templates_from_server"):
+            monkeypatch.setattr(
+                rest_endpoints.global_mcp_server_manager,
+                method,
+                failing if method == manager_method else AsyncMock(return_value=[]),
+            )
+
+        request = _build_request(path=f"/mcp-rest/{catalog}/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await getattr(rest_endpoints, route_name)(
+                request, server_id=server.server_id, user_api_key_dict=UserAPIKeyAuth()
+            )
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail == {
+            "error": "unreachable",
+            "message": f"Failed to list {catalog} from server catalog",
+        }
+        assert failing.await_args.kwargs["raise_on_error"] is True
+
+    async def test_upstream_auth_challenge_is_relayed_for_catalog_routes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+
+        server = self._stub_server()
+        self._grant(monkeypatch, server, allowed=[server.server_id])
+        challenge = 'Bearer resource_metadata="https://upstream.example/.well-known/oauth-protected-resource"'
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_prompts_from_server",
+            AsyncMock(
+                side_effect=MCPUpstreamAuthError(status_code=401, www_authenticate=challenge, server_name=server.name)
+            ),
+        )
+
+        request = _build_request(path="/mcp-rest/prompts/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_prompts_rest_api(
+                request, server_id=server.server_id, user_api_key_dict=UserAPIKeyAuth()
+            )
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.headers is not None
+        assert "www-authenticate" in {key.lower() for key in exc_info.value.headers}
+
+    def test_openapi_keeps_prompt_management_and_mcp_prompt_contracts_distinct(self) -> None:
+        """The catalog response reuses the MCP SDK prompt type, which shares its class name with the
+        prompt-management request model, so the two must land as separate OpenAPI components:
+        POST /prompts still requires prompt_id + litellm_params while the catalog item requires name."""
+        from fastapi import FastAPI
+
+        from litellm.proxy.prompts.prompt_endpoints import router as prompt_router
+
+        app = FastAPI()
+        app.include_router(rest_endpoints.router)
+        app.include_router(prompt_router)
+        spec = app.openapi()
+        schemas = spec["components"]["schemas"]
+
+        def component(ref: Dict[str, Any]) -> Dict[str, Any]:
+            return schemas[ref["$ref"].rsplit("/", 1)[1]]
+
+        create_prompt_operation = spec["paths"]["/prompts"]["post"]
+        create_prompt_body = component(create_prompt_operation["requestBody"]["content"]["application/json"]["schema"])
+        assert {"prompt_id", "litellm_params"} <= set(create_prompt_body["required"])
+
+        catalog_operation = spec["paths"]["/mcp-rest/prompts/list"]["get"]
+        catalog_response = component(catalog_operation["responses"]["200"]["content"]["application/json"]["schema"])
+        catalog_prompt = component(catalog_response["properties"]["prompts"]["items"])
+        assert catalog_prompt["required"] == ["name"]
+        assert "arguments" in catalog_prompt["properties"]
+
+
 class TestCallToolRestAPI:
     pytestmark = pytest.mark.asyncio
 
@@ -4447,3 +4661,73 @@ class TestClientAllowlistOnRestRoutes:
         assert denied.value.detail["error"] == "Forbidden"
         assert "'claude-code'" in denied.value.detail["details"]
         acting.assert_not_awaited()
+
+    @pytest.mark.parametrize("route_name", ("list_prompts_rest_api", "list_resources_rest_api"))
+    @pytest.mark.parametrize(
+        ("caller", "headers", "expected_fragment"),
+        (
+            (UserAPIKeyAuth(jwt_claims={"azp": "claude-code"}), {"x-mcp-client": "antigravity-cli"}, "'claude-code'"),
+            (UserAPIKeyAuth(), {}, "no 'x-mcp-client' header"),
+        ),
+    )
+    async def test_catalog_routes_reject_unlisted_clients_before_resolving_servers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        route_name: str,
+        caller: UserAPIKeyAuth,
+        headers: dict[str, str],
+        expected_fragment: str,
+    ) -> None:
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", _CLIENT_ALLOWLIST_SETTINGS, raising=False)
+        acting: Final = AsyncMock()
+        monkeypatch.setattr(rest_endpoints, "acting_user_auth", acting, raising=False)
+        request: Final = _build_request(headers, path=f"/mcp-rest/{route_name}", method="GET")
+
+        with pytest.raises(HTTPException) as denied:
+            await getattr(rest_endpoints, route_name)(request, server_id="server-1", user_api_key_dict=caller)
+
+        assert denied.value.status_code == 403
+        assert denied.value.detail["error"] == "Forbidden"
+        assert expected_fragment in denied.value.detail["details"]
+        assert "mcp_allowed_clients" in denied.value.detail["details"]
+        acting.assert_not_awaited()
+
+    @pytest.mark.parametrize("route_name", ("list_prompts_rest_api", "list_resources_rest_api"))
+    async def test_catalog_routes_admit_listed_clients(self, monkeypatch: pytest.MonkeyPatch, route_name: str) -> None:
+        catalog_suite: Final = TestListPromptsAndResourcesRestAPI()
+        server: Final = catalog_suite._stub_server()
+        catalog_suite._grant(monkeypatch, server, allowed=[server.server_id])
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", _CLIENT_ALLOWLIST_SETTINGS, raising=False)
+        for method in ("get_prompts_from_server", "get_resources_from_server", "get_resource_templates_from_server"):
+            monkeypatch.setattr(rest_endpoints.global_mcp_server_manager, method, AsyncMock(return_value=[]))
+        request: Final = _build_request(
+            {"x-mcp-client": "antigravity-cli"}, path=f"/mcp-rest/{route_name}", method="GET"
+        )
+
+        result: Final = await getattr(rest_endpoints, route_name)(
+            request, server_id=server.server_id, user_api_key_dict=UserAPIKeyAuth()
+        )
+
+        assert result.model_dump() in ({"prompts": []}, {"resources": [], "resource_templates": []})
+
+
+@pytest.mark.asyncio
+async def test_oauth_header_failure_escapes_logged_identity(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy._experimental.mcp_server import db as mcp_db
+
+    server: Final = MCPServer(
+        server_id="oauth2-srv", name="oauth2-srv", url="https://upstream.example.com/mcp",
+        transport=MCPTransport.http, auth_type=MCPAuth.oauth2, delegate_auth_to_upstream=True,
+    )
+    auth: Final = UserAPIKeyAuth(user_id="user\r\nFORGED")
+    resolver: Final = AsyncMock(side_effect=RuntimeError("lookup failed"))
+    monkeypatch.setattr(mcp_db, "resolve_valid_user_oauth_token", resolver)
+
+    result: Final = await rest_endpoints._get_user_oauth_extra_headers(server, auth, prefetched_creds={})
+
+    assert result is None
+    assert resolver.await_args.kwargs["user_id"] == "user\r\nFORGED"
+    assert "failed to retrieve credential" in caplog.text
+    assert all("\n" not in record.getMessage() and "\r" not in record.getMessage() for record in caplog.records)

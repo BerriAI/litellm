@@ -55,9 +55,9 @@ export async function deleteMcpServerByName(page: PwPage, serverName: string): P
   }
 }
 
-/** Opens a server from the grid and switches to its MCP Tools tab. */
+/** Opens a server from the grid and switches to its MCP Catalog tab. */
 export async function openMcpToolsTab(page: PwPage, serverName: string): Promise<void> {
   await page.getByTestId("mcp-servers-grid").getByText(serverName).first().click();
   await expect(page.getByRole("button", { name: /Back to All Servers/i })).toBeVisible({ timeout: 10_000 });
-  await page.getByRole("tab", { name: "MCP Tools" }).click();
+  await page.getByRole("tab", { name: "MCP Catalog" }).click();
 }

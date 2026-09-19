@@ -4603,3 +4603,24 @@ async def test_user_update_hashes_and_persists_strong_password(_admin_prisma, mo
     written_data = mock_prisma_client.update_data.call_args.kwargs["data"]
     assert written_data.get("password") is not None
     assert written_data["password"] != strong_password
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("http_error", [True, False])
+async def test_team_add_failure_escapes_logged_identity(
+    http_error: bool, mocker: MockerFixture, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _add_user_to_team
+
+    failure: Final = HTTPException(status_code=503, detail="unavailable") if http_error else RuntimeError("unavailable")
+    mocker.patch(  # test-quality-ok: inject a failing downstream team operation to exercise both wrapper error handlers
+        "litellm.proxy.management_endpoints.team_endpoints.team_member_add", side_effect=failure
+    )
+    if http_error:
+        await _add_user_to_team("user\r\nFORGED", "team", UserAPIKeyAuth())
+    else:
+        with pytest.raises(RuntimeError, match="unavailable"):
+            await _add_user_to_team("user\r\nFORGED", "team", UserAPIKeyAuth())
+
+    assert "failed to add user" in caplog.text
+    assert all("\n" not in record.getMessage() and "\r" not in record.getMessage() for record in caplog.records)

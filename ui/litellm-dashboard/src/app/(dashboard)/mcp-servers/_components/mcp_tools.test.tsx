@@ -1,12 +1,20 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import MCPToolsViewer from "./mcp_tools";
-import { listMCPTools, getMCPOAuthUserCredentialStatus } from "@/components/networking";
-import { isTokenValid, getToken } from "@/utils/mcpTokenStore";
+import {
+  listMCPTools,
+  listMCPPrompts,
+  listMCPResources,
+  getMCPOAuthUserCredentialStatus,
+} from "@/components/networking";
+import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
 
 vi.mock("@/components/networking", () => ({
   listMCPTools: vi.fn(),
+  listMCPPrompts: vi.fn(),
+  listMCPResources: vi.fn(),
   callMCPTool: vi.fn(),
   getMCPOAuthUserCredentialStatus: vi.fn(),
 }));
@@ -17,16 +25,21 @@ vi.mock("@/utils/mcpTokenStore", () => ({
   removeToken: vi.fn(),
 }));
 
-const { toolsOAuthFlowSpy } = vi.hoisted(() => ({
-  toolsOAuthFlowSpy: vi.fn(() => ({ startOAuthFlow: vi.fn(), status: "idle", error: null })),
-}));
+const { toolsOAuthFlowSpy, userMcpOAuthFlowSpy } = vi.hoisted(() => {
+  type FlowState = { startOAuthFlow: () => void; status: string; error: string | null };
+  const idle = (): FlowState => ({ startOAuthFlow: () => {}, status: "idle", error: null });
+  return {
+    toolsOAuthFlowSpy: vi.fn((_options: { onSuccess: (token: string) => void }) => idle()),
+    userMcpOAuthFlowSpy: vi.fn((_options: { onSuccess: () => void }) => idle()),
+  };
+});
 
 vi.mock("@/hooks/useToolsOAuthFlow", () => ({
   useToolsOAuthFlow: toolsOAuthFlowSpy,
 }));
 
 vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
-  useUserMcpOAuthFlow: () => ({ startOAuthFlow: vi.fn(), status: "idle", error: null }),
+  useUserMcpOAuthFlow: userMcpOAuthFlowSpy,
 }));
 
 const GATE_TEXT = "Authentication required";
@@ -82,6 +95,8 @@ describe("MCPToolsViewer gatewayMintsClient wiring", () => {
 describe("MCPToolsViewer auth gate routing", () => {
   beforeEach(() => {
     vi.mocked(listMCPTools).mockReset().mockResolvedValue({ tools: [], error: null });
+    vi.mocked(listMCPPrompts).mockReset().mockResolvedValue({ prompts: [] });
+    vi.mocked(listMCPResources).mockReset().mockResolvedValue({ resources: [], resource_templates: [] });
     vi.mocked(isTokenValid).mockReset().mockReturnValue(false);
     vi.mocked(getToken)
       .mockReset()
@@ -213,5 +228,162 @@ describe("MCPToolsViewer auth gate routing", () => {
     expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
     // M2M uses the backend service token, not a per-user DB credential.
     expect(vi.mocked(getMCPOAuthUserCredentialStatus)).not.toHaveBeenCalled();
+  });
+});
+
+describe("MCPToolsViewer prompts and resources catalog", () => {
+  beforeEach(() => {
+    vi.mocked(listMCPTools).mockReset().mockResolvedValue({ tools: [], error: null });
+    vi.mocked(listMCPPrompts)
+      .mockReset()
+      .mockResolvedValue({
+        prompts: [
+          {
+            name: "summarize",
+            description: "Summarize a block of text",
+            arguments: [
+              { name: "text", required: true },
+              { name: "style", required: false },
+            ],
+          },
+        ],
+      });
+    vi.mocked(listMCPResources)
+      .mockReset()
+      .mockResolvedValue({
+        resources: [{ name: "readme", uri: "demo://readme", description: "Project readme", mimeType: "text/markdown" }],
+        resource_templates: [{ name: "profile", uriTemplate: "demo://users/{user_id}/profile" }],
+      });
+    vi.mocked(isTokenValid).mockReset().mockReturnValue(false);
+    vi.mocked(getToken).mockReset().mockReturnValue(null);
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockReset().mockResolvedValue(credStatus());
+  });
+
+  it("lists the server's prompts and resources next to its tools", async () => {
+    renderViewer({ auth_type: "api_key", tokenUrl: null });
+
+    const prompts = await screen.findByRole("region", { name: "Prompts" });
+    expect(await within(prompts).findByText("summarize")).toBeInTheDocument();
+    expect(within(prompts).getByText("Summarize a block of text")).toBeInTheDocument();
+    expect(within(prompts).getByText("text")).toBeInTheDocument();
+    expect(within(prompts).getByText("style")).toBeInTheDocument();
+
+    const resources = screen.getByRole("region", { name: "Resources" });
+    expect(await within(resources).findByText("demo://readme")).toBeInTheDocument();
+    expect(within(resources).getByText("text/markdown")).toBeInTheDocument();
+    expect(within(resources).getByText("demo://users/{user_id}/profile")).toBeInTheDocument();
+    expect(within(resources).getByText("2")).toBeInTheDocument();
+
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenCalledWith("litellm-key", "srv-1", undefined);
+    expect(vi.mocked(listMCPResources)).toHaveBeenCalledWith("litellm-key", "srv-1", undefined);
+  });
+
+  it("forwards the browser session token to the prompt and resource listings like tools", async () => {
+    vi.mocked(isTokenValid).mockReturnValue(true);
+    vi.mocked(getToken).mockReturnValue({
+      access_token: "slack-tok",
+      expires_at: Date.now() + 60_000,
+      token_type: "bearer",
+    });
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: true });
+
+    await screen.findByText("summarize");
+    const passthroughHeader = expect.objectContaining({ "x-mcp-slack-authorization": "Bearer slack-tok" });
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenCalledWith("litellm-key", "srv-1", passthroughHeader);
+    expect(vi.mocked(listMCPResources)).toHaveBeenCalledWith("litellm-key", "srv-1", passthroughHeader);
+  });
+
+  it("does not list prompts or resources while the auth gate is shown", async () => {
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue(credStatus({ has_credential: false }));
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Prompts" })).not.toBeInTheDocument();
+    expect(vi.mocked(listMCPPrompts)).not.toHaveBeenCalled();
+    expect(vi.mocked(listMCPResources)).not.toHaveBeenCalled();
+  });
+
+  it("shows the upstream error for a catalog that failed to load", async () => {
+    const failedResources = {
+      resources: [],
+      resource_templates: [],
+      error: "http_502",
+      message: "upstream unreachable",
+      status: 502,
+    };
+    vi.mocked(listMCPResources).mockResolvedValue(failedResources);
+
+    renderViewer({ auth_type: "api_key", tokenUrl: null });
+
+    const resources = await screen.findByRole("region", { name: "Resources" });
+    expect(await within(resources).findByText("Error: upstream unreachable")).toBeInTheDocument();
+    expect(await screen.findByText("summarize")).toBeInTheDocument();
+  });
+
+  const unauthorized = { error: "auth_required", message: "upstream credential expired", status: 401 };
+
+  it("gates on a prompts 401 even when tools load, and reloads all three listings after Authorize (stored credential)", async () => {
+    vi.mocked(listMCPTools).mockResolvedValue({ tools: [], error: null });
+    vi.mocked(listMCPPrompts).mockResolvedValue({ prompts: [], ...unauthorized });
+    // The hook completes the redirect flow out of band; here Authorize resolves it immediately.
+    userMcpOAuthFlowSpy.mockReset().mockImplementation((options) => ({
+      startOAuthFlow: () => options.onSuccess(),
+      status: "idle",
+      error: null,
+    }));
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Prompts" })).not.toBeInTheDocument();
+    expect(vi.mocked(listMCPTools)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(listMCPResources)).toHaveBeenCalledTimes(1);
+
+    vi.mocked(listMCPPrompts).mockResolvedValue({ prompts: [{ name: "summarize" }] });
+    await userEvent.click(screen.getByRole("button", { name: "Authorize" }));
+
+    const prompts = await screen.findByRole("region", { name: "Prompts" });
+    expect(await within(prompts).findByText("summarize")).toBeInTheDocument();
+    expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
+    expect(vi.mocked(listMCPTools)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(listMCPResources)).toHaveBeenCalledTimes(2);
+  });
+
+  it("gates on a resources 401 even when tools load, and relists all three with the new browser token after Authorize", async () => {
+    vi.mocked(isTokenValid).mockReturnValue(true);
+    vi.mocked(getToken).mockReturnValue({
+      access_token: "stale-tok",
+      expires_at: Date.now() + 60_000,
+      token_type: "bearer",
+    });
+    vi.mocked(listMCPResources).mockResolvedValue({ resources: [], resource_templates: [], ...unauthorized });
+    toolsOAuthFlowSpy.mockReset().mockImplementation((options) => ({
+      startOAuthFlow: () => options.onSuccess("fresh-tok"),
+      status: "idle",
+      error: null,
+    }));
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: true });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(vi.mocked(removeToken)).toHaveBeenCalledWith("srv-1", "tin@berri.ai");
+    expect(screen.queryByRole("region", { name: "Resources" })).not.toBeInTheDocument();
+
+    vi.mocked(listMCPResources).mockResolvedValue({
+      resources: [{ name: "readme", uri: "demo://readme" }],
+      resource_templates: [],
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Authorize" }));
+
+    const resources = await screen.findByRole("region", { name: "Resources" });
+    expect(await within(resources).findByText("demo://readme")).toBeInTheDocument();
+    const freshHeader = expect.objectContaining({ "x-mcp-slack-authorization": "Bearer fresh-tok" });
+    expect(vi.mocked(listMCPTools)).toHaveBeenLastCalledWith("litellm-key", "srv-1", freshHeader);
+    expect(vi.mocked(listMCPPrompts)).toHaveBeenLastCalledWith("litellm-key", "srv-1", freshHeader);
+    expect(vi.mocked(listMCPResources)).toHaveBeenLastCalledWith("litellm-key", "srv-1", freshHeader);
   });
 });

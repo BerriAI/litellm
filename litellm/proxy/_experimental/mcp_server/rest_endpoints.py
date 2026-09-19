@@ -5,14 +5,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from traceback import walk_tb
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 from uuid import uuid4
 
 import anyio
 import httpx
 import httpx2
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from starlette.datastructures import Headers
 
 from litellm._logging import verbose_logger
@@ -190,11 +190,15 @@ def _known_connection_error_message(exc: BaseException, url: str | None, timeout
 
 if MCP_AVAILABLE:
     from mcp.shared.exceptions import MCPError
+    from mcp.types import Prompt, Resource, ResourceTemplate
     from mcp.types import Tool as MCPTool
 
     from litellm.experimental_mcp_client.client import MCPClient, as_mcp_read_timeout
     from litellm.llms.litellm_proxy.skills.skill_search import (
         DEFAULT_SKILL_SEARCH_TOP_K,
+    )
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         _UPSTREAM_OAUTH_DISCOVERY_AUTH_TYPES,
@@ -216,6 +220,34 @@ if MCP_AVAILABLE:
         fire_mcp_tool_call_failure_logging,
         reject_disallowed_mcp_client,
     )
+
+    class MCPCatalogPrompt(Prompt):
+        """An MCP server's prompt as the upstream reports it. Subclassed only so the OpenAPI
+        component gets a name distinct from the prompt-management ``Prompt`` request model."""
+
+    class ListMCPPromptsRestAPIResponse(BaseModel):
+        prompts: list[MCPCatalogPrompt]
+
+        @classmethod
+        def from_prompts(cls, prompts: Sequence[Prompt]) -> "ListMCPPromptsRestAPIResponse":
+            return cls(
+                prompts=[
+                    MCPCatalogPrompt.model_validate(prompt.model_dump(by_alias=True, exclude_unset=True))
+                    for prompt in prompts
+                ]
+            )
+
+    class ListMCPResourcesRestAPIResponse(BaseModel):
+        resources: list[Resource]
+        resource_templates: list[ResourceTemplate]
+
+    @dataclass(frozen=True, slots=True)
+    class _CatalogServerContext:
+        server: MCPServer
+        user_api_key_dict: UserAPIKeyAuth
+        mcp_auth_header: dict[str, str] | str | None
+        extra_headers: dict[str, str] | None
+        raw_headers: dict[str, str]
 
     ########################################################
     ############ MCP Server REST API Routes #################
@@ -491,7 +523,7 @@ if MCP_AVAILABLE:
         except Exception as e:
             verbose_logger.warning(
                 "_get_user_oauth_extra_headers: failed to retrieve credential for user=%s server=%s: %s",
-                user_id,
+                user_id.replace("\r", "\\r").replace("\n", "\\n"),
                 server_id,
                 e,
             )
@@ -1077,6 +1109,107 @@ if MCP_AVAILABLE:
                 "error": "unexpected_error",
                 "message": f"An unexpected error occurred: {e}",
             }
+
+    async def _resolve_catalog_server_context(
+        request: Request,
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> _CatalogServerContext:
+        reject_disallowed_mcp_client(request.headers, user_api_key_dict)
+        acting_auth: Final = await acting_user_auth(user_api_key_dict)
+        _, canonical_server_id = await _resolve_allowed_mcp_servers_with_ip_filter(request, acting_auth, server_id)
+        server: Final = global_mcp_server_manager.get_mcp_server_by_id(canonical_server_id)
+        if server is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "server_not_found",
+                    "message": f"MCP server '{server_id}' was not found",
+                },
+            )
+        mcp_auth_header, mcp_server_auth_headers, raw_headers = _extract_mcp_headers_from_request(
+            request, MCPRequestHandler
+        )
+        return _CatalogServerContext(
+            server=server,
+            user_api_key_dict=acting_auth,
+            mcp_auth_header=_get_server_auth_header(server, mcp_server_auth_headers, mcp_auth_header),
+            extra_headers=await _get_user_oauth_extra_headers(server, acting_auth),
+            raw_headers=raw_headers,
+        )
+
+    def _catalog_list_http_exception(
+        error: MCPServerListError, server: MCPServer, catalog: Literal["prompts", "resources"]
+    ) -> HTTPException:
+        fault: Final = classify_list_exception(error)
+        return HTTPException(
+            status_code=list_fault_http_status(fault),
+            detail={
+                "error": fault.tag,
+                "message": f"Failed to list {catalog} from server {get_server_prefix(server)}",
+            },
+        )
+
+    @router.get("/prompts/list", dependencies=[Depends(user_api_key_auth)])
+    async def list_prompts_rest_api(
+        request: Request,
+        server_id: Annotated[str, Query(description="The MCP server id, name, or alias to list prompts for")],
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    ) -> ListMCPPromptsRestAPIResponse:
+        """List the prompts one MCP server exposes, with names as the upstream server reports them.
+
+        An upstream failure relays its classified HTTP status, the same as ``/mcp-rest/tools/list``."""
+        context: Final = await _resolve_catalog_server_context(request, server_id, user_api_key_dict)
+        try:
+            prompts: Final = await global_mcp_server_manager.get_prompts_from_server(
+                context.server,
+                user_api_key_auth=context.user_api_key_dict,
+                mcp_auth_header=context.mcp_auth_header,
+                extra_headers=context.extra_headers,
+                add_prefix=False,
+                raw_headers=context.raw_headers,
+                raise_on_error=True,
+            )
+        except MCPUpstreamAuthError as e:
+            raise _relay_upstream_auth_http_exception(e, request) from e
+        except MCPServerListError as e:
+            raise _catalog_list_http_exception(e, context.server, "prompts") from e
+        return ListMCPPromptsRestAPIResponse.from_prompts(prompts)
+
+    @router.get("/resources/list", dependencies=[Depends(user_api_key_auth)])
+    async def list_resources_rest_api(
+        request: Request,
+        server_id: Annotated[str, Query(description="The MCP server id, name, or alias to list resources for")],
+        user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    ) -> ListMCPResourcesRestAPIResponse:
+        """List the resources and resource templates one MCP server exposes."""
+        context: Final = await _resolve_catalog_server_context(request, server_id, user_api_key_dict)
+        try:
+            resources, resource_templates = await asyncio.gather(
+                global_mcp_server_manager.get_resources_from_server(
+                    context.server,
+                    user_api_key_auth=context.user_api_key_dict,
+                    mcp_auth_header=context.mcp_auth_header,
+                    extra_headers=context.extra_headers,
+                    add_prefix=False,
+                    raw_headers=context.raw_headers,
+                    raise_on_error=True,
+                ),
+                global_mcp_server_manager.get_resource_templates_from_server(
+                    context.server,
+                    user_api_key_auth=context.user_api_key_dict,
+                    mcp_auth_header=context.mcp_auth_header,
+                    extra_headers=context.extra_headers,
+                    add_prefix=False,
+                    raw_headers=context.raw_headers,
+                    raise_on_error=True,
+                ),
+            )
+        except MCPUpstreamAuthError as e:
+            raise _relay_upstream_auth_http_exception(e, request) from e
+        except MCPServerListError as e:
+            raise _catalog_list_http_exception(e, context.server, "resources") from e
+        return ListMCPResourcesRestAPIResponse(resources=resources, resource_templates=resource_templates)
 
     @router.post("/tools/call", dependencies=[Depends(user_api_key_auth)])
     async def call_tool_rest_api(
