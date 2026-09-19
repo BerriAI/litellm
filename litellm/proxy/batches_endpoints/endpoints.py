@@ -66,6 +66,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import request_tags_from_metadata
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy, is_known_model
+from litellm.repositories.managed_batch_repository import ManagedBatchRepository
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
@@ -98,6 +99,7 @@ def _litellm_executed_batch_runner(llm_router: Router, proxy_logging_obj: ProxyL
         llm_router=llm_router,
         prisma_client=prisma_client,
         managed_files=managed_files,
+        batches=ManagedBatchRepository(prisma_client),
         proxy_logging_obj=proxy_logging_obj,
         general_settings=general_settings,
     )
