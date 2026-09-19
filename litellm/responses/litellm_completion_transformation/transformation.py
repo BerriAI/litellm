@@ -453,7 +453,7 @@ class LiteLLMCompletionResponsesConfig:
             "max_tokens": responses_api_request.get("max_output_tokens"),
             "stream": stream,
             "metadata": kwargs.get("metadata"),
-            "service_tier": kwargs.get("service_tier"),
+            "service_tier": responses_api_request.get("service_tier") or kwargs.get("service_tier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning.effort,
@@ -2476,6 +2476,10 @@ class LiteLLMCompletionResponsesConfig:
         provider_fields: Final = responses_api_response._hidden_params.get("provider_specific_fields")
         if provider_fields:
             setattr(responses_api_response, "provider_specific_fields", provider_fields)
+
+        returned_service_tier: Final = getattr(chat_completion_response, "service_tier", None)
+        if returned_service_tier is not None:
+            setattr(responses_api_response, "service_tier", returned_service_tier)  # noqa: B010  # not a declared field
 
         return responses_api_response
 

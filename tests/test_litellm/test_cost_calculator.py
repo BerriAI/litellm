@@ -1847,7 +1847,7 @@ def test_completion_cost_extracts_service_tier_from_usage(_local_model_cost_map)
 
 
 def test_completion_cost_service_tier_priority(_local_model_cost_map):
-    """Test that service_tier extraction follows priority: optional_params > completion_response > usage."""
+    """Test that service_tier resolution follows precedence: response > usage > requested (explicit/optional_params)."""
     from litellm import completion_cost
 
     # Test with gpt-5-nano which has flex pricing
@@ -1864,41 +1864,47 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
     )
     setattr(response, "service_tier", "priority")
 
-    # Test that optional_params takes priority over response and usage
-    cost_from_params = completion_cost(
+    usage_no_tier: Final = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+    priority_reference: Final = completion_cost(
+        completion_response=ModelResponse(usage=usage_no_tier, model=model),
+        model=model,
+        custom_llm_provider="openai",
+        service_tier="priority",
+    )
+    flex_reference: Final = completion_cost(
+        completion_response=ModelResponse(usage=usage_no_tier, model=model),
+        model=model,
+        custom_llm_provider="openai",
+        service_tier="flex",
+    )
+
+    cost_from_params: Final = completion_cost(
         completion_response=response,
         model=model,
         custom_llm_provider="openai",
         optional_params={"service_tier": "flex"},
     )
+    assert cost_from_params == pytest.approx(priority_reference)
 
-    # Test that response takes priority over usage when optional_params is not provided
-    completion_cost(
-        completion_response=response,
-        model=model,
-        custom_llm_provider="openai",
-    )
-
-    # Test that usage is used when neither optional_params nor response have service_tier
-    # Create a new response without service_tier attribute
-    response_no_tier = ModelResponse(
+    response_no_tier: Final = ModelResponse(
         usage=usage,
         model=model,
     )
-    # Don't set service_tier on response, so it will fall back to usage
-
-    cost_from_usage = completion_cost(
+    cost_from_usage: Final = completion_cost(
         completion_response=response_no_tier,
         model=model,
         custom_llm_provider="openai",
+        optional_params={"service_tier": "priority"},
     )
+    assert cost_from_usage == pytest.approx(flex_reference)
 
-    # All should use flex pricing (from different sources)
-    assert cost_from_params > 0, "Cost from params should be greater than 0"
-    assert cost_from_usage > 0, "Cost from usage should be greater than 0"
-
-    # Costs should be similar (all using flex)
-    assert abs(cost_from_params - cost_from_usage) < 1e-6, "Costs from params and usage should be similar (both flex)"
+    cost_from_optional_params: Final = completion_cost(
+        completion_response=ModelResponse(usage=usage_no_tier, model=model),
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "flex"},
+    )
+    assert cost_from_optional_params == pytest.approx(flex_reference)
 
 
 def test_completion_cost_service_tier_for_bedrock(_local_model_cost_map):
@@ -4206,3 +4212,40 @@ def test_completion_cost_prices_responses_websocket_turns_per_service_tier():
     assert ws_cost == pytest.approx(_http_cost(100, 40, "default") + _http_cost(60, 10, "priority"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "default"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "priority"))
+
+
+def test_completion_cost_response_service_tier_beats_requested(_local_model_cost_map):
+    """The tier the provider reports serving is what is billed, so it beats the requested tier."""
+    model = "databricks/offline-service-tier-precedence"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "databricks",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "input_cost_per_token_priority": 2e-6,
+                "output_cost_per_token_priority": 4e-6,
+            },
+        },
+    )
+    response = ModelResponse(
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        model=model,
+    )
+    response.service_tier = "default"
+
+    standard = completion_cost(completion_response=response, model=model, custom_llm_provider="databricks")
+    overridden = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="databricks",
+        service_tier="priority",
+        optional_params={"service_tier": "priority"},
+    )
+
+    assert overridden == pytest.approx(standard)
+
+    response.service_tier = "priority"
+    priority = completion_cost(completion_response=response, model=model, custom_llm_provider="databricks")
+    assert priority == pytest.approx(standard * 2)

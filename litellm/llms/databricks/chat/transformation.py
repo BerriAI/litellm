@@ -270,6 +270,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             "tool_choice",
             "reasoning_effort",
             "thinking",
+            "service_tier",
         ]
 
     @staticmethod
@@ -686,6 +687,10 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             json_mode=json_mode,
         )
 
+        response_service_tier: Final = completion_response.get("service_tier")
+        if response_service_tier is not None:
+            setattr(model_response, "service_tier", response_service_tier)  # noqa: B010  # not a declared field
+
         return model_response
 
     def get_model_response_iterator(
@@ -783,6 +788,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                 model=chunk["model"],
                 choices=translated_choices,
                 usage=chunk.get("usage"),
+                service_tier=chunk.get("service_tier"),
             )
         except KeyError as e:
             raise DatabricksException(
