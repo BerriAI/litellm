@@ -92,3 +92,9 @@ class WebSearchInterceptionConfig(TypedDict, total=False):
 
     max_agentic_loops: ReadOnly[int | None]
     """How many follow-up model calls one intercepted request may chain. If None, LiteLLM's default of 3 applies."""
+
+    recognize_conventional_web_search_name: ReadOnly[bool]
+    """When True, treat name-only OpenAI function tools named ``web_search`` as
+    server search tools. Default is off so a user-defined name-only ``web_search``
+    function still reaches the client handler.
+    """
