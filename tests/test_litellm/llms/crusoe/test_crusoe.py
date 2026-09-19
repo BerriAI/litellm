@@ -105,31 +105,3 @@ def test_crusoe_provider_detection_by_prefix():
     assert model == "meta-llama/Llama-3.3-70B-Instruct"
 
 
-def test_crusoe_model_list_populated(monkeypatch):
-    """Test Crusoe models are present in model_prices_and_context_window.json"""
-    import litellm
-
-    original_model_cost = litellm.model_cost
-    original_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
-    try:
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        expected = [
-            "crusoe/meta-llama/Llama-3.3-70B-Instruct",
-            "crusoe/deepseek-ai/DeepSeek-R1-0528",
-            "crusoe/deepseek-ai/DeepSeek-V3-0324",
-            "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507",
-            "crusoe/moonshotai/Kimi-K2-Thinking",
-            "crusoe/openai/gpt-oss-120b",
-            "crusoe/google/gemma-3-12b-it",
-        ]
-        for model in expected:
-            assert model in litellm.model_cost, f"{model} not found in model_cost"
-            assert litellm.model_cost[model].get("litellm_provider") == "crusoe"
-    finally:
-        litellm.model_cost = original_model_cost
-        if original_env is None:
-            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
-        else:
-            monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", original_env)

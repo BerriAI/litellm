@@ -394,35 +394,20 @@ class LangFuseLogger:
                 status_message=status_message,
             )
             verbose_logger.debug("OUTPUT IN LANGFUSE: %s; original: %s", output, response_obj)
-            trace_id = None
-            generation_id = None
-            if self._is_langfuse_v2():
-                trace_id, generation_id = self._log_langfuse_v2(
-                    user_id=user_id,
-                    metadata=metadata,
-                    litellm_params=litellm_params,
-                    output=output,
-                    start_time=start_time,
-                    end_time=end_time,
-                    kwargs=kwargs,
-                    optional_params=optional_params,
-                    input=input,
-                    response_obj=response_obj,
-                    level=level,
-                    litellm_call_id=litellm_call_id,
-                )
-            elif response_obj is not None:
-                self._log_langfuse_v1(
-                    user_id=user_id,
-                    metadata=metadata,
-                    output=output,
-                    start_time=start_time,
-                    end_time=end_time,
-                    kwargs=kwargs,
-                    optional_params=optional_params,
-                    input=input,
-                    response_obj=response_obj,
-                )
+            trace_id, generation_id = self._log_langfuse_v2(
+                user_id=user_id,
+                metadata=metadata,
+                litellm_params=litellm_params,
+                output=output,
+                start_time=start_time,
+                end_time=end_time,
+                kwargs=kwargs,
+                optional_params=optional_params,
+                input=input,
+                response_obj=response_obj,
+                level=level,
+                litellm_call_id=litellm_call_id,
+            )
             verbose_logger.debug("Langfuse Layer Logging - final response object: %s", response_obj)
             verbose_logger.info("Langfuse Layer Logging - logging success")
 
@@ -517,58 +502,6 @@ class LangFuseLogger:
 
         This approach does not impact latency and runs in the background
         """
-
-    def _is_langfuse_v2(self):
-        import langfuse
-
-        return Version(langfuse.version.__version__) >= Version("2.0.0")
-
-    def _log_langfuse_v1(
-        self,
-        user_id,
-        metadata,
-        output,
-        start_time,
-        end_time,
-        kwargs,
-        optional_params,
-        input,
-        response_obj,
-    ):
-        from langfuse.model import CreateGeneration, CreateTrace
-
-        verbose_logger.warning(
-            "Please upgrade langfuse to v2.0.0 or higher: https://github.com/langfuse/langfuse-python/releases/tag/v2.0.1"
-        )
-
-        trace: Final = self.Langfuse.trace(
-            CreateTrace(
-                name=metadata.get("generation_name", "litellm-completion"),
-                input=input,
-                output=output,
-                userId=user_id,
-            )
-        )
-
-        custom_llm_provider: Final = cast(str | None, kwargs.get("custom_llm_provider"))
-        model_name: Final = reconstruct_model_name(kwargs.get("model", ""), custom_llm_provider, metadata)
-
-        trace.generation(
-            CreateGeneration(
-                name=metadata.get("generation_name", "litellm-completion"),
-                startTime=start_time,
-                endTime=end_time,
-                model=model_name,
-                modelParameters=optional_params,
-                prompt=input,
-                completion=output,
-                usage={
-                    "prompt_tokens": response_obj.usage.prompt_tokens,
-                    "completion_tokens": response_obj.usage.completion_tokens,
-                },
-                metadata=metadata,
-            )
-        )
 
     def _log_langfuse_v2(
         self,

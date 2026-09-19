@@ -1,6 +1,9 @@
 from collections.abc import Mapping
+from typing import Final
 
 import pytest
+
+from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 
 from litellm.router_utils.auto_router_model_naming import (
     carries_complexity_router_settings,
@@ -169,6 +172,52 @@ def test_validate_rejects_ambiguous_tier_labels(tier_labels, expected_fragment):
 )
 def test_validate_accepts_loadable_complexity_config(complexity_router_config):
     assert validate_complexity_router_config_write(complexity_router_config=complexity_router_config) is None
+
+
+def _fuse_write_config(profiles: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "classifier_type": "llm_v2",
+        "classifier_llm_config": {"model": "judge"},
+        "tiers": {"SIMPLE": ["opaque-efficient"], "REASONING": ["opaque-capable"]},
+        "llm_v2_config": {"max_quality_gap": 0.05, **profiles},
+    }
+
+
+def test_fuse_write_accepts_presets_and_custom_text_with_the_same_entitlement() -> None:
+    catalog: Final = get_fuse_presets()
+    presets: Final = _fuse_write_config(
+        {
+            "efficient_profile_preset": catalog.models[0].id,
+            "capable_profile_preset": catalog.models[-1].id,
+            "harness_preset": catalog.harnesses[0].id,
+        }
+    )
+    custom: Final = _fuse_write_config(
+        {
+            "efficient_profile": catalog.models[0].text,
+            "capable_profile": catalog.models[-1].text,
+            "harness": catalog.harnesses[0].text,
+        }
+    )
+    assert validate_complexity_router_config_write(presets) is None
+    assert validate_complexity_router_config_write(custom) is None
+    assert claimed_capability(presets) is claimed_capability(custom)
+    assert claimed_capability(presets) is not None
+
+
+@pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
+def test_fuse_write_rejects_unknown_preset_even_with_custom_text(field: str) -> None:
+    config: Final = _fuse_write_config(
+        {
+            "efficient_profile": "Custom efficient solver",
+            "capable_profile": "Custom capable solver",
+            "harness": "Custom runtime",
+            f"{field}_preset": "unknown-v1",
+        }
+    )
+    violation: Final = validate_complexity_router_config_write(config)
+    assert violation is not None
+    assert f"{field}_preset" in violation
 
 
 def test_naming_check_ignores_the_config_entirely():
@@ -395,6 +444,8 @@ def test_placement_is_scoped_to_complexity_router_deployments(model, present_fie
 
 
 _HV2_CONFIG: Mapping[str, object] = {"classifier_type": "heuristic_v2"}
+_CAPABILITY_CONFIG: Mapping[str, object] = {"classifier_type": "capability"}
+_FUSE_CONFIG: Mapping[str, object] = {"classifier_type": "llm_v2"}
 _CUSTOM_TIER_CONFIG: Mapping[str, object] = {
     "classifier_type": "llm",
     "tier_definitions": [{"name": "routine", "description": "easy"}, {"name": "hard", "description": "hard"}],
@@ -457,6 +508,10 @@ def test_is_complexity_router_model(model: str | None, expected: bool) -> None:
 @pytest.mark.parametrize(
     "litellm_params,expected_key",
     [
+        ({"model": "auto_router/complexity_router", "complexity_router_config": _CAPABILITY_CONFIG}, "capability"),
+        ({"model": "auto_router/complexity_router-eu", "complexity_router_config": _FUSE_CONFIG}, "llm_v2"),
+        ({"model": "openai/solver", "complexity_router_config": _CAPABILITY_CONFIG}, None),
+        ({"model": "auto_router/quality_router", "complexity_router_config": _FUSE_CONFIG}, None),
         ({"model": "auto_router/complexity_router", "complexity_router_config": _HV2_CONFIG}, "heuristic_v2"),
         ({"model": "auto_router/complexity_router-eu", "complexity_router_config": _HV2_CONFIG}, "heuristic_v2"),
         ({"model": "auto_router/complexity_router", "complexity_router_config": _CUSTOM_TIER_CONFIG}, "tier_or_classifier_prompt"),
@@ -493,6 +548,8 @@ def test_count_capability_routers_counts_only_its_own_capability(capability) -> 
 
     by_key = {
         "heuristic_v2": (_HV2_CONFIG, _HV2_CONFIG),
+        "capability": (_CAPABILITY_CONFIG, _CAPABILITY_CONFIG),
+        "llm_v2": (_FUSE_CONFIG, _FUSE_CONFIG),
         "tier_or_classifier_prompt": (_CUSTOM_TIER_CONFIG, _CUSTOM_PROMPT_CONFIG),
     }
     mine_first, mine_second = by_key[capability.key]
@@ -545,6 +602,8 @@ def test_every_gated_capability_has_a_distinct_predicate_and_sql_spelling() -> N
     "config",
     [
         _HV2_CONFIG,
+        _CAPABILITY_CONFIG,
+        _FUSE_CONFIG,
         _CUSTOM_TIER_CONFIG,
         _CUSTOM_PROMPT_CONFIG,
         {"classifier_type": "heuristic"},

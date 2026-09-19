@@ -1318,6 +1318,42 @@ async def test_streaming_step_records_guardrail_information_once_on_block(monkey
     assert _recorded_guardrail_statuses(result) == ["guardrail_intervened"]
 
 
+def _two_choice_chat_chunks():
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    def chunk(index, content, finish_reason=None):
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[StreamingChoices(index=index, delta=Delta(content=content), finish_reason=finish_reason)],
+        )
+
+    return [chunk(0, "pers"), chunk(1, "pers"), chunk(0, "immon", "stop"), chunk(1, "immon", "stop")]
+
+
+@pytest.mark.asyncio
+async def test_streaming_step_delivers_text_rewrites_on_every_choice_of_a_chat_stream(monkeypatch, caplog):
+    from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+
+    monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["[MASKED]", "[MASKED]"])])
+    chunks = _two_choice_chat_chunks()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        result = await _run_streaming_step(OpenAIChatCompletionsHandler(), chunks)
+
+    assert result.terminal_action == "allow"
+    assert not any("discarded" in record.getMessage() for record in caplog.records)
+    assert [(c.choices[0].index, c.choices[0].delta.content) for c in chunks] == [
+        (0, "[MASKED]"),
+        (1, "[MASKED]"),
+        (0, ""),
+        (1, ""),
+    ]
+    assert result.modified_data["metadata"]["applied_guardrails"] == ["masker"]
+
+
 @pytest.mark.asyncio
 async def test_streaming_step_restores_chunks_when_translation_refuses_the_rewrite(monkeypatch, caplog):
     monkeypatch.setattr(litellm, "callbacks", [_TextReturningGuardrail(["hello [MASKED]"])])

@@ -44,7 +44,7 @@ from models import ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, Usage
 from passthrough_client import PassthroughClient
 import os
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 BEDROCK_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"

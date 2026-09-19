@@ -1,3 +1,4 @@
+import { transitionClassifierType } from "./classifier_type_transition";
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -17,7 +18,6 @@ import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import ClassifierVisionConfig from "./ClassifierVisionConfig";
 import type { ReasoningEffort } from "./complexity_router_tiers";
-import { nonReasoningTierFields } from "./nonReasoningTierFields";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
   ClassificationFrequency,
@@ -33,12 +33,10 @@ import {
   DEFAULT_CLASSIFIER_FALLBACK,
   DEFAULT_CLASSIFIER_TIMEOUT_MS,
   DEFAULT_CLASSIFICATION_RUBRIC,
-  NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
   ClassificationRubric,
   effectiveTierLabel,
   heuristicScoringRole,
   usesLlmClassifier,
-  DEFAULT_HEURISTIC_FIRST_MAX_TIER,
   DEFAULT_HYBRID_BOUNDARY_MARGIN,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
   effectiveClassifierType,
@@ -263,35 +261,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
-    const nextValue: ComplexityRouterConfigValue = {
-      ...value,
-      classifier_type: classifierType,
-      classifier_llm_config: usesLlmClassifier(classifierType)
-        ? value.classifier_llm_config ?? {
-            model: "",
-            timeout_ms: DEFAULT_CLASSIFIER_TIMEOUT_MS,
-            classification_rubric: NEW_CLASSIFIER_CLASSIFICATION_RUBRIC,
-          }
-        : undefined,
-      classifier_context_window_size: usesLlmClassifier(classifierType)
-        ? value.classifier_context_window_size ?? DEFAULT_CLASSIFIER_CONTEXT_WINDOW_SIZE
-        : undefined,
-      classifier_context_budget_chars: usesLlmClassifier(classifierType)
-        ? value.classifier_context_budget_chars ?? DEFAULT_CLASSIFIER_CONTEXT_BUDGET_CHARS
-        : undefined,
-      classifier_context_include_assistant_turns: usesLlmClassifier(classifierType)
-        ? value.classifier_context_include_assistant_turns
-        : undefined,
-      classifier_fallback: usesLlmClassifier(classifierType) ? value.classifier_fallback : undefined,
-      heuristic_first_max_tier:
-        classifierType === "heuristic_first"
-          ? value.heuristic_first_max_tier ?? DEFAULT_HEURISTIC_FIRST_MAX_TIER
-          : undefined,
-      hybrid_boundary_margin:
-        classifierType === "hybrid" ? value.hybrid_boundary_margin ?? DEFAULT_HYBRID_BOUNDARY_MARGIN : undefined,
-      ...nonReasoningTierFields(classifierType, value),
-    };
-    onChange(nextValue);
+    onChange(transitionClassifierType(value, classifierType));
   };
 
   const handleHeuristicFirstMaxTierChange = (tier: string) => {
@@ -432,27 +402,6 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
       classifier_context_include_assistant_turns: includeAssistantTurns,
     });
   };
-
-  if (classifierType === "capability") {
-    return (
-      <p className="text-sm text-muted-foreground">
-        This router uses capability forecasting. Configure its classifier, threshold, and calibration through YAML or
-        the API. Saving preserves those settings
-      </p>
-    );
-  }
-
-  if (classifierType === "llm_v2") {
-    return (
-      <div className="rounded-md border p-4 text-sm">
-        <strong>LLM V2 classifier (experimental)</strong>
-        <p className="mt-2 text-muted-foreground">
-          Combines task demands and model capability in one forecast. Its solver profiles and quality allowance are
-          configured through the API. Saving this router preserves those settings
-        </p>
-      </div>
-    );
-  }
 
   return (
     <>

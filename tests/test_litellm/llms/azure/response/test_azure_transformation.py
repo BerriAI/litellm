@@ -677,3 +677,14 @@ def test_azure_responses_gpt6_astra_rejects_temperature_while_reasoning(local_mo
             model="gpt-6-astra",
             drop_params=False,
         )
+
+
+def test_azure_responses_sends_the_deployment_name_when_azure_ai_prefix_survives_provider_remap():
+    request = AzureOpenAIResponsesAPIConfig().transform_responses_api_request(
+        model="azure_ai/gpt-5.4-nano",
+        input="hi",
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert request["model"] == "gpt-5.4-nano"
