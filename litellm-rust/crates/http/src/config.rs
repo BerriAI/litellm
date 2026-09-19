@@ -72,7 +72,7 @@ impl From<&HttpSettings> for Resolution {
                 force_ipv4: settings.force_ipv4,
                 http2: settings.http2,
                 user_agent: settings.user_agent.clone(),
-                trust_proxy_env: settings.trusts_proxy_env(),
+                trust_proxy_env: settings.trust_proxy_env,
                 connect_timeout: settings.connect_timeout,
                 tcp_keepalive: settings.tcp_keepalive,
                 pool_idle_timeout: settings.pool_idle_timeout,
@@ -125,17 +125,12 @@ mod tests {
 
     use super::*;
 
-    fn no_env(_: &str) -> Option<String> {
-        None
-    }
-
     fn settings(ssl_verify: Option<SslVerify>, ssl_cert_file: Option<&str>) -> HttpSettings {
         HttpSettings {
             ssl_verify,
             ssl_cert_file: ssl_cert_file.map(PathBuf::from),
             ..HttpSettings::default()
         }
-        .with_environment(&no_env)
     }
 
     #[rstest]
@@ -159,17 +154,6 @@ mod tests {
     ) {
         let config = Resolution::from(&settings).config;
         assert_eq!(config.verify, expected);
-    }
-
-    #[test]
-    fn ssl_verify_environment_variable_beats_the_configured_setting() {
-        let settings = HttpSettings {
-            ssl_verify: Some(SslVerify::Disabled),
-            ..HttpSettings::default()
-        }
-        .with_environment(&|name: &str| (name == "SSL_VERIFY").then(|| "true".to_string()));
-        let config = Resolution::from(&settings).config;
-        assert_eq!(config.verify, Verify::BuiltInRoots);
     }
 
     #[rstest]
@@ -278,29 +262,6 @@ mod tests {
                 pool_idle_timeout: Duration::from_secs(45),
             }
         );
-    }
-
-    #[rstest]
-    #[case::aiohttp_default(HttpSettings::default(), true)]
-    #[case::aiohttp_opted_out(HttpSettings { ignore_proxy_env: true, ..HttpSettings::default() }, false)]
-    #[case::session_trust_env_beats_opt_out(
-        HttpSettings { ignore_proxy_env: true, trust_proxy_env: true, ..HttpSettings::default() },
-        true
-    )]
-    #[case::http2_uses_httpx(
-        HttpSettings { ignore_proxy_env: true, http2: true, ..HttpSettings::default() },
-        true
-    )]
-    #[case::aiohttp_disabled(
-        HttpSettings { ignore_proxy_env: true, httpx_transport: true, ..HttpSettings::default() },
-        true
-    )]
-    fn environment_proxies_apply_unless_the_aiohttp_transport_opts_out(
-        #[case] settings: HttpSettings,
-        #[case] expected: bool,
-    ) {
-        let config = Resolution::from(&settings).config;
-        assert_eq!(config.trust_proxy_env, expected);
     }
 
     #[test]

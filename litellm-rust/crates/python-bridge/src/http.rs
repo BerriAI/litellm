@@ -5,7 +5,8 @@ use std::{
 };
 
 use litellm_http::{
-    HttpClientConfig, HttpClientPool, HttpSettings, Resolution, SslVerify, Unsupported,
+    HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
+    Unsupported,
 };
 use litellm_llms::custom_httpx::media::{PublicDnsResolver, UrlPolicy};
 use pyo3::{prelude::*, types::PyDict};
@@ -26,10 +27,12 @@ pub(crate) fn call_config(
     kwargs: &Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<HttpClientConfig> {
-    let configured = settings(&PythonSettings::Http.read(py)?)?
-        .with_environment(&|name| std::env::var(name).ok());
-    let settings = for_call(configured, call_ssl_verify(kwargs)?, asynchronous)
-        .without_missing_files(&|path: &Path| path.exists());
+    let settings = HttpSettings::from_layers([
+        for_call(call_ssl_verify(kwargs)?, asynchronous),
+        HttpSettingsLayer::from_environment(&|name| std::env::var(name).ok()),
+        configured(&PythonSettings::Http.read(py)?)?,
+    ])
+    .without_missing_files(&|path: &Path| path.exists());
     let resolution = Resolution::from(&settings);
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
         PythonSettings::warn(py, &unsupported.to_string())?;
@@ -70,15 +73,11 @@ fn call_ssl_verify(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<SslVerify>> {
         .and_then(|value| ssl_verify(&value)))
 }
 
-fn for_call(
-    configured: HttpSettings,
-    call_ssl_verify: Option<SslVerify>,
-    asynchronous: bool,
-) -> HttpSettings {
-    HttpSettings {
-        ssl_verify: call_ssl_verify.or(configured.ssl_verify),
-        httpx_transport: configured.httpx_transport || !asynchronous,
-        ..configured
+fn for_call(call_ssl_verify: Option<SslVerify>, asynchronous: bool) -> HttpSettingsLayer {
+    HttpSettingsLayer {
+        ssl_verify: call_ssl_verify,
+        disable_aiohttp_transport: (!asynchronous).then_some(true),
+        ..HttpSettingsLayer::default()
     }
 }
 
@@ -102,24 +101,24 @@ struct PythonHttpSettings<'py> {
     user_agent: String,
 }
 
-fn settings(value: &Bound<'_, PyAny>) -> PyResult<HttpSettings> {
+fn configured(value: &Bound<'_, PyAny>) -> PyResult<HttpSettingsLayer> {
     let python: PythonHttpSettings = value.extract().map_err(|error: PyErr| {
         RustBridgeDeclined::new_err(format!(
             "litellm HTTP settings cannot be used by the Rust route: {error}"
         ))
     })?;
-    Ok(HttpSettings {
+    Ok(HttpSettingsLayer {
         ssl_verify: ssl_verify(&python.ssl_verify),
         ssl_certificate: python.ssl_certificate.map(PathBuf::from),
         ssl_security_level: python.ssl_security_level,
         ssl_ecdh_curve: python.ssl_ecdh_curve,
-        force_ipv4: python.force_ipv4,
-        http2: python.http2,
-        httpx_transport: python.disable_aiohttp_transport,
+        force_ipv4: Some(python.force_ipv4),
+        http2: Some(python.http2),
+        aiohttp_trust_env: Some(python.aiohttp_trust_env),
+        disable_aiohttp_trust_env: Some(python.disable_aiohttp_trust_env),
+        disable_aiohttp_transport: Some(python.disable_aiohttp_transport),
         user_agent: Some(python.user_agent),
-        trust_proxy_env: python.aiohttp_trust_env,
-        ignore_proxy_env: python.disable_aiohttp_trust_env,
-        ..HttpSettings::default()
+        ..HttpSettingsLayer::default()
     })
 }
 
@@ -174,12 +173,12 @@ settings = types.SimpleNamespace(**{{name: defaults[name] for name in json.loads
     }
 
     #[test]
-    fn default_python_settings_produce_default_settings_with_verification_on() {
+    fn default_python_settings_resolve_to_default_settings_with_verification_on() {
         Python::initialize();
         Python::attach(|py| {
-            let settings = settings(&python_settings(py, "")).unwrap();
+            let layer = configured(&python_settings(py, "")).unwrap();
             assert_eq!(
-                settings,
+                HttpSettings::from_layers([layer]),
                 HttpSettings {
                     ssl_verify: Some(SslVerify::Enabled),
                     user_agent: Some("litellm/test".into()),
@@ -190,10 +189,10 @@ settings = types.SimpleNamespace(**{{name: defaults[name] for name in json.loads
     }
 
     #[test]
-    fn python_settings_flow_into_settings() {
+    fn python_settings_flow_into_the_configured_layer() {
         Python::initialize();
         Python::attach(|py| {
-            let settings = settings(&python_settings(
+            let layer = configured(&python_settings(
                 py,
                 "
 ssl_verify='/etc/ssl/corp.pem',
@@ -210,19 +209,19 @@ user_agent='litellm/9.9.9',
             ))
             .unwrap();
             assert_eq!(
-                settings,
-                HttpSettings {
+                layer,
+                HttpSettingsLayer {
                     ssl_verify: Some(SslVerify::CaBundle("/etc/ssl/corp.pem".into())),
                     ssl_certificate: Some("/etc/ssl/client.pem".into()),
                     ssl_security_level: Some("2".into()),
                     ssl_ecdh_curve: Some("X25519".into()),
-                    force_ipv4: true,
-                    http2: true,
-                    httpx_transport: true,
+                    force_ipv4: Some(true),
+                    http2: Some(true),
+                    aiohttp_trust_env: Some(true),
+                    disable_aiohttp_trust_env: Some(true),
+                    disable_aiohttp_transport: Some(true),
                     user_agent: Some("litellm/9.9.9".into()),
-                    trust_proxy_env: true,
-                    ignore_proxy_env: true,
-                    ..HttpSettings::default()
+                    ..HttpSettingsLayer::default()
                 }
             );
         });
@@ -232,11 +231,12 @@ user_agent='litellm/9.9.9',
     fn user_agent_environment_variable_beats_the_python_default() {
         Python::initialize();
         Python::attach(|py| {
-            let settings = settings(&python_settings(py, ""))
-                .unwrap()
-                .with_environment(&|name| {
+            let settings = HttpSettings::from_layers([
+                HttpSettingsLayer::from_environment(&|name| {
                     (name == "LITELLM_USER_AGENT").then(|| "operator/1".to_string())
-                });
+                }),
+                configured(&python_settings(py, "")).unwrap(),
+            ]);
             assert_eq!(settings.user_agent.as_deref(), Some("operator/1"));
         });
     }
@@ -252,8 +252,8 @@ user_agent='litellm/9.9.9',
     ) {
         Python::initialize();
         Python::attach(|py| {
-            let settings = settings(&python_settings(py, overrides)).unwrap();
-            let config = Resolution::from(&settings).config;
+            let layer = configured(&python_settings(py, overrides)).unwrap();
+            let config = Resolution::from(&HttpSettings::from_layers([layer])).config;
             assert_eq!(config.verify, expected);
         });
     }
@@ -262,8 +262,8 @@ user_agent='litellm/9.9.9',
     fn ssl_context_global_is_ignored_so_environment_and_defaults_apply() {
         Python::initialize();
         Python::attach(|py| {
-            let settings = settings(&python_settings(py, "ssl_verify=object()")).unwrap();
-            assert_eq!(settings.ssl_verify, None);
+            let layer = configured(&python_settings(py, "ssl_verify=object()")).unwrap();
+            assert_eq!(layer.ssl_verify, None);
         });
     }
 
@@ -283,22 +283,27 @@ user_agent='litellm/9.9.9',
     fn mistyped_python_settings_decline_instead_of_raising() {
         Python::initialize();
         Python::attach(|py| {
-            let error = settings(&python_settings(py, "force_ipv4='yes'")).unwrap_err();
+            let error = configured(&python_settings(py, "force_ipv4='yes'")).unwrap_err();
             assert!(error.is_instance_of::<RustBridgeDeclined>(py));
         });
     }
 
+    fn configured_ssl_verify(ssl_verify: SslVerify) -> HttpSettingsLayer {
+        HttpSettingsLayer {
+            ssl_verify: Some(ssl_verify),
+            ..HttpSettingsLayer::default()
+        }
+    }
+
     #[test]
-    fn call_ssl_verify_beats_the_configured_and_environment_value() {
+    fn call_ssl_verify_beats_the_configured_value() {
         Python::initialize();
         Python::attach(|py| {
             let kwargs = PyDict::new(py);
             kwargs.set_item("ssl_verify", false).unwrap();
-            let configured = HttpSettings {
-                ssl_verify: Some(SslVerify::Enabled),
-                ..HttpSettings::default()
-            };
-            let settings = for_call(configured, call_ssl_verify(&kwargs).unwrap(), true);
+            let call = for_call(call_ssl_verify(&kwargs).unwrap(), true);
+            let settings =
+                HttpSettings::from_layers([call, configured_ssl_verify(SslVerify::Enabled)]);
             assert_eq!(settings.ssl_verify, Some(SslVerify::Disabled));
         });
     }
@@ -309,12 +314,10 @@ user_agent='litellm/9.9.9',
         Python::attach(|py| {
             let kwargs = PyDict::new(py);
             kwargs.set_item("ssl_verify", py.None()).unwrap();
-            let configured = HttpSettings {
-                ssl_verify: Some(SslVerify::Disabled),
-                ..HttpSettings::default()
-            };
-            let settings = for_call(configured.clone(), call_ssl_verify(&kwargs).unwrap(), true);
-            assert_eq!(settings, configured);
+            let call = for_call(call_ssl_verify(&kwargs).unwrap(), true);
+            let settings =
+                HttpSettings::from_layers([call, configured_ssl_verify(SslVerify::Disabled)]);
+            assert_eq!(settings.ssl_verify, Some(SslVerify::Disabled));
         });
     }
 
@@ -326,12 +329,10 @@ user_agent='litellm/9.9.9',
             kwargs
                 .set_item("ssl_verify", py.eval(c"object()", None, None).unwrap())
                 .unwrap();
-            let configured = HttpSettings {
-                ssl_verify: Some(SslVerify::Disabled),
-                ..HttpSettings::default()
-            };
-            let settings = for_call(configured.clone(), call_ssl_verify(&kwargs).unwrap(), true);
-            assert_eq!(settings, configured);
+            let call = for_call(call_ssl_verify(&kwargs).unwrap(), true);
+            let settings =
+                HttpSettings::from_layers([call, configured_ssl_verify(SslVerify::Disabled)]);
+            assert_eq!(settings.ssl_verify, Some(SslVerify::Disabled));
         });
     }
 
@@ -342,12 +343,12 @@ user_agent='litellm/9.9.9',
         #[case] asynchronous: bool,
         #[case] expected: bool,
     ) {
-        let opted_out = HttpSettings {
-            ignore_proxy_env: true,
-            ..HttpSettings::default()
+        let opted_out = HttpSettingsLayer {
+            disable_aiohttp_trust_env: Some(true),
+            disable_aiohttp_transport: Some(false),
+            ..HttpSettingsLayer::default()
         };
-        let settings = for_call(opted_out, None, asynchronous);
-        let config = Resolution::from(&settings).config;
-        assert_eq!(config.trust_proxy_env, expected);
+        let settings = HttpSettings::from_layers([for_call(None, asynchronous), opted_out]);
+        assert_eq!(settings.trust_proxy_env, expected);
     }
 }

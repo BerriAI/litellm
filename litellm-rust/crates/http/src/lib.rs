@@ -9,5 +9,5 @@ pub use config::{HttpClientConfig, Resolution, Verify};
 pub use error::Error;
 pub use pool::{ClientVariant, HttpClientPool};
 pub use proxy::EnvironmentProxies;
-pub use settings::{HttpSettings, SslVerify, TcpKeepalive};
+pub use settings::{HttpSettings, HttpSettingsLayer, SslVerify, TcpKeepalive};
 pub use tls::{KeyExchangeGroup, Tls12CipherSuite, Unsupported};

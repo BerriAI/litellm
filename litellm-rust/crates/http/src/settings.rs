@@ -27,6 +27,79 @@ pub struct TcpKeepalive {
     pub retries: u32,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HttpSettingsLayer {
+    pub ssl_verify: Option<SslVerify>,
+    pub ssl_cert_file: Option<PathBuf>,
+    pub ssl_certificate: Option<PathBuf>,
+    pub ssl_security_level: Option<String>,
+    pub ssl_ecdh_curve: Option<String>,
+    pub force_ipv4: Option<bool>,
+    pub http2: Option<bool>,
+    pub aiohttp_trust_env: Option<bool>,
+    pub disable_aiohttp_trust_env: Option<bool>,
+    pub disable_aiohttp_transport: Option<bool>,
+    pub user_agent: Option<String>,
+    pub tcp_keepalive: Option<TcpKeepalive>,
+    pub pool_idle_timeout: Option<Duration>,
+}
+
+impl HttpSettingsLayer {
+    pub fn from_environment(env: &(dyn Fn(&str) -> Option<String> + Sync)) -> Self {
+        let enabled = |name: &str| {
+            env(name)
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+                .then_some(true)
+        };
+        let number = |name: &str| env(name).and_then(|value| value.trim().parse::<u32>().ok());
+        let seconds = |name: &str, default: u32| {
+            Duration::from_secs(u64::from(number(name).unwrap_or(default)))
+        };
+        Self {
+            ssl_verify: env("SSL_VERIFY").map(|value| SslVerify::parse(&value)),
+            ssl_cert_file: env("SSL_CERT_FILE").map(PathBuf::from),
+            ssl_certificate: env("SSL_CERTIFICATE").map(PathBuf::from),
+            ssl_security_level: env("SSL_SECURITY_LEVEL"),
+            ssl_ecdh_curve: env("SSL_ECDH_CURVE"),
+            force_ipv4: None,
+            http2: enabled("LITELLM_HTTP2"),
+            aiohttp_trust_env: enabled("AIOHTTP_TRUST_ENV"),
+            disable_aiohttp_trust_env: enabled("DISABLE_AIOHTTP_TRUST_ENV"),
+            disable_aiohttp_transport: enabled("DISABLE_AIOHTTP_TRANSPORT"),
+            user_agent: env("LITELLM_USER_AGENT"),
+            tcp_keepalive: enabled("AIOHTTP_SO_KEEPALIVE").map(|_| TcpKeepalive {
+                idle: seconds("AIOHTTP_TCP_KEEPIDLE", 60),
+                interval: seconds("AIOHTTP_TCP_KEEPINTVL", 30),
+                retries: number("AIOHTTP_TCP_KEEPCNT").unwrap_or(5),
+            }),
+            pool_idle_timeout: number("AIOHTTP_KEEPALIVE_TIMEOUT")
+                .map(|timeout| Duration::from_secs(u64::from(timeout))),
+        }
+    }
+
+    fn or(self, lower: Self) -> Self {
+        Self {
+            ssl_verify: self.ssl_verify.or(lower.ssl_verify),
+            ssl_cert_file: self.ssl_cert_file.or(lower.ssl_cert_file),
+            ssl_certificate: self.ssl_certificate.or(lower.ssl_certificate),
+            ssl_security_level: self.ssl_security_level.or(lower.ssl_security_level),
+            ssl_ecdh_curve: self.ssl_ecdh_curve.or(lower.ssl_ecdh_curve),
+            force_ipv4: self.force_ipv4.or(lower.force_ipv4),
+            http2: self.http2.or(lower.http2),
+            aiohttp_trust_env: self.aiohttp_trust_env.or(lower.aiohttp_trust_env),
+            disable_aiohttp_trust_env: self
+                .disable_aiohttp_trust_env
+                .or(lower.disable_aiohttp_trust_env),
+            disable_aiohttp_transport: self
+                .disable_aiohttp_transport
+                .or(lower.disable_aiohttp_transport),
+            user_agent: self.user_agent.or(lower.user_agent),
+            tcp_keepalive: self.tcp_keepalive.or(lower.tcp_keepalive),
+            pool_idle_timeout: self.pool_idle_timeout.or(lower.pool_idle_timeout),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpSettings {
     pub ssl_verify: Option<SslVerify>,
@@ -36,10 +109,8 @@ pub struct HttpSettings {
     pub ssl_ecdh_curve: Option<String>,
     pub force_ipv4: bool,
     pub http2: bool,
-    pub httpx_transport: bool,
     pub user_agent: Option<String>,
     pub trust_proxy_env: bool,
-    pub ignore_proxy_env: bool,
     pub connect_timeout: Duration,
     pub tcp_keepalive: Option<TcpKeepalive>,
     pub pool_idle_timeout: Duration,
@@ -55,10 +126,8 @@ impl Default for HttpSettings {
             ssl_ecdh_curve: None,
             force_ipv4: false,
             http2: false,
-            httpx_transport: false,
             user_agent: None,
-            trust_proxy_env: false,
-            ignore_proxy_env: false,
+            trust_proxy_env: true,
             connect_timeout: Duration::from_secs(10),
             tcp_keepalive: None,
             pool_idle_timeout: Duration::from_secs(120),
@@ -67,52 +136,36 @@ impl Default for HttpSettings {
 }
 
 impl HttpSettings {
-    pub fn with_environment(self, env: &(dyn Fn(&str) -> Option<String> + Sync)) -> Self {
-        let enabled =
-            |name: &str| env(name).is_some_and(|value| value.trim().eq_ignore_ascii_case("true"));
-        let number = |name: &str| env(name).and_then(|value| value.trim().parse::<u32>().ok());
-        let seconds = |name: &str, default: u32| {
-            Duration::from_secs(u64::from(number(name).unwrap_or(default)))
-        };
+    pub fn from_layers(
+        highest_precedence_first: impl IntoIterator<Item = HttpSettingsLayer>,
+    ) -> Self {
+        let merged = highest_precedence_first
+            .into_iter()
+            .reduce(HttpSettingsLayer::or)
+            .unwrap_or_default();
+        let defaults = Self::default();
+        let http2 = merged.http2.unwrap_or(defaults.http2);
         Self {
-            ssl_verify: env("SSL_VERIFY")
-                .map(|value| SslVerify::parse(&value))
-                .or(self.ssl_verify),
-            ssl_cert_file: env("SSL_CERT_FILE")
-                .map(PathBuf::from)
-                .or(self.ssl_cert_file),
-            ssl_certificate: env("SSL_CERTIFICATE")
-                .map(PathBuf::from)
-                .or(self.ssl_certificate)
+            ssl_verify: merged.ssl_verify,
+            ssl_cert_file: merged.ssl_cert_file,
+            ssl_certificate: merged
+                .ssl_certificate
                 .filter(|path| !path.as_os_str().is_empty()),
-            ssl_security_level: env("SSL_SECURITY_LEVEL")
-                .or(self.ssl_security_level)
-                .filter(|level| !level.is_empty()),
-            ssl_ecdh_curve: env("SSL_ECDH_CURVE")
-                .or(self.ssl_ecdh_curve)
-                .filter(|curve| !curve.is_empty()),
-            http2: self.http2 || enabled("LITELLM_HTTP2"),
-            httpx_transport: self.httpx_transport || enabled("DISABLE_AIOHTTP_TRANSPORT"),
-            user_agent: env("LITELLM_USER_AGENT").or(self.user_agent),
-            trust_proxy_env: self.trust_proxy_env || enabled("AIOHTTP_TRUST_ENV"),
-            ignore_proxy_env: self.ignore_proxy_env || enabled("DISABLE_AIOHTTP_TRUST_ENV"),
-            tcp_keepalive: enabled("AIOHTTP_SO_KEEPALIVE")
-                .then(|| TcpKeepalive {
-                    idle: seconds("AIOHTTP_TCP_KEEPIDLE", 60),
-                    interval: seconds("AIOHTTP_TCP_KEEPINTVL", 30),
-                    retries: number("AIOHTTP_TCP_KEEPCNT").unwrap_or(5),
-                })
-                .or(self.tcp_keepalive),
-            pool_idle_timeout: number("AIOHTTP_KEEPALIVE_TIMEOUT")
-                .map_or(self.pool_idle_timeout, |timeout| {
-                    Duration::from_secs(u64::from(timeout))
-                }),
-            ..self
+            ssl_security_level: merged.ssl_security_level.filter(|level| !level.is_empty()),
+            ssl_ecdh_curve: merged.ssl_ecdh_curve.filter(|curve| !curve.is_empty()),
+            force_ipv4: merged.force_ipv4.unwrap_or(defaults.force_ipv4),
+            http2,
+            user_agent: merged.user_agent,
+            trust_proxy_env: !merged.disable_aiohttp_trust_env.unwrap_or(false)
+                || merged.aiohttp_trust_env.unwrap_or(false)
+                || merged.disable_aiohttp_transport.unwrap_or(false)
+                || http2,
+            tcp_keepalive: merged.tcp_keepalive,
+            pool_idle_timeout: merged
+                .pool_idle_timeout
+                .unwrap_or(defaults.pool_idle_timeout),
+            ..defaults
         }
-    }
-
-    pub fn trusts_proxy_env(&self) -> bool {
-        !self.ignore_proxy_env || self.trust_proxy_env || self.http2 || self.httpx_transport
     }
 
     pub fn without_missing_files(self, exists: &dyn Fn(&Path) -> bool) -> Self {
@@ -161,15 +214,15 @@ mod tests {
     }
 
     #[test]
-    fn environment_overrides_configured_ssl_values() {
-        let settings = HttpSettings {
+    fn higher_layers_override_lower_ones() {
+        let configured = HttpSettingsLayer {
             ssl_verify: Some(SslVerify::Enabled),
             ssl_certificate: Some("/configured/client.pem".into()),
             ssl_security_level: Some("configured".into()),
             user_agent: Some("configured/1".into()),
-            ..HttpSettings::default()
-        }
-        .with_environment(&env_of(&[
+            ..HttpSettingsLayer::default()
+        };
+        let environment = HttpSettingsLayer::from_environment(&env_of(&[
             ("SSL_VERIFY", "false"),
             ("SSL_CERT_FILE", "/env/roots.pem"),
             ("SSL_CERTIFICATE", "/env/client.pem"),
@@ -177,6 +230,7 @@ mod tests {
             ("SSL_ECDH_CURVE", "X25519"),
             ("LITELLM_USER_AGENT", "env/2"),
         ]));
+        let settings = HttpSettings::from_layers([environment, configured]);
         assert_eq!(settings.ssl_verify, Some(SslVerify::Disabled));
         assert_eq!(settings.ssl_cert_file, Some("/env/roots.pem".into()));
         assert_eq!(settings.ssl_certificate, Some("/env/client.pem".into()));
@@ -189,30 +243,60 @@ mod tests {
     }
 
     #[test]
-    fn missing_environment_keeps_configured_values() {
-        let configured = HttpSettings {
-            ssl_verify: Some(SslVerify::CaBundle("/configured/roots.pem".into())),
-            http2: true,
-            trust_proxy_env: true,
-            user_agent: Some("configured/1".into()),
-            ..HttpSettings::default()
+    fn an_explicit_false_in_a_higher_layer_beats_a_lower_true() {
+        let higher = HttpSettingsLayer {
+            http2: Some(false),
+            force_ipv4: Some(false),
+            ..HttpSettingsLayer::default()
         };
-        assert_eq!(configured.clone().with_environment(&no_env), configured);
+        let lower = HttpSettingsLayer {
+            http2: Some(true),
+            force_ipv4: Some(true),
+            ..HttpSettingsLayer::default()
+        };
+        let settings = HttpSettings::from_layers([higher, lower]);
+        assert!(!settings.http2);
+        assert!(!settings.force_ipv4);
+    }
+
+    #[test]
+    fn an_empty_environment_is_an_empty_layer_so_lower_layers_and_defaults_apply() {
+        assert_eq!(
+            HttpSettingsLayer::from_environment(&no_env),
+            HttpSettingsLayer::default()
+        );
+        let configured = HttpSettingsLayer {
+            ssl_verify: Some(SslVerify::CaBundle("/configured/roots.pem".into())),
+            http2: Some(true),
+            user_agent: Some("configured/1".into()),
+            ..HttpSettingsLayer::default()
+        };
+        assert_eq!(
+            HttpSettings::from_layers([HttpSettingsLayer::default(), configured]),
+            HttpSettings {
+                ssl_verify: Some(SslVerify::CaBundle("/configured/roots.pem".into())),
+                http2: true,
+                user_agent: Some("configured/1".into()),
+                ..HttpSettings::default()
+            }
+        );
+        assert_eq!(HttpSettings::from_layers([]), HttpSettings::default());
     }
 
     #[test]
     fn empty_environment_values_clear_the_setting_like_python_truthiness() {
-        let settings = HttpSettings {
+        let configured = HttpSettingsLayer {
             ssl_certificate: Some("/configured/client.pem".into()),
             ssl_security_level: Some("configured".into()),
             ssl_ecdh_curve: Some("X25519".into()),
-            ..HttpSettings::default()
-        }
-        .with_environment(&env_of(&[
+            ..HttpSettingsLayer::default()
+        };
+        let environment = HttpSettingsLayer::from_environment(&env_of(&[
             ("SSL_CERTIFICATE", ""),
             ("SSL_SECURITY_LEVEL", ""),
             ("SSL_ECDH_CURVE", ""),
         ]));
+        let settings = HttpSettings::from_layers([environment, configured]);
         assert_eq!(settings.ssl_certificate, None);
         assert_eq!(settings.ssl_security_level, None);
         assert_eq!(settings.ssl_ecdh_curve, None);
@@ -220,11 +304,11 @@ mod tests {
 
     #[test]
     fn socket_keepalive_follows_the_aiohttp_variables_with_python_defaults() {
-        let tuned = HttpSettings::default().with_environment(&env_of(&[
+        let tuned = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&env_of(&[
             ("AIOHTTP_SO_KEEPALIVE", "True"),
             ("AIOHTTP_TCP_KEEPIDLE", "45"),
             ("AIOHTTP_KEEPALIVE_TIMEOUT", "30"),
-        ]));
+        ]))]);
         assert_eq!(
             tuned.tcp_keepalive,
             Some(TcpKeepalive {
@@ -238,10 +322,51 @@ mod tests {
 
     #[test]
     fn socket_keepalive_stays_off_unless_enabled() {
-        let settings =
-            HttpSettings::default().with_environment(&env_of(&[("AIOHTTP_TCP_KEEPIDLE", "45")]));
+        let settings = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&env_of(
+            &[("AIOHTTP_TCP_KEEPIDLE", "45")],
+        ))]);
         assert_eq!(settings.tcp_keepalive, None);
         assert_eq!(settings.pool_idle_timeout, Duration::from_secs(120));
+    }
+
+    fn proxy_flags(
+        aiohttp_trust_env: bool,
+        disable_aiohttp_trust_env: bool,
+        disable_aiohttp_transport: bool,
+        http2: bool,
+    ) -> HttpSettingsLayer {
+        HttpSettingsLayer {
+            aiohttp_trust_env: Some(aiohttp_trust_env),
+            disable_aiohttp_trust_env: Some(disable_aiohttp_trust_env),
+            disable_aiohttp_transport: Some(disable_aiohttp_transport),
+            http2: Some(http2),
+            ..HttpSettingsLayer::default()
+        }
+    }
+
+    #[rstest]
+    #[case::aiohttp_default(proxy_flags(false, false, false, false), true)]
+    #[case::aiohttp_opted_out(proxy_flags(false, true, false, false), false)]
+    #[case::session_trust_env_beats_opt_out(proxy_flags(true, true, false, false), true)]
+    #[case::http2_uses_httpx(proxy_flags(false, true, false, true), true)]
+    #[case::aiohttp_disabled(proxy_flags(false, true, true, false), true)]
+    fn environment_proxies_apply_unless_the_aiohttp_transport_opts_out(
+        #[case] layer: HttpSettingsLayer,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(HttpSettings::from_layers([layer]).trust_proxy_env, expected);
+    }
+
+    #[test]
+    fn a_proxy_opt_out_in_one_source_still_yields_to_trust_env_from_another() {
+        let environment =
+            HttpSettingsLayer::from_environment(&env_of(&[("DISABLE_AIOHTTP_TRUST_ENV", "true")]));
+        let configured = HttpSettingsLayer {
+            aiohttp_trust_env: Some(true),
+            ..HttpSettingsLayer::default()
+        };
+        assert!(!HttpSettings::from_layers([environment.clone()]).trust_proxy_env);
+        assert!(HttpSettings::from_layers([environment, configured]).trust_proxy_env);
     }
 
     #[test]
@@ -267,11 +392,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case("true", true)]
-    #[case("True", true)]
-    #[case("false", false)]
-    #[case("1", false)]
-    fn boolean_switches_only_turn_on_for_true(#[case] value: &'static str, #[case] expected: bool) {
+    #[case("true", Some(true))]
+    #[case("True", Some(true))]
+    #[case("false", None)]
+    #[case("1", None)]
+    fn boolean_switches_only_turn_on_for_true(
+        #[case] value: &'static str,
+        #[case] expected: Option<bool>,
+    ) {
         let env = move |name: &str| match name {
             "LITELLM_HTTP2"
             | "AIOHTTP_TRUST_ENV"
@@ -279,10 +407,10 @@ mod tests {
             | "DISABLE_AIOHTTP_TRUST_ENV" => Some(value.to_string()),
             _ => None,
         };
-        let settings = HttpSettings::default().with_environment(&env);
-        assert_eq!(settings.http2, expected);
-        assert_eq!(settings.httpx_transport, expected);
-        assert_eq!(settings.trust_proxy_env, expected);
-        assert_eq!(settings.ignore_proxy_env, expected);
+        let layer = HttpSettingsLayer::from_environment(&env);
+        assert_eq!(layer.http2, expected);
+        assert_eq!(layer.aiohttp_trust_env, expected);
+        assert_eq!(layer.disable_aiohttp_transport, expected);
+        assert_eq!(layer.disable_aiohttp_trust_env, expected);
     }
 }
