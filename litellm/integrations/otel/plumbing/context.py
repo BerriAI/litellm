@@ -325,12 +325,27 @@ def _outgoing_trace_context(parent_span: object) -> Context | None:
     return None
 
 
+def _propagated_context(headers: Mapping[str, str], request_context: Context) -> Context:
+    """``request_context`` when it continues the trace ``headers`` already name, else the
+    caller's own context, so an explicit upstream ``traceparent`` (``x-pass-traceparent``)
+    is never swapped for an unrelated trace and its ``tracestate`` survives."""
+    caller: Final = extract_traceparent(headers)
+    if caller is None:
+        return request_context
+    caller_span: Final = get_current_span(caller).get_span_context()
+    request_span: Final = get_current_span(request_context).get_span_context()
+    if not caller_span.is_valid or caller_span.trace_id == request_span.trace_id:
+        return request_context
+    return caller
+
+
 def inject_trace_context(headers: Mapping[str, str], parent_span: object = None) -> dict[str, str]:
     """``headers`` plus W3C ``traceparent``/``tracestate`` for this request's span.
 
     Parent preference: ``parent_span`` (the request span auth stashed on the key), then
     the anchored request root span, then the ambient active span. Only trace context is
-    injected, never Baggage. Unchanged when no valid span exists anywhere.
+    injected, never Baggage. Unchanged when no valid span exists anywhere. A ``traceparent``
+    already in ``headers`` from a different trace is forwarded as-is instead of replaced.
     """
     context: Final = _outgoing_trace_context(parent_span)
     if context is None:
@@ -338,7 +353,7 @@ def inject_trace_context(headers: Mapping[str, str], parent_span: object = None)
     carrier: Final = {  # mutable-ok: OpenTelemetry propagator requires a mutable carrier
         key: value for key, value in headers.items() if key.lower() not in _W3C_TRACE_HEADERS
     }
-    _PROPAGATOR.inject(carrier, context=context)
+    _PROPAGATOR.inject(carrier, context=_propagated_context(headers, context))
     return carrier
 
 
