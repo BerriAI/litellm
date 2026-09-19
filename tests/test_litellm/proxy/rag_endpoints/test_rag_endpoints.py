@@ -359,6 +359,73 @@ def test_rag_ingest_registry_store_wins_over_request_provider_and_params(client_
     assert forwarded["aws_region_name"] == "eu-west-1"
 
 
+def test_rag_ingest_registry_store_drops_caller_destinations_and_keeps_upload_options(client_internal_user):
+    """
+    The store's registered credentials ride along on the upload, so a caller authorized
+    on the store must not be able to point them at a bucket, index or project the store
+    does not define. Per-upload options still pass through.
+    """
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        BEDROCK_REGISTRY_STORE, {"vector_store_id": "kb-store", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post(
+            "/v1/rag/ingest",
+            **_ingest_form(
+                {
+                    "vector_store_id": "kb-store",
+                    "s3_bucket": "someone-elses-bucket",
+                    "s3_prefix": "other-kb/",
+                    "vector_bucket_name": "someone-elses-vectors",
+                    "index_name": "other-index",
+                    "vertex_project": "other-project",
+                    "data_source_id": "DS2",
+                    "wait_for_ingestion": True,
+                    "ingestion_timeout": 60,
+                }
+            ),
+        )
+
+    assert response.status_code == 200, response.json()
+    forwarded = mock_aingest.await_args.kwargs["ingest_options"]["vector_store"]
+    assert forwarded == {
+        "vector_store_id": "kb-store",
+        "custom_llm_provider": "bedrock",
+        "aws_region_name": "eu-west-1",
+        "aws_access_key_id": "AKIA-registry",
+        "aws_secret_access_key": "registry-secret",
+        "data_source_id": "DS2",
+        "wait_for_ingestion": True,
+        "ingestion_timeout": 60,
+    }
+
+
+def test_rag_ingest_unmanaged_store_keeps_the_callers_full_config(client_internal_user):
+    """A store id the proxy does not manage carries no server-side config, so the caller's config is all there is."""
+    caller_config = {
+        "vector_store_id": "KB-unmanaged",
+        "custom_llm_provider": "bedrock",
+        "s3_bucket": "callers-bucket",
+        "s3_prefix": "docs/",
+    }
+    aingest_patch, registry_patch = _patched_ingest_boundary(
+        None, {"vector_store_id": "KB-unmanaged", "file_id": "file_123"}
+    )
+    with (
+        aingest_patch as mock_aingest,
+        registry_patch,
+        _patched_prisma_client(None),
+    ):
+        response = client_internal_user.post("/v1/rag/ingest", **_ingest_form(caller_config))
+
+    assert response.status_code == 200, response.json()
+    assert mock_aingest.await_args.kwargs["ingest_options"]["vector_store"] == caller_config
+
+
 def test_rag_ingest_db_managed_store_keeps_the_callers_credential_name(client_internal_user):
     """
     A store synced from the database carries litellm_credential_name=None; that
