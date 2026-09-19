@@ -125,6 +125,9 @@ start_proxy() {
 start_proxy 4000 proxy.log
 proxy_pid="$launched_pid"
 .venv/bin/python .circleci/scripts/wait_integration_services.py
+curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
+  -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
 if [ "$suite" = management ]; then
   export INTEGRATION_PEER_URL=http://127.0.0.1:4001
   start_proxy 4001 peer.log

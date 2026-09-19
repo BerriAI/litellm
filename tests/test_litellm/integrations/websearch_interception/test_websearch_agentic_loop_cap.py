@@ -12,19 +12,23 @@ config.yaml through to the settings the loop actually reads.
 """
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 import litellm
+from litellm.exceptions import AuthenticationError, RateLimitError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.handler import (
+    WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY,
     WebSearchInterceptionLogger,
 )
+from litellm.integrations.websearch_interception.tools import get_litellm_web_search_tool
+from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC_LOOPS
 from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
     FakeAnthropicMessagesStreamIterator,
 )
-from litellm.litellm_core_utils.agentic_loop_settings import DEFAULT_MAX_AGENTIC_LOOPS
+from litellm.llms.base_llm.search.transformation import SearchResponse, SearchResult
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret
 from litellm.types.integrations.custom_logger import (
@@ -488,6 +492,135 @@ class TestOuterFramePostHookStillRuns:
         assert _block_types(result)[:2] == ["server_tool_use", "web_search_tool_result"]
         assert INTERNAL_TOOL_NAME not in _tool_use_names(result)
         assert result["stop_reason"] == "end_turn"
+
+
+def _response_asking_for_searches(*queries: str) -> dict:
+    return {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [
+            {"id": f"toolu_internal_{index}", "type": "tool_use", "name": INTERNAL_TOOL_NAME, "input": {"query": query}}
+            for index, query in enumerate(queries, start=1)
+        ],
+        "stop_reason": "tool_use",
+        "usage": {"input_tokens": 10, "output_tokens": 5},
+    }
+
+
+class TestFailedSearchEndsTheTurn:
+    """
+    A search that failed used to come back to the client as an empty successful
+    ``web_search_tool_result`` while the model was re-asked the same query until
+    the loop cap tripped. When the client sent a native web search tool, the
+    turn now ends after the first failed search, with Anthropic's
+    ``web_search_tool_result_error`` object in the tool result and no follow-up
+    model call. An iteration where some search still succeeded keeps its
+    follow-up call.
+    """
+
+    def setup_method(self):
+        self.handler = BaseLLMHTTPHandler()
+        self.logger = WebSearchInterceptionLogger(enabled_providers=["anthropic"])
+        self.followup_calls: list[dict] = []
+
+    async def _fake_acreate(self, **call_kwargs):
+        self.followup_calls.append(call_kwargs)
+        return {
+            "id": "msg_followup",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "final answer"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 20, "output_tokens": 5},
+        }
+
+    async def _run(self, response: dict, converted_stream: bool = False):
+        return await self.handler._call_agentic_completion_hooks(
+            response=response,
+            model="claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "who won the world cup"}],
+            anthropic_messages_provider_config=MagicMock(),
+            anthropic_messages_optional_request_params={"tools": [get_litellm_web_search_tool()]},
+            logging_obj=_logging_obj(self.logger, converted_stream=converted_stream),
+            stream=False,
+            custom_llm_provider="anthropic",
+            kwargs={"_agentic_loop_depth": 0, "max_agentic_loops": 3, WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: True},
+        )
+
+    @pytest.mark.asyncio
+    async def test_all_failed_iteration_ends_the_turn_without_a_follow_up_call(self, monkeypatch):
+        monkeypatch.setattr("litellm.anthropic_interface.messages.acreate", self._fake_acreate)
+
+        with patch.object(
+            self.logger,
+            "_execute_search",
+            side_effect=AuthenticationError("401 Unauthorized", llm_provider="tavily", model="tavily"),
+        ):
+            result = await self._run(_response_asking_for_searches("who won the world cup"))
+
+        assert self.followup_calls == []
+        assert result["stop_reason"] == "end_turn"
+        assert INTERNAL_TOOL_NAME not in _tool_use_names(result)
+        assert _block_types(result) == ["server_tool_use", "web_search_tool_result"]
+        server_tool_use, tool_result = result["content"]
+        assert server_tool_use["id"].startswith("srvtoolu_")
+        assert server_tool_use["input"] == {"query": "who won the world cup"}
+        assert tool_result["tool_use_id"] == server_tool_use["id"]
+        assert tool_result["content"] == {"type": "web_search_tool_result_error", "error_code": "unavailable"}
+
+    @pytest.mark.asyncio
+    async def test_all_failed_iteration_streams_the_error_block(self, monkeypatch):
+        monkeypatch.setattr("litellm.anthropic_interface.messages.acreate", self._fake_acreate)
+
+        with patch.object(
+            self.logger,
+            "_execute_search",
+            side_effect=AuthenticationError("401 Unauthorized", llm_provider="tavily", model="tavily"),
+        ):
+            result = await self._run(_response_asking_for_searches("who won the world cup"), converted_stream=True)
+
+        assert self.followup_calls == []
+        assert isinstance(result, FakeAnthropicMessagesStreamIterator)
+        events = _stream_events(result.response)
+        started = [event["content_block"] for event in events if event["type"] == "content_block_start"]
+        assert [block["type"] for block in started] == ["server_tool_use", "web_search_tool_result"]
+        assert started[1]["tool_use_id"] == started[0]["id"]
+        assert started[1]["content"] == {"type": "web_search_tool_result_error", "error_code": "unavailable"}
+        assert [event["delta"]["stop_reason"] for event in events if event["type"] == "message_delta"] == ["end_turn"]
+
+    @pytest.mark.asyncio
+    async def test_mixed_iteration_keeps_the_follow_up_call(self, monkeypatch):
+        monkeypatch.setattr("litellm.anthropic_interface.messages.acreate", self._fake_acreate)
+
+        async def search(query, kwargs=None):
+            if query == "fails":
+                raise RateLimitError("slow down", llm_provider="tavily", model="tavily")
+            found = SearchResult(title="Result", url="https://example.com", snippet="A result.", date=None)
+            return ("Title: Result\nURL: https://example.com", SearchResponse(results=[found]))
+
+        with patch.object(self.logger, "_execute_search", side_effect=search):
+            result = await self._run(_response_asking_for_searches("fails", "works"))
+
+        assert len(self.followup_calls) == 1
+        tool_results = self.followup_calls[0]["messages"][-1]["content"]
+        assert [block["type"] for block in tool_results] == ["tool_result", "tool_result"]
+        assert tool_results[0]["content"] == "Search failed: litellm.RateLimitError: slow down"
+        assert tool_results[1]["content"] == "Title: Result\nURL: https://example.com"
+        assert result["stop_reason"] == "end_turn"
+        assert _block_types(result) == [
+            "server_tool_use",
+            "web_search_tool_result",
+            "server_tool_use",
+            "web_search_tool_result",
+            "text",
+        ]
+        assert result["content"][0]["input"] == {"query": "fails"}
+        assert result["content"][1]["content"] == {"type": "web_search_tool_result_error", "error_code": "too_many_requests"}
+        assert result["content"][2]["input"] == {"query": "works"}
+        assert result["content"][3]["content"][0]["url"] == "https://example.com"
 
 
 class TestMaxAgenticLoopsConfigKnob:

@@ -159,8 +159,7 @@ class _MCPHTTPClient(httpx2.AsyncClient):
         follow_redirects: bool | UseClientDefault = httpx2.USE_CLIENT_DEFAULT,
     ) -> httpx2.Response:
         response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
-        # Check after the auth flow completes so a refreshable 401 can still be retried.
-        if request.method == "POST" and response.is_error:
+        if request.method == "POST" and response.is_error and response.status_code != 404:
             await response.aclose()
             response.raise_for_status()
         return response

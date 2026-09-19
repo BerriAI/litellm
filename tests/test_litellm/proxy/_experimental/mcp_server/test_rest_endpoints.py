@@ -4319,3 +4319,131 @@ class TestV1ResolvedOauth2Gate:
 
         assert rest_endpoints._v1_resolved_oauth2_server_ids(["oauth2-srv"]) == set()
         assert rest_endpoints._v1_resolved_oauth2_server_ids(["oauth2-srv", "delegate-srv"]) == {"delegate-srv"}
+
+
+_CLIENT_ALLOWLIST_SETTINGS: Final[dict[str, object]] = {
+    "mcp_allowed_clients": [{"alias": "Antigravity CLI", "value": "antigravity-cli"}],
+    "litellm_jwtauth": {"mcp_client_id_jwt_field": "azp"},
+    "mcp_client_id_header": "x-mcp-client",
+}
+
+
+class TestClientAllowlistOnRestRoutes:
+    """``mcp_allowed_clients`` must gate the REST tool facade exactly like the /mcp transports,
+    otherwise an unlisted harness can list and call tools by switching to /mcp-rest."""
+
+    pytestmark = pytest.mark.asyncio
+
+    @staticmethod
+    def _stub_listing(monkeypatch: pytest.MonkeyPatch) -> list[UserAPIKeyAuth]:
+        listed_for: list[UserAPIKeyAuth] = []
+
+        async def fake_contexts(user_api_key_auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+            listed_for.append(user_api_key_auth)
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(
+            user_api_key_auth: UserAPIKeyAuth | None = None,
+            *,
+            keyless_source: bool = False,
+        ) -> list[str]:
+            return []
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", _CLIENT_ALLOWLIST_SETTINGS, raising=False)
+        monkeypatch.setattr(rest_endpoints, "build_effective_auth_contexts", fake_contexts, raising=False)
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        return listed_for
+
+    @pytest.mark.parametrize(
+        ("caller", "headers", "expected_fragment"),
+        (
+            (UserAPIKeyAuth(jwt_claims={"azp": "claude-code"}), {"x-mcp-client": "antigravity-cli"}, "'claude-code'"),
+            (UserAPIKeyAuth(jwt_claims={}), {"x-mcp-client": "antigravity-cli"}, "no 'azp' claim"),
+            (UserAPIKeyAuth(), {"x-mcp-client": "claude-code"}, "'claude-code'"),
+            (UserAPIKeyAuth(), {}, "no 'x-mcp-client' header"),
+        ),
+    )
+    async def test_tools_list_rejects_unlisted_clients_before_resolving_servers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caller: UserAPIKeyAuth,
+        headers: dict[str, str],
+        expected_fragment: str,
+    ) -> None:
+        listed_for: Final = self._stub_listing(monkeypatch)
+        request: Final = _build_request(headers, path="/mcp-rest/tools/list", method="GET")
+
+        with pytest.raises(HTTPException) as denied:
+            await rest_endpoints.list_tool_rest_api(
+                request, server_id=None, mcp_server_name=None, toolset_name=None, user_api_key_dict=caller
+            )
+
+        assert denied.value.status_code == 403
+        assert denied.value.detail["error"] == "Forbidden"
+        assert expected_fragment in denied.value.detail["details"]
+        assert "mcp_allowed_clients" in denied.value.detail["details"]
+        assert listed_for == []
+
+    @pytest.mark.parametrize(
+        ("caller", "headers"),
+        (
+            (UserAPIKeyAuth(jwt_claims={"azp": "antigravity-cli"}), {"x-mcp-client": "claude-code"}),
+            (UserAPIKeyAuth(), {"x-mcp-client": "antigravity-cli"}),
+        ),
+    )
+    async def test_tools_list_admits_listed_clients(
+        self, monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth, headers: dict[str, str]
+    ) -> None:
+        listed_for: Final = self._stub_listing(monkeypatch)
+        request: Final = _build_request(headers, path="/mcp-rest/tools/list", method="GET")
+
+        result: Final = await rest_endpoints.list_tool_rest_api(
+            request, server_id=None, mcp_server_name=None, toolset_name=None, user_api_key_dict=caller
+        )
+
+        assert result["tools"] == []
+        assert listed_for == [caller]
+
+    async def test_dashboard_session_is_not_treated_as_a_client_application(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+        listed_for: Final = self._stub_listing(monkeypatch)
+        session: Final = UserAPIKeyAuth(team_id=UI_SESSION_TOKEN_TEAM_ID, user_id="admin-user", user_role="proxy_admin")
+        request: Final = _build_request(path="/mcp-rest/tools/list", method="GET")
+
+        result: Final = await rest_endpoints.list_tool_rest_api(
+            request, server_id=None, mcp_server_name=None, toolset_name=None, user_api_key_dict=session
+        )
+
+        assert result["tools"] == []
+        assert listed_for == [session]
+
+    async def test_tools_call_rejects_unlisted_clients_before_reading_the_body(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", _CLIENT_ALLOWLIST_SETTINGS, raising=False)
+        acting: Final = AsyncMock()
+        monkeypatch.setattr(rest_endpoints, "acting_user_auth", acting, raising=False)
+        request: Final = _build_request(
+            {"x-mcp-client": "antigravity-cli"},
+            path="/mcp-rest/tools/call",
+            method="POST",
+            json_body={"server_id": "server-1", "name": "demo-tool", "arguments": {}},
+        )
+
+        with pytest.raises(HTTPException) as denied:
+            await rest_endpoints.call_tool_rest_api(
+                request, user_api_key_dict=UserAPIKeyAuth(jwt_claims={"azp": "claude-code"})
+            )
+
+        assert denied.value.status_code == 403
+        assert denied.value.detail["error"] == "Forbidden"
+        assert "'claude-code'" in denied.value.detail["details"]
+        acting.assert_not_awaited()

@@ -2616,6 +2616,23 @@ wheels = [
 ]
 
 [[package]]
+name = "google-cloud-speech"
+version = "2.40.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "google-api-core", version = "2.25.2", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version >= '3.14'" },
+    { name = "google-api-core", version = "2.30.3", source = { registry = "https://pypi.org/simple" }, extra = ["grpc"], marker = "python_full_version < '3.14'" },
+    { name = "google-auth" },
+    { name = "grpcio" },
+    { name = "proto-plus" },
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5a/c1/5dc9795314f4aefea0b01b02e9f5486a198341ecc15fe47f89a61c68df63/google_cloud_speech-2.40.0.tar.gz", hash = "sha256:e89e688e4ce0b926754038bf992d0d0f065c5f1c3503bb20e6c46d08b63658fc", size = 404366, upload-time = "2026-06-03T16:13:59.506Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cc/78/afeca8d597fab54bdd823f857aad15d6f9c4628ff3cb72aa237d01700721/google_cloud_speech-2.40.0-py3-none-any.whl", hash = "sha256:7cc0302b3b9ca33d2eae9669da94a44316601a240942895362ac70e765b9f39c", size = 345427, upload-time = "2026-06-03T16:12:40.909Z" },
+]
+
+[[package]]
 name = "google-cloud-storage"
 version = "3.4.1"
 source = { registry = "https://pypi.org/simple" }
@@ -4595,6 +4612,7 @@ proxy-runtime = [
     { name = "ddtrace" },
     { name = "detect-secrets" },
     { name = "google-cloud-aiplatform" },
+    { name = "google-cloud-speech" },
     { name = "google-genai" },
     { name = "grpcio" },
     { name = "langfuse" },
@@ -4622,6 +4640,9 @@ stt-nvidia-riva = [
     { name = "nvidia-riva-client" },
     { name = "soundfile" },
 ]
+stt-vertex-chirp = [
+    { name = "google-cloud-speech" },
+]
 utils = [
     { name = "numpydoc" },
 ]
@@ -4636,6 +4657,7 @@ ci = [
     { name = "blockbuster" },
     { name = "claude-agent-sdk" },
     { name = "detect-secrets" },
+    { name = "google-cloud-speech" },
     { name = "google-generativeai" },
     { name = "jsonlines" },
     { name = "langchain" },
@@ -4749,6 +4771,8 @@ requires-dist = [
     { name = "google-cloud-aiplatform", marker = "extra == 'proxy-runtime'", specifier = ">=1.133.0,<2.0" },
     { name = "google-cloud-iam", marker = "extra == 'extra-proxy'", specifier = ">=2.19.1,<3.0" },
     { name = "google-cloud-kms", marker = "extra == 'extra-proxy'", specifier = ">=2.24.2,<3.0" },
+    { name = "google-cloud-speech", marker = "extra == 'proxy-runtime'", specifier = ">=2.40.0,<3.0" },
+    { name = "google-cloud-speech", marker = "extra == 'stt-vertex-chirp'", specifier = ">=2.40.0,<3.0" },
     { name = "google-genai", marker = "extra == 'proxy-runtime'", specifier = ">=1.37.0,<2.0" },
     { name = "granian", marker = "extra == 'proxy'", specifier = ">=2.7.4,<3.0" },
     { name = "grpcio", marker = "extra == 'grpc'", specifier = "==1.78.0" },
@@ -4821,7 +4845,7 @@ requires-dist = [
     { name = "uvloop", marker = "sys_platform != 'win32' and extra == 'proxy'", specifier = ">=0.22.1,<1.0" },
     { name = "websockets", marker = "extra == 'proxy'", specifier = ">=15.0.1,<16.0" },
 ]
-provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
+provides-extras = ["proxy", "cli", "extra-proxy", "utils", "caching", "mcp", "saml", "semantic-router", "mlflow", "grpc", "stt-vertex-chirp", "stt-nvidia-riva", "google", "bedrock-realtime", "proxy-runtime"]
 
 [package.metadata.requires-dev]
 ci = [
@@ -4833,6 +4857,7 @@ ci = [
     { name = "blockbuster", specifier = "==1.5.26" },
     { name = "claude-agent-sdk", specifier = "==0.1.44" },
     { name = "detect-secrets", specifier = "==1.5.0" },
+    { name = "google-cloud-speech", specifier = "==2.40.0" },
     { name = "google-generativeai", specifier = "==0.8.6" },
     { name = "jsonlines", specifier = "==4.0.0" },
     { name = "langchain", specifier = "==1.3.9" },

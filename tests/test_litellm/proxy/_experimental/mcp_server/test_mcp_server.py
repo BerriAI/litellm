@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import contextvars
 import json
 import os
@@ -20,7 +21,8 @@ from mcp.types import (
     TextResourceContents,
 )
 from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS, LATEST_HANDSHAKE_VERSION
-from starlette.types import Message, Scope
+from pydantic import TypeAdapter
+from starlette.types import Message, Receive, Scope, Send
 
 from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
 from litellm.proxy._types import (
@@ -2059,6 +2061,220 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(_mcp_r
         assert headers[b"x-mcp-debug-auth-resolution"] == (b"stored-user-token" if method == "POST" else b"unresolved")
     else:
         assert not any(name.startswith(b"x-mcp-debug") for name in headers)
+
+
+_FORBIDDEN_BODY_ADAPTER: Final[TypeAdapter[dict[str, str]]] = TypeAdapter(dict[str, str])
+_BODY_CHUNK_ADAPTER: Final[TypeAdapter[bytes]] = TypeAdapter(bytes)
+_INITIALIZE: Final = (
+    b'{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18",'
+    b'"capabilities":{},"clientInfo":{"name":"antigravity-cli","version":"1.0.0"}}}'
+)
+_TOOLS_LIST: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+_ALLOWLIST_SETTINGS: Final[dict[str, object]] = {
+    "mcp_allowed_clients": [{"alias": "Antigravity CLI", "value": "antigravity-cli"}],
+    "litellm_jwtauth": {"mcp_client_id_jwt_field": "azp"},
+    "mcp_client_id_header": "x-mcp-client",
+}
+_LISTED_JWT: Final[dict[str, object]] = {"azp": "antigravity-cli", "sub": "user-1"}
+_UNLISTED_JWT: Final[dict[str, object]] = {"azp": "claude-code", "sub": "user-1"}
+_LISTED_HEADER: Final[list[tuple[bytes, bytes]]] = [(b"x-mcp-client", b"antigravity-cli")]
+_UNLISTED_HEADER: Final[list[tuple[bytes, bytes]]] = [(b"x-mcp-client", b"claude-code")]
+
+
+async def _drain_body(receive: Receive) -> bytes:
+    first: Final = await receive()
+    body: Final = _BODY_CHUNK_ADAPTER.validate_python(first.get("body", b""))
+    if not first.get("more_body", False):
+        return body
+    return body + await _drain_body(receive)
+
+
+def _client_allowlist_patches(
+    settings: dict[str, object], jwt_claims: dict[str, object] | None
+) -> contextlib.ExitStack:
+    stack: Final = contextlib.ExitStack()
+    stack.enter_context(
+        patch(  # test-quality-ok: the ASGI handler resolves auth through a module-level function; no injection seam
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(UserAPIKeyAuth(user_id="allowlist-user", jwt_claims=jwt_claims), None, None, None, None, {}),
+        )
+    )
+    stack.enter_context(
+        patch(  # test-quality-ok: module flag guarding lazy session-manager startup; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED", True
+        )
+    )
+    stack.enter_context(
+        patch(  # test-quality-ok: the allowlist is read off this module global; no injection seam
+            "litellm.proxy.proxy_server.general_settings", settings
+        )
+    )
+    return stack
+
+
+def _forbidden_body(denied: HTTPException) -> dict[str, str]:
+    return _FORBIDDEN_BODY_ADAPTER.validate_python(denied.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("jwt_claims", "headers", "request_body", "expected_fragment"),
+    (
+        (_UNLISTED_JWT, [], _INITIALIZE, "MCP client 'claude-code' (from JWT claim 'azp')"),
+        (_UNLISTED_JWT, _LISTED_HEADER, _INITIALIZE, "MCP client 'claude-code' (from JWT claim 'azp')"),
+        ({"sub": "user-1"}, _LISTED_HEADER, _INITIALIZE, "no 'azp' claim"),
+        (None, _UNLISTED_HEADER, _INITIALIZE, "MCP client 'claude-code' (from header 'x-mcp-client')"),
+        (None, [], _INITIALIZE, "no 'x-mcp-client' header"),
+        (_UNLISTED_JWT, [(b"mcp-session-id", b"session-1")], _TOOLS_LIST, "MCP client 'claude-code'"),
+    ),
+)
+async def test_streamable_http_rejects_unlisted_client_before_any_session_work(
+    jwt_claims: dict[str, object] | None,
+    headers: list[tuple[bytes, bytes]],
+    request_body: bytes,
+    expected_fragment: str,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
+    receive: Final = AsyncMock(return_value={"type": "http.request", "body": request_body, "more_body": False})
+    send: Final = AsyncMock()
+    stateful_handle: Final = AsyncMock()
+    stateless_handle: Final = AsyncMock()
+    session_cap: Final = AsyncMock(return_value=True)
+
+    with (
+        _client_allowlist_patches(_ALLOWLIST_SETTINGS, jwt_claims),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
+        ),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
+        ),
+        patch(  # test-quality-ok: module-level cap check; asserting it is never reached is the point
+            "litellm.proxy._experimental.mcp_server.server._enforce_stateful_session_cap_for_owner", session_cap
+        ),
+        pytest.raises(HTTPException) as denied,
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    assert denied.value.status_code == 403
+    body: Final = _forbidden_body(denied.value)
+    assert body["error"] == "Forbidden"
+    assert expected_fragment in body["details"]
+    assert "mcp_allowed_clients" in body["details"]
+    receive.assert_not_awaited()
+    send.assert_not_awaited()
+    stateful_handle.assert_not_awaited()
+    stateless_handle.assert_not_awaited()
+    session_cap.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("settings", "jwt_claims", "headers"),
+    (
+        (_ALLOWLIST_SETTINGS, _LISTED_JWT, []),
+        (_ALLOWLIST_SETTINGS, _LISTED_JWT, _UNLISTED_HEADER),
+        (_ALLOWLIST_SETTINGS, None, _LISTED_HEADER),
+        ({}, _UNLISTED_JWT, _UNLISTED_HEADER),
+        ({}, None, []),
+    ),
+)
+async def test_streamable_http_admits_listed_or_unrestricted_clients_and_hands_the_body_downstream(
+    settings: dict[str, object], jwt_claims: dict[str, object] | None, headers: list[tuple[bytes, bytes]]
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers}
+    receive: Final = AsyncMock(
+        side_effect=[
+            {"type": "http.request", "body": _INITIALIZE[:20], "more_body": True},
+            {"type": "http.request", "body": _INITIALIZE[20:], "more_body": False},
+        ]
+    )
+    send: Final = AsyncMock()
+    downstream_bodies: Final[list[bytes]] = []
+
+    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
+        downstream_bodies.append(await _drain_body(downstream_receive))
+
+    stateful_handle: Final = AsyncMock(side_effect=handle_request)
+    stateless_handle: Final = AsyncMock()
+
+    with (
+        _client_allowlist_patches(settings, jwt_claims),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
+        ),
+        patch(  # test-quality-ok: session managers are module singletons; the downstream call is the observable
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    assert downstream_bodies == [_INITIALIZE]
+    stateless_handle.assert_not_awaited()
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("jwt_claims", "headers", "admitted"),
+    (
+        (_LISTED_JWT, [], True),
+        (None, _LISTED_HEADER, True),
+        (_UNLISTED_JWT, _LISTED_HEADER, False),
+        (None, _UNLISTED_HEADER, False),
+        (None, [], False),
+    ),
+)
+async def test_sse_endpoint_applies_the_same_client_allowlist(
+    jwt_claims: dict[str, object] | None, headers: list[tuple[bytes, bytes]], admitted: bool
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp/sse", "headers": headers}
+    receive: Final = AsyncMock(return_value={"type": "http.request", "body": _INITIALIZE, "more_body": False})
+    send: Final = AsyncMock()
+    downstream_bodies: Final[list[bytes]] = []
+
+    async def handle_request(_: Scope, downstream_receive: Receive, __: Send) -> None:
+        downstream_bodies.append(await _drain_body(downstream_receive))
+
+    with (
+        _client_allowlist_patches(_ALLOWLIST_SETTINGS, jwt_claims),
+        patch(  # test-quality-ok: module-level pre-auth probe unrelated to the allowlist under test; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._raise_preemptive_401_for_unauthenticated_servers",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: module-level upstream auth probe unrelated to the allowlist under test; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._check_passthrough_upstream_auth",
+            new_callable=AsyncMock,
+        ),
+        patch.object(  # test-quality-ok: SSE manager is a module singleton; the downstream call is the observable
+            mcp_module.sse_session_manager, "handle_request", side_effect=handle_request
+        ),
+    ):
+        if admitted:
+            await mcp_module.handle_sse_mcp(scope, receive, send)
+            assert downstream_bodies == [_INITIALIZE]
+            send.assert_not_awaited()
+            return
+        with pytest.raises(HTTPException) as denied:
+            await mcp_module.handle_sse_mcp(scope, receive, send)
+
+    assert denied.value.status_code == 403
+    body: Final = _forbidden_body(denied.value)
+    assert body["error"] == "Forbidden"
+    assert "mcp_allowed_clients" in body["details"]
+    assert downstream_bodies == []
+    send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
