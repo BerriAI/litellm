@@ -1836,6 +1836,22 @@ def _rewritten_model_response(response: Any) -> litellm.ModelResponse:
     return litellm.ModelResponse(**payload)
 
 
+def _two_choice_stream_chunks() -> List[Any]:
+    return [
+        litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "hello "}, "finish_reason": None}]),
+        litellm.ModelResponseStream(choices=[{"index": 1, "delta": {"content": "bonjour "}, "finish_reason": None}]),
+        litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": "world"}, "finish_reason": "stop"}]),
+        litellm.ModelResponseStream(choices=[{"index": 1, "delta": {"content": "monde"}, "finish_reason": "stop"}]),
+    ]
+
+
+def _rewritten_every_choice(response: Any) -> litellm.ModelResponse:
+    payload = response.model_dump()
+    for choice in payload["choices"]:
+        choice["message"]["content"] = "[REWRITTEN] " + choice["message"]["content"]
+    return litellm.ModelResponse(**payload)
+
+
 def test_streamable_post_call_pipelines_keeps_hook_guardrails_and_drops_iterator_only(
     make_user_api_key_auth, monkeypatch, caplog
 ):
@@ -1981,6 +1997,39 @@ async def test_streaming_iterator_hook_runs_legacy_hook_and_delivers_its_rewrite
     assert delivered[1].choices[0].delta.content in (None, "")
     assert delivered[1].choices[0].finish_reason == "stop"
     assert data["metadata"]["applied_guardrails"] == ["gr-post"]
+    assert _warnings(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_delivers_legacy_hook_rewrite_on_every_choice(
+    proxy_logging, make_user_api_key_auth, monkeypatch, caplog
+):
+    seen: Dict[str, Any] = {}
+    guardrail = _legacy_hook_stream_guardrail(seen, rewrite=_rewritten_every_choice)
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+    chunks = _two_choice_stream_chunks()
+    auth = make_user_api_key_auth(request_route="/v1/chat/completions")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await proxy_logging.pre_call_hook(user_api_key_dict=auth, data=data, call_type="completion", guardrails_only=True)
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=auth, response=_async_chunk_iter(chunks), request_data=data
+            )
+        ]
+
+    assert [choice.message.content for choice in seen["response"].choices] == ["hello world", "bonjour monde"]
+    assert [id(item) for item in delivered] == [id(chunk) for chunk in chunks]
+    assert [(item.choices[0].index, item.choices[0].delta.content) for item in delivered] == [
+        (0, "[REWRITTEN] hello world"),
+        (1, "[REWRITTEN] bonjour monde"),
+        (0, ""),
+        (1, ""),
+    ]
+    assert [item.choices[0].finish_reason for item in delivered] == [None, None, "stop", "stop"]
     assert _warnings(caplog) == []
 
 
