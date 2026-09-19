@@ -756,7 +756,11 @@ def get_logging_payload(
             ),
             response=_get_response_for_spend_logs_payload(payload=standard_logging_payload, kwargs=kwargs),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
-                metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
+                metadata=metadata,
+                litellm_params=(
+                    _placeholder_stored_request_body_model(litellm_params) if model_is_placeholdered else litellm_params
+                ),
+                kwargs=kwargs,
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
@@ -1416,9 +1420,29 @@ def _convert_mapping_to_json_serializable(obj: Mapping[str, object]) -> dict[str
     return dict(obj)
 
 
+def _placeholder_stored_request_body_model(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    proxy_server_request: Final = litellm_params.get("proxy_server_request")
+    if not isinstance(proxy_server_request, Mapping):
+        return litellm_params
+    request_body: Final = proxy_server_request.get("body")
+    if not isinstance(request_body, Mapping) or "model" not in request_body:
+        return litellm_params
+    return MappingProxyType(
+        {
+            **litellm_params,
+            "proxy_server_request": MappingProxyType(
+                {
+                    **proxy_server_request,
+                    "body": MappingProxyType({**request_body, "model": UNKNOWN_MODEL_SPEND_LOG_MODEL}),
+                }
+            ),
+        }
+    )
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
-    litellm_params: dict,
+    litellm_params: Mapping[str, object],
     kwargs: dict | None = None,
 ) -> str:
     """

@@ -1107,6 +1107,50 @@ def test_get_logging_payload_keeps_a_whitespace_model_name_on_success_or_a_route
     assert payload["model"] == _RAW_MODEL_WITH_PROMPT
 
 
+@pytest.mark.parametrize("redact_messages", [False, True])
+@pytest.mark.parametrize(
+    ("metadata", "expected_stored_model"),
+    [
+        ({"user_api_key": "sk-test", "status": "failure"}, UNKNOWN_MODEL_SPEND_LOG_MODEL),
+        (
+            {"user_api_key": "sk-test", "status": "failure", "model_info": {"id": "routed-deployment"}},
+            _RAW_MODEL_WITH_PROMPT,
+        ),
+    ],
+)
+def test_get_logging_payload_placeholders_the_stored_request_body_model_only_when_the_row_is_placeholdered(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: dict[str, object],
+    expected_stored_model: str,
+    redact_messages: bool,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    kwargs: Final = {
+        "model": _RAW_MODEL_WITH_PROMPT,
+        "call_type": "amoderation",
+        "standard_callback_dynamic_params": {"turn_off_message_logging": redact_messages},
+        "litellm_params": {
+            "metadata": metadata,
+            "proxy_server_request": {
+                "url": "http://localhost:4000/v1/moderations",
+                "body": {"input": "hi", "model": _RAW_MODEL_WITH_PROMPT},
+            },
+        },
+    }
+
+    payload: Final = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=ValueError("Invalid value for 'model'"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    stored_request_body: Final = json.loads(payload["proxy_server_request"])
+    assert stored_request_body["model"] == expected_stored_model
+
+
 _WHITESPACE_MODEL_GROUP: Final = "Broken GPT Mini"
 _WHITESPACE_MODEL_GROUP_ALIAS: Final = "Broken GPT Alias"
 _COOLDOWN_ERROR_MESSAGE: Final = (
@@ -1223,7 +1267,9 @@ def test_get_logging_payload_persists_no_raw_model_for_a_prompt_shaped_moderatio
     error_information: Final = _sanitize_error_information_for_spend_logs(
         StandardLoggingPayloadSetup.get_error_information(
             original_exception=provider_rejection,
-            traceback_str=f"Traceback (most recent call last):\n  ...\nlitellm.exceptions.BadRequestError: {provider_rejection}",
+            traceback_str=(
+                f"Traceback (most recent call last):\n  ...\nlitellm.exceptions.BadRequestError: {provider_rejection}"
+            ),
         ),
         original_exception=provider_rejection,
     )
@@ -1272,8 +1318,14 @@ _TRUNCATION_MARKER_TEXT: Final = (
             f"OpenAIException - {{'message': '{UNKNOWN_MODEL_SPEND_LOG_MODEL}'}}",
         ),
         (
-            f"Invalid model {_RAW_MODEL_WITH_PROMPT[:20]}{_TRUNCATION_MARKER_TEXT}{_RAW_MODEL_WITH_PROMPT[30:]} rejected",
-            f"Invalid model {UNKNOWN_MODEL_SPEND_LOG_MODEL}{_TRUNCATION_MARKER_TEXT}{UNKNOWN_MODEL_SPEND_LOG_MODEL} rejected",
+            (
+                f"Invalid model {_RAW_MODEL_WITH_PROMPT[:20]}{_TRUNCATION_MARKER_TEXT}"
+                f"{_RAW_MODEL_WITH_PROMPT[30:]} rejected"
+            ),
+            (
+                f"Invalid model {UNKNOWN_MODEL_SPEND_LOG_MODEL}{_TRUNCATION_MARKER_TEXT}"
+                f"{UNKNOWN_MODEL_SPEND_LOG_MODEL} rejected"
+            ),
         ),
     ],
 )
