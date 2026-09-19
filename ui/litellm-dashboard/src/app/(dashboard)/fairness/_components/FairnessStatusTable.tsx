@@ -50,8 +50,8 @@ const ClassRow = ({ row }: { row: WorkloadClassStatus }) => (
     <TableCell>
       {rejectedTotal(row).toLocaleString()}
       <span className="block text-xs text-muted-foreground">
-        {row.rejected_capacity_total} capacity, {row.rejected_queue_full_total} queue full,{" "}
-        {row.rejected_deadline_total} deadline, {row.disconnected_total} disconnected
+        {`${row.rejected_capacity_total} capacity, ${row.rejected_queue_full_total} queue full, ` +
+          `${row.rejected_deadline_total} deadline, ${row.disconnected_total} disconnected`}
       </span>
     </TableCell>
   </TableRow>
