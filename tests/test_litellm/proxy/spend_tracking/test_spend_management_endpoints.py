@@ -7717,8 +7717,9 @@ async def test_ui_view_spend_logs_group_by_session_offset_for_non_starttime_sort
         assert "next_session_cursor" not in data
         emitted_sql = [call.args[0] for call in mock_prisma.db.query_raw.await_args_list]
         assert "HAVING" not in " ".join(emitted_sql)
-        assert f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in emitted_sql[1]
-        assert "OFFSET" in emitted_sql[1]
+        page_sql = [sql for sql in emitted_sql if f"DISTINCT ON ({SESSION_GROUP_KEY_SQL})" in sql]
+        assert len(page_sql) == 1
+        assert "OFFSET" in page_sql[0]
     finally:
         app.dependency_overrides.pop(ps.user_api_key_auth, None)
 

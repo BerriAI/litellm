@@ -3,7 +3,7 @@ import asyncio
 import collections
 import json
 import os
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from itertools import groupby
@@ -2880,11 +2880,11 @@ async def ui_view_spend_logs(
             LIMIT ${p} OFFSET ${p + 1}
         """
         )
-        count_task: Final[Awaitable[Sequence[_SpendLogsCountRow] | None]] = _query_raw_or_none(
-            prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1
+        count_task: Final[asyncio.Task[Sequence[_SpendLogsCountRow] | None]] = asyncio.create_task(
+            _query_raw_or_none(prisma_client, count_query, *sql_params, SPEND_LOGS_PAGINATION_COUNT_CAP + 1)
         )
-        data_task: Final = prisma_client.db.query_raw(sql_query, *sql_params, page_size, skip)
-        count_rows, data = await asyncio.gather(count_task, data_task)
+        data: Final = await prisma_client.db.query_raw(sql_query, *sql_params, page_size, skip)
+        count_rows: Final = await count_task
         raw_total: Final = int(count_rows[0]["total_count"]) if count_rows else 0
         total_is_capped: Final = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
         total_records: Final = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
