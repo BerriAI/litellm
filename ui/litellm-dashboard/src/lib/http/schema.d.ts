@@ -7693,6 +7693,10 @@ export interface paths {
          *         - max_budget: Optional[float] - Max budget for key
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
+         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
+         *
+         *     Only the fields an item carries are written: a field left out keeps its current value, and a field
+         *     sent explicitly, null included, is applied exactly as /key/update applies it.
          *
          *     Returns:
          *     - total_requested: int - Total number of keys requested for update
@@ -7801,7 +7805,7 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
-         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
@@ -8282,7 +8286,7 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
-         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - blocked: Optional[bool] - Whether the key is blocked
          *     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -24767,10 +24771,16 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Requested Token Type */
+            requested_token_type?: string | null;
             /** Resource */
             resource?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Subject Token */
+            subject_token?: string | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
         };
         /** Body_token_endpoint_token_post */
         Body_token_endpoint_token_post: {
@@ -24788,10 +24798,16 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Requested Token Type */
+            requested_token_type?: string | null;
             /** Resource */
             resource?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Subject Token */
+            subject_token?: string | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
         };
         /** Body_upload_logo_upload_logo_post */
         Body_upload_logo_upload_logo_post: {
@@ -25225,7 +25241,7 @@ export interface components {
         };
         /**
          * BulkUpdateKeyRequestItem
-         * @description Individual key update request item
+         * @description One /key/bulk_update item; only the fields it carries are written.
          */
         BulkUpdateKeyRequestItem: {
             /** Budget Id */
@@ -25234,6 +25250,7 @@ export interface components {
             key: string;
             /** Max Budget */
             max_budget?: number | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Tags */
             tags?: string[] | null;
             /** Team Id */
@@ -26070,6 +26087,8 @@ export interface components {
             /** Allowed Callers */
             allowed_callers?: string[];
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
+            /** Eager Input Streaming */
+            eager_input_streaming?: boolean;
             function: components["schemas"]["ChatCompletionToolParamFunctionChunk"];
             /** Type */
             type: "function" | string;
@@ -26078,6 +26097,8 @@ export interface components {
         ChatCompletionToolParamFunctionChunk: {
             /** Description */
             description?: string;
+            /** Eager Input Streaming */
+            eager_input_streaming?: boolean;
             /** Name */
             name: string;
             /** Parameters */
@@ -26683,6 +26704,13 @@ export interface components {
              */
             cancel_on_disconnect?: boolean | null;
             /**
+             * Claude Code Gateway Managed Settings
+             * @description Claude Code managed-settings.json served verbatim at the gateway's /claude_code_gateway/managed/settings endpoint. When unset the endpoint returns 404 (no managed policy)
+             */
+            claude_code_gateway_managed_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Completion Model
              * @description proxy level default model for all chat completion calls
              */
@@ -26776,6 +26804,11 @@ export interface components {
              * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
              */
             disable_responses_id_security?: boolean | null;
+            /**
+             * Enable Claude Code Gateway
+             * @description serve the Claude Code gateway protocol (https://code.claude.com/docs/en/claude-apps-gateway) under /claude_code_gateway: OAuth device-flow sign-in reusing proxy SSO, plus managed settings and OTLP telemetry ingestion. Off by default
+             */
+            enable_claude_code_gateway?: boolean | null;
             /**
              * Enable Openai Websocket Passthrough
              * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
@@ -26923,6 +26956,16 @@ export interface components {
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
              */
             maximum_spend_logs_retention_period?: string | null;
+            /**
+             * Mcp Allowed Clients
+             * @description MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.
+             */
+            mcp_allowed_clients?: components["schemas"]["MCPAllowedClient"][] | null;
+            /**
+             * Mcp Client Id Header
+             * @description Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.
+             */
+            mcp_client_id_header?: string | null;
             /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
@@ -29416,6 +29459,8 @@ export interface components {
         KeyMetadata: {
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Exists */
+            key_exists?: boolean | null;
             /** Team Id */
             team_id?: string | null;
             /** User Email */
@@ -30627,6 +30672,8 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Annotation Cost Per Page Batches */
+            annotation_cost_per_page_batches?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -30856,6 +30903,8 @@ export interface components {
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
             ocr_cost_per_page?: number | null;
+            /** Ocr Cost Per Page Batches */
+            ocr_cost_per_page_batches?: number | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -31757,9 +31806,8 @@ export interface components {
             /**
              * Api Version
              * @description API version for Javelin service
-             * @default v1
              */
-            api_version: string | null;
+            api_version?: string | null;
             /**
              * Application
              * @description Application name for Javelin service
@@ -32558,6 +32606,22 @@ export interface components {
              * @enum {string}
              */
             status?: "healthy" | "unhealthy";
+        };
+        /**
+         * MCPAllowedClient
+         * @description One entry of `general_settings.mcp_allowed_clients`.
+         */
+        MCPAllowedClient: {
+            /**
+             * Alias
+             * @description Human-readable name for this client application, shown in the dashboard and in gateway logs.
+             */
+            alias: string;
+            /**
+             * Value
+             * @description Exact value of the JWT claim named in litellm_jwtauth.mcp_client_id_jwt_field, or of the mcp_client_id_header header, that identifies this client application. Matched case-sensitively.
+             */
+            value: string;
         };
         /** MCPConnectorEntry */
         MCPConnectorEntry: {
@@ -41267,6 +41331,8 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Annotation Cost Per Page Batches */
+            annotation_cost_per_page_batches?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -41496,6 +41562,8 @@ export interface components {
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
             ocr_cost_per_page?: number | null;
+            /** Ocr Cost Per Page Batches */
+            ocr_cost_per_page_batches?: number | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */

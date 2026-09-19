@@ -22,16 +22,16 @@ from typing import TYPE_CHECKING
 from urllib.parse import parse_qsl
 
 import httpx
+import httpx2
 import pytest
+from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
+from e2e_http import AuthHeaders, NoBody, unwrap
 from mcp import ClientSession
 from mcp.client.auth import OAuthClientProvider
 from mcp.client.streamable_http import streamable_http_client
-from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
-
-from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
-from proxy_client import ProxyClient
-from e2e_http import AuthHeaders, NoBody, unwrap
+from mcp.shared.auth import AuthorizationCodeResult, OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
 from models import ChatBody, ChatResponse, McpServerCreateBody, McpServerInfo
+from proxy_client import ProxyClient
 
 if TYPE_CHECKING:
     from playwright.async_api import Route
@@ -88,7 +88,7 @@ async def _browser_follow_authorize(start_url: str, storage_state_path: str) -> 
         if url.startswith(OAUTH_CLIENT_REDIRECT_URI) and "url" not in captured:
             captured["url"] = url
 
-    async def _swallow_redirect(route: "Route") -> None:
+    async def _swallow_redirect(route: Route) -> None:
         await route.fulfill(status=200, content_type="text/plain", body="ok")
 
     async with async_playwright() as playwright:
@@ -139,10 +139,10 @@ def _oauth_provider(url: str, storage: InMemoryTokenStorage, storage_state_path:
         code_holder["code"] = code
         code_holder["state"] = state
 
-    async def callback_handler() -> tuple[str, str | None]:
+    async def callback_handler() -> AuthorizationCodeResult:
         code = code_holder.get("code")
         assert code is not None, "callback_handler ran before the authorize redirect completed"
-        return code, code_holder.get("state")
+        return AuthorizationCodeResult(code=code, state=code_holder.get("state"))
 
     return OAuthClientProvider(
         server_url=url,
@@ -161,30 +161,30 @@ def _oauth_provider(url: str, storage: InMemoryTokenStorage, storage_state_path:
     )
 
 
-class _HeaderInjectingTransport(httpx.AsyncBaseTransport):
+class _HeaderInjectingTransport(httpx2.AsyncBaseTransport):
     """Adds the caller's LiteLLM key header to every outgoing SDK request
     (discovery, DCR, token exchange), so the gateway resolves which user to
     store the upstream token for from the key on the token exchange, exactly
     like a production MCP host configured with a LiteLLM key header."""
 
-    def __init__(self, inner: httpx.AsyncBaseTransport, headers: dict[str, str]) -> None:
+    def __init__(self, inner: httpx2.AsyncBaseTransport, headers: dict[str, str]) -> None:
         self._inner = inner
         self._headers = headers
 
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+    async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         for name, value in self._headers.items():
             if name not in request.headers:
                 request.headers[name] = value
         return await self._inner.handle_async_request(request)
 
 
-def _oauth_http_client(headers: dict[str, str], auth: OAuthClientProvider) -> httpx.AsyncClient:
-    return httpx.AsyncClient(
+def _oauth_http_client(headers: dict[str, str], auth: OAuthClientProvider) -> httpx2.AsyncClient:
+    return httpx2.AsyncClient(
         headers=headers,
         auth=auth,
-        timeout=httpx.Timeout(REQUEST_TIMEOUT),
+        timeout=httpx2.Timeout(REQUEST_TIMEOUT),
         follow_redirects=True,
-        transport=_HeaderInjectingTransport(httpx.AsyncHTTPTransport(), headers),
+        transport=_HeaderInjectingTransport(httpx2.AsyncHTTPTransport(), headers),
     )
 
 
@@ -192,7 +192,7 @@ async def _seed_via_dance(
     url: str, headers: dict[str, str], storage: InMemoryTokenStorage, storage_state_path: str
 ) -> tuple[str, ...]:
     async with _oauth_http_client(headers, _oauth_provider(url, storage, storage_state_path)) as http_client:
-        async with streamable_http_client(url, http_client=http_client) as (read, write, _):
+        async with streamable_http_client(url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 listed = await session.list_tools()

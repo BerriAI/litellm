@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 from collections.abc import Mapping
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal, Optional
@@ -914,6 +915,32 @@ async def test_get_user_object_wraps_db_outage_as_valueerror_preserving_context(
             )
 
     assert isinstance(exc_info.value.__context__, ConnectionError)
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_check_db_only_ignores_recent_miss(monkeypatch):
+    """A database-only read is never answered by the per-worker negative memo: a row created after a miss on
+    this worker is returned within db_cache_expiry seconds instead of raising UserNotFoundError, so the token
+    exchange mints for a user JWT auth just accepted."""
+    from litellm.proxy.auth import auth_checks
+
+    user_id = "memo-probe-user"
+    monkeypatch.setitem(auth_checks.last_db_access_time, f"user_id:{user_id}", (None, time.time()))
+    db_row = LiteLLM_UserTable(user_id=user_id, user_email=None, user_role="internal_user")
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_row)
+
+    result = await get_user_object(
+        user_id=user_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=UserApiKeyCache(),
+        user_id_upsert=False,
+        check_db_only=True,
+    )
+
+    assert result is not None
+    assert result.user_id == user_id
+    mock_prisma_client.db.litellm_usertable.find_unique.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -7545,6 +7572,70 @@ async def test_project_allowlist_enforced_when_key_models_empty():
     assert exc_info.value.code == "403"
 
 
+def _project_with_budget(spend: float, max_budget: float):
+    from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_ProjectTableCachedObj
+
+    return LiteLLM_ProjectTableCachedObj(
+        project_id="p-budget",
+        team_id="t-1",
+        budget_id="b-1",
+        spend=spend,
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="b-1", max_budget=max_budget),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "counter_spend, db_spend, max_budget, blocks",
+    [
+        pytest.param(5.0, 0.0, 5.0, True, id="counter-at-budget-blocks-despite-stale-db-row"),
+        pytest.param(4.99, 0.0, 5.0, False, id="counter-under-budget-admits"),
+        pytest.param(None, 5.0, 5.0, True, id="no-counter-falls-back-to-persisted-spend"),
+        pytest.param(None, 0.0, 5.0, False, id="no-counter-and-no-persisted-spend-admits"),
+        pytest.param(12.5, 12.5, 0.0, False, id="zero-budget-is-unbudgeted"),
+        pytest.param(12.5, 12.5, -1.0, False, id="negative-budget-is-unbudgeted"),
+    ],
+)
+async def test_project_max_budget_check_blocks_only_when_live_spend_reaches_a_positive_budget(
+    counter_spend, db_spend, max_budget, blocks
+):
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.auth_checks import _project_max_budget_check
+
+    real_spend_counter_cache = DualCache()
+    if counter_spend is not None:
+        real_spend_counter_cache.in_memory_cache.set_cache(key="spend:project:p-budget", value=counter_spend)
+    valid_token = UserAPIKeyAuth(api_key="hashed-key", project_id="p-budget", team_id="t-1", user_id="u-1")
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    with patch(  # test-quality-ok: injects a real DualCache for the module global, not a behavior mock
+        "litellm.proxy.proxy_server.spend_counter_cache", real_spend_counter_cache
+    ):
+        if not blocks:
+            await _project_max_budget_check(
+                project_object=_project_with_budget(spend=db_spend, max_budget=max_budget),
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+            await asyncio.sleep(0)
+            proxy_logging_obj.budget_alerts.assert_not_awaited()
+            return
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _project_max_budget_check(
+                project_object=_project_with_budget(spend=db_spend, max_budget=max_budget),
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        await asyncio.sleep(0)
+
+    assert exc_info.value.entity_type == Litellm_EntityType.PROJECT.value
+    assert exc_info.value.entity_id == "p-budget"
+    assert exc_info.value.current_cost == 5.0
+    proxy_logging_obj.budget_alerts.assert_awaited_once()
+    assert proxy_logging_obj.budget_alerts.await_args.kwargs["type"] == "project_budget"
+
+
 def test_is_user_proxy_admin_rejects_view_only_admin():
     """This predicate skips `non_proxy_admin_allowed_routes_check` entirely, so an
     Admin Viewer answering True here would gain every write route. Read parity for
@@ -8675,6 +8766,23 @@ async def test_access_group_model_fallback_uses_the_injected_database(channel: s
             ) is True
     reader.assert_awaited_once_with(where={"access_group_id": "group-a"})
 
+
+def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
+    """The RFC 8693 token exchange authorizes the IdP JWT against ``POST /token`` itself, and JWT
+    auth only binds a team from a multi-team claim when that team may call the route, so the
+    default team allowlist has to cover the gateway's token endpoint or the exchange would mint
+    teamless credentials for every ``team_ids_jwt_field`` deployment."""
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.auth_checks import allowed_routes_check
+
+    assert allowed_routes_check(
+        user_role=LitellmUserRoles.TEAM, user_route="/token", litellm_proxy_roles=LiteLLM_JWTAuth()
+    )
+    assert not allowed_routes_check(
+        user_role=LitellmUserRoles.TEAM,
+        user_route="/token",
+        litellm_proxy_roles=LiteLLM_JWTAuth(team_allowed_routes=[]),
+    )
 
 def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/models") is True

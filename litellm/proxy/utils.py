@@ -12,13 +12,37 @@ import sys
 import threading
 import time
 import traceback
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterable,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from functools import partial
+from itertools import takewhile
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeVar, Union, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ClassVar,
+    Final,
+    Generic,
+    Literal,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    cast,
+    overload,
+)
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -123,6 +147,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
 from litellm.proxy.common_utils.config_sync_pubsub import publish_config_param_change
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
@@ -436,6 +461,36 @@ def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: 
     event_hook: Final[object] = getattr(callback, "event_hook", None)
     if event_hook:
         detail.setdefault("guardrail_mode", event_hook)
+
+
+def _record_raising_guardrail(request_data: Mapping[str, object], callback: object) -> None:
+    guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
+    if isinstance(request_data, dict) and isinstance(guardrail_name, str):
+        add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=guardrail_name)
+
+
+class _UpstreamStreamBoundary(Generic[_T]):
+    __slots__ = ("_upstream", "failure")
+
+    def __init__(self, upstream: AsyncIterable[_T]) -> None:
+        self._upstream: Final = upstream.__aiter__()
+        self.failure: BaseException | None = None
+
+    def __aiter__(self) -> "_UpstreamStreamBoundary[_T]":
+        return self
+
+    async def __anext__(self) -> _T:
+        try:
+            return await self._upstream.__anext__()
+        except StopAsyncIteration:
+            raise
+        except Exception as e:
+            self.failure = e
+            raise
+
+
+class _StreamIteratorHook(Protocol[_T]):
+    def __call__(self, *, response: AsyncIterator[_T]) -> AsyncGenerator[_T, None]: ...
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
@@ -955,6 +1010,7 @@ class _CallbackCapabilities:
     has_guardrail: bool = False
     has_pre_call_override: bool = False
     has_content_enforcer: bool = False
+    has_moderation_override: bool = False
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
@@ -963,6 +1019,11 @@ class _CallbackCapabilities:
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
+
+
+def _overrides_moderation_hook(callback: CustomLogger) -> bool:
+    leaf_to_base: Final = takewhile(lambda klass: klass is not CustomLogger, type(callback).__mro__)
+    return any("async_moderation_hook" in klass.__dict__ for klass in leaf_to_base)
 
 
 class ProxyLogging:
@@ -1816,13 +1877,19 @@ class ProxyLogging:
         )
         if expected_if_unmutated is not None:
             callback.mark_pre_call_hook_ran(expected_if_unmutated)
-        result: Final = await self._process_guardrail_callback(
-            callback=callback,
-            data=input_data,
-            user_api_key_dict=user_api_key_dict,
-            call_type=call_type,
-            event_type=GuardrailEventHooks.pre_call,
-        )
+        try:
+            result: Final = await self._process_guardrail_callback(
+                callback=callback,
+                data=input_data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+                event_type=GuardrailEventHooks.pre_call,
+            )
+        except SensitiveDataRouteException:
+            raise
+        except Exception:
+            _record_raising_guardrail(data, callback)
+            raise
         if (
             scans_raw_request
             and expected_if_unmutated is not None
@@ -2045,13 +2112,18 @@ class ProxyLogging:
             _merge_pipeline_metadata_writes(data, result.modified_data)
 
         if result.terminal_action == "block":
+            blocking_step: Final = result.step_results[-1] if result.step_results else None
+            callback: Final = (
+                PipelineExecutor.find_guardrail_callback(blocking_step.guardrail_name)
+                if blocking_step is not None
+                else None
+            )
+            if callback is not None:
+                _record_raising_guardrail(data, callback)
             original_exception: Final = result.original_exception
             if original_exception is not None and not _exception_changes_request_flow(original_exception):
-                blocking_step: Final = result.step_results[-1] if result.step_results else None
-                if blocking_step is not None:
-                    callback: Final = PipelineExecutor.find_guardrail_callback(blocking_step.guardrail_name)
-                    if callback is not None:
-                        _enrich_http_exception_with_guardrail_context(original_exception, callback)
+                if callback is not None:
+                    _enrich_http_exception_with_guardrail_context(original_exception, callback)
                 raise original_exception
 
             step_results_serializable: Final = [
@@ -2317,8 +2389,10 @@ class ProxyLogging:
             if data is not None:
                 self._process_guardrail_metadata(data)
             return data
-        except Exception as e:
-            raise e
+        except Exception:
+            if data is not None:
+                self._process_guardrail_metadata(data)
+            raise
 
     async def _run_parallel_pre_call_guardrails(
         self,
@@ -2376,6 +2450,8 @@ class ProxyLogging:
             # live kwargs.
             if callback.scan_raw_request and not isinstance(result, BaseException) and result is not None:
                 callback.mark_pre_call_hook_ran(data)
+            if isinstance(result, BaseException) and not isinstance(result, SensitiveDataRouteException):
+                _record_raising_guardrail(data, callback)
         raised: Final = tuple(result for result in results if isinstance(result, BaseException))
         blocking: Final = next((exc for exc in raised if not _exception_changes_request_flow(exc)), None)
         if blocking is not None:
@@ -2454,7 +2530,12 @@ class ProxyLogging:
                 break
 
     @staticmethod
-    async def _run_guardrail_with_metrics(callback: object, coro: Awaitable[_T], hook_type: str) -> _T:
+    async def _run_guardrail_with_metrics(
+        callback: object,
+        coro: Awaitable[_T],
+        hook_type: str,
+        request_data: Mapping[str, object],
+    ) -> _T:
         """
         Await `coro`, recording its latency and status to the
         `litellm_guardrail_latency_seconds` metric under `hook_type`, and
@@ -2474,6 +2555,7 @@ class ProxyLogging:
             status = "error"
             error_type = type(e).__name__
             _enrich_http_exception_with_guardrail_context(e, callback)
+            _record_raising_guardrail(request_data, callback)
             raise
         finally:
             ProxyLogging._emit_guardrail_metrics(
@@ -2486,21 +2568,19 @@ class ProxyLogging:
 
     @staticmethod
     async def _wrap_streaming_iterator_with_enrichment(
-        callback: object, gen: AsyncGenerator[_T, None]
+        callback: object,
+        response: AsyncIterable[_T],
+        hook: _StreamIteratorHook[_T],
+        request_data: Mapping[str, object],
     ) -> AsyncGenerator[_T, None]:
-        """
-        Yield from `gen`; if iteration raises an HTTPException with dict detail,
-        enrich the detail with the originating callback's `guardrail_name` and
-        `guardrail_mode` before re-raising. Used to wrap each layer of the
-        async_post_call_streaming_iterator_hook chain so the enrichment is
-        attributed to the callback that produced the chunk pipeline at that
-        point in the chain.
-        """
+        upstream: Final = _UpstreamStreamBoundary(response)
         try:
-            async for chunk in gen:
+            async for chunk in hook(response=upstream):
                 yield chunk
         except Exception as e:
-            _enrich_http_exception_with_guardrail_context(e, callback)
+            if e is not upstream.failure:
+                _enrich_http_exception_with_guardrail_context(e, callback)
+                _record_raising_guardrail(request_data, callback)
             raise
 
     # Cache for callback-capability detection. Keyed on a signature of
@@ -2532,6 +2612,7 @@ class ProxyLogging:
         has_guardrail = False
         has_pre_call_override = False
         has_content_enforcer = False
+        has_moderation_override = False
         iterator_overrides: Final[list[tuple[Any, str]]] = []  # (callback, kind)
         resolved_callbacks: Final[list[CustomLogger]] = []
 
@@ -2550,6 +2631,8 @@ class ProxyLogging:
                 continue
             if isinstance(resolved, CustomGuardrail):
                 has_guardrail = True
+            elif _overrides_moderation_hook(resolved):
+                has_moderation_override = True
             # Use the same leaf-class ``__dict__`` check as the other hook
             # capabilities: only callbacks that actually override the hook
             # contribute to the flag. Setting this for every ``CustomLogger``
@@ -2594,6 +2677,7 @@ class ProxyLogging:
             has_guardrail=has_guardrail,
             has_pre_call_override=has_pre_call_override,
             has_content_enforcer=has_content_enforcer,
+            has_moderation_override=has_moderation_override,
             iterator_overrides=tuple(iterator_overrides),
             resolved_callbacks=tuple(resolved_callbacks),
         )
@@ -2655,20 +2739,27 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
     ):
-        """
-        Runs the CustomGuardrail's async_moderation_hook() in parallel
-        """
-        # Fast path: skip the entire guardrail scan when no CustomGuardrail
-        # callbacks are registered. Saves per-request iteration over
-        # ``litellm.callbacks`` plus an ``asyncio.gather([])`` round trip on
-        # deployments with no guardrails configured.
-        if not ProxyLogging._callback_capabilities().has_guardrail:
+        caps: Final = ProxyLogging._callback_capabilities()
+        if not caps.has_guardrail and not caps.has_moderation_override:
             return data
         # Step 1: Collect all guardrail tasks to run in parallel
         guardrail_tasks: Final = []
 
         for callback in litellm.callbacks:
-            if isinstance(callback, CustomGuardrail):
+            if (
+                isinstance(callback, CustomLogger)
+                and not isinstance(callback, CustomGuardrail)
+                and _overrides_moderation_hook(callback)
+                and user_api_key_dict is not None
+            ):
+                guardrail_tasks.append(
+                    callback.async_moderation_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        call_type=call_type,
+                    )
+                )
+            elif isinstance(callback, CustomGuardrail):
                 ################################################################
                 # Check if guardrail should be run for GuardrailEventHooks.during_call hook
                 ################################################################
@@ -2676,7 +2767,7 @@ class ProxyLogging:
                 # V1 implementation - backwards compatibility
                 if callback.event_hook is None and hasattr(callback, "moderation_check"):
                     if callback.moderation_check == "pre_call":
-                        return
+                        continue
                 else:
                     # Main - V2 Guardrails implementation
                     from litellm.types.guardrails import GuardrailEventHooks
@@ -2735,6 +2826,7 @@ class ProxyLogging:
                     call_type=call_type,
                 ),
                 "during_call",
+                request_data=data,
             )
             return
         await self._run_guardrail_with_metrics(
@@ -2745,6 +2837,7 @@ class ProxyLogging:
                 call_type=call_type,
             ),
             "during_call",
+            request_data=data,
         )
 
     async def failed_tracking_alert(
@@ -3263,6 +3356,7 @@ class ProxyLogging:
                             response=response,
                         ),
                         "post_call",
+                        request_data=data,
                     )
                 else:
                     guardrail_response = await self._run_guardrail_with_metrics(
@@ -3273,6 +3367,7 @@ class ProxyLogging:
                             response=response,
                         ),
                         "post_call",
+                        request_data=data,
                     )
 
                 if guardrail_response is not None:
@@ -3336,6 +3431,7 @@ class ProxyLogging:
                         response=response,
                     ),
                     "post_call",
+                    request_data=data,
                 )
             else:
                 await self._run_guardrail_with_metrics(
@@ -3346,6 +3442,7 @@ class ProxyLogging:
                         response=response,
                     ),
                     "post_call",
+                    request_data=data,
                 )
 
         results: Final = await asyncio.gather(
@@ -3409,6 +3506,7 @@ class ProxyLogging:
                     request_data=request_data,
                 ),
                 "post_mcp_call",
+                request_data=request_data,
             )
         return response
 
@@ -3650,27 +3748,27 @@ class ProxyLogging:
                 )
                 else kind
             )
-            if effective_kind == "override":
-                current_response = self._wrap_streaming_iterator_with_enrichment(
-                    resolved_callback,
-                    resolved_callback.async_post_call_streaming_iterator_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        response=current_response,
-                        request_data=request_data,
-                    ),
+            hook: _StreamIteratorHook[object] = (
+                partial(
+                    resolved_callback.async_post_call_streaming_iterator_hook,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
                 )
-            else:
-                # kind == "apply_guardrail": route through unified_guardrail
-                current_response = self._wrap_streaming_iterator_with_enrichment(
-                    resolved_callback,
-                    unified_guardrail.async_post_call_streaming_iterator_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        request_data=request_data,
-                        response=current_response,
-                        guardrail_to_apply=resolved_callback,
-                        buffer_until_moderated_default=(kind == "override"),
-                    ),
+                if effective_kind == "override"
+                else partial(
+                    unified_guardrail.async_post_call_streaming_iterator_hook,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                    guardrail_to_apply=resolved_callback,
+                    buffer_until_moderated_default=(kind == "override"),
                 )
+            )
+            current_response = self._wrap_streaming_iterator_with_enrichment(
+                resolved_callback,
+                current_response,
+                hook,
+                request_data=request_data,
+            )
 
         pipeline_translation: Final = (
             resolve_endpoint_translation(user_api_key_dict, None) if post_call_pipelines else None

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import enum
 import re
 from collections.abc import Awaitable, Callable, Mapping
@@ -12,6 +14,7 @@ from typing_extensions import TypedDict
 from litellm.types.llms.base import HiddenParams
 
 if TYPE_CHECKING:
+    import httpx2
     from mcp.types import EmbeddedResource as MCPEmbeddedResource
     from mcp.types import ImageContent as MCPImageContent
     from mcp.types import TextContent as MCPTextContent
@@ -89,6 +92,22 @@ class MCPPublicServer(BaseModel):
     spec_path: str | None = None
     auth_type: MCPAuthType | None = None
     mcp_info: dict[str, Any] | None = None
+
+
+class MCPAllowedClient(BaseModel):
+    """One entry of `general_settings.mcp_allowed_clients`."""
+
+    model_config = ConfigDict(frozen=True)
+
+    alias: str = Field(
+        min_length=1,
+        description="Human-readable name for this client application, shown in the dashboard and in gateway logs.",
+    )
+    value: str = Field(
+        min_length=1,
+        description="Exact value of the JWT claim named in litellm_jwtauth.mcp_client_id_jwt_field, or of the "
+        "mcp_client_id_header header, that identifies this client application. Matched case-sensitively.",
+    )
 
 
 class MCPToolSearchSettings(BaseModel):
@@ -332,7 +351,7 @@ def custom_credential_slot(headers: Mapping[str, str] | None) -> str | None:
 
 def credential_redirect_hook(
     configured_url: str, slot: str | None
-) -> Callable[[httpx.Request], Awaitable[None]] | None:
+) -> Callable[[httpx.Request | httpx2.Request], Awaitable[None]] | None:
     """An httpx request hook dropping ``slot`` once a redirect leaves ``configured_url``'s origin.
 
     None when no guard is needed, so callers do not each repeat the exemption: HTTP clients already
@@ -342,7 +361,7 @@ def credential_redirect_hook(
     if not configured_url or not slot or same_header(slot, DEFAULT_CREDENTIAL_HEADER):
         return None
 
-    async def guard(request: httpx.Request) -> None:
+    async def guard(request: httpx.Request | httpx2.Request) -> None:
         if slot in request.headers and crosses_origin(configured_url, str(request.url)):
             del request.headers[slot]
 

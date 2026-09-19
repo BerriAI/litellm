@@ -1,11 +1,13 @@
 import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
@@ -586,6 +588,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         tags=["tag-a"],
         request_started_at=start_time,
         model_access_groups=("premium",),
+        project_id=None,
     )
 
 
@@ -1371,6 +1374,7 @@ async def test_enrich_failure_metadata_with_full_key_lookup():
     mock_key_obj.user_id = "fetched-user-id"
     mock_key_obj.team_id = "fetched-team-id"
     mock_key_obj.org_id = "fetched-org-id"
+    mock_key_obj.project_id = "fetched-project-id"
 
     mock_team_obj = MagicMock()
     mock_team_obj.team_alias = "fetched-team-alias"
@@ -1394,12 +1398,14 @@ async def test_enrich_failure_metadata_with_full_key_lookup():
             "user_api_key_team_id": None,
             "user_api_key_team_alias": None,
             "user_api_key_org_id": None,
+            "user_api_key_project_id": None,
         }
         result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
         assert result["user_api_key_alias"] == "fetched-key-alias"
         assert result["user_api_key_user_id"] == "fetched-user-id"
         assert result["user_api_key_team_id"] == "fetched-team-id"
         assert result["user_api_key_org_id"] == "fetched-org-id"
+        assert result["user_api_key_project_id"] == "fetched-project-id"
         assert result["user_api_key_team_alias"] == "fetched-team-alias"
 
 
@@ -2536,3 +2542,79 @@ async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_
         == "/chat/completions: Invalid model name passed in. Call `/v1/models` to view available models for your key."
     )
     assert error_information["error_class"] == "ProxyModelNotFoundError"
+
+
+class _NeverStringifiedMetadataValue:
+    def __repr__(self) -> str:
+        raise AssertionError("a request metadata value was stringified by the cost tracking failure path")
+
+    __str__ = __repr__
+
+
+def _spend_write_kwargs_with_metadata_value(metadata_value: object) -> dict:
+    return {
+        "call_type": "acompletion",
+        "model": "gpt-5.4-mini",
+        "litellm_call_id": "test-call-id",
+        "stream": False,
+        "response_cost": 4.725e-05,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "user-1",
+                "user_context": metadata_value,
+                "headers": {"user-agent": metadata_value},
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_level", [logging.WARNING, logging.DEBUG])
+async def test_track_cost_callback_failure_alert_never_carries_request_metadata_values(log_level):
+    logger: Final = _ProxyDBLogger()
+    records: list[logging.LogRecord] = []
+    handler: Final = logging.Handler()
+    handler.emit = records.append
+    previous_level: Final = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(log_level)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        with patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging:
+            mock_proxy_logging.failed_tracking_alert = AsyncMock()
+            mock_proxy_logging.db_spend_update_writer = MagicMock()
+            mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(
+                side_effect=Exception("READONLY You can't write against a read only replica.")
+            )
+
+            await logger._PROXY_track_cost_callback(
+                kwargs=_spend_write_kwargs_with_metadata_value(_NeverStringifiedMetadataValue()),
+                completion_response=ModelResponse(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+            await asyncio.sleep(0)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(previous_level)
+
+    mock_proxy_logging.failed_tracking_alert.assert_awaited_once()
+    alert: Final = mock_proxy_logging.failed_tracking_alert.await_args.kwargs
+    assert alert["failing_model"] == "gpt-5.4-mini"
+    assert "READONLY You can't write against a read only replica." in alert["error_message"]
+    assert "model: gpt-5.4-mini" in alert["error_message"]
+    assert "call_type: acompletion" in alert["error_message"]
+
+    failure_debug_lines: Final = [
+        record.getMessage()
+        for record in records
+        if record.levelno == logging.DEBUG and "Cost tracking callback failed" in record.getMessage()
+    ]
+    if log_level == logging.DEBUG:
+        assert len(failure_debug_lines) == 1
+        assert "user_context" in failure_debug_lines[0]
+        assert "headers" in failure_debug_lines[0]
+    else:
+        assert failure_debug_lines == []

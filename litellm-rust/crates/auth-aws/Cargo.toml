@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 litellm-auth.workspace = true
+litellm-http.workspace = true
 
 moka = { workspace = true, features = ["sync"] }
 serde_json.workspace = true

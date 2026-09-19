@@ -158,6 +158,8 @@ DEFAULT_SEMANTIC_GUARD_EMBEDDING_MODEL: Final = str(
 )
 DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD = float(os.getenv("DEFAULT_SEMANTIC_GUARD_SIMILARITY_THRESHOLD", 0.75))
 
+DEFAULT_OPENAI_MODERATIONS_MODEL: Final = "omni-moderation-latest"
+
 # MCP OAuth2 Client Credentials Defaults
 MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS", "60"))
 MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200"))
@@ -576,6 +578,9 @@ FIREWORKS_AI_176_B_MOE: Final = int(os.getenv("FIREWORKS_AI_176_B_MOE", 176))
 FIREWORKS_AI_4_B: Final = int(os.getenv("FIREWORKS_AI_4_B", 4))
 FIREWORKS_AI_16_B: Final = int(os.getenv("FIREWORKS_AI_16_B", 16))
 FIREWORKS_AI_80_B: Final = int(os.getenv("FIREWORKS_AI_80_B", 80))
+# https://docs.fireworks.ai/guides/prompt-caching (accessed 2026-09-19): serverless cached prompt tokens
+# default to a 50% discount off the input rate
+FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO: Final = 0.5
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
@@ -996,6 +1001,9 @@ openai_compatible_providers: Final[list] = [
     "cognition",
     "scx-ai",
 ]
+
+OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
+
 openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",

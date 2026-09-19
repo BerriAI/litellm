@@ -1,4 +1,4 @@
-litellm-llms mirrors `litellm/llms/`: base config traits, provider transformations, and the `custom_httpx` handlers. See `../core/AGENTS.md` for how the crates layer.
+litellm-llms mirrors `litellm/llms/`: base config traits, provider transformations, and the OCR request handler in `base_llm/ocr/handler.rs`. Transport code (clients, media fetching, header helpers, transport errors) lives in `litellm-http`. See `../core/AGENTS.md` for how the crates layer.
 
 ## Python/Rust transformation pairs
 

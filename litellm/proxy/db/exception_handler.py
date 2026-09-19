@@ -1,6 +1,8 @@
 from collections.abc import Awaitable, Callable, Iterator
 from typing import Any, Final, TypeVar
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
@@ -16,6 +18,8 @@ _MAX_EXCEPTION_CHAIN_DEPTH: Final = 20
 _TRANSIENT_DB_UNAVAILABLE_MESSAGE: Final = (
     "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
 )
+
+_DATABASE_ERROR_META: Final = TypeAdapter(dict[str, object])
 
 
 def _exception_chain(e: BaseException) -> Iterator[BaseException]:
@@ -220,6 +224,20 @@ class PrismaDBExceptionHandler:
             or "40p01" in error_message
             or "write conflict or a deadlock" in error_message
         )
+
+    @staticmethod
+    def postgres_sqlstate(e: Exception) -> str | None:
+        """The SQLSTATE Postgres attached to a failed statement, as prisma surfaces it, or None."""
+        import prisma
+
+        if not isinstance(e, _exception_types(prisma.errors.DataError)):
+            return None
+        try:
+            meta: Final = _DATABASE_ERROR_META.validate_python(getattr(e, "meta", None))
+        except ValidationError:
+            return None
+        code: Final = meta.get("code")
+        return code if isinstance(code, str) else None
 
     @staticmethod
     def is_read_only_transaction_error(e: Exception) -> bool:

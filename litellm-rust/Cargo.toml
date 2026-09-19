@@ -10,13 +10,14 @@ repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
-litellm-callbacks = { path = "crates/callbacks" }
+litellm-host = { path = "crates/host" }
 litellm-callbacks-legacy = { path = "crates/callbacks-legacy" }
 litellm-framing = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
+litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
 litellm-types = { path = "crates/types" }
 litellm-core-utils = { path = "crates/core-utils" }
@@ -26,6 +27,9 @@ litellm-token-counter = { path = "crates/token-counter" }
 litellm-host-python = { path = "crates/host-python" }
 
 bytes = "1"
+http = "1"
+hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy"] }
+proptest = "1.7.0"
 pyo3 = "0.29.2"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 pythonize = "0.29.0"
@@ -48,6 +52,7 @@ base64 = "0.22"
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
+webpki-roots = "1"
 time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
 fancy-regex = "0.19.2"

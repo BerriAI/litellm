@@ -95,6 +95,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
 )
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
@@ -281,9 +282,8 @@ async def chat_completion_pass_through_endpoint(
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
         else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "completion: Invalid model name passed in model=" + data.get("model", "")},
+            raise ProxyModelNotFoundError(
+                route="completion", model_name=data.get("model", ""), retryable_with_model_read_through=False
             )
 
         # Await the llm_response task
