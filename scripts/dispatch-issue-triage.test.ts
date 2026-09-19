@@ -72,6 +72,13 @@ describe("dispatchTarget", () => {
     expect(dispatchTarget(ready(), [unrelated], [])).toEqual({ kind: "dispatch" });
   });
 
+  test("only the workflow's own marker counts, a commenter pasting it cannot opt the issue out", () => {
+    const forged: Comment = { ...marker, user: { type: "User", login: "someone" } };
+    expect(dispatchTarget(ready(), [forged], [])).toEqual({ kind: "dispatch" });
+    const otherBot: Comment = { ...marker, user: { type: "Bot", login: "some-other-app[bot]" } };
+    expect(dispatchTarget(ready(), [otherBot], [])).toEqual({ kind: "dispatch" });
+  });
+
   test("an open pull request that references the issue blocks, a merged one or a plain issue does not", () => {
     expect(reasonOf(dispatchTarget(ready(), [], [crossRef(41950, "open")]))).toBe("open pull request #41950 already references it");
     expect(reasonOf(dispatchTarget(ready(), [], [crossRef(41950, "open"), crossRef(41960, "open")]))).toBe(

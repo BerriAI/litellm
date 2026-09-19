@@ -195,6 +195,13 @@ describe("flagIssue", () => {
     const { api, writes } = fakeApi(undefined, [existing]);
     expect(await flagIssue(api, config, verdict())).toEqual({ kind: "skip", reason: "already carries a duplicate notice" });
     expect(writes).toEqual([]);
+
+    const rerun = fakeApi(undefined, [existing]);
+    expect(await flagIssue(rerun.api, config, verdict({ duplicate_of: null }))).toEqual({
+      kind: "skip",
+      reason: "already carries a duplicate notice",
+    });
+    expect(rerun.writes).toEqual([]);
   });
 
   test("a failed comment leaves no marker, so the rerun finishes the job", async () => {

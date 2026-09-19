@@ -31,6 +31,7 @@ export type DispatchVerdict =
 export const BUG_LABEL = labelName("kind", "bug");
 export const RUNNING_LABEL = labelName("repro", "running");
 export const DISPATCH_MARKER = "<!-- litellm:repro-dispatched -->";
+export const DISPATCH_AUTHOR = "github-actions[bot]";
 export const DISPATCH_COMMENT = [
   DISPATCH_MARKER,
   "Devin is going to try to reproduce this. A PR or a Linear ticket follows if it does. Add repro:skip to opt out",
@@ -70,7 +71,7 @@ export function dispatchTarget(
   if (blocking.length > 0) {
     return skip(`carries ${blocking.join(", ")}`);
   }
-  if (comments.some((comment) => comment.body.includes(DISPATCH_MARKER))) {
+  if (comments.some((comment) => comment.user.login === DISPATCH_AUTHOR && comment.body.includes(DISPATCH_MARKER))) {
     return skip("was already dispatched once");
   }
   const pulls = openPullsReferencing(timeline);

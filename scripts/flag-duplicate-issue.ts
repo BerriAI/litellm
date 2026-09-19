@@ -103,15 +103,15 @@ export function noticeBody(issue: Issue, prior: Issue, evidence: string): string
 export async function flagIssue(api: GitHubApi, config: FlagConfig, verdict: Verdict): Promise<FlagVerdict> {
   const target = flagTarget(verdict, config.issueNumber);
   const issuePath = `/repos/${config.repo}/issues/${config.issueNumber}`;
+  const comments = await listAll<Comment>(api, `${issuePath}/comments`);
+  if (comments.some((comment) => comment.body.includes(NOTICE_MARKER_PREFIX))) {
+    return skip("already carries a duplicate notice");
+  }
   if (target.kind === "clear") {
     if (!config.dryRun) {
       await api.request("POST", `${issuePath}/labels`, { labels: [CLEAR_LABEL] });
     }
     return target;
-  }
-  const comments = await listAll<Comment>(api, `${issuePath}/comments`);
-  if (comments.some((comment) => comment.body.includes(NOTICE_MARKER_PREFIX))) {
-    return skip("already carries a duplicate notice");
   }
   const prior = await api.request<Issue>("GET", `/repos/${config.repo}/issues/${target.original}`);
   if (prior.pull_request !== undefined) {
