@@ -10,8 +10,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.rust_bridge import callbacks_legacy_python as callbacks
-from litellm.rust_bridge.callbacks_legacy_python import check_limits, setup
+from litellm.rust_bridge import legacy_callbacks as callbacks
+from litellm.rust_bridge.legacy_callbacks import check_limits, setup
 
 _OCR_KWARGS: Final = MappingProxyType(
     {
@@ -81,7 +81,7 @@ def test_setup_builds_a_logger_when_none_is_supplied(call_type: str, kwargs: Map
     assert result.logger.litellm_call_id == result.kwargs["litellm_call_id"]
 
 
-CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
+CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy/python_contract.json"
 
 
 def test_the_rust_contract_matches_the_shim_signatures() -> None:

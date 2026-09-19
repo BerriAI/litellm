@@ -18,7 +18,7 @@ panic-test = []
 [dependencies]
 bytes.workspace = true
 litellm-auth.workspace = true
-litellm-callbacks-legacy-python.workspace = true
+litellm-callbacks-legacy.workspace = true
 litellm-callbacks-v1-python.workspace = true
 litellm-core.workspace = true
 litellm-core-utils.workspace = true
