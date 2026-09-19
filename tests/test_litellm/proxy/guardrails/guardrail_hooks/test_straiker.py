@@ -2185,3 +2185,29 @@ async def test_v3_openai_format_conversations_that_share_a_system_prompt_get_the
     assert refund != other_preamble
     assert developer == refund and developer != other_preamble
     assert responses_input.startswith("litellm-")
+
+
+@pytest.mark.asyncio
+async def test_v3_derived_session_reads_the_text_of_a_turn_that_opens_with_an_image():
+    async def session_for(first_user_content):
+        g = _make_guardrail(api_key=V3_KEY)
+        g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+        data = _v3_request_data(
+            system="You are the claims assistant.",
+            messages=[{"role": "user", "content": first_user_content}],
+            metadata={"user_api_key_end_user_id": "alice.chen@example.com"},
+        )
+        data["proxy_server_request"] = {"headers": {}}
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data=data, input_type="request", logging_obj=_logging_obj()
+        )
+        return _posted_payload(g)["session_id"]
+
+    image = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "AAAA"}}
+    dent = await session_for([image, {"type": "text", "text": "Assess the dent on the rear door"}])
+    dent_again = await session_for([image, {"type": "text", "text": "Assess the dent on the rear door"}])
+    windshield = await session_for([image, {"type": "text", "text": "Assess the cracked windshield"}])
+    text_first = await session_for([{"type": "text", "text": "Assess the dent on the rear door"}, image])
+    assert dent == dent_again
+    assert dent != windshield
+    assert text_first == dent

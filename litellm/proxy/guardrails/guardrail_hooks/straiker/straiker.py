@@ -673,11 +673,15 @@ _V3_PREAMBLE_ROLES: Final = frozenset({"system", "developer"})
 
 
 def _v3_message_text(message: object) -> str:
+    """Every text block of a message, so a turn that opens with an image or a document still
+    seeds on what the user wrote."""
     content: Final = message.get("content") if isinstance(message, Mapping) else None
     if isinstance(content, str):
         return content
-    if isinstance(content, (list, tuple)) and content and isinstance(content[0], Mapping):
-        return str(content[0].get("text") or "")
+    if isinstance(content, (list, tuple)):
+        return "\n".join(
+            str(block["text"]) for block in content if isinstance(block, Mapping) and isinstance(block.get("text"), str)
+        )
     return ""
 
 
