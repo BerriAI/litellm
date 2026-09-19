@@ -403,8 +403,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         item_type: Final = item.get("type")
         item_id: Final = item.get("id")
         genuine_prefix: Final = TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE.get(item_type) if isinstance(item_type, str) else None
-        if genuine_prefix is None or not isinstance(item_id, str) or item_id.startswith(genuine_prefix):
+        if genuine_prefix is None or not isinstance(item_id, str):
             return item
+        from litellm.litellm_core_utils.prompt_templates.factory import (
+            THOUGHT_SIGNATURE_SEPARATOR,
+        )
+
+        clean_id: Final = (
+            item_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if THOUGHT_SIGNATURE_SEPARATOR in item_id else item_id
+        )
+        if clean_id.startswith(genuine_prefix) and len(clean_id) <= 64:
+            if clean_id == item_id:
+                return item
+            return {**item, "id": clean_id}  # mutable-ok: outgoing JSON request item
         return {key: value for key, value in item.items() if key != "id"}  # mutable-ok: outgoing JSON request item
 
     def _sanitized_tool_schemas_for_openai(
