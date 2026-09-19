@@ -291,6 +291,72 @@ async def test_find_team_with_model_access_uses_request_method_for_passthrough_a
     assert "allowed_passthrough_routes" in exc_info.value.detail
 
 
+def test_get_all_team_ids_preserves_claim_order():
+    handler = JWTHandler()
+    handler.litellm_jwtauth = LiteLLM_JWTAuth(team_ids_jwt_field="groups")
+
+    team_ids = JWTAuthManager.get_all_team_ids(
+        handler,
+        {"groups": ["team-b", "team-a", "team-b", "team-c"]},
+    )
+
+    assert team_ids == ("team-b", "team-a", "team-c")
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_preserves_team_claim_order():
+    handler = JWTHandler()
+    handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    async def mock_get_team_object(team_id: str, **kwargs: object) -> LiteLLM_TeamTable:
+        return LiteLLM_TeamTable(team_id=team_id, models=["gpt-4"])
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            side_effect=mock_get_team_object,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.can_team_access_model",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.allowed_routes_check",
+            return_value=True,
+        ),
+        patch.object(
+            JWTAuthManager,
+            "_team_has_passthrough_route_access",
+            return_value=True,
+        ),
+    ):
+        first_team_id, _ = await JWTAuthManager.find_team_with_model_access(
+            team_ids=("team-b", "team-a"),
+            requested_model="gpt-4",
+            route="/chat/completions",
+            jwt_handler=handler,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+        reversed_team_id, _ = await JWTAuthManager.find_team_with_model_access(
+            team_ids=("team-a", "team-b"),
+            requested_model="gpt-4",
+            route="/chat/completions",
+            jwt_handler=handler,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            parent_otel_span=None,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert first_team_id == "team-b"
+    assert reversed_team_id == "team-a"
+
+
 @pytest.mark.asyncio
 async def test_auth_builder_proxy_admin_user_role():
     """Test that is_proxy_admin is True when user_object.user_role is PROXY_ADMIN"""

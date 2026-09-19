@@ -1589,13 +1589,11 @@ class JWTAuthManager:
         return individual_team_id, team_object
 
     @staticmethod
-    def get_all_team_ids(jwt_handler: JWTHandler, jwt_valid_token: dict) -> set[str]:
+    def get_all_team_ids(jwt_handler: JWTHandler, jwt_valid_token: dict) -> tuple[str, ...]:
         """Get combined team IDs from groups and individual team_id"""
         team_ids_from_groups: Final = jwt_handler.get_team_ids_from_jwt(token=jwt_valid_token)
 
-        all_team_ids: Final = set(team_ids_from_groups)
-
-        return all_team_ids
+        return tuple(dict.fromkeys(team_ids_from_groups))
 
     @staticmethod
     def _team_has_passthrough_route_access(
@@ -1629,7 +1627,7 @@ class JWTAuthManager:
 
     @staticmethod
     async def find_team_with_model_access(
-        team_ids: set[str],
+        team_ids: Sequence[str],
         requested_model: str | None,
         route: str,
         jwt_handler: JWTHandler,
@@ -1868,7 +1866,7 @@ class JWTAuthManager:
     @staticmethod
     def get_team_id_from_header(
         request_headers: Mapping[str, str] | None,
-        allowed_team_ids: set[str],
+        allowed_team_ids: Sequence[str],
         fallback_to_db_teams: bool = False,
     ) -> str | None:
         """
@@ -1877,7 +1875,7 @@ class JWTAuthManager:
 
         Args:
             request_headers: Dictionary of request headers
-            allowed_team_ids: Set of team IDs the user is allowed to access (from JWT)
+            allowed_team_ids: Sequence of team IDs the user is allowed to access (from JWT)
             fallback_to_db_teams: When True and the JWT carries no team claims
                 (allowed_team_ids is empty), the header value is returned
                 provisionally and validated against DB memberships later in
@@ -2472,7 +2470,7 @@ class JWTAuthManager:
 
         # Get team with model access
         ## Check if team_id is specified via x-litellm-team-id header
-        all_team_ids: Final = JWTAuthManager.get_all_team_ids(handler, jwt_valid_token)
+        claim_team_ids: Final = JWTAuthManager.get_all_team_ids(handler, jwt_valid_token)
         specific_team_id: Final = handler.get_team_id(token=jwt_valid_token, default_value=None)
 
         # The DB fallback only applies when the token carries no team identity at
@@ -2488,8 +2486,11 @@ class JWTAuthManager:
             and not handler.get_team_alias(token=jwt_valid_token, default_value=None)
             and team_id is None
         )
-        if specific_team_id and not db_team_fallback:
-            all_team_ids.add(specific_team_id)
+        all_team_ids: Final[tuple[str, ...]] = tuple(
+            dict.fromkeys(
+                (*claim_team_ids, specific_team_id) if specific_team_id and not db_team_fallback else claim_team_ids
+            )
+        )
 
         header_team_id: Final = JWTAuthManager.get_team_id_from_header(
             request_headers=request_headers,
