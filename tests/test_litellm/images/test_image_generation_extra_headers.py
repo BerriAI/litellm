@@ -71,10 +71,10 @@ class TestImageGenerationExtraHeaders:
         assert "extra_headers" not in optional_params
 
     def test_openai_image_generation_excludes_extra_headers_from_body(self):
-        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+        captured: Final[list[httpx.Request]] = []  # mutable-ok: test request capture log
 
         def handle_request(request: httpx.Request) -> httpx.Response:
-            captured["request"] = request
+            captured.append(request)
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
         transport: Final = httpx.MockTransport(handle_request)
@@ -87,8 +87,8 @@ class TestImageGenerationExtraHeaders:
             extra_headers={"cf-aig-auth": "secret-123"},
         )
 
-        assert "request" in captured
-        req: Final = captured["request"]
+        assert len(captured) == 1
+        req: Final = captured[0]
         assert req.headers.get("cf-aig-auth") == "secret-123"
         body: Final = json.loads(req.read())
         assert "extra_headers" not in body
@@ -96,10 +96,10 @@ class TestImageGenerationExtraHeaders:
 
     @pytest.mark.asyncio
     async def test_openai_aimage_generation_excludes_extra_headers_from_body(self):
-        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+        captured: Final[list[httpx.Request]] = []  # mutable-ok: test request capture log
 
         def handle_request(request: httpx.Request) -> httpx.Response:
-            captured["request"] = request
+            captured.append(request)
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
         transport: Final = httpx.MockTransport(handle_request)
@@ -112,18 +112,18 @@ class TestImageGenerationExtraHeaders:
             extra_headers={"cf-aig-auth": "async-secret-123"},
         )
 
-        assert "request" in captured
-        req: Final = captured["request"]
+        assert len(captured) == 1
+        req: Final = captured[0]
         assert req.headers.get("cf-aig-auth") == "async-secret-123"
         body: Final = json.loads(req.read())
         assert "extra_headers" not in body
         assert body == {"prompt": "async test prompt", "model": "gpt-image-2"}
 
     def test_openai_image_generation_with_headers_excludes_from_body(self):
-        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+        captured: Final[list[httpx.Request]] = []  # mutable-ok: test request capture log
 
         def handle_request(request: httpx.Request) -> httpx.Response:
-            captured["request"] = request
+            captured.append(request)
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
         transport: Final = httpx.MockTransport(handle_request)
@@ -136,8 +136,8 @@ class TestImageGenerationExtraHeaders:
             headers={"custom-header": "custom-val"},
         )
 
-        assert "request" in captured
-        req: Final = captured["request"]
+        assert len(captured) == 1
+        req: Final = captured[0]
         assert req.headers.get("custom-header") == "custom-val"
         body: Final = json.loads(req.read())
         assert "headers" not in body
@@ -145,10 +145,10 @@ class TestImageGenerationExtraHeaders:
         assert body == {"prompt": "headers test", "model": "gpt-image-2"}
 
     def test_openai_image_generation_sanitizes_extra_body_and_preserves_siblings(self):
-        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+        captured: Final[list[httpx.Request]] = []  # mutable-ok: test request capture log
 
         def handle_request(request: httpx.Request) -> httpx.Response:
-            captured["request"] = request
+            captured.append(request)
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
         transport: Final = httpx.MockTransport(handle_request)
@@ -161,8 +161,8 @@ class TestImageGenerationExtraHeaders:
             extra_body={"extra_headers": {"cf-aig-auth": "secret-123"}, "custom_sibling": "sibling_val"},
         )
 
-        assert "request" in captured
-        req: Final = captured["request"]
+        assert len(captured) == 1
+        req: Final = captured[0]
         body: Final = json.loads(req.read())
         assert "extra_headers" not in body
         assert body.get("custom_sibling") == "sibling_val"
@@ -170,10 +170,10 @@ class TestImageGenerationExtraHeaders:
 
     @pytest.mark.asyncio
     async def test_openai_aimage_generation_sanitizes_extra_body_and_preserves_siblings(self):
-        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+        captured: Final[list[httpx.Request]] = []  # mutable-ok: test request capture log
 
         def handle_request(request: httpx.Request) -> httpx.Response:
-            captured["request"] = request
+            captured.append(request)
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
         transport: Final = httpx.MockTransport(handle_request)
@@ -186,18 +186,18 @@ class TestImageGenerationExtraHeaders:
             extra_body={"extra_headers": {"cf-aig-auth": "secret-123"}, "custom_sibling": "async_sibling_val"},
         )
 
-        assert "request" in captured
-        req: Final = captured["request"]
+        assert len(captured) == 1
+        req: Final = captured[0]
         body: Final = json.loads(req.read())
         assert "extra_headers" not in body
         assert body.get("custom_sibling") == "async_sibling_val"
         assert body == {"prompt": "async test prompt", "model": "gpt-image-2", "custom_sibling": "async_sibling_val"}
 
     def test_openai_image_generation_extra_body_only_headers_pops_empty_extra_body(self):
-        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+        captured: Final[list[httpx.Request]] = []  # mutable-ok: test request capture log
 
         def handle_request(request: httpx.Request) -> httpx.Response:
-            captured["request"] = request
+            captured.append(request)
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
         transport: Final = httpx.MockTransport(handle_request)
@@ -210,8 +210,8 @@ class TestImageGenerationExtraHeaders:
             extra_body={"extra_headers": {"cf-aig-auth": "secret-123"}},
         )
 
-        assert "request" in captured
-        req: Final = captured["request"]
+        assert len(captured) == 1
+        req: Final = captured[0]
         body: Final = json.loads(req.read())
         assert "extra_headers" not in body
         assert "extra_body" not in body
@@ -219,10 +219,10 @@ class TestImageGenerationExtraHeaders:
 
     @pytest.mark.asyncio
     async def test_openai_aimage_generation_extra_body_only_headers_pops_empty_extra_body(self):
-        captured: Final[dict[str, httpx.Request]] = {}  # mutable-ok: test request capture map
+        captured: Final[list[httpx.Request]] = []  # mutable-ok: test request capture log
 
         def handle_request(request: httpx.Request) -> httpx.Response:
-            captured["request"] = request
+            captured.append(request)
             return httpx.Response(200, json={"data": [{"url": "https://example.com/image.png"}]})
 
         transport: Final = httpx.MockTransport(handle_request)
@@ -235,8 +235,8 @@ class TestImageGenerationExtraHeaders:
             extra_body={"extra_headers": {"cf-aig-auth": "secret-123"}},
         )
 
-        assert "request" in captured
-        req: Final = captured["request"]
+        assert len(captured) == 1
+        req: Final = captured[0]
         body: Final = json.loads(req.read())
         assert "extra_headers" not in body
         assert "extra_body" not in body

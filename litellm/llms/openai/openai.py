@@ -1415,6 +1415,18 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
+            raw_extra_body: Final = data.get("extra_body")
+            sanitized_extra_body: Final = (
+                {k: v for k, v in raw_extra_body.items() if k not in ("extra_headers", "headers")}  # mutable-ok: sanitized payload dictionary
+                if isinstance(raw_extra_body, dict)
+                else None
+            )
+            sanitized_data: Final = {  # mutable-ok: sanitized payload dictionary
+                k: (sanitized_extra_body if k == "extra_body" else v)
+                for k, v in data.items()
+                if k != "extra_body" or sanitized_extra_body
+            }
+
             logging_obj.pre_call(
                 input=prompt,
                 api_key=openai_aclient.api_key,
@@ -1422,20 +1434,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     "headers": {"Authorization": f"Bearer {openai_aclient.api_key}"},  # mutable-ok: logged header map
                     "api_base": str(openai_aclient.base_url),
                     "acompletion": True,
-                    "complete_input_dict": data,
+                    "complete_input_dict": sanitized_data,
                 },
             )
-
-            sanitized_extra_body: Final = (
-                {k: v for k, v in data["extra_body"].items() if k not in ("extra_headers", "headers")}
-                if isinstance(data.get("extra_body"), dict)
-                else None
-            )
-            sanitized_data: Final = {
-                k: (sanitized_extra_body if k == "extra_body" else v)
-                for k, v in data.items()
-                if k != "extra_body" or sanitized_extra_body
-            }
 
             request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
                 {**sanitized_data, "extra_headers": headers} if headers else sanitized_data
@@ -1510,6 +1511,18 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 client=client,
             )
 
+            raw_extra_body: Final = data.get("extra_body")
+            sanitized_extra_body: Final = (
+                {k: v for k, v in raw_extra_body.items() if k not in ("extra_headers", "headers")}  # mutable-ok: sanitized payload dictionary
+                if isinstance(raw_extra_body, dict)
+                else None
+            )
+            sanitized_data: Final = {  # mutable-ok: sanitized payload dictionary
+                k: (sanitized_extra_body if k == "extra_body" else v)
+                for k, v in data.items()
+                if k != "extra_body" or sanitized_extra_body
+            }
+
             ## LOGGING
             logging_obj.pre_call(
                 input=prompt,
@@ -1518,20 +1531,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     "headers": {"Authorization": f"Bearer {openai_client.api_key}"},
                     "api_base": openai_client._base_url._uri_reference,
                     "acompletion": True,
-                    "complete_input_dict": data,
+                    "complete_input_dict": sanitized_data,
                 },
             )
-
-            sanitized_extra_body: Final = (
-                {k: v for k, v in data["extra_body"].items() if k not in ("extra_headers", "headers")}
-                if isinstance(data.get("extra_body"), dict)
-                else None
-            )
-            sanitized_data: Final = {
-                k: (sanitized_extra_body if k == "extra_body" else v)
-                for k, v in data.items()
-                if k != "extra_body" or sanitized_extra_body
-            }
 
             ## COMPLETION CALL
             request_data: Final = (  # mutable-ok: the OpenAI SDK takes the request body as a dict
