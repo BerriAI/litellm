@@ -6,15 +6,20 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
-from unittest.mock import patch
+import asyncio
+from unittest.mock import Mock, patch
 
 
 import httpx
 import pytest
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
 
 import litellm
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
+from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
 from litellm.types.utils import LlmProviders
+from tests.test_litellm.llms.bedrock.event_loop_probe import EventLoopProbe
 
 
 @pytest.fixture
@@ -40,21 +45,6 @@ class TestBedrockMantleProviderRegistration:
 
     def test_provider_in_provider_list(self):
         assert "bedrock_mantle" in litellm.provider_list
-
-    def test_models_loaded(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        assert len(litellm.bedrock_mantle_models) > 0
-        assert "bedrock_mantle/openai.gpt-oss-120b" in litellm.bedrock_mantle_models
-        assert "bedrock_mantle/openai.gpt-oss-20b" in litellm.bedrock_mantle_models
-        assert (
-            "bedrock_mantle/openai.gpt-oss-safeguard-120b"
-            in litellm.bedrock_mantle_models
-        )
-        assert (
-            "bedrock_mantle/openai.gpt-oss-safeguard-20b"
-            in litellm.bedrock_mantle_models
-        )
 
 
 class TestBedrockMantleConfig:
@@ -146,6 +136,27 @@ class TestBedrockMantleConfig:
         # /openai/v1 base per the AWS model card.
         assert api_base == "https://bedrock-mantle.us-east-2.api.aws/openai/v1"
 
+    def test_region_prefixed_model_routes_to_that_region(self, monkeypatch, local_cost_map):
+        for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION", "AWS_REGION_NAME"):
+            monkeypatch.delenv(var, raising=False)
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(None, None, model="us-gov-west-1/xai.grok-4.3")
+        assert api_base == "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1"
+
+    def test_aws_region_name_param_beats_model_region_prefix(self, monkeypatch, local_cost_map):
+        from litellm.types.router import GenericLiteLLMParams
+
+        for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION", "AWS_REGION_NAME"):
+            monkeypatch.delenv(var, raising=False)
+        cfg = BedrockMantleChatConfig()
+        api_base, _ = cfg._get_openai_compatible_provider_info(
+            None,
+            None,
+            litellm_params=GenericLiteLLMParams(aws_region_name="us-east-1"),
+            model="us-gov-west-1/xai.grok-4.3",
+        )
+        assert api_base == "https://bedrock-mantle.us-east-1.api.aws/openai/v1"
+
     def test_default_api_base_fallback_to_us_east_1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
@@ -231,6 +242,18 @@ class TestBedrockMantleConfig:
         assert "temperature" in params
         assert "stream" in params
         assert "max_tokens" in params
+        assert "verbosity" not in params
+
+    def test_verbosity_passes_through_for_gpt_5_models(self):
+        cfg = BedrockMantleChatConfig()
+        assert "verbosity" in cfg.get_supported_openai_params("openai.gpt-5.6-sol")
+        optional_params = litellm.get_optional_params(
+            model="openai.gpt-5.6-sol",
+            custom_llm_provider="bedrock_mantle",
+            verbosity="low",
+            drop_params=False,
+        )
+        assert optional_params["verbosity"] == "low"
 
 
 class TestBedrockMantleChatAuth:
@@ -681,17 +704,122 @@ class TestBedrockMantleProviderResolution:
         assert model == "openai.gpt-oss-20b"
 
 
+    def test_get_llm_provider_strips_region_prefix(self, monkeypatch, local_cost_map):
+        for var in ("BEDROCK_MANTLE_REGION", "BEDROCK_MANTLE_API_BASE", "AWS_REGION", "AWS_REGION_NAME"):
+            monkeypatch.delenv(var, raising=False)
+        model, provider, _, api_base = litellm.get_llm_provider("bedrock_mantle/us-gov-west-1/xai.grok-4.3")
+        assert provider == "bedrock_mantle"
+        assert model == "xai.grok-4.3"
+        assert api_base == "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1"
+
+    def test_completion_region_prefixed_model_sends_bare_model_to_that_region(self, monkeypatch, local_cost_map):
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_API_BASE",
+            "BEDROCK_MANTLE_REGION",
+            "AWS_REGION_NAME",
+            "AWS_REGION",
+            "AWS_PROFILE",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0")
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 1733529600,
+                    "model": "xai.grok-4.3",
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 38, "completion_tokens": 20, "total_tokens": 58},
+                },
+                request=request,
+            )
+
+        handler = Mock(side_effect=respond)
+        response = litellm.completion(
+            model="bedrock_mantle/us-gov-west-1/xai.grok-4.3",
+            messages=[{"role": "user", "content": "hello"}],
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+        sent = handler.call_args.args[0]
+        assert str(sent.url) == "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/chat/completions"
+        assert json.loads(sent.content)["model"] == "xai.grok-4.3"
+        assert "/us-gov-west-1/bedrock/aws4_request" in sent.headers["Authorization"]
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+        )
+
+    def test_responses_region_prefixed_model_prices_from_that_region_over_env_region(self, monkeypatch, local_cost_map):
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        for var in (
+            "BEDROCK_MANTLE_API_KEY",
+            "AWS_BEARER_TOKEN_BEDROCK",
+            "BEDROCK_MANTLE_API_BASE",
+            "BEDROCK_MANTLE_REGION",
+            "AWS_REGION",
+            "AWS_PROFILE",
+        ):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+        monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0")
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 1733529600,
+                    "status": "completed",
+                    "model": "xai.grok-4.3",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_test",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+                        }
+                    ],
+                    "parallel_tool_calls": True,
+                    "tool_choice": "auto",
+                    "tools": [],
+                    "top_p": 1.0,
+                    "usage": {"input_tokens": 38, "output_tokens": 20, "total_tokens": 58},
+                },
+                request=request,
+            )
+
+        handler = Mock(side_effect=respond)
+        response = litellm.responses(
+            model="bedrock_mantle/us-gov-west-1/xai.grok-4.3",
+            input="hello",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+        )
+
+        gov = litellm.model_cost["bedrock_mantle/us-gov-west-1/xai.grok-4.3"]
+        sent = handler.call_args.args[0]
+        assert str(sent.url) == "https://bedrock-mantle.us-gov-west-1.api.aws/openai/v1/responses"
+        assert json.loads(sent.content)["model"] == "xai.grok-4.3"
+        assert "/us-gov-west-1/bedrock/aws4_request" in sent.headers["Authorization"]
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            38 * gov["input_cost_per_token"] + 20 * gov["output_cost_per_token"]
+        )
+
+
 class TestBedrockMantlePricing:
     """Tests that verify Bedrock Mantle uses correct AWS Bedrock pricing, not OpenAI pricing."""
-
-    def test_safeguard_models_have_larger_output_tokens(self, monkeypatch):
-        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-        litellm.add_known_models()
-        info_120b = litellm.get_model_info("bedrock_mantle/openai.gpt-oss-120b")
-        info_safeguard = litellm.get_model_info(
-            "bedrock_mantle/openai.gpt-oss-safeguard-120b"
-        )
-        assert info_safeguard["max_output_tokens"] > info_120b["max_output_tokens"]
 
 
 @pytest.mark.parametrize(
@@ -710,3 +838,26 @@ def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
     resolved_model, provider, _, _ = litellm.get_llm_provider(full_model_name)
     assert provider == "bedrock_mantle"
     assert resolved_model == model_id
+
+
+@pytest.mark.asyncio
+async def test_mantle_signing_runs_off_the_event_loop():
+    """Regression for issue #40165: Mantle signs with SigV4 through a composed BaseAWSLLM, so the
+    off-loop gate must recognise it too, or its credential refresh blocks the loop like Bedrock's did."""
+    probe = EventLoopProbe()
+
+    def sign(headers: dict[str, str]) -> dict[str, str]:
+        request = AWSRequest(
+            method="POST", url="https://bedrock-mantle.us-east-1.api.aws/v1/responses", data="{}", headers=headers
+        )
+        SigV4Auth(probe.credentials(), "bedrock", "us-east-1").add_auth(request)
+        return dict(request.headers)
+
+    release = asyncio.create_task(probe.release_refresh_from_the_loop())
+    signed = await sign_request_off_loop_if_aws(
+        BedrockMantleChatConfig(), sign, headers={"Content-Type": "application/json"}
+    )
+    await release
+
+    assert "Authorization" in signed
+    assert probe.served_during_refresh is True

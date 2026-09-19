@@ -900,7 +900,7 @@ async def test_service_declared_ccr_hashes_drive_injection_and_validation(guardr
     )
 
     assert has_headroom_retrieve_tool(result.get("tools") or [])
-    (issued, _expiry), = guardrail._issued_hashes_by_call_id.values()
+    ((issued, _expiry),) = guardrail._issued_hashes_by_call_id.values()
     assert issued == frozenset({"98ca69107318", "b573993006976af767214fac"})
 
 
@@ -951,7 +951,6 @@ async def test_anthropic_assistant_history_never_reaches_compression_service(gua
     assert sent["messages"][1]["content"] == "Earlier follow-up. " + "B" * 5000
     assert table not in json.dumps(sent["messages"])
     assert result["messages"][1]["content"] == [{"type": "text", "text": table}]
-
 
 
 def test_has_headroom_retrieve_tool_recognizes_anthropic_native_shape():
@@ -1797,12 +1796,8 @@ PARTS_MESSAGES = [
     {
         "role": "user",
         "content": [
-            {"type": "text", "text": "Earlier turn.", "cache_control": {"type": "ephemeral"}},
-            {
-                "type": "text",
-                "text": "Second block. " + "B" * 5000,
-                "cache_control": {"type": "ephemeral", "ttl": "1h"},
-            },
+            {"type": "text", "text": "Earlier turn."},
+            {"type": "text", "text": "Second block. " + "B" * 5000},
         ],
     },
     {
@@ -1891,14 +1886,9 @@ async def test_apply_guardrail_restores_rewritten_all_text_row(
 
     messages = result["structured_messages"]
     history_content = messages[1]["content"]
-    # Rewritten all-text row collapses to one part carrying the LAST declared
-    # breakpoint: an Anthropic breakpoint caches the prefix ending at its
-    # part, so after the merge the last one (and its TTL) still describes the
-    # row.
     assert isinstance(history_content, list)
     assert len(history_content) == 1
     assert history_content[0]["text"] == "compressed history. Retrieve more: hash=b573993006976af767214fac"
-    assert history_content[0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
     # Mixed row passes through byte-identical.
     assert messages[2]["content"] == PARTS_MESSAGES[2]["content"]
     # The service-declared hash still drives retrieve-tool injection on a restored row.
@@ -2351,9 +2341,7 @@ async def test_streaming_responses_resolves_ccr_retrieval_end_to_end(
     )
     assert streamed_text == final_answer
     assert not any("function_call" in str(getattr(event, "type", "")) for event in events)
-    assert not any(
-        getattr(getattr(event, "item", None), "type", None) == "function_call" for event in events
-    )
+    assert not any(getattr(getattr(event, "item", None), "type", None) == "function_call" for event in events)
     mock_get.assert_called_once()
     assert CCR_HASH in (mock_get.call_args.kwargs.get("url") or mock_get.call_args.args[0])
 
@@ -2408,9 +2396,7 @@ def test_sync_streaming_responses_resolves_ccr_retrieval_end_to_end(
         getattr(event, "delta", "") for event in events if getattr(event, "type", None) == "response.output_text.delta"
     )
     assert streamed_text == final_answer
-    assert not any(
-        getattr(getattr(event, "item", None), "type", None) == "function_call" for event in events
-    )
+    assert not any(getattr(getattr(event, "item", None), "type", None) == "function_call" for event in events)
     mock_get.assert_called_once()
     assert len(upstream.calls) == 2
     assert not json.loads(upstream.calls[1].request.content).get("stream")
@@ -2521,6 +2507,68 @@ async def test_history_is_still_compressed(guardrail: HeadroomGuardrail):
     assert messages[1] == compressed_history[0]
     assert messages[2] == AGENTIC_MESSAGES[2]
     assert messages[3] == compressed_history[1]
+
+
+CACHED_PREFIX_MESSAGES = [
+    {"role": "system", "content": "You are Claude Code. " + "S" * 5000},
+    {"role": "user", "content": "old question " + "Q" * 5000},
+    {
+        "role": "assistant",
+        "content": "Reading the file now.",
+        "tool_calls": [{"id": "old_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "old_1", "content": "large file body " + "F" * 5000},
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": "cached turn", "cache_control": {"type": "ephemeral"}}],
+    },
+    {
+        "role": "assistant",
+        "content": "Listing now.",
+        "tool_calls": [{"id": "new_1", "type": "function", "function": {"name": "Bash", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "new_1", "content": "volatile tail output " + "T" * 5000},
+    {"role": "assistant", "content": "Finished listing."},
+    {"role": "user", "content": "live instruction"},
+]
+
+
+@pytest.mark.asyncio
+async def test_rows_before_last_cache_control_breakpoint_are_never_sent(guardrail: HeadroomGuardrail):
+    wire, result = await _wire_and_result(guardrail, CACHED_PREFIX_MESSAGES)
+
+    assert [row.get("tool_call_id") for row in wire] == ["new_1"]
+    assert result["structured_messages"][:5] == CACHED_PREFIX_MESSAGES[:5]
+
+
+CACHE_MARKED_HISTORY_MESSAGES = [
+    {"role": "system", "content": "You are Claude Code. " + "S" * 5000},
+    {"role": "user", "content": "old question " + "Q" * 5000},
+    {
+        "role": "assistant",
+        "content": "Reading the file now.",
+        "tool_calls": [{"id": "old_1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+    },
+    {
+        "role": "tool",
+        "tool_call_id": "old_1",
+        "content": [{"type": "text", "text": "large cached file body " + "F" * 5000}],
+        "cache_control": {"type": "ephemeral"},
+    },
+    {"role": "assistant", "content": "Summarized the file for you."},
+    {"role": "tool", "tool_call_id": "tail", "content": "volatile tail output " + "T" * 5000},
+    {"role": "user", "content": "live instruction"},
+]
+
+
+@pytest.mark.asyncio
+async def test_mid_history_cache_control_row_is_never_sent_for_compression(guardrail: HeadroomGuardrail):
+    wire, result = await _wire_and_result(guardrail, CACHE_MARKED_HISTORY_MESSAGES)
+
+    cached_row = CACHE_MARKED_HISTORY_MESSAGES[3]
+    assert cached_row not in wire
+    assert not any(row.get("tool_call_id") == "old_1" for row in wire)
+    assert result["structured_messages"][3] == cached_row
 
 
 # ---------------------------------------------------------------------------

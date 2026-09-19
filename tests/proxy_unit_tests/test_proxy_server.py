@@ -809,6 +809,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             n=1,
             size="1024x1024",
             imageConfig={"aspectRatio": "9:16", "imageSize": "1K"},
+            litellm_call_id=mock.ANY,
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
@@ -1371,6 +1372,7 @@ async def test_create_team_member_add_team_admin(
     from fastapi import Request
 
     from litellm.proxy._types import (
+        LiteLLM_TeamMembership,
         LiteLLM_TeamTableCachedObj,
         LiteLLM_UserTable,
         Member,
@@ -1453,6 +1455,10 @@ async def test_create_team_member_add_team_admin(
         team_mock_client.update = AsyncMock(
             return_value=LiteLLM_TeamTableCachedObj(team_id="1234")
         )
+        membership_mock_client = AsyncMock()
+        membership_mock_client.upsert = AsyncMock(
+            return_value=LiteLLM_TeamMembership(user_id="1234", team_id=_team_id)
+        )
 
         tx_cm = _member_add_tx_cm(team_mock_client)
 
@@ -1461,6 +1467,11 @@ async def test_create_team_member_add_team_admin(
                 litellm.proxy.proxy_server.prisma_client.db,
                 "litellm_teamtable",
                 team_mock_client,
+            ),
+            patch.object(  # test-quality-ok: legacy test swaps the prisma table on the module-level client
+                litellm.proxy.proxy_server.prisma_client.db,
+                "litellm_teammembership",
+                membership_mock_client,
             ),
             patch.object(
                 litellm.proxy.proxy_server.prisma_client,
@@ -2139,7 +2150,7 @@ async def test_model_info_alias_without_prisma(hidden):
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
 
-    models = resp["data"]
+    models = json.loads(resp.body)["data"]
 
     alias_found = any(
         m["model_name"] == model_alias
@@ -2203,7 +2214,7 @@ async def test_proxy_model_group_alias_checks(prisma_client, hidden):  # noqa: F
     resp = await model_info_v1(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
-    models = resp["data"]
+    models = json.loads(resp.body)["data"]
     is_model_alias_in_list = False
     for item in models:
         if model_alias == item["model_name"]:
@@ -2280,7 +2291,7 @@ async def test_proxy_model_group_info_rerank(prisma_client):  # noqa: F811  # py
     resp = await model_info_v1(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
     )
-    models = resp["data"]
+    models = json.loads(resp.body)["data"]
     assert models[0]["model_info"]["mode"] == "rerank"
     resp = await model_group_info(
         user_api_key_dict=UserAPIKeyAuth(models=[]),
@@ -2920,7 +2931,7 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
         assert result["status"] == "success"
         assert "callbacks" in result
 
-        callbacks = result["callbacks"]
+        callbacks = [cb for cb in result["callbacks"] if not cb.get("read_only", False)]
 
         # Verify we have all 5 callbacks (2 success + 1 failure + 2 success_and_failure)
         assert len(callbacks) == 5

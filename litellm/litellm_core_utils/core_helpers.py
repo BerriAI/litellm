@@ -2,6 +2,7 @@
 ## Helper utilities
 import copy
 import logging
+import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -19,6 +20,13 @@ if TYPE_CHECKING:
     Span = _Span | Any
 else:
     Span = Any
+
+
+_CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
+
+
+def is_codex_user_agent(user_agent: str) -> bool:
+    return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
 
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
@@ -216,6 +224,12 @@ _FINISH_REASON_MAP: Final[dict[str, OpenAIChatCompletionFinishReason]] = {
     "IMAGE_PROHIBITED_CONTENT": "content_filter",
     "TOO_MANY_TOOL_CALLS": "stop",
     "MALFORMED_RESPONSE": "stop",
+    "NO_IMAGE": "content_filter",
+    "IMAGE_RECITATION": "content_filter",
+    "IMAGE_OTHER": "content_filter",
+    "ESCALATION": "content_filter",
+    "UNEXPECTED_TOOL_CALL": "stop",
+    "MISSING_THOUGHT_SIGNATURE": "stop",
     # Zhipu GLM
     "network_error": "stop",
     "sensitive": "content_filter",
@@ -293,6 +307,16 @@ def get_metadata_variable_name_from_kwargs(
     - LiteLLM is now moving to using `litellm_metadata` for our metadata
     """
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
+
+
+def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_request: int | None) -> bool:
+    if num_retries_per_request is None:
+        return False
+    metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
+    if not isinstance(metadata, Mapping):
+        return False
+    retry_count: Final = metadata.get("request_retry_count")
+    return type(retry_count) is int and 0 < retry_count and num_retries_per_request <= retry_count
 
 
 def get_or_create_metadata_bucket(

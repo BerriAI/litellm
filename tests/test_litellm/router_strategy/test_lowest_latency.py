@@ -8,11 +8,12 @@ import json
 from datetime import datetime, timedelta
 
 import pytest
-
+from pydantic import ValidationError
 
 import litellm
 from litellm.caching.caching import DualCache
-from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler
+from litellm.router import Router
+from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler, RoutingArgs
 
 DEPLOYMENT_ID = "9876"
 KWARGS = {
@@ -58,9 +59,9 @@ def test_sync_embedding_latency_is_json_serializable():
 
     latencies = _recorded_latencies(cache)
     assert latencies, "expected a latency entry to be recorded"
-    assert all(
-        not isinstance(value, timedelta) for value in latencies
-    ), f"raw timedelta leaked into latency list: {latencies}"
+    assert all(not isinstance(value, timedelta) for value in latencies), (
+        f"raw timedelta leaked into latency list: {latencies}"
+    )
     assert latencies[-1] == pytest.approx(2.0)
     # the exact failure mode from production: redis cache sync json.dumps
     json.dumps({"latency": latencies})
@@ -84,9 +85,9 @@ async def test_async_embedding_latency_is_json_serializable():
 
     latencies = _recorded_latencies(cache)
     assert latencies, "expected a latency entry to be recorded"
-    assert all(
-        not isinstance(value, timedelta) for value in latencies
-    ), f"raw timedelta leaked into latency list: {latencies}"
+    assert all(not isinstance(value, timedelta) for value in latencies), (
+        f"raw timedelta leaked into latency list: {latencies}"
+    )
     assert latencies[-1] == pytest.approx(3.0)
     json.dumps({"latency": latencies})
 
@@ -293,6 +294,85 @@ async def test_streaming_routing_ignores_per_token_ttft_samples_from_older_worke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("ttft_percentile", "first_samples", "second_samples", "expected_id"),
+    [
+        (None, [0.1, 0.1, 1.0], [0.3, 0.3, 0.3], SLOW_TTFT_ID),
+        (0.5, [0.1, 0.1, 1.0], [0.3, 0.3, 0.3], FAST_TTFT_ID),
+        (0.9, [0.1, 0.1, 0.1, 0.1, 1.5], [0.3, 0.3, 0.3, 0.3, 0.3], SLOW_TTFT_ID),
+    ],
+    ids=["default_average", "p50", "p90"],
+)
+async def test_streaming_ttft_ranking_percentile(
+    sync_mode: bool,
+    ttft_percentile: float | None,
+    first_samples: list[float],
+    second_samples: list[float],
+    expected_id: str,
+):
+    cache = DualCache()
+    routing_args = {} if ttft_percentile is None else {"ttft_percentile": ttft_percentile}
+    handler = LowestLatencyLoggingHandler(router_cache=cache, routing_args=routing_args)
+    cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={
+            FAST_TTFT_ID: {"time_to_first_token_seconds": first_samples},
+            SLOW_TTFT_ID: {"time_to_first_token_seconds": second_samples},
+        },
+    )
+
+    if sync_mode:
+        picked = handler.get_available_deployments(
+            model_group=MODEL_GROUP,
+            healthy_deployments=STREAMING_DEPLOYMENTS,
+            request_kwargs={"stream": True, "metadata": {}},
+        )
+    else:
+        picked = await handler.async_get_available_deployments(
+            model_group=MODEL_GROUP,
+            healthy_deployments=STREAMING_DEPLOYMENTS,
+            request_kwargs={"stream": True, "metadata": {}},
+        )
+
+    assert picked is not None
+    assert picked["model_info"]["id"] == expected_id
+
+
+@pytest.mark.parametrize("ttft_percentile", [0, -0.1, 1.1])
+def test_ttft_percentile_validation(ttft_percentile: float):
+    with pytest.raises(ValidationError):
+        RoutingArgs(ttft_percentile=ttft_percentile)
+
+
+@pytest.mark.parametrize("ttft_percentile", [0.5, 0.9, 0.95, 1.0])
+def test_ttft_percentile_accepts_valid_values(ttft_percentile: float):
+    assert RoutingArgs(ttft_percentile=ttft_percentile).ttft_percentile == ttft_percentile
+
+
+@pytest.mark.asyncio
+async def test_ttft_percentile_does_not_change_non_streaming_routing():
+    cache = DualCache()
+    handler = LowestLatencyLoggingHandler(router_cache=cache, routing_args={"ttft_percentile": 0.9})
+    cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={
+            FAST_TTFT_ID: {"latency": [1.0], "time_to_first_token_seconds": [0.1]},
+            SLOW_TTFT_ID: {"latency": [0.2], "time_to_first_token_seconds": [1.5]},
+        },
+    )
+
+    picked = await handler.async_get_available_deployments(
+        model_group=MODEL_GROUP,
+        healthy_deployments=STREAMING_DEPLOYMENTS,
+        request_kwargs={"stream": False, "metadata": {}},
+    )
+
+    assert picked is not None
+    assert picked["model_info"]["id"] == SLOW_TTFT_ID
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "cached_entry",
     [{"latency": []}, {"2026-09-05-15-39": {"tpm": 28, "rpm": 1}}],
@@ -318,3 +398,81 @@ async def test_async_get_available_deployments_treats_missing_samples_as_zero_la
 
     assert picked is not None
     assert picked["model_info"]["id"] == DEPLOYMENT_ID
+
+
+def _latency_router(routing_strategy_args: dict) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP,
+                "litellm_params": {"model": f"openai/{MODEL_GROUP}", "api_key": "sk-fake"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in (FAST_TTFT_ID, SLOW_TTFT_ID)
+        ],
+        routing_strategy="latency-based-routing",
+        routing_strategy_args=routing_strategy_args,
+    )
+
+
+def _seed_streaming_ttft(router: Router) -> None:
+    router.cache.set_cache(
+        key=f"{MODEL_GROUP}_map",
+        value={
+            FAST_TTFT_ID: {"time_to_first_token_seconds": [0.1, 0.1, 1.0]},
+            SLOW_TTFT_ID: {"time_to_first_token_seconds": [0.3, 0.3, 0.3]},
+        },
+    )
+
+
+async def _pick_streaming(router: Router) -> str:
+    picked = await router.async_get_available_deployment(
+        model=MODEL_GROUP,
+        request_kwargs={"stream": True, "metadata": {}},
+    )
+    return picked["model_info"]["id"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_routing_strategy_args_update_applies_ttft_percentile():
+    """A config reload that adds ttft_percentile must reach the live selector,
+    not sit unused until the proxy restarts."""
+    router = _latency_router({"max_latency_list_size": 50})
+    _seed_streaming_ttft(router)
+
+    assert await _pick_streaming(router) == SLOW_TTFT_ID
+
+    router.update_settings(routing_strategy_args={"max_latency_list_size": 50, "ttft_percentile": 0.5})
+
+    assert await _pick_streaming(router) == FAST_TTFT_ID
+
+
+@pytest.mark.asyncio
+async def test_runtime_routing_strategy_args_update_keeps_previous_args_when_invalid():
+    router = _latency_router({"ttft_percentile": 0.5})
+    _seed_streaming_ttft(router)
+
+    router.update_settings(routing_strategy_args={"ttft_percentile": 5})
+
+    assert await _pick_streaming(router) == FAST_TTFT_ID
+
+
+@pytest.mark.asyncio
+async def test_runtime_routing_strategy_args_update_is_a_noop_without_a_selector():
+    """simple-shuffle has no selector to re-link, so an args update must leave
+    the router alone instead of blowing up on a missing selector attribute."""
+    router = Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP,
+                "litellm_params": {"model": f"openai/{MODEL_GROUP}", "api_key": "sk-fake"},
+                "model_info": {"id": FAST_TTFT_ID},
+            }
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    router.update_settings(routing_strategy_args={"ttl": 5})
+
+    assert router.routing_strategy_args == {"ttl": 5}
+    assert await _pick_streaming(router) == FAST_TTFT_ID

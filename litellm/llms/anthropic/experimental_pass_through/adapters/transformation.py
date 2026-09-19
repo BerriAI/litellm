@@ -111,11 +111,17 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
 from litellm.llms.anthropic.common_utils import (
+    eager_input_streaming_flag,
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
+    strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
+)
+from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
+    convert_mid_conversation_system_turns,
+    is_system_role_message,
 )
 from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
     openai_chat_refusal_text,
@@ -175,6 +181,7 @@ from litellm.types.llms.openai import (
     ToolMessageContentPart,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
+from litellm.utils import supports_mid_conversation_system
 
 from .streaming_iterator import AnthropicStreamWrapper
 
@@ -183,6 +190,21 @@ if TYPE_CHECKING:
     from litellm.types.llms.anthropic import ContentBlockContentBlockDict
 
 ToolResultContent: TypeAlias = str | list[ToolMessageContentPart]
+
+
+def target_supports_mid_conversation_system(model: str | None, custom_llm_provider: str | None) -> bool:
+    if not model:
+        return False
+    return supports_mid_conversation_system(model=model, custom_llm_provider=custom_llm_provider)
+
+
+def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
+    eager_input_streaming: Final = eager_input_streaming_flag(tool)
+    if eager_input_streaming is None:
+        return ChatCompletionToolParam(type="function", function=function_chunk)
+    return ChatCompletionToolParam(
+        type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+    )
 
 
 class AnthropicAdapter:
@@ -399,7 +421,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
         Anthropic web search tools have:
         - type starting with "web_search" (e.g., "web_search_20260209")
-        - name = "web_search"
+        - legacy name = "web_search" without a client input_schema
 
         Args:
             tool: Tool definition dict
@@ -409,15 +431,36 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         tool_type: Final = tool.get("type", "")
         tool_name: Final = tool.get("name", "")
-        return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search"
+        return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or (
+            tool_name == "web_search" and "input_schema" not in tool
+        )
 
     def translate_anthropic_messages_to_openai(
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
         model: str | None = None,
+        *,
+        custom_llm_provider: str | None = None,
+        preserve_midturn_system: bool = False,
     ) -> list:
         new_messages: Final[list[AllMessageValues]] = []
-        for m in messages:
+        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        leading_count: Final = next(
+            (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
+            len(replayable_messages),
+        )
+        trailing_messages: Final = replayable_messages[leading_count:]
+        keeps_midturn_system: Final = (
+            preserve_midturn_system
+            or not any(is_system_role_message(m) for m in trailing_messages)
+            or target_supports_mid_conversation_system(model, custom_llm_provider)
+        )
+        ordered_messages: Final = (
+            replayable_messages
+            if keeps_midturn_system
+            else (*replayable_messages[:leading_count], *convert_mid_conversation_system_turns(trailing_messages))
+        )
+        for m in ordered_messages:
             user_message: ChatCompletionUserMessage | None = None
             tool_message_list: list[ChatCompletionToolMessage] = []
             new_user_content_list: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
@@ -490,7 +533,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 if isinstance(m.get("content"), str):
                     assistant_message_str = str(m.get("content", ""))
                 elif isinstance(m.get("content"), list):
-                    for content in m.get("content", []):
+                    for content in cast(list, m.get("content", [])):  # cast-ok: untrusted client payload
                         if isinstance(content, str):
                             assistant_message_str = str(content)
                         elif isinstance(content, dict):
@@ -737,6 +780,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "cache_control",
             "strict",
             "type",
+            "eager_input_streaming",
         ]
 
         for idx, tool in enumerate(tools):
@@ -775,7 +819,7 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            tool_param = ChatCompletionToolParam(type="function", function=function_chunk)
+            tool_param = _chat_tool_param(function_chunk, tool)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)
 
@@ -1150,6 +1194,7 @@ class LiteLLMAnthropicMessagesAdapter:
         anthropic_message_request: AnthropicMessagesRequest,
         *,
         custom_llm_provider: str | None = None,
+        preserve_midturn_system: bool = False,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1171,12 +1216,14 @@ class LiteLLMAnthropicMessagesAdapter:
         new_messages = self.translate_anthropic_messages_to_openai(
             messages=messages_list,
             model=anthropic_message_request.get("model"),
+            custom_llm_provider=custom_llm_provider,
+            preserve_midturn_system=preserve_midturn_system,
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
         self._add_system_message_to_messages(new_messages, anthropic_message_request)
 
         new_kwargs: Final[ChatCompletionRequest] = {
-            "model": anthropic_message_request["model"],
+            "model": anthropic_message_request.get("model", ""),
             "messages": new_messages,
         }
         ## CONVERT METADATA (user_id + litellm metadata)
@@ -1363,6 +1410,8 @@ class LiteLLMAnthropicMessagesAdapter:
             return "max_tokens"
         elif openai_finish_reason == "tool_calls":
             return "tool_use"
+        elif openai_finish_reason in ["content_filter", "refusal"]:
+            return "refusal"
         return "end_turn"
 
     @staticmethod
@@ -1487,8 +1536,9 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_content.insert(0, polyfill_result.compaction_block)
 
         ## extract finish reason
+        openai_finish_reason: Final = response.choices[0].finish_reason if response.choices else "stop"
         translated_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
-            openai_finish_reason=response.choices[0].finish_reason
+            openai_finish_reason=openai_finish_reason
         )
         anthropic_finish_reason: Final = (
             "refusal"

@@ -10,6 +10,7 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
+import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLoginWarningBanner";
 import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { UserBanner } from "@/components/UserBanner";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
@@ -114,6 +115,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <Navbar accessToken={accessToken} isPublicPage={false} />
         <DebugWarningBanner accessToken={accessToken} />
         <NoRedisWarningBanner accessToken={accessToken} />
+        <EnvCredentialLoginWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
         <UpgradeBanner accessToken={accessToken} />
@@ -134,6 +136,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <DashboardHeader />
         <DebugWarningBanner accessToken={accessToken} />
         <NoRedisWarningBanner accessToken={accessToken} />
+        <EnvCredentialLoginWarningBanner accessToken={accessToken} />
         <LicenseExpiryBanner accessToken={accessToken} />
         <UserBanner accessToken={accessToken} />
         <UpgradeBanner accessToken={accessToken} />
