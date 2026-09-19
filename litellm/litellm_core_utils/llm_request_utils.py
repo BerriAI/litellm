@@ -164,11 +164,13 @@ def pick_cheapest_chat_models_from_llm_provider(custom_llm_provider: str, n=1):
         _cost = (model_info.get("input_cost_per_token") or 0.0) + (model_info.get("output_cost_per_token") or 0.0)
         model_costs.append((model, _cost))
 
-    # Sort by cost (ascending)
-    model_costs.sort(key=lambda x: x[1])
-
-    # Return the top n cheapest models
+    model_costs.sort(key=_paid_rows_cheapest_first_then_unpriced)
     return [model for model, _ in model_costs[:n]]
+
+
+def _paid_rows_cheapest_first_then_unpriced(model_cost: tuple[str, float]) -> tuple[bool, float]:
+    _, cost = model_cost
+    return (cost == 0, cost)
 
 
 def get_proxy_server_request_headers(litellm_params: dict | None) -> dict:

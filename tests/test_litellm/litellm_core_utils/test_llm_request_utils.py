@@ -1,8 +1,13 @@
+from collections.abc import Iterator
+from typing import Final
+
 import httpx
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.llm_request_utils import (
     flatten_form_field_values,
+    pick_cheapest_chat_models_from_llm_provider,
     serialize_multipart_form_fields,
 )
 
@@ -105,3 +110,43 @@ def test_flatten_form_field_values_rejects_over_deep_nesting():
     assert isinstance(nested, dict)
     with pytest.raises(ValueError, match="max depth"):
         flatten_form_field_values(nested)
+
+
+PAID_VERTEX_CHAT_ROW: Final = "lit8171-fake-paid-chat"
+UNPRICED_VERTEX_CHAT_ROW: Final = "lit8171-fake-unpriced-chat"
+
+
+@pytest.fixture
+def vertex_chat_rows_paid_and_unpriced() -> Iterator[None]:
+    fake_rows: Final = {
+        PAID_VERTEX_CHAT_ROW: {
+            "litellm_provider": "vertex_ai-language-models",
+            "mode": "chat",
+            "input_cost_per_token": 1e-12,
+            "output_cost_per_token": 1e-12,
+        },
+        UNPRICED_VERTEX_CHAT_ROW: {
+            "litellm_provider": "vertex_ai-language-models",
+            "mode": "chat",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+    }
+    litellm.model_cost.update(fake_rows)
+    litellm.add_known_models(model_cost_map=fake_rows)
+    try:
+        yield
+    finally:
+        for name in fake_rows:
+            litellm.model_cost.pop(name, None)
+            litellm.vertex_language_models.discard(name)
+        litellm.add_known_models(model_cost_map={})
+
+
+def test_pick_cheapest_chat_models_puts_unpriced_rows_after_every_paid_row(
+    vertex_chat_rows_paid_and_unpriced: None,
+) -> None:
+    picks: Final = pick_cheapest_chat_models_from_llm_provider("vertex_ai", n=3)
+
+    assert picks[0] == PAID_VERTEX_CHAT_ROW
+    assert UNPRICED_VERTEX_CHAT_ROW not in picks
