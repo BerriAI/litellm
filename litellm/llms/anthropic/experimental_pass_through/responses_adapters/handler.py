@@ -96,11 +96,12 @@ def _build_responses_kwargs(
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
     forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    raw_custom_llm_provider: Final = forwarded_kwargs.get("custom_llm_provider")
+    custom_llm_provider: Final = raw_custom_llm_provider if isinstance(raw_custom_llm_provider, str) else None
     responses_kwargs: Final = _ADAPTER.translate_request(
         anthropic_request,
-        include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
-            model, forwarded_kwargs.get("custom_llm_provider")
-        ),
+        include_encrypted_reasoning=_provider_returns_encrypted_reasoning(model, custom_llm_provider),
+        custom_llm_provider=custom_llm_provider,
     )
 
     # Normalize reasoning effort based on model capabilities
