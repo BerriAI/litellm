@@ -1043,6 +1043,7 @@ async def test_route_request_override_enable_tag_filtering_beats_body_value():
     [
         ("acompletion", "messages", "/chat/completions"),
         ("aembedding", "input", "/embeddings"),
+        ("aresponses", "input", "/responses"),
         ("acreate_batch", "input_file_id", "/batches"),
     ],
 )
@@ -1090,6 +1091,8 @@ def test_raise_if_required_body_param_missing_names_first_missing_batch_param(da
         ("acompletion", {"model": "gpt-4o", "messages": []}),
         ("atext_completion", {"model": "gpt-4o"}),
         ("aembedding", {"model": "text-embedding-3-small", "input": "hi"}),
+        ("aresponses", {"model": "gpt-4o", "input": "hi"}),
+        ("aresponses", {"model": "gpt-4o", "input": []}),
         ("arerank", {"model": "rerank-model"}),
         ("aimage_generation", {"model": "dall-e-3"}),
         (
@@ -1118,6 +1121,20 @@ async def test_route_request_rejects_chat_completion_without_messages():
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "messages"
     llm_router.acompletion.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_request_rejects_responses_without_input():
+    from litellm.proxy.route_llm_request import ProxyMissingRequiredParamError
+
+    llm_router = MagicMock()
+
+    with pytest.raises(ProxyMissingRequiredParamError) as exc_info:
+        await route_request({"model": "gpt-4o"}, llm_router, None, "aresponses")
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "input"
+    llm_router.aresponses.assert_not_called()
 
 
 class FakeProxyModelTable:
