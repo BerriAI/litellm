@@ -3,8 +3,8 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import litellm
 
+import litellm
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
     get_credentials_for_model,
