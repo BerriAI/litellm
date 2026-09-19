@@ -138,7 +138,7 @@ async def test_vector_store_file_list_resolves_managed_vector_store_before_team_
 
     llm_router = MagicMock()
 
-    def get_credentials(model_id):
+    def get_credentials(model_id, team_id=None, user_api_key_auth=None):
         return {
             "api_key": f"sk-{model_id}",
             "api_base": "https://api.openai.com/v1",
@@ -159,11 +159,12 @@ async def test_vector_store_file_list_resolves_managed_vector_store_before_team_
             new=fake_base_process,
         ),
     ):
+        user_api_key_dict = UserAPIKeyAuth(team_models=["team-openai"])
         response = await vector_store_file_list(
             vector_store_id=vector_store_id,
             request=request,
             fastapi_response=Response(),
-            user_api_key_dict=UserAPIKeyAuth(team_models=["team-openai"]),
+            user_api_key_dict=user_api_key_dict,
         )
 
     assert response == {"ok": True}
@@ -171,7 +172,7 @@ async def test_vector_store_file_list_resolves_managed_vector_store_before_team_
     assert captured_data["api_key"] == "sk-managed-deployment"
     assert captured_data["model"] == "openai/managed-deployment"
     llm_router.get_deployment_credentials_with_provider.assert_called_once_with(
-        model_id="managed-deployment"
+        model_id="managed-deployment", user_api_key_auth=user_api_key_dict
     )
 
 

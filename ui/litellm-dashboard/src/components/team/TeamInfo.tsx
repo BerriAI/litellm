@@ -99,6 +99,8 @@ import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers"
 import { useMCPToolsets } from "@/app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import { useAccessGroups, type AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { ModelSelect } from "../ModelSelect/ModelSelect";
+import { deploymentOptionLabel } from "../ModelSelect/modelUtils";
+import { useModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import { estimateChecks, estimateTooltips } from "../templates/estimatedOutputTokens";
 import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
@@ -571,6 +573,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
+  const { data: modelDeployments } = useModelDeployments();
+  const deployments = modelDeployments ?? [];
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
   const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
@@ -1262,17 +1266,20 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <p>Models</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {computeTeamModelBadges(info.models, info.access_group_models || [], info.access_group_details).map(
-                (badge, index) => (
-                  <SimpleTooltip key={`${badge.kind}-${badge.label}-${index}`} content={badge.tooltip}>
-                    <span>
-                      <StatusBadge
-                        tone={TEAM_MODEL_BADGE_TONES[badge.kind]}
-                        label={badge.label}
-                        href={teamModelBadgeHref(badge)}
-                      />
-                    </span>
-                  </SimpleTooltip>
-                ),
+                (badge, index) => {
+                  const deployment = deployments.find((candidate) => candidate.id === badge.label);
+                  return (
+                    <SimpleTooltip key={`${badge.kind}-${badge.label}-${index}`} content={badge.tooltip}>
+                      <span>
+                        <StatusBadge
+                          tone={TEAM_MODEL_BADGE_TONES[badge.kind]}
+                          label={deployment ? deploymentOptionLabel(deployment) : badge.label}
+                          href={deployment ? modelGroupHref(deployment.modelName) : teamModelBadgeHref(badge)}
+                        />
+                      </span>
+                    </SimpleTooltip>
+                  );
+                },
               )}
             </div>
           </Card>

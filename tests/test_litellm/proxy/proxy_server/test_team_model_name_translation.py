@@ -1553,7 +1553,7 @@ async def test_retrieve_model_by_public_name_returns_200(monkeypatch):
     assert resp.get("max_output_tokens") == 4096
     # lookup happened by the internal routing key, not the public name
     router.get_deployment_by_model_group_name.assert_called_once_with(
-        "model_name_team-abc-123_4a6b8"
+        "model_name_team-abc-123_4a6b8", user_api_key_auth=key
     )
 
 
@@ -1798,6 +1798,27 @@ def test_get_direct_access_models_expands_access_group_grant():
     result = ps.get_direct_access_models(user_db_object=user, llm_router=router)
 
     assert result == ("gpt4o-id", "sonnet-id")
+
+
+def test_get_direct_access_models_resolves_a_deployment_id_grant_to_only_that_deployment():
+    from litellm.types.router import Deployment
+
+    router = MagicMock()
+    router.get_model_access_groups.return_value = {}
+    router.get_model_list.return_value = []
+    router.get_deployment.side_effect = lambda model_id: (
+        Deployment(model_name="gpt-4", litellm_params={"model": "azure/gpt-4"}, model_info={"id": "azure-gpt-4-id"})
+        if model_id == "azure-gpt-4-id"
+        else None
+    )
+
+    user = LiteLLM_UserTable(user_id="u", models=["azure-gpt-4-id"], teams=[])
+
+    assert ps.get_direct_access_models(user_db_object=user, llm_router=router) == ("azure-gpt-4-id",)
+    assert ps.get_direct_access_models(user_db_object=user, llm_router=router, key_models=("openai-gpt-4-id",)) == ()
+    assert ps.get_direct_access_models(user_db_object=user, llm_router=router, key_models=("azure-gpt-4-id",)) == (
+        "azure-gpt-4-id",
+    )
 
 
 @pytest.mark.asyncio

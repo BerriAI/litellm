@@ -75,6 +75,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
+  useModelDeployments: vi.fn().mockReturnValue({ data: [], isLoading: false }),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
@@ -224,7 +225,7 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
 
-import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
+import { useAllProxyModels, useModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -289,6 +290,7 @@ const seedDefaultMocks = () => {
     data: { data: [] },
     isLoading: false,
   } as any);
+  vi.mocked(useModelDeployments).mockReturnValue({ data: [], isLoading: false } as any);
   mockUseTeam.mockReturnValue({
     data: undefined,
     isLoading: false,
@@ -434,6 +436,22 @@ describe("TeamInfoView", () => {
 
       expect(await screen.findByText("All proxy models")).toBeInTheDocument();
       expect(screen.queryByRole("link", { name: "All proxy models" })).not.toBeInTheDocument();
+    });
+
+    it("labels a granted deployment id with its model name and provider model, linking to the model group", async () => {
+      vi.mocked(useModelDeployments).mockReturnValue({
+        data: [{ id: "azure-gpt-4-id", modelName: "gpt-4", litellmModel: "azure/gpt-4-eu" }],
+        isLoading: false,
+      } as any);
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ models: ["azure-gpt-4-id"] }));
+
+      renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+      expect(await screen.findByRole("link", { name: "gpt-4 · azure/gpt-4-eu · azure-gp" })).toHaveAttribute(
+        "href",
+        expect.stringContaining("/models-and-endpoints?model_group=gpt-4"),
+      );
+      expect(screen.queryByText("azure-gpt-4-id")).not.toBeInTheDocument();
     });
 
     it("should display loading state while fetching team data", () => {

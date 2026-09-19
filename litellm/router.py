@@ -244,6 +244,7 @@ from litellm.types.router import (
     AllowedFailsPolicy,
     AssistantsTypedDict,
     AutoRouterCapabilityLimit,
+    CallerModelGrants,
     ConsumedRequestTagsStamp,
     CredentialLiteLLMParams,
     CustomRoutingStrategyBase,
@@ -311,6 +312,7 @@ if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
     from litellm.exceptions import MidStreamFallbackError
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.responses.streaming_iterator import (
         BaseResponsesAPIStreamingIterator,
     )
@@ -10064,27 +10066,32 @@ class Router:
             deployment.litellm_params.model_dump(exclude_none=True)
         ).model_dump(exclude_none=True)
 
-    def get_deployment_by_model_group_name(self, model_group_name: str) -> Deployment | None:
+    def get_deployment_by_model_group_name(
+        self, model_group_name: str, user_api_key_auth: "UserAPIKeyAuth | None" = None
+    ) -> Deployment | None:
         """
         Returns -> Deployment or None
 
         Raise Exception -> if model found in invalid format
 
         Optimized with O(1) index lookup instead of O(n) linear scan.
+        With ``user_api_key_auth``, a name granted only through deployment IDs
+        resolves to one of those deployments, never a sibling.
         """
-        # O(1) lookup in model_name index
-        if model_group_name in self.model_name_to_deployment_indices:
-            indices: Final = self.model_name_to_deployment_indices[model_group_name]
-            if indices:
-                # Return first deployment for this model_name
-                model: Final = self.model_list[indices[0]]
-                if isinstance(model, dict):
-                    return Deployment(**model)
-                elif isinstance(model, Deployment):
-                    return model
-                else:
-                    raise Exception(f"Model Name invalid - {type(model)}")
-        return None
+        indices: Final = self.model_name_to_deployment_indices.get(model_group_name) or ()
+        granted: Final = self._restrict_deployments_to_caller_grants(
+            model=model_group_name,
+            deployments=tuple(self.model_list[idx] for idx in indices),
+            user_api_key_auth=user_api_key_auth,
+        )
+        model: Final = next(iter(granted), None)
+        if model is None:
+            return None
+        if isinstance(model, dict):
+            return Deployment(**model)
+        if isinstance(model, Deployment):
+            return model
+        raise Exception(f"Model Name invalid - {type(model)}")
 
     @staticmethod
     def _deployment_usable_by_team(model: Mapping | Deployment, team_id: str | None) -> bool:
@@ -10097,18 +10104,25 @@ class Router:
         return owner_team_id is None or owner_team_id == team_id
 
     def _get_model_group_deployment_usable_by_team(
-        self, model_group_name: str, team_id: str | None
+        self,
+        model_group_name: str,
+        team_id: str | None,
+        user_api_key_auth: "UserAPIKeyAuth | None" = None,
     ) -> Deployment | None:
         """
         Like ``get_deployment_by_model_group_name``, but skips deployments owned
         by other teams so a shared model name never resolves another team's
-        credentials.
+        credentials. When the caller's auth is given, a name granted only through
+        deployment IDs resolves to one of those deployments, never a sibling.
         """
         indices: Final = self.model_name_to_deployment_indices.get(model_group_name) or ()
-        usable: Final = (
+        usable: Final = tuple(
             self.model_list[idx] for idx in indices if self._deployment_usable_by_team(self.model_list[idx], team_id)
         )
-        first_usable: Final = next(usable, None)
+        granted: Final = self._restrict_deployments_to_caller_grants(
+            model=model_group_name, deployments=usable, user_api_key_auth=user_api_key_auth
+        )
+        first_usable: Final = next(iter(granted), None)
         if first_usable is None:
             return None
         return Deployment(**first_usable) if isinstance(first_usable, dict) else first_usable
@@ -10313,13 +10327,20 @@ class Router:
             return display_name
         return None
 
-    def get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:
+    def get_credential_deployment(
+        self,
+        model_id: str,
+        team_id: str | None = None,
+        user_api_key_auth: "UserAPIKeyAuth | None" = None,
+    ) -> Deployment | None:
         """
         The deployment a passthrough endpoint (files, batches, etc.) resolves for a
         model id or model name: by deployment id first, then by model_name, then by
         the team's exact public model name, then by wildcard pattern (team wildcards
         before global ones, so a global "openai/*" never shadows the team's own
         entry). Name and wildcard lookups never resolve another team's deployment.
+        With the caller's auth, a name granted only through deployment IDs resolves
+        to one of those deployments rather than the first sibling sharing the name.
 
         Returns None when nothing matches or the match is paused via
         `LiteLLM_ProxyModelTable.blocked`, so callers cannot bypass an admin pause
@@ -10327,7 +10348,9 @@ class Router:
         """
         deployment: Final = (
             self.get_deployment(model_id=model_id)
-            or self._get_model_group_deployment_usable_by_team(model_group_name=model_id, team_id=team_id)
+            or self._get_model_group_deployment_usable_by_team(
+                model_group_name=model_id, team_id=team_id, user_api_key_auth=user_api_key_auth
+            )
             or self._get_team_public_name_deployment(model_id=model_id, team_id=team_id)
             or self._get_wildcard_deployment_usable_by_team(model_id=model_id, team_id=team_id)
         )
@@ -10363,7 +10386,10 @@ class Router:
         return None
 
     def get_deployment_credentials_with_provider(
-        self, model_id: str, team_id: str | None = None
+        self,
+        model_id: str,
+        team_id: str | None = None,
+        user_api_key_auth: "UserAPIKeyAuth | None" = None,
     ) -> dict[str, Any] | None:
         """
         Get API credentials and provider info from a model name in model_list.
@@ -10380,6 +10406,10 @@ class Router:
                 wildcard lookups never resolve a deployment owned by a
                 different team, so shared model names can't leak another
                 team's credentials.
+            user_api_key_auth: Optional auth of the caller. When set, a model
+                name the key or team granted only through deployment IDs
+                resolves to one of those deployments instead of the first
+                deployment sharing that name.
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
@@ -10391,7 +10421,9 @@ class Router:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
             # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", "model": "gpt-4o", ...}
         """
-        deployment: Final = self.get_credential_deployment(model_id=model_id, team_id=team_id)
+        deployment: Final = self.get_credential_deployment(
+            model_id=model_id, team_id=team_id, user_api_key_auth=user_api_key_auth
+        )
         if deployment is None:
             return None
 
@@ -12551,6 +12583,11 @@ class Router:
             request_kwargs=request_kwargs,
             request_team_id=request_team_id,
         )
+        healthy_deployments = self._filter_deployments_by_granted_deployment_ids(
+            model=model,
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
         _access_group_filter_emptied_candidates = (
             _pre_model_access_group_filter_len > 0 and len(healthy_deployments) == 0
         )
@@ -12682,6 +12719,77 @@ class Router:
                 filtered_deployments.append(deployment)
 
         return filtered_deployments
+
+    def _filter_deployments_by_granted_deployment_ids(
+        self,
+        model: str,
+        healthy_deployments: Sequence[Mapping[str, object]],
+        request_kwargs: Mapping[str, object] | None,
+    ) -> Sequence[Mapping[str, object]]:
+        """
+        Restrict candidate deployments to the deployment IDs granted on the key or team.
+
+        Applied per grant scope (key models, then team models) and only when that scope grants this
+        model through deployment IDs rather than its name, a wildcard, or all-proxy-models. A scope
+        whose granted deployments are all unavailable yields no candidates rather than widening.
+        """
+        if not healthy_deployments or request_kwargs is None:
+            return healthy_deployments
+        return self._restrict_deployments_to_caller_grants(
+            model=model,
+            deployments=healthy_deployments,
+            user_api_key_auth=self._request_user_api_key_auth(request_kwargs),
+        )
+
+    def _restrict_deployments_to_caller_grants(
+        self,
+        model: str,
+        deployments: Sequence[Mapping[str, object]],
+        user_api_key_auth: object,
+    ) -> Sequence[Mapping[str, object]]:
+        if not deployments or not isinstance(user_api_key_auth, CallerModelGrants):
+            return deployments
+
+        model_group_ids: Final = frozenset(self.get_model_ids(model_name=model))
+        key_grants: Final = self._grant_strings(user_api_key_auth.models) - frozenset({"all-team-models"})
+        team_grants: Final = self._grant_strings(user_api_key_auth.team_models)
+        key_scoped: Final = self._restrict_to_granted_deployment_ids(
+            model=model, deployments=deployments, grants=key_grants, model_group_ids=model_group_ids
+        )
+        return self._restrict_to_granted_deployment_ids(
+            model=model, deployments=key_scoped, grants=team_grants, model_group_ids=model_group_ids
+        )
+
+    @staticmethod
+    def _request_user_api_key_auth(request_kwargs: Mapping[str, object]) -> object:
+        buckets: Final = (request_kwargs.get(name) for name in ("metadata", "litellm_metadata"))
+        return next(
+            (
+                bucket["user_api_key_auth"]
+                for bucket in buckets
+                if isinstance(bucket, Mapping) and "user_api_key_auth" in bucket
+            ),
+            None,
+        )
+
+    @staticmethod
+    def _grant_strings(models: Sequence[object] | None) -> frozenset[str]:
+        return frozenset(model for model in models or () if isinstance(model, str))
+
+    @classmethod
+    def _restrict_to_granted_deployment_ids(
+        cls,
+        model: str,
+        deployments: Sequence[Mapping[str, object]],
+        grants: frozenset[str],
+        model_group_ids: frozenset[str],
+    ) -> Sequence[Mapping[str, object]]:
+        if model in grants or "*" in grants or "all-proxy-models" in grants:
+            return deployments
+        granted_ids: Final = grants & model_group_ids
+        if not granted_ids:
+            return deployments
+        return tuple(deployment for deployment in deployments if cls._deployment_ids((deployment,)) & granted_ids)
 
     async def async_get_healthy_deployments(
         self,

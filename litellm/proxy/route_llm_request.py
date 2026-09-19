@@ -561,7 +561,9 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
                     deployment_creds = llm_router.get_deployment_credentials(model_id=model)
                     if not deployment_creds:
                         # Try by model group name
-                        deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=model)
+                        deployment: Final = llm_router.get_deployment_by_model_group_name(
+                            model_group_name=model, user_api_key_auth=user_api_key_dict
+                        )
                         if (
                             deployment
                             and deployment.litellm_params

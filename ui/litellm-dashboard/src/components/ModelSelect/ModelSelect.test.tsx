@@ -1,4 +1,4 @@
-import type { ProxyModel } from "@/app/(dashboard)/hooks/models/useModels";
+import type { ModelDeploymentSummary, ProxyModel } from "@/app/(dashboard)/hooks/models/useModels";
 import type { Organization } from "@/components/networking";
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -8,6 +8,7 @@ import { ModelSelect } from "./ModelSelect";
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
+  useModelDeployments: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
@@ -22,12 +23,13 @@ vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
   useCurrentUser: vi.fn(),
 }));
 
-import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
+import { useAllProxyModels, useModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 
 const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
+const mockUseModelDeployments = vi.mocked(useModelDeployments);
 const mockUseTeam = vi.mocked(useTeam);
 const mockUseOrganization = vi.mocked(useOrganization);
 const mockUseCurrentUser = vi.mocked(useCurrentUser);
@@ -74,6 +76,10 @@ describe("ModelSelect", () => {
       data: { data: mockProxyModels },
       isLoading: false,
     } as any);
+    mockUseModelDeployments.mockReturnValue({
+      data: [],
+      isLoading: false,
+    } as any);
     mockUseTeam.mockReturnValue({
       data: undefined,
       isLoading: false,
@@ -110,6 +116,7 @@ describe("ModelSelect", () => {
 
     const loadingScenarios = [
       { hook: mockUseAllProxyModels, context: "user" as const },
+      { hook: mockUseModelDeployments, context: "user" as const },
       { hook: mockUseTeam, context: "team" as const, props: { teamID: "team-1" } },
       { hook: mockUseOrganization, context: "organization" as const, props: { organizationID: "org-1" } },
       { hook: mockUseCurrentUser, context: "user" as const },
@@ -631,6 +638,60 @@ describe("ModelSelect", () => {
     await openModelList(user);
 
     expect(screen.getAllByRole("option", { name: "gpt-4" })).toHaveLength(1);
+  });
+
+  describe("same-name deployments", () => {
+    const gpt4Deployments: ModelDeploymentSummary[] = [
+      { id: "openai-gpt-4-id", modelName: "gpt-4", litellmModel: "openai/gpt-4" },
+      { id: "azure-gpt-4-id", modelName: "gpt-4", litellmModel: "azure/gpt-4-eu" },
+    ];
+
+    beforeEach(() => {
+      mockUseModelDeployments.mockReturnValue({
+        data: [...gpt4Deployments, { id: "claude-id", modelName: "claude-3", litellmModel: "anthropic/claude-3" }],
+        isLoading: false,
+      } as any);
+    });
+
+    it("should offer one option per deployment under a duplicated model name and keep the name itself", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+      );
+
+      await openModelList(user);
+
+      expect(screen.getByRole("option", { name: /^gpt-4\s*All 2 deployments$/ })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /azure\/gpt-4-eu.*Deployment ID azure-gpt-4-id/ })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /openai\/gpt-4.*Deployment ID openai-gpt-4-id/ })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "claude-3" })).toBeInTheDocument();
+    });
+
+    it("should report the deployment id, not the model name, when a single deployment is picked", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+      );
+
+      await openModelList(user);
+      await user.click(screen.getByRole("option", { name: /azure\/gpt-4-eu/ }));
+
+      expect(mockOnChange).toHaveBeenCalledWith(["azure-gpt-4-id"]);
+    });
+
+    it("should show a saved deployment id as its model name and provider model", async () => {
+      renderWithProviders(
+        <ModelSelect
+          onChange={mockOnChange}
+          value={["azure-gpt-4-id"]}
+          context="user"
+          options={{ showAllProxyModelsOverride: true }}
+        />,
+      );
+
+      expect(await screen.findByText("gpt-4 · azure/gpt-4-eu · azure-gp")).toBeInTheDocument();
+      expect(screen.queryByText("azure-gpt-4-id")).not.toBeInTheDocument();
+    });
   });
 
   it("should collapse selections past the chip limit into a labelled overflow count", async () => {

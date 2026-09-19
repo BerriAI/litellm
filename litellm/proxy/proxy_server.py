@@ -11084,7 +11084,9 @@ async def model_info(
     if llm_router is None:
         raise HTTPException(status_code=500, detail="Router not initialized")
 
-    deployment: Final = llm_router.get_deployment_by_model_group_name(resolved_model_id)
+    deployment: Final = llm_router.get_deployment_by_model_group_name(
+        resolved_model_id, user_api_key_auth=user_api_key_dict
+    )
     if deployment is None:
         raise HTTPException(
             status_code=404,
@@ -11528,7 +11530,9 @@ async def embeddings(
             # check if provider accept list of tokens as input - e.g. for langchain integration
             if llm_router is not None and data.get("model") in router_model_names:
                 # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
-                deployment: Final = llm_router.get_deployment_by_model_group_name(model_group_name=data["model"])
+                deployment: Final = llm_router.get_deployment_by_model_group_name(
+                    model_group_name=data["model"], user_api_key_auth=user_api_key_dict
+                )
                 if deployment is not None:
                     litellm_params: Final = deployment.get("litellm_params", {}) or {}
                     litellm_model: Final = litellm_params.get("model", "")
@@ -11915,6 +11919,7 @@ async def audio_transcriptions(
             request_data=data,
             file=file,
             router_model_names=router_model_names,
+            user_api_key_dict=user_api_key_dict,
         )
 
         file_content: Final = await file.read()
@@ -13415,6 +13420,20 @@ async def non_admin_all_models(
     return unique_models
 
 
+def _granted_deployment_ids(models: Sequence[str], llm_router: Router, team_id: str | None = None) -> tuple[str, ...]:
+    deployments: Final = tuple(
+        deployment
+        for model in models
+        if isinstance(deployment := llm_router.get_deployment(model_id=model), Deployment)
+    )
+    return tuple(
+        deployment.model_info.id
+        for deployment in deployments
+        if deployment.model_info.id is not None
+        and (team_id is None or deployment.model_info.team_id in (None, team_id))
+    )
+
+
 def _add_team_models_to_all_models(
     team_db_objects_typed: list[LiteLLM_TeamTable],
     llm_router: Router,
@@ -13458,6 +13477,12 @@ def _add_team_models_to_all_models(
                         model_id = model.get("model_info", {}).get("id", None)
                         if model_id is not None:
                             team_models.setdefault(model_id, set()).add(team_object.team_id)
+            for model_id in _granted_deployment_ids(
+                models=team_object.models, llm_router=llm_router, team_id=team_object.team_id
+            ):
+                team_models.setdefault(model_id, set()).add(  # mutable-ok: fills the dict[str, set[str]] accumulator
+                    team_object.team_id
+                )
     return team_models
 
 
@@ -13586,12 +13611,13 @@ def _resolve_model_grant_to_deployment_ids(
 
     access_groups: Final = llm_router.get_model_access_groups()
     granted_model_names: Final = tuple(name for model in models for name in (model, *access_groups.get(model, ())))
-    return tuple(
+    by_name: Final = tuple(
         model_id
         for name in granted_model_names
         for deployment in (llm_router.get_model_list(model_name=name) or ())
         if (model_id := deployment.get("model_info", {}).get("id", None)) is not None
     )
+    return tuple(dict.fromkeys((*by_name, *_granted_deployment_ids(models=models, llm_router=llm_router))))
 
 
 def get_direct_access_models(

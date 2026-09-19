@@ -1,4 +1,4 @@
-import { ProxyModel, useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
+import { ProxyModel, useAllProxyModels, useModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
@@ -20,7 +20,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { Team } from "@/components/key_team_helpers/key_list";
-import { splitWildcardModels } from "./modelUtils";
+import { buildModelOptions, resolveSelectedModelOption, splitWildcardModels, type ModelOption } from "./modelUtils";
 
 const MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE = {
   label: "All Proxy Models",
@@ -55,12 +55,6 @@ export interface ModelSelectProps {
   onChange: (values: string[]) => void;
   style?: React.CSSProperties;
 }
-
-type ModelOption = {
-  label: string;
-  value: string;
-  disabled?: boolean;
-};
 
 type ModelOptionGroup = {
   label: string;
@@ -131,6 +125,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const { id, teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { showAllProxyModelsOverride, includeSpecialOptions } = options || {};
   const { data: allProxyModels, isLoading: isLoadingAllProxyModels } = useAllProxyModels();
+  const { data: modelDeployments, isLoading: isLoadingModelDeployments } = useModelDeployments();
   const { data: team, isLoading: isLoadingTeam, isFetching: isFetchingTeam } = useTeam(teamID);
   const { data: organization, isLoading: isLoadingOrganization } = useOrganization(organizationID);
   const { data: currentUser, isLoading: isCurrentUserLoading } = useCurrentUser();
@@ -138,7 +133,12 @@ export const ModelSelect = (props: ModelSelectProps) => {
   const isSpecialOption = (value: string) => MODEL_SENTINEL_OPTIONS.some((sv) => sv.value === value);
   const hasSpecialOptionSelected = value.some(isSpecialOption);
   const isTeamPending = isLoadingTeam || isAwaitingOrganizationModels(team, isFetchingTeam);
-  const isLoading = isLoadingAllProxyModels || isTeamPending || isLoadingOrganization || isCurrentUserLoading;
+  const isLoading =
+    isLoadingAllProxyModels ||
+    isLoadingModelDeployments ||
+    isTeamPending ||
+    isLoadingOrganization ||
+    isCurrentUserLoading;
   // The org's ceiling rides on /team/info, which a team admin may read; /organization/info 403s for them.
   const organizationModels = team?.organization_models ?? organization?.models;
   const organizationHasAllProxyModels = organizationModels !== undefined && isUncappedModelCeiling(organizationModels);
@@ -170,6 +170,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
   });
 
   const { wildcard, regular } = splitWildcardModels(filteredModels);
+  const deployments = modelDeployments ?? [];
 
   const groups: ModelOptionGroup[] = [
     ...(includeSpecialOptions
@@ -220,16 +221,12 @@ export const ModelSelect = (props: ModelSelectProps) => {
       : []),
     {
       label: "Models",
-      items: regular.map((model) => ({
-        label: model,
-        value: model,
-        disabled: hasSpecialOptionSelected,
-      })),
+      items: buildModelOptions(regular, deployments, hasSpecialOptionSelected),
     },
   ];
 
   const optionsByValue = new Map(groups.flatMap((group) => group.items).map((option) => [option.value, option]));
-  const selectedOptions = value.map((v) => optionsByValue.get(v) ?? { label: v, value: v });
+  const selectedOptions = value.map((v) => resolveSelectedModelOption(v, optionsByValue, deployments));
   const overflowOptions = selectedOptions.slice(MAX_VISIBLE_MODEL_CHIPS);
 
   return (
@@ -273,7 +270,12 @@ export const ModelSelect = (props: ModelSelectProps) => {
                 <ComboboxCollection>
                   {(option: ModelOption) => (
                     <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
-                      <span className="min-w-0 break-words">{option.label}</span>
+                      <span className="flex min-w-0 flex-col">
+                        <span className="break-words">{option.label}</span>
+                        {option.description && (
+                          <span className="text-xs text-muted-foreground">{option.description}</span>
+                        )}
+                      </span>
                     </ComboboxItem>
                   )}
                 </ComboboxCollection>

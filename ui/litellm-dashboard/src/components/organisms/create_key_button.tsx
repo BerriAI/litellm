@@ -1,5 +1,6 @@
 "use client";
 import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useModelDeployments } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useTags } from "@/app/(dashboard)/hooks/tags/useTags";
@@ -19,6 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect, type MultiSelectOption } from "@/components/shared/MultiSelect";
+import { buildModelOptions } from "@/components/ModelSelect/modelUtils";
 import { PaginatedSearchSelect } from "@/components/shared/PaginatedSearchSelect";
 import { SearchSelect, type SearchSelectOption } from "@/components/shared/SearchSelect";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
@@ -258,6 +260,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
   const [selectedOrganizationId, setSelectedOrganizationId] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const { data: modelDeployments } = useModelDeployments();
   const [isCreateUserModalVisible, setIsCreateUserModalVisible] = useState(false);
   const [possibleUIRoles, setPossibleUIRoles] = useState<Record<string, Record<string, string>>>({});
   const [userOptions, setUserOptions] = useState<SearchSelectOption[]>([]);
@@ -634,11 +637,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     ...(selectedProjectId === null && !selectedCreateKeyTeam
       ? [{ value: "all-proxy-models", label: "All Proxy Models" }]
       : []),
-    ...modelsToPick.map((model) => ({
-      value: model,
-      label: getModelDisplayName(model),
-      disabled: hasAllModelsSentinel(selectedModels),
-    })),
+    ...buildModelOptions(
+      modelsToPick,
+      modelDeployments ?? [],
+      hasAllModelsSentinel(selectedModels),
+      getModelDisplayName,
+    ),
   ];
 
   const changeKeyType = (write: FieldWrite) => (value: string) => {

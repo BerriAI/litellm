@@ -302,6 +302,36 @@ def test_get_model_by_id_not_found(client, auth_as, patched_models, path):
     assert "not found" in response.text.lower()
 
 
+@pytest.mark.parametrize("path", ["/v1/models/gpt-4", "/models/gpt-4"])
+def test_get_model_by_id_follows_the_granted_deployment(client, auth_as, patched_models, monkeypatch, path):
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    monkeypatch.setattr(litellm, "get_llm_provider", get_llm_provider)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "key1"},
+                "model_info": {"id": "openai-gpt-4-id"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "azure/gpt-4", "api_key": "key2", "api_base": "https://x"},
+                "model_info": {"id": "azure-gpt-4-id"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+
+    with auth_as(models=["azure-gpt-4-id"]):
+        granted = client.get(path)
+    with auth_as(models=["gpt-4"]):
+        broad = client.get(path)
+
+    assert granted.status_code == 200 and granted.json()["owned_by"] == "azure"
+    assert broad.status_code == 200 and broad.json()["owned_by"] == "openai"
+
+
 @pytest.mark.parametrize("params", [{}, {"scope": "expand"}])
 def test_anthropic_format_returns_public_team_model_name(
     client, auth_as, patched_models, monkeypatch, params

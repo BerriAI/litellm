@@ -4142,6 +4142,13 @@ def _resolve_all_team_model_sentinel_for_auth_check(
     return list(dict.fromkeys(non_sentinel_models + proxy_models))
 
 
+def _deployment_id_granted_for_model(model: str, llm_router: Router | None, allowed_models: list[str]) -> bool:
+    if llm_router is None:
+        return False
+    allowed: Final = frozenset(allowed_models)
+    return any(deployment_id in allowed for deployment_id in llm_router.get_model_ids(model_name=model))
+
+
 def _check_model_access_helper(
     model: str,
     llm_router: Router | None,
@@ -4186,7 +4193,7 @@ def _check_model_access_helper(
         all_model_access = True
 
     if model is not None and model not in filtered_models and all_model_access is False:
-        return False
+        return _deployment_id_granted_for_model(model=model, llm_router=llm_router, allowed_models=filtered_models)
     return True
 
 

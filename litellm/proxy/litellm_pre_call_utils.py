@@ -2693,6 +2693,7 @@ def _apply_credential_overrides_from_model_config(
             llm_router=llm_router,
             model_name=model_name,
             pre_alias_model_name=pre_alias_model_name,
+            user_api_key_dict=user_api_key_dict,
         )
 
     credential_name: Final = _resolve_credential_from_model_config(
@@ -2733,6 +2734,7 @@ def _resolve_provider_from_deployment(
     llm_router: Router,
     model_name: str,
     pre_alias_model_name: str | None = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> str | None:
     """
     Resolve a provider hint from the deployment's litellm_params when the
@@ -2748,7 +2750,9 @@ def _resolve_provider_from_deployment(
 
     for name in candidates:
         try:
-            deployment = llm_router.get_deployment_by_model_group_name(model_group_name=name)
+            deployment = llm_router.get_deployment_by_model_group_name(
+                model_group_name=name, user_api_key_auth=user_api_key_dict
+            )
         except Exception:
             deployment = None
         if deployment is None:

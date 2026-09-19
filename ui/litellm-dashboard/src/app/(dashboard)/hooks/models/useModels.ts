@@ -227,6 +227,23 @@ export const usePlainChatModelDeployments = (): AutoRouterDeployment[] =>
 export const useAutoRouters = (): UseQueryResult<AutoRouterDeployment[], Error> =>
   useDeployments(selectAutoRouterDeployments);
 
+export interface ModelDeploymentSummary {
+  id: string;
+  modelName: string;
+  litellmModel: string;
+}
+
+export const selectModelDeploymentSummaries = (deployments: AutoRouterDeployment[]): ModelDeploymentSummary[] =>
+  deployments.flatMap((deployment) => {
+    const id = deployment.model_info?.id;
+    const modelName = deployment.model_name;
+    if (!id || !modelName) return [];
+    return [{ id, modelName, litellmModel: deployment.litellm_params?.model ?? "" }];
+  });
+
+export const useModelDeployments = (): UseQueryResult<ModelDeploymentSummary[], Error> =>
+  useDeployments(selectModelDeploymentSummaries);
+
 export const useInvalidateAutoRouters = (): (() => Promise<void>) => {
   const queryClient = useQueryClient();
   return async () => {

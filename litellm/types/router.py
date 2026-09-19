@@ -1066,6 +1066,17 @@ class ConsumedRequestTagsStamp:
 
 
 @runtime_checkable
+class CallerModelGrants(Protocol):
+    """Key and team model grants a proxy request carries as ``user_api_key_auth`` in its metadata."""
+
+    @property
+    def models(self) -> Sequence[object]: ...
+
+    @property
+    def team_models(self) -> Sequence[object]: ...
+
+
+@runtime_checkable
 class PreRoutingStrategy(Protocol):
     """Structural interface shared by the auto / complexity / adaptive / quality routers."""
 

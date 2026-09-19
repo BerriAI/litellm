@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import dataclasses
 import functools
 import gc
 import json
@@ -16919,3 +16920,220 @@ class TestMemberAutoRouterInference:
         monkeypatch.setitem(sys.modules, "fastapi", None)
         monkeypatch.delitem(sys.modules, "litellm.proxy.auth.auto_router_checks", raising=False)
         assert (await self._route(router, {"metadata": {"user_api_key_team_id": "router-team"}})).model == "restricted-model"
+
+
+def _same_name_router_for_deployment_id_grants():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "key1", "mock_response": "from-openai"},
+                "model_info": {"id": "openai-gpt-4-id"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "azure/gpt-4",
+                    "api_key": "key2",
+                    "api_base": "https://x",
+                    "mock_response": "from-azure",
+                },
+                "model_info": {"id": "azure-gpt-4-id"},
+            },
+        ]
+    )
+
+
+def test_deployment_id_grant_restricts_routing_to_granted_deployment():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _same_name_router_for_deployment_id_grants()
+
+    for scoped_key in (
+        UserAPIKeyAuth(api_key="hashed-key", models=["azure-gpt-4-id"], team_models=[]),
+        UserAPIKeyAuth(api_key="hashed-key", team_id="team1", models=[], team_models=["azure-gpt-4-id"]),
+        UserAPIKeyAuth(
+            api_key="hashed-key",
+            team_id="team1",
+            models=["all-team-models"],
+            team_models=["azure-gpt-4-id", "claude"],
+        ),
+    ):
+        _model, deployments = router._common_checks_available_deployment(
+            model="gpt-4",
+            request_kwargs={"metadata": {"user_api_key_auth": scoped_key}},
+        )
+        assert [d["model_info"]["id"] for d in deployments] == ["azure-gpt-4-id"]
+
+        seen = set()
+        for _ in range(10):
+            response = router.completion(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "hello"}],
+                metadata={"user_api_key_auth": scoped_key},
+            )
+            seen.add(response.choices[0].message.content)
+        assert seen == {"from-azure"}
+
+
+def test_deployment_id_grant_filter_does_not_import_proxy_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    @dataclasses.dataclass(frozen=True, slots=True)
+    class Grants:
+        models: tuple[str, ...]
+        team_models: tuple[str, ...]
+
+    router = _same_name_router_for_deployment_id_grants()
+    monkeypatch.setitem(sys.modules, "fastapi", None)
+    monkeypatch.delitem(sys.modules, "litellm.proxy._types", raising=False)
+
+    _model, deployments = router._common_checks_available_deployment(
+        model="gpt-4",
+        request_kwargs={"metadata": {"user_api_key_auth": Grants(models=("azure-gpt-4-id",), team_models=())}},
+    )
+
+    assert [d["model_info"]["id"] for d in deployments] == ["azure-gpt-4-id"]
+
+
+def test_public_name_grant_is_not_narrowed_by_deployment_id_grant():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _same_name_router_for_deployment_id_grants()
+
+    for broad_key in (
+        UserAPIKeyAuth(api_key="hashed-key", models=["gpt-4", "azure-gpt-4-id"], team_models=[]),
+        UserAPIKeyAuth(api_key="hashed-key", models=["all-team-models"], team_models=["gpt-4", "azure-gpt-4-id"]),
+        UserAPIKeyAuth(api_key="hashed-key", models=["*"], team_models=["all-proxy-models"]),
+        UserAPIKeyAuth(api_key="hashed-key", models=[], team_models=[]),
+    ):
+        _model, deployments = router._common_checks_available_deployment(
+            model="gpt-4",
+            request_kwargs={"metadata": {"user_api_key_auth": broad_key}},
+        )
+        assert {d["model_info"]["id"] for d in deployments} == {"openai-gpt-4-id", "azure-gpt-4-id"}
+
+
+def test_deployment_id_grant_does_not_widen_when_granted_deployment_is_unavailable():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _same_name_router_for_deployment_id_grants()
+    scoped_key = UserAPIKeyAuth(api_key="hashed-key", models=["azure-gpt-4-id"], team_models=[])
+    healthy_openai_only = [d for d in router.model_list if d["model_info"]["id"] == "openai-gpt-4-id"]
+
+    assert (
+        router._filter_deployments_by_granted_deployment_ids(
+            model="gpt-4",
+            healthy_deployments=healthy_openai_only,
+            request_kwargs={"metadata": {"user_api_key_auth": scoped_key}},
+        )
+        == ()
+    )
+
+
+def test_request_user_api_key_auth_is_read_from_either_metadata_bucket():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    auth = UserAPIKeyAuth(api_key="hashed-key", models=["azure-gpt-4-id"])
+
+    assert Router._request_user_api_key_auth({"metadata": {"user_api_key_auth": auth}}) is auth
+    assert Router._request_user_api_key_auth({"litellm_metadata": {"user_api_key_auth": auth}}) is auth
+    assert Router._request_user_api_key_auth({"metadata": {}, "litellm_metadata": None}) is None
+    assert Router._request_user_api_key_auth({}) is None
+
+
+def test_grant_strings_keeps_only_string_grants():
+    assert Router._grant_strings(["gpt-4", 3, None, "azure-gpt-4-id"]) == frozenset({"gpt-4", "azure-gpt-4-id"})
+    assert Router._grant_strings(None) == frozenset()
+
+
+def test_restrict_to_granted_deployment_ids_only_narrows_deployment_id_grants():
+    router = _same_name_router_for_deployment_id_grants()
+    deployments = router.model_list
+    model_group_ids = frozenset({"openai-gpt-4-id", "azure-gpt-4-id"})
+
+    def restrict(grants: set[str]) -> set[str]:
+        return {
+            d["model_info"]["id"]
+            for d in Router._restrict_to_granted_deployment_ids(
+                model="gpt-4",
+                deployments=deployments,
+                grants=frozenset(grants),
+                model_group_ids=model_group_ids,
+            )
+        }
+
+    assert restrict({"azure-gpt-4-id"}) == {"azure-gpt-4-id"}
+    assert restrict({"azure-gpt-4-id", "openai-gpt-4-id"}) == {"azure-gpt-4-id", "openai-gpt-4-id"}
+    for broad in ({"gpt-4", "azure-gpt-4-id"}, {"*"}, {"all-proxy-models"}, {"claude"}, set()):
+        assert restrict(broad) == {"openai-gpt-4-id", "azure-gpt-4-id"}
+
+
+def test_restrict_deployments_to_caller_grants_applies_key_then_team_scope():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _same_name_router_for_deployment_id_grants()
+    deployments = router.model_list
+
+    def restrict(auth: object) -> set[str]:
+        return {
+            d["model_info"]["id"]
+            for d in router._restrict_deployments_to_caller_grants(
+                model="gpt-4", deployments=deployments, user_api_key_auth=auth
+            )
+        }
+
+    both = {"openai-gpt-4-id", "azure-gpt-4-id"}
+    assert restrict(None) == both
+    assert restrict({"models": ["azure-gpt-4-id"]}) == both
+    assert restrict(UserAPIKeyAuth(api_key="k", models=["all-team-models"], team_models=["azure-gpt-4-id"])) == {
+        "azure-gpt-4-id"
+    }
+    assert restrict(UserAPIKeyAuth(api_key="k", models=["openai-gpt-4-id"], team_models=["gpt-4"])) == {
+        "openai-gpt-4-id"
+    }
+    assert restrict(UserAPIKeyAuth(api_key="k", models=["openai-gpt-4-id"], team_models=["azure-gpt-4-id"])) == set()
+    assert (
+        router._restrict_deployments_to_caller_grants(
+            model="gpt-4", deployments=(), user_api_key_auth=UserAPIKeyAuth(api_key="k", models=["azure-gpt-4-id"])
+        )
+        == ()
+    )
+
+
+def test_credential_lookup_by_public_name_resolves_the_granted_deployment():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _same_name_router_for_deployment_id_grants()
+    azure_only_key = UserAPIKeyAuth(api_key="hashed-key", models=["azure-gpt-4-id"], team_models=[])
+
+    ungated = router.get_deployment_credentials_with_provider(model_id="gpt-4")
+    gated = router.get_deployment_credentials_with_provider(model_id="gpt-4", user_api_key_auth=azure_only_key)
+
+    assert ungated is not None and ungated["api_key"] == "key1"
+    assert gated is not None and gated["api_key"] == "key2" and gated["custom_llm_provider"] == "azure"
+
+
+def test_credential_lookup_by_public_name_is_not_narrowed_for_a_name_grant():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _same_name_router_for_deployment_id_grants()
+    name_key = UserAPIKeyAuth(api_key="hashed-key", models=["gpt-4", "azure-gpt-4-id"], team_models=[])
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="gpt-4", user_api_key_auth=name_key)
+
+    assert credentials is not None and credentials["api_key"] == "key1"
+
+
+def test_get_deployment_by_model_group_name_honors_deployment_id_grants():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    router = _same_name_router_for_deployment_id_grants()
+    azure_only_key = UserAPIKeyAuth(api_key="hashed-key", models=["azure-gpt-4-id"], team_models=[])
+
+    ungated = router.get_deployment_by_model_group_name(model_group_name="gpt-4")
+    gated = router.get_deployment_by_model_group_name(model_group_name="gpt-4", user_api_key_auth=azure_only_key)
+
+    assert ungated is not None and ungated.model_info.id == "openai-gpt-4-id"
+    assert gated is not None and gated.model_info.id == "azure-gpt-4-id"
+    assert (
+        router.get_deployment_by_model_group_name(model_group_name="missing", user_api_key_auth=azure_only_key) is None
+    )

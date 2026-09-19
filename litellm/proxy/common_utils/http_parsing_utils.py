@@ -14,7 +14,7 @@ from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
 )
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
 )
@@ -329,6 +329,7 @@ def check_file_size_under_limit(
     request_data: dict,
     file: UploadFile,
     router_model_names: Collection[str],
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> bool:
     """
     Check if any files passed in request are under max_file_size_mb
@@ -353,7 +354,7 @@ def check_file_size_under_limit(
     if llm_router is not None and request_data["model"] in router_model_names:
         try:
             deployment: Final[Deployment | None] = llm_router.get_deployment_by_model_group_name(
-                model_group_name=request_data["model"]
+                model_group_name=request_data["model"], user_api_key_auth=user_api_key_dict
             )
             if (
                 deployment
