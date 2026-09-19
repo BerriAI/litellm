@@ -6,6 +6,7 @@ from hashlib import sha256
 from typing import Final, cast
 
 import pytest
+
 from integration._support.client import JSON_OBJECT, Gateway
 from integration.cost_calculation.conftest import (
     approx_equal,
@@ -105,15 +106,34 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         assert breakdown.output_cost is not None and approx_equal(breakdown.output_cost, expected.output_cost), (
             f"{case.name}: output_cost {breakdown.output_cost} != expected {expected.output_cost}"
         )
-        for field, header_name, expected_component in (
-            ("cache_read_cost", "x-litellm-response-cost-cache-read", expected.cache_read_cost),
-            ("cache_creation_cost", "x-litellm-response-cost-cache-creation", expected.cache_creation_cost),
-            ("reasoning_cost", "x-litellm-response-cost-reasoning", expected.reasoning_cost),
-            ("tool_usage_cost", "x-litellm-response-cost-tool-usage", expected.tool_usage_cost),
+        for field, header_name, actual_component, expected_component in (
+            (
+                "cache_read_cost",
+                "x-litellm-response-cost-cache-read",
+                breakdown.cache_read_cost,
+                expected.cache_read_cost,
+            ),
+            (
+                "cache_creation_cost",
+                "x-litellm-response-cost-cache-creation",
+                breakdown.cache_creation_cost,
+                expected.cache_creation_cost,
+            ),
+            (
+                "reasoning_cost",
+                "x-litellm-response-cost-reasoning",
+                breakdown.reasoning_cost,
+                expected.reasoning_cost,
+            ),
+            (
+                "tool_usage_cost",
+                "x-litellm-response-cost-tool-usage",
+                breakdown.tool_usage_cost,
+                expected.tool_usage_cost,
+            ),
         ):
             if expected_component is None:
                 continue
-            actual_component: Final = getattr(breakdown, field)
             assert actual_component is not None and approx_equal(actual_component, expected_component), (
                 f"{case.name}: {field} {actual_component} != expected {expected_component}"
             )

@@ -21817,8 +21817,10 @@
       "response": {
         "content_type": "application/json",
         "body": {
+          "id": "resp_$REQUEST_ID",
           "object": "response",
           "status": "completed",
+          "created_at": 1700000000,
           "model": "gpt-5.6",
           "output": [
             {

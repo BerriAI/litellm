@@ -9,11 +9,12 @@ from typing import Final
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from pydantic import BaseModel, ConfigDict
+
 from integration._support.client import JSON_OBJECT, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase
-from pydantic import BaseModel, ConfigDict
 
 
 class CostBreakdown(BaseModel):
