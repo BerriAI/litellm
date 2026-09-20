@@ -975,11 +975,9 @@ def test_an_unmapped_exception_with_no_model_or_provider_is_a_connection_error(q
 def test_unmapped_sdk_exception_includes_bug_report_link(quiet_exception_mapping):
     with pytest.raises(litellm.APIConnectionError) as raised:
         exception_type(
-            model="gpt-4o",
-            custom_llm_provider="openai",
+            model="my-model",
+            custom_llm_provider="minimax",
             original_exception=ValueError("boom"),
-            completion_kwargs={},
-            extra_kwargs={},
         )
 
     assert "https://github.com/BerriAI/litellm/issues/new?" in str(raised.value)
@@ -991,11 +989,9 @@ def test_unmapped_sdk_exception_bug_report_link_can_be_disabled(quiet_exception_
 
     with pytest.raises(litellm.APIConnectionError) as raised:
         exception_type(
-            model="gpt-4o",
-            custom_llm_provider="openai",
+            model="my-model",
+            custom_llm_provider="minimax",
             original_exception=ValueError("boom"),
-            completion_kwargs={},
-            extra_kwargs={},
         )
 
     assert "https://github.com/BerriAI/litellm/issues/new?" not in str(raised.value)
