@@ -178,6 +178,7 @@ class RecountExpected(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     min_completion_tokens: int | None = None
+    max_completion_tokens: int | None = None
 
 
 class FailureDetails(BaseModel):

@@ -123,7 +123,7 @@ def poll_cost_row(key: str) -> CostRow:
     return result
 
 
-def poll_rows(key: str) -> tuple[CostRow, ...]:
+def poll_rows(key: str, count: int) -> tuple[CostRow, ...]:
     digest: Final = sha256(key.encode()).hexdigest()
 
     def read() -> tuple[CostRow, ...]:
@@ -134,11 +134,18 @@ def poll_rows(key: str) -> tuple[CostRow, ...]:
         )
         return tuple(parsed for row in rows if (parsed := _row(row)) is not None)
 
-    result: Final = eventually(read, lambda rows: len(rows) > 0, seconds=20)
+    result: Final = eventually(read, lambda rows: len(rows) >= count, seconds=60)
     return result
 
 
-def poll_rollups(key: str, team_id: str, user_id: str, end_user_id: str) -> Rollups:
+def poll_rollups(
+    key: str,
+    team_id: str,
+    user_id: str,
+    end_user_id: str,
+    requests: int,
+    target_spend: float,
+) -> Rollups:
     digest: Final = sha256(key.encode()).hexdigest()
 
     def read() -> Rollups | None:
@@ -179,7 +186,16 @@ def poll_rollups(key: str, team_id: str, user_id: str, end_user_id: str) -> Roll
             daily_team=DailySpend.model_validate(daily_team_rows[0]),
         )
 
-    result: Final = eventually(read, lambda value: value is not None, seconds=20)
+    result: Final = eventually(
+        read,
+        lambda value: (
+            value is not None
+            and value.daily_user.api_requests >= requests
+            and value.daily_team.api_requests >= requests
+            and approx_equal(value.key_spend, target_spend)
+        ),
+        seconds=60,
+    )
     assert result is not None
     return result
 
