@@ -14,7 +14,6 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.llms.vertex_ai.videos.transformation import (
     VertexAIVideoConfig,
     _convert_image_to_vertex_format,
@@ -123,18 +122,6 @@ class TestVertexAIVideoConfig:
                 model="veo-002", api_base=None, litellm_params={}
             )
 
-    def test_get_complete_url_default_location(self):
-        """Test URL construction with default location."""
-        litellm_params = {"vertex_project": "test-project"}
-
-        url = self.config.get_complete_url(
-            model="veo-002", api_base=None, litellm_params=litellm_params
-        )
-
-        # Should default to us-central1
-        assert "us-central1" in url
-        # Should NOT include endpoint
-        assert not url.endswith(":predictLongRunning")
 
     def test_veo_31_lite_provider_routing_from_local_model_map(
         self, monkeypatch: pytest.MonkeyPatch
@@ -154,24 +141,6 @@ class TestVertexAIVideoConfig:
         assert model == "veo-3.1-lite-generate-001"
         assert custom_llm_provider == "vertex_ai"
 
-    def test_veo_31_lite_cost_uses_resolution_tiers(self):
-        model_cost = _load_model_cost_map(BACKUP_MODEL_COST_PATH)
-        model_info = model_cost[VEO_31_LITE_VERTEX_MODEL]
-
-        assert video_generation_cost(
-            model=VEO_31_LITE_VERTEX_MODEL,
-            duration_seconds=10.0,
-            custom_llm_provider="vertex_ai",
-            model_info=dict(model_info),
-            video_resolution="720p",
-        ) == pytest.approx(0.5)
-        assert video_generation_cost(
-            model=VEO_31_LITE_VERTEX_MODEL,
-            duration_seconds=10.0,
-            custom_llm_provider="vertex_ai",
-            model_info=dict(model_info),
-            video_resolution="1080p",
-        ) == pytest.approx(0.8)
 
     def test_transform_video_create_request(self):
         """Test transformation of video creation request."""

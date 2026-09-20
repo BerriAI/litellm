@@ -4,10 +4,9 @@ from types import SimpleNamespace
 from typing import Final
 
 import pytest
-from fastapi.testclient import TestClient
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from pytest_mock import MockerFixture
-
 
 from litellm.proxy._types import (
     LiteLLM_UserTableFiltered,
@@ -27,6 +26,10 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     ui_view_users,
 )
 from litellm.proxy.proxy_server import app
+from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
+    CascadingJWTMappingTable,
+    JWTMappingRow,
+)
 
 client = TestClient(app)
 
@@ -2627,6 +2630,9 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     )
 
     # Mock all delete_many calls
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(
+        return_value=[]
+    )
     mock_prisma_client.db.litellm_verificationtoken.delete_many = mocker.AsyncMock(
         return_value=0
     )
@@ -2674,6 +2680,84 @@ async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     for condition in or_conditions:
         field = list(condition.keys())[0]
         assert condition[field] == {"in": ["admin-creator"]}
+
+
+@pytest.mark.asyncio
+async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker):
+    """/user/delete bulk-deletes the user's keys without going through /key/delete, so the
+    jwt_key_mapping cache entries pointing at those keys must be evicted here too. A surviving
+    entry keeps resolving the deleted token hash until the mapping cache TTL expires: the deleted
+    identity is either still served through the stale key cache or 401s on every JWT call, and it is
+    never re-registered (LIT-5387).
+
+    The FK cascade drops the mapping rows with the key rows, so the cache keys have to be read
+    before the delete: reading them afterwards finds nothing to evict.
+    """
+    from litellm.proxy._types import DeleteUserRequest, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.internal_user_endpoints import delete_user
+
+    global_cache_key: Final = jwt_key_mapping_cache_key("sub", "jwt-user", None)
+    issuer_cache_key: Final = jwt_key_mapping_cache_key("sub", "jwt-user", "https://issuer.example")
+    unrelated_cache_key: Final = jwt_key_mapping_cache_key("sub", "other-user", None)
+    jwt_table: Final = CascadingJWTMappingTable(
+        [
+            JWTMappingRow("hashed-jwt-key", "sub", "jwt-user"),
+            JWTMappingRow("hashed-issuer-key", "sub", "jwt-user", "https://issuer.example"),
+            JWTMappingRow("hashed-unrelated-key", "sub", "other-user"),
+        ]
+    )
+    cache: Final = UserApiKeyCache()
+    for cache_key, hashed_token in (
+        (global_cache_key, "hashed-jwt-key"),
+        (issuer_cache_key, "hashed-issuer-key"),
+        (unrelated_cache_key, "hashed-unrelated-key"),
+    ):
+        cache.set_cache(key=cache_key, value=hashed_token)
+        cache.set_cache(key=hashed_token, value=UserAPIKeyAuth(token=hashed_token))
+
+    user_row: Final = mocker.MagicMock()
+    user_row.user_id = "jwt-user"
+    user_row.user_email = "jwt-user@example.com"
+    user_row.teams = []
+    user_row.model_dump_json.return_value = "{}"
+    user_row.model_dump.return_value = {"user_id": "jwt-user", "user_email": "jwt-user@example.com", "teams": []}
+
+    mock_prisma_client: Final = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=user_row)
+    mock_prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_jwtkeymapping = jwt_table
+    mock_prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(
+        return_value=[SimpleNamespace(token="hashed-jwt-key"), SimpleNamespace(token="hashed-issuer-key")]
+    )
+
+    async def cascading_delete_many(where):
+        jwt_table.cascade(("hashed-jwt-key", "hashed-issuer-key"))
+        return 2
+
+    mock_prisma_client.db.litellm_verificationtoken.delete_many = mocker.AsyncMock(side_effect=cascading_delete_many)
+    mock_prisma_client.db.litellm_invitationlink.delete_many = mocker.AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)  # test-quality-ok: substitute the database dependency
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: exercise a real isolated cache
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", None)  # test-quality-ok: delete_user reads it off proxy_server at call time
+
+    await delete_user(
+        data=DeleteUserRequest(user_ids=["jwt-user"]),
+        user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert cache.get_cache(key=global_cache_key) is None
+    assert cache.get_cache(key=issuer_cache_key) is None
+    assert cache.get_cache(key="hashed-jwt-key") is None
+    assert cache.get_cache(key="hashed-issuer-key") is None
+    assert cache.get_cache(key=unrelated_cache_key) == "hashed-unrelated-key"
+    assert cache.get_cache(key="hashed-unrelated-key") is not None
+    assert [row.token for row in jwt_table.rows] == ["hashed-unrelated-key"]
 
 
 @pytest.mark.asyncio

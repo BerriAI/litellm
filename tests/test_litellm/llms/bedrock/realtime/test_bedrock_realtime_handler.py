@@ -8,7 +8,11 @@ from unittest.mock import MagicMock
 import pytest
 
 import litellm
-from litellm.constants import REALTIME_SESSION_SUCCESS_LOGGED_KEY
+from litellm.constants import (
+    BEDROCK_REALTIME_SDK_SUPPORTED_RANGE,
+    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    WEBSOCKET_CLOSE_REASON_MAX_BYTES,
+)
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.handler import BedrockRealtime
 from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
@@ -207,7 +211,19 @@ class ScriptedBedrockStream:
         return (None, self._receiver)
 
 
+class FakeAWSCredentialsIdentity:
+    def __init__(self, access_key_id, secret_access_key, session_token=None):
+        self.access_key_id = access_key_id
+        self.secret_access_key = secret_access_key
+        self.session_token = session_token
+
+
 class FakeStaticCredentialsResolver:
+    def __init__(self, identity=None):
+        self.identity = identity
+
+
+class FakeAWSCRTHTTPClient:
     pass
 
 
@@ -227,48 +243,32 @@ class StubCredentialsBedrockRealtime(BedrockRealtime):
         return SimpleNamespace(get_frozen_credentials=lambda: self.frozen_credentials)
 
 
-@pytest.fixture
-def stub_aws_sdk_client(monkeypatch):
-    captured = {}
+class FakeOperationInput:
+    def __init__(self, model_id):
+        self.model_id = model_id
 
-    class CapturingConfig:
-        def __init__(self, **kwargs):
-            captured["config_kwargs"] = kwargs
-            self.kwargs = kwargs
 
-    class FakeOperationInput:
-        def __init__(self, model_id):
-            self.model_id = model_id
-
-    class FakeBedrockRuntimeClient:
-        def __init__(self, config):
-            captured["client_config"] = config
-
-        async def invoke_model_with_bidirectional_stream(self, operation_input):
-            captured["operation_input"] = operation_input
-            if captured.get("streams"):
-                stream = captured["streams"].pop(0)
-                if isinstance(stream, Exception):
-                    raise stream
-                return stream
-            return ScriptedBedrockStream(captured.get("scripted_payloads", []))
-
+def _install_fake_sdk_modules(monkeypatch, client_module, config_module):
+    """Wire fake aws_sdk_bedrock_runtime / smithy packages into sys.modules for the handler's lazy imports."""
     package = types.ModuleType("aws_sdk_bedrock_runtime")
-    client_module = types.ModuleType("aws_sdk_bedrock_runtime.client")
-    client_module.BedrockRuntimeClient = FakeBedrockRuntimeClient
-    client_module.InvokeModelWithBidirectionalStreamOperationInput = FakeOperationInput
-    config_module = types.ModuleType("aws_sdk_bedrock_runtime.config")
-    config_module.Config = CapturingConfig
     models_module = types.ModuleType("aws_sdk_bedrock_runtime.models")
     models_module.BidirectionalInputPayloadPart = FakePayloadPart
     models_module.InvokeModelWithBidirectionalStreamInputChunk = FakeInputChunk
+    models_module.InvokeModelWithBidirectionalStreamOperationInput = FakeOperationInput
     package.client = client_module
     package.config = config_module
     package.models = models_module
     smithy_package = types.ModuleType("smithy_aws_core")
     identity_module = types.ModuleType("smithy_aws_core.identity")
+    identity_module.AWSCredentialsIdentity = FakeAWSCredentialsIdentity
     identity_module.StaticCredentialsResolver = FakeStaticCredentialsResolver
     smithy_package.identity = identity_module
+    smithy_http_package = types.ModuleType("smithy_http")
+    smithy_http_aio = types.ModuleType("smithy_http.aio")
+    crt_module = types.ModuleType("smithy_http.aio.crt")
+    crt_module.AWSCRTHTTPClient = FakeAWSCRTHTTPClient
+    smithy_http_aio.crt = crt_module
+    smithy_http_package.aio = smithy_http_aio
 
     stubbed_modules = {
         "aws_sdk_bedrock_runtime": package,
@@ -277,9 +277,55 @@ def stub_aws_sdk_client(monkeypatch):
         "aws_sdk_bedrock_runtime.models": models_module,
         "smithy_aws_core": smithy_package,
         "smithy_aws_core.identity": identity_module,
+        "smithy_http": smithy_http_package,
+        "smithy_http.aio": smithy_http_aio,
+        "smithy_http.aio.crt": crt_module,
     }
     for module_name, module in stubbed_modules.items():
         monkeypatch.setitem(sys.modules, module_name, module)
+
+
+@pytest.fixture
+def stub_aws_sdk_client(monkeypatch):
+    """Fake of the aws-sdk-bedrock-runtime 0.10/0.11 surface: async config resolve, async client with close()"""
+    captured = {}
+
+    class FakeAsyncBedrockRuntimeConfig:
+        def __init__(self, kwargs):
+            self.kwargs = kwargs
+
+        @classmethod
+        async def resolve(cls, **kwargs):
+            captured["config_kwargs"] = kwargs
+            return cls(kwargs)
+
+    class FakeAsyncBedrockRuntimeClient:
+        def __init__(self, config):
+            captured["client_config"] = config
+            captured["client_closed"] = False
+
+        async def invoke_model_with_bidirectional_stream(self, operation_input):
+            captured["operation_input"] = operation_input
+            if captured.get("streams"):
+                stream = captured["streams"].pop(0)
+                if isinstance(stream, Exception):
+                    raise stream
+                captured["open_stream"] = stream
+                return stream
+            stream = ScriptedBedrockStream(captured.get("scripted_payloads", []))
+            captured["open_stream"] = stream
+            return stream
+
+        async def close(self):
+            open_stream = captured.get("open_stream")
+            captured["input_closed_before_client_close"] = open_stream is None or open_stream.input_stream.closed
+            captured["client_closed"] = True
+
+    client_module = types.ModuleType("aws_sdk_bedrock_runtime.client")
+    client_module.AsyncBedrockRuntimeClient = FakeAsyncBedrockRuntimeClient
+    config_module = types.ModuleType("aws_sdk_bedrock_runtime.config")
+    config_module.AsyncBedrockRuntimeConfig = FakeAsyncBedrockRuntimeConfig
+    _install_fake_sdk_modules(monkeypatch, client_module, config_module)
 
     for env_var in (
         "AWS_ACCESS_KEY_ID",
@@ -764,14 +810,32 @@ class TestBedrockRealtimeAwsAuth:
         )
 
         config_kwargs = stub_aws_sdk_client["config_kwargs"]
-        assert config_kwargs["aws_access_key_id"] == "litellm-params-access-key"
-        assert config_kwargs["aws_secret_access_key"] == "litellm-params-secret-key"
-        assert config_kwargs["aws_session_token"] == "litellm-params-session-token"
-        assert isinstance(config_kwargs["aws_credentials_identity_resolver"], FakeStaticCredentialsResolver)
+        resolver = config_kwargs["aws_credentials_identity_resolver"]
+        assert isinstance(resolver, FakeStaticCredentialsResolver)
+        assert resolver.identity.access_key_id == "litellm-params-access-key"
+        assert resolver.identity.secret_access_key == "litellm-params-secret-key"
+        assert resolver.identity.session_token == "litellm-params-session-token"
         assert config_kwargs["region"] == "us-east-1"
+        assert config_kwargs["endpoint_uri"] == "https://bedrock-runtime.us-east-1.amazonaws.com"
+        assert isinstance(config_kwargs["transport"], FakeAWSCRTHTTPClient)
         assert stub_aws_sdk_client["client_config"].kwargs is config_kwargs
         assert stub_aws_sdk_client["operation_input"].model_id == "amazon.nova-sonic-v1:0"
         assert websocket.closed
+
+    @pytest.mark.asyncio
+    async def test_api_base_overrides_default_endpoint(self, stub_aws_sdk_client):
+        await BedrockRealtime().async_realtime(
+            model="amazon.nova-sonic-v1:0",
+            websocket=RealtimeClientWS(),
+            logging_obj=FakeLogging(),
+            aws_region_name="us-east-1",
+            aws_access_key_id="k",
+            aws_secret_access_key="s",
+            api_base="https://vpce-bedrock.example.internal",
+            aws_bedrock_runtime_endpoint="https://ignored.example.internal",
+        )
+
+        assert stub_aws_sdk_client["config_kwargs"]["endpoint_uri"] == "https://vpce-bedrock.example.internal"
 
     @pytest.mark.asyncio
     async def test_role_assumption_params_forwarded_to_get_credentials(self, stub_aws_sdk_client):
@@ -791,6 +855,7 @@ class TestBedrockRealtimeAwsAuth:
             aws_role_name="arn:aws:iam::123456789012:role/nova-sonic",
             aws_session_name="realtime-session",
             aws_external_id="realtime-external-id",
+            aws_session_tags=[{"Key": "team", "Value": "realtime"}],
         )
 
         assert handler.get_credentials_kwargs == {
@@ -804,12 +869,13 @@ class TestBedrockRealtimeAwsAuth:
             "aws_web_identity_token": None,
             "aws_sts_endpoint": None,
             "aws_external_id": "realtime-external-id",
+            "aws_session_tags": ({"Key": "team", "Value": "realtime"},),
         }
-        config_kwargs = stub_aws_sdk_client["config_kwargs"]
-        assert config_kwargs["aws_access_key_id"] == "assumed-access-key"
-        assert config_kwargs["aws_secret_access_key"] == "assumed-secret-key"
-        assert config_kwargs["aws_session_token"] == "assumed-session-token"
-        assert isinstance(config_kwargs["aws_credentials_identity_resolver"], FakeStaticCredentialsResolver)
+        resolver = stub_aws_sdk_client["config_kwargs"]["aws_credentials_identity_resolver"]
+        assert isinstance(resolver, FakeStaticCredentialsResolver)
+        assert resolver.identity.access_key_id == "assumed-access-key"
+        assert resolver.identity.secret_access_key == "assumed-secret-key"
+        assert resolver.identity.session_token == "assumed-session-token"
 
     @pytest.mark.asyncio
     async def test_unresolvable_credentials_raise_clear_auth_error(self, stub_aws_sdk_client):
@@ -824,6 +890,119 @@ class TestBedrockRealtimeAwsAuth:
             )
 
         assert "config_kwargs" not in stub_aws_sdk_client
+
+
+class TestBedrockRealtimeSdkLifecycle:
+    """aws-sdk-bedrock-runtime 0.10/0.11: async config, async client, CRT transport, close() (LIT-7938 regression)"""
+
+    AWS_ARGS = {
+        "model": "amazon.nova-sonic-v1:0",
+        "aws_region_name": "us-east-1",
+        "aws_access_key_id": "k",
+        "aws_secret_access_key": "s",
+    }
+
+    @pytest.mark.asyncio
+    async def test_client_closed_after_input_stream_on_normal_completion(self, stub_aws_sdk_client):
+        await BedrockRealtime().async_realtime(websocket=RealtimeClientWS(), logging_obj=FakeLogging(), **self.AWS_ARGS)
+
+        assert stub_aws_sdk_client["client_closed"]
+        assert stub_aws_sdk_client["input_closed_before_client_close"]
+
+    @pytest.mark.asyncio
+    async def test_client_closed_when_stream_open_fails(self, stub_aws_sdk_client):
+        stub_aws_sdk_client["streams"] = [ServiceUnavailableException("bedrock unavailable")]
+
+        with pytest.raises(ServiceUnavailableException):
+            await BedrockRealtime().async_realtime(
+                websocket=RealtimeClientWS(), logging_obj=FakeLogging(), **self.AWS_ARGS
+            )
+
+        assert stub_aws_sdk_client["client_closed"]
+
+    @pytest.mark.asyncio
+    async def test_client_closed_when_provider_stream_fails_mid_session(self, stub_aws_sdk_client):
+        stub_aws_sdk_client["streams"] = [ScriptedBedrockStream([], receiver_type=BreakingBedrockReceiver)]
+
+        with pytest.raises(BedrockError):
+            await BedrockRealtime().async_realtime(
+                websocket=ConnectedClientWS([]), logging_obj=FakeLogging(), **self.AWS_ARGS
+            )
+
+        assert stub_aws_sdk_client["client_closed"]
+        assert stub_aws_sdk_client["input_closed_before_client_close"]
+
+    @pytest.mark.asyncio
+    async def test_client_without_close_completes_session(self, monkeypatch):
+        class ClientWithoutClose:
+            def __init__(self, config):
+                pass
+
+            async def invoke_model_with_bidirectional_stream(self, operation_input):
+                return ScriptedBedrockStream([])
+
+        class ConfigWithoutCapture:
+            @classmethod
+            async def resolve(cls, **kwargs):
+                return cls()
+
+        client_module = types.ModuleType("aws_sdk_bedrock_runtime.client")
+        client_module.AsyncBedrockRuntimeClient = ClientWithoutClose
+        config_module = types.ModuleType("aws_sdk_bedrock_runtime.config")
+        config_module.AsyncBedrockRuntimeConfig = ConfigWithoutCapture
+        _install_fake_sdk_modules(monkeypatch, client_module, config_module)
+        websocket = RealtimeClientWS()
+
+        await BedrockRealtime().async_realtime(websocket=websocket, logging_obj=FakeLogging(), **self.AWS_ARGS)
+
+        assert websocket.closed
+
+
+class TestBedrockRealtimeSdkImportErrors:
+    """Init errors must tell 'SDK not installed' apart from 'SDK installed but unsupported version' (LIT-7938)"""
+
+    @pytest.mark.asyncio
+    async def test_absent_sdk_names_install_extra(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "aws_sdk_bedrock_runtime", None)
+        handler = BedrockRealtime(sdk_version_lookup=lambda: None)
+
+        with pytest.raises(ImportError) as exc_info:
+            await handler.async_realtime(
+                model="amazon.nova-sonic-v1:0", websocket=RealtimeClientWS(), logging_obj=FakeLogging()
+            )
+
+        message = str(exc_info.value)
+        assert message.startswith("Missing aws_sdk_bedrock_runtime")
+        assert "litellm[bedrock-realtime]" in message
+        assert "is installed but" not in message
+        close_reason = message.encode()[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode()
+        assert BEDROCK_REALTIME_SDK_SUPPORTED_RANGE in close_reason
+        assert "pip install 'litellm[bedrock-realtime]'" in close_reason
+
+    @pytest.mark.asyncio
+    async def test_incompatible_sdk_names_installed_version_and_supported_range(self, monkeypatch):
+        legacy_client_module = types.ModuleType("aws_sdk_bedrock_runtime.client")
+        legacy_client_module.BedrockRuntimeClient = object
+        legacy_config_module = types.ModuleType("aws_sdk_bedrock_runtime.config")
+        legacy_config_module.Config = object
+        _install_fake_sdk_modules(monkeypatch, legacy_client_module, legacy_config_module)
+        handler = BedrockRealtime(sdk_version_lookup=lambda: "0.7.0")
+
+        with pytest.raises(ImportError) as exc_info:
+            await handler.async_realtime(
+                model="amazon.nova-sonic-v1:0", websocket=RealtimeClientWS(), logging_obj=FakeLogging()
+            )
+
+        message = str(exc_info.value)
+        assert "aws-sdk-bedrock-runtime 0.7.0 is installed but" in message
+        assert ">=0.10.0,<0.12.0" in message
+        assert not message.startswith("Missing aws_sdk_bedrock_runtime")
+        assert isinstance(exc_info.value.__cause__, ImportError)
+        assert str(exc_info.value.__cause__) not in message
+        assert "cannot import name" not in message
+        close_reason = message.encode()[:WEBSOCKET_CLOSE_REASON_MAX_BYTES].decode()
+        assert "0.7.0 is installed" in close_reason
+        assert BEDROCK_REALTIME_SDK_SUPPORTED_RANGE in close_reason
 
 
 if __name__ == "__main__":

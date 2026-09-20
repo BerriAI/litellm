@@ -67,7 +67,7 @@ def _configured_key_header_names() -> frozenset[str]:
     except Exception:
         return frozenset()
     general_settings: Final = getattr(proxy_server, "general_settings", None)
-    if not isinstance(general_settings, dict):
+    if not isinstance(general_settings, Mapping):
         return frozenset()
     name: Final[object] = general_settings.get("litellm_key_header_name")
     return frozenset({name.lower()}) if isinstance(name, str) and name else frozenset()
