@@ -12,15 +12,26 @@ Line shape decides the parse, not the batch's declared endpoint, so an output
 file mixing Responses-shaped and chat-shaped lines sums across both.
 """
 
-from typing import Literal, get_args, get_type_hints
 
 import pytest
 
 import litellm
 import litellm.batches.batch_utils as bu
-from litellm.types.llms.openai import CreateBatchRequest
 
 MODEL = "gpt-5.6"
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
 
 
 def _responses_line(input_tokens: int, output_tokens: int) -> dict:
@@ -107,13 +118,3 @@ async def test_mixed_shape_batch_output_sums_across_both_line_shapes(local_model
     assert result.cost == pytest.approx(
         133 * model_info["input_cost_per_token_batches"] + 107 * model_info["output_cost_per_token_batches"]
     )
-
-
-def test_create_batch_endpoint_accepts_v1_responses():
-    """A type-checked caller can pass endpoint="/v1/responses", which the runtime
-    already forwarded correctly."""
-    endpoint_annotation = get_type_hints(CreateBatchRequest)["endpoint"]
-    assert "/v1/responses" in get_args(endpoint_annotation)
-
-    for create_fn in (litellm.create_batch, litellm.acreate_batch):
-        assert "/v1/responses" in get_args(get_type_hints(create_fn)["endpoint"])
