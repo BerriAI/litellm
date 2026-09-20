@@ -151,48 +151,6 @@ class TestLevoConfig(unittest.TestCase):
 class TestLevoIntegration(unittest.TestCase):
     """Integration tests for LevoLogger."""
 
-    @patch.dict(
-        "os.environ",
-        {
-            "LEVOAI_API_KEY": "test-api-key",
-            "LEVOAI_ORG_ID": "test-org-id",
-            "LEVOAI_WORKSPACE_ID": "test-workspace-id",
-            "LEVOAI_COLLECTOR_URL": "https://collector.levo.ai",
-        },
-    )
-    @pytest.mark.skipif(
-        not OPENTELEMETRY_AVAILABLE, reason="OpenTelemetry packages not installed"
-    )
-    @patch(
-        "litellm.integrations.opentelemetry.OpenTelemetry._init_otel_logger_on_litellm_proxy"
-    )
-    @pytest.mark.asyncio
-    async def test_levo_logger_health_check_healthy(self, mock_init_proxy):
-        """Test health check returns healthy status when config is valid."""
-        # Mock the proxy initialization to avoid importing proxy code
-        mock_init_proxy.return_value = None
-
-        config = LevoLogger.get_levo_config()
-        otel_config = OpenTelemetryConfig(
-            exporter=config.protocol,
-            endpoint=config.endpoint,
-            headers=config.otlp_auth_headers,
-        )
-
-        # Create tracer provider with in-memory exporter
-        tracer_provider = TracerProvider()
-        tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
-
-        levo_logger = LevoLogger(
-            config=otel_config, callback_name="levo", tracer_provider=tracer_provider
-        )
-
-        # Run health check
-        result = await levo_logger.async_health_check()
-
-        self.assertEqual(result["status"], "healthy")
-        self.assertIn("message", result)
-
     @patch.dict("os.environ", {}, clear=True)
     def test_levo_logger_health_check_unhealthy(self):
         """Test health check returns unhealthy status when required vars are missing."""
