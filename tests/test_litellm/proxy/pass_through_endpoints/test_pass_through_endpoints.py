@@ -7,43 +7,43 @@ from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from io import BytesIO
 from types import SimpleNamespace
-from typing import Optional
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import Request, Response, UploadFile
+from pydantic import ValidationError
 from starlette.datastructures import FormData, Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
-
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
+    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
-    LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     _registered_pass_through_routes,
     chat_completion_pass_through_endpoint,
     create_pass_through_route,
     initialize_pass_through_endpoints,
     pass_through_request,
-    resolve_pass_through_request_timeout,
     resolve_llm_passthrough_timeout,
+    resolve_pass_through_request_timeout,
     websocket_passthrough_request,
     _with_trace_context,
-)
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
-    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
-
-import litellm
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
+    LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+)
 
 MESSAGE_START_SSE_FRAME = b'event: message_start\ndata: {"type": "message_start"}\n\n'
 
@@ -1156,6 +1156,95 @@ def test_resolve_llm_passthrough_timeout_precedence():
         {"pass_through_request_timeout": 6},
     ):
         assert resolve_llm_passthrough_timeout() == 6.0
+
+
+def test_resolve_llm_passthrough_timeout_stream_timeout_precedence():
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True, "stream_timeout": 1800, "timeout": 45},
+        )
+        == 1800.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True, "timeout": 45},
+            litellm_params={"stream_timeout": 1800, "timeout": 90},
+        )
+        == 1800.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True, "timeout": 45},
+            litellm_params={"timeout": 90},
+            router_timeout=120,
+            router_stream_timeout=1800,
+        )
+        == 1800.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True},
+            router_stream_timeout="1800",
+        )
+        == 1800.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": True},
+            litellm_params={"timeout": 90},
+            router_timeout=120,
+        )
+        == 90.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": False, "stream_timeout": 1800},
+            litellm_params={"stream_timeout": 1800, "timeout": 90},
+            router_stream_timeout=1800,
+        )
+        == 90.0
+    )
+    assert (
+        resolve_llm_passthrough_timeout(
+            litellm_params={"stream_timeout": 1800},
+            router_timeout=120,
+            router_stream_timeout=1800,
+        )
+        == 120.0
+    )
+
+
+@pytest.mark.parametrize(
+    "stream, expected",
+    [(None, 90.0), (0, 90.0), ("", 90.0), (1, 1800.0), ("yes", 1800.0)],
+)
+def test_resolve_llm_passthrough_timeout_reads_stream_by_truthiness(stream: object, expected: float):
+    assert (
+        resolve_llm_passthrough_timeout(
+            kwargs={"stream": stream},
+            litellm_params={"stream_timeout": 1800, "timeout": 90},
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "kwargs, litellm_params, expected",
+    [
+        ({"stream": True, "stream_timeout": 1800, "timeout": httpx.Timeout(30.0)}, {}, 1800.0),
+        ({"stream": False}, {"stream_timeout": httpx.Timeout(30.0), "timeout": 90}, 90.0),
+        ({"timeout": 45}, {"request_timeout": httpx.Timeout(30.0)}, 45.0),
+    ],
+)
+def test_resolve_llm_passthrough_timeout_validates_only_the_winning_value(
+    kwargs: dict[str, object], litellm_params: dict[str, object], expected: float
+):
+    assert resolve_llm_passthrough_timeout(kwargs=kwargs, litellm_params=litellm_params) == expected
+
+
+def test_resolve_llm_passthrough_timeout_rejects_a_non_numeric_winner():
+    with pytest.raises(ValidationError):
+        resolve_llm_passthrough_timeout(kwargs={"timeout": httpx.Timeout(30.0)})
 
 
 @pytest.mark.asyncio
@@ -2436,10 +2525,10 @@ async def _run_pass_through_and_capture_wire_url(
     target: str,
     incoming_query: str,
     merge_query_params: bool = False,
-    default_query_params: Optional[dict] = None,
-    custom_llm_provider: Optional[str] = None,
-    managed_files_hook: Optional[_FakeManagedFilesHook] = None,
-    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+    default_query_params: dict | None = None,
+    custom_llm_provider: str | None = None,
+    managed_files_hook: _FakeManagedFilesHook | None = None,
+    user_api_key_dict: UserAPIKeyAuth | None = None,
 ) -> httpx.URL:
     import litellm
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -2549,6 +2638,15 @@ async def test_pass_through_request_without_merge_replaces_target_query():
         incoming_query="q=litellm",
     )
     assert dict(wire_url.params) == {"q": "litellm"}
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_preserves_target_query_without_client_query():
+    wire_url = await _run_pass_through_and_capture_wire_url(
+        target="https://example.com/v1/models/gemini:streamGenerateContent?alt=sse",
+        incoming_query="",
+    )
+    assert dict(wire_url.params) == {"alt": "sse"}
 
 
 @pytest.mark.asyncio
@@ -4322,6 +4420,65 @@ async def test_pass_through_request_propagates_active_trace_context(span_source:
     assert propagated.get_span_context().span_id == span.get_span_context().span_id
 
 
+async def _relay_with_trace_headers(inbound_headers: dict[str, str], forward_headers: bool):
+    from opentelemetry.sdk.trace import TracerProvider
+
+    captured: dict[str, httpx.Headers] = {}
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        captured["headers"] = upstream_request.headers
+        return httpx.Response(200, json={"ok": True}, request=upstream_request)
+
+    fake_client, cleanup = _inject_fake_passthrough_client(httpx.MockTransport(transport_handler), timeout=None)
+    tracer = TracerProvider().get_tracer("test")
+    try:
+        with ExitStack() as stack:
+            _enter_relay_logging_mocks(stack, {})
+            span = tracer.start_span("litellm_request")
+            stack.callback(span.end)
+            request = _relay_client_request(method="POST")
+            request.headers = Headers(inbound_headers)
+            response = await pass_through_request(
+                request=request,
+                target="http://internal-api.test/v1/generate",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", parent_otel_span=span),
+                forward_headers=forward_headers,
+            )
+    finally:
+        cleanup()
+        await fake_client.aclose()
+    assert response.status_code == 200
+    return captured["headers"], span
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("forward_headers", [False, True])
+async def test_pass_through_request_keeps_x_pass_trace_headers_when_otel_span_is_active(forward_headers: bool):
+    caller_traceparent = "00-11111111111111111111111111111111-2222222222222222-01"
+
+    upstream_headers, span = await _relay_with_trace_headers(
+        {"x-pass-traceparent": caller_traceparent, "x-pass-tracestate": "vendor=caller"},
+        forward_headers=forward_headers,
+    )
+
+    assert upstream_headers["traceparent"] == caller_traceparent
+    assert upstream_headers["tracestate"] == "vendor=caller"
+    assert format(span.get_span_context().trace_id, "032x") not in upstream_headers["traceparent"]
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_without_caller_trace_headers_still_propagates_proxy_span():
+    from opentelemetry.trace import get_current_span
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+    upstream_headers, span = await _relay_with_trace_headers({"x-pass-anthropic-beta": "beta-1"}, forward_headers=False)
+
+    propagated = get_current_span(TraceContextTextMapPropagator().extract(upstream_headers))
+    assert propagated.get_span_context().span_id == span.get_span_context().span_id
+    assert upstream_headers["anthropic-beta"] == "beta-1"
+
+
 @pytest.mark.asyncio
 async def test_pass_through_request_relays_non_json_body_without_buffering():
     """
@@ -4401,12 +4558,14 @@ async def test_pass_through_request_relays_non_json_body_without_buffering():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_json_response_stays_buffered_for_logging():
+@pytest.mark.parametrize("content_type", ["application/json", "application/x-amz-json-1.1"])
+async def test_pass_through_request_json_response_stays_buffered_for_logging(content_type: str):
     """
-    JSON responses (content-type application/json) must keep the buffered
-    behavior: spend logging and guardrails inspect the parsed body, so the
-    handler reads the full upstream body and passes the parsed dict to the
-    success handler.
+    JSON responses (content-type application/json, and the AWS JSON protocol
+    media types AWS services such as Amazon Transcribe answer with) must keep
+    the buffered behavior: spend logging and guardrails inspect the parsed body,
+    so the handler reads the full upstream body and passes the parsed dict to
+    the success handler instead of handing it a relayed, already closed response.
     """
     from fastapi.responses import StreamingResponse
 
@@ -4417,7 +4576,7 @@ async def test_pass_through_request_json_response_stays_buffered_for_logging():
     fake_client, cleanup = _inject_fake_passthrough_client(
         _FakeUpstreamTransport(
             status_code=200,
-            headers={"content-type": "application/json"},
+            headers={"content-type": content_type},
             stream=upstream_stream,
         ),
         timeout=312.0,
@@ -4844,18 +5003,21 @@ async def test_unusable_upstream_cost_records_zero_not_the_flat_estimate():
 
 
 class FakeUpstreamWebSocket:
-    def __init__(self, first_frame: bytes):
-        self._first_frame = first_frame
+    """Serves the given frames in order, then closes normally, the way a real websockets connection does"""
+
+    def __init__(self, *frames: str | bytes):
+        self._frames = iter(frames)
         self.close = AsyncMock()
+        self.send = AsyncMock()
 
-    async def recv(self, decode: bool = True):
-        return self._first_frame
+    async def recv(self, decode: bool | None = None):
+        from websockets.exceptions import ConnectionClosedOK
+        from websockets.frames import Close
 
-    def __aiter__(self):
-        return self
-
-    async def __anext__(self):
-        raise StopAsyncIteration
+        frame = next(self._frames, None)
+        if frame is None:
+            raise ConnectionClosedOK(rcvd=Close(1000, ""), sent=Close(1000, ""), rcvd_then_sent=True)
+        return frame
 
 
 class FakeUpstreamConnect:
@@ -4876,7 +5038,7 @@ async def test_websocket_passthrough_forwards_non_ascii_first_frame():
     first_frame = json.dumps(
         {"type": "session.created", "session": {"instructions": "Hablas español, ¿sí?"}},
         ensure_ascii=False,
-    ).encode("utf-8")
+    )
     upstream_ws = FakeUpstreamWebSocket(first_frame)
 
     websocket = MagicMock()
@@ -4930,7 +5092,7 @@ async def test_websocket_passthrough_propagates_active_trace_context(
     from starlette.websockets import WebSocketState
 
     captured: dict[str, dict[str, str]] = {}
-    upstream_ws = FakeUpstreamWebSocket(b"{}")
+    upstream_ws = FakeUpstreamWebSocket("{}")
 
     def fake_connect(target, additional_headers):
         captured["headers"] = additional_headers
@@ -5359,9 +5521,147 @@ async def test_websocket_passthrough_does_not_close_twice_when_success_logging_f
     websocket.close.assert_awaited_once_with(code=1008, reason=upstream_reason)
 
 
+DEEPGRAM_LISTEN_TARGET = "wss://api.deepgram.com/v1/listen?model=nova-3&encoding=linear16&sample_rate=16000"
+DEEPGRAM_INTERIM_FRAME = json.dumps(
+    {
+        "type": "Results",
+        "start": 0.0,
+        "duration": 1.02,
+        "is_final": False,
+        "channel": {"alternatives": [{"transcript": "hello wor", "confidence": 0.71}]},
+    }
+)
+DEEPGRAM_FINAL_FRAME = json.dumps(
+    {
+        "type": "Results",
+        "start": 0.0,
+        "duration": 2.5,
+        "is_final": True,
+        "speech_final": True,
+        "channel": {"alternatives": [{"transcript": "hello world, ¿qué tal?", "confidence": 0.98}]},
+    },
+    ensure_ascii=False,
+)
+DEEPGRAM_METADATA_FRAME = json.dumps({"type": "Metadata", "request_id": "req-1", "duration": 2.5, "channels": 1})
+
+
+async def _relay_deepgram_listen(upstream_ws, client_receive):
+    """Runs the generic relay the way the Deepgram route does and returns (client websocket, success handler mock)"""
+    websocket = _client_websocket(client_receive)
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target=DEEPGRAM_LISTEN_TARGET,
+            custom_headers={"Authorization": "Token dg-provider-key"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/deepgram/v1/listen",
+            accept_websocket=False,
+        )
+    return websocket, success_handler
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_relays_deepgram_transcript_frames_verbatim_and_keeps_them_for_billing():
+    """Interim, final and Metadata frames reach the client byte for byte (no JSON round trip, non-ASCII intact,
+    a binary frame first) and every JSON object frame is what the success handler gets to bill from."""
+    upstream_ws = FakeUpstreamWebSocket(
+        b"\x00\x01binary-first",
+        DEEPGRAM_INTERIM_FRAME,
+        "not json at all",
+        DEEPGRAM_FINAL_FRAME,
+        DEEPGRAM_METADATA_FRAME,
+    )
+
+    websocket, success_handler = await _relay_deepgram_listen(upstream_ws, _pending_receive)
+
+    assert [call.args[0] for call in websocket.send_bytes.await_args_list] == [b"\x00\x01binary-first"]
+    assert [call.args[0] for call in websocket.send_text.await_args_list] == [
+        DEEPGRAM_INTERIM_FRAME,
+        "not json at all",
+        DEEPGRAM_FINAL_FRAME,
+        DEEPGRAM_METADATA_FRAME,
+    ]
+    success_call = success_handler.call_args.kwargs
+    assert success_call["url_route"] == "/deepgram/v1/listen"
+    assert success_call["response_body"] == [
+        json.loads(DEEPGRAM_INTERIM_FRAME),
+        json.loads(DEEPGRAM_FINAL_FRAME),
+        json.loads(DEEPGRAM_METADATA_FRAME),
+    ]
+    assert success_call["httpx_response"].request.url == DEEPGRAM_LISTEN_TARGET
+    assert success_call["logging_obj"].model_call_details.get("custom_llm_provider") is None
+    websocket.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_sends_deepgram_audio_bytes_and_control_text_upstream_unchanged():
+    upstream_ws = RecordingUpstreamWebSocket()
+    audio_chunk = bytes(range(256)) * 4
+    close_stream = json.dumps({"type": "CloseStream"})
+
+    await _relay_deepgram_listen(
+        upstream_ws,
+        AsyncMock(
+            side_effect=[
+                {"type": "websocket.receive", "bytes": audio_chunk},
+                {"type": "websocket.receive", "text": close_stream},
+                {"type": "websocket.disconnect"},
+            ]
+        ),
+    )
+
+    assert [call.args[0] for call in upstream_ws.send.await_args_list] == [audio_chunk, close_stream]
+    assert isinstance(upstream_ws.send.await_args_list[0].args[0], bytes)
+    upstream_ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_websocket_passthrough_vertex_live_setup_ack_names_the_model_but_is_not_billed_as_usage():
+    """Vertex Live keeps its special first frame: the setup acknowledgement is forwarded verbatim, read for the
+    model, and left out of the frames the usage handler sees; later frames are kept as before."""
+    setup_ack = json.dumps(
+        {"setupComplete": {}, "model": "projects/p/locations/global/publishers/google/models/gemini-live-2.5-flash"}
+    )
+    server_content = json.dumps({"serverContent": {"turnComplete": True}, "usageMetadata": {"totalTokenCount": 12}})
+    upstream_ws = FakeUpstreamWebSocket(setup_ack, server_content)
+    websocket = _client_websocket(_pending_receive)
+
+    with (
+        _patched_websocket_passthrough_environment(upstream_ws),
+        patch(  # test-quality-ok: pass_through_endpoint_logging is a module global read inside websocket_passthrough_request; there is no injection seam
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints."
+            "pass_through_endpoint_logging.pass_through_async_success_handler",
+            new=AsyncMock(),
+        ) as success_handler,
+    ):
+        await websocket_passthrough_request(
+            websocket=websocket,
+            target="wss://aiplatform.googleapis.com/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent",
+            custom_headers={"Authorization": "Bearer token"},
+            user_api_key_dict=UserAPIKeyAuth(),
+            forward_headers=False,
+            endpoint="/vertex_ai/live",
+            accept_websocket=False,
+        )
+
+    assert [call.args[0] for call in websocket.send_text.await_args_list] == [setup_ack, server_content]
+    success_call = success_handler.call_args.kwargs
+    assert success_call["response_body"] == [json.loads(server_content)]
+    assert success_call["logging_obj"].model == "gemini-live-2.5-flash"
+    assert success_call["logging_obj"].model_call_details["custom_llm_provider"] == "vertex_ai_language_models"
+
+
 def _passthrough_kwargs_for_reservation(
     user_api_key_dict: UserAPIKeyAuth,
-    parsed_body: Optional[dict] = None,
+    parsed_body: dict | None = None,
     user_defined_route: bool = False,
 ) -> dict:
     mock_request = MagicMock(spec=Request)
@@ -6143,6 +6443,46 @@ async def test_chat_completion_pass_through_endpoint_answers_an_openai_typed_err
         )
 
     assert (raised.value.type, raised.value.param, raised.value.code) == ("invalid_request_error", None, "400")
+
+
+@pytest.mark.asyncio
+async def test_chat_completion_pass_through_endpoint_keeps_the_raw_model_out_of_the_spend_log_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    raw_model: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+    proxy_logging: Final = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging.post_call_failure_hook = AsyncMock()
+
+    async def fake_add_litellm_data_to_request(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", fake_add_litellm_data_to_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    request: Final = MagicMock(spec=Request)
+    request.body = AsyncMock(
+        return_value=json.dumps({"model": raw_model, "messages": [{"role": "user", "content": "hi"}]}).encode()
+    )
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    logged_exception: Final = proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"]
+    assert isinstance(logged_exception, ProxyModelNotFoundError)
+    assert logged_exception.retryable_with_model_read_through is False
+    assert logged_exception.spend_log_error_message.startswith("completion: ")
+    assert "medical records" not in logged_exception.spend_log_error_message
+    assert (raised.value.type, raised.value.param, raised.value.code) == ("invalid_request_error", None, "400")
+    assert raw_model in logged_exception.detail["error"]
 
 
 @pytest.mark.asyncio

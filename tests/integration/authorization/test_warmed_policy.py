@@ -10,9 +10,9 @@ from pydantic import JsonValue
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
 
-from integration._support.client import Gateway, eventually, object_value
-from integration._support.database import read_rows
-from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
+from tests.integration._support.client import Gateway, eventually, object_value
+from tests.integration._support.database import read_rows
+from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 
 
 def assert_serving(gateway: Gateway, model: str, key: str, status: int, error_type: str = "auth_error") -> None:

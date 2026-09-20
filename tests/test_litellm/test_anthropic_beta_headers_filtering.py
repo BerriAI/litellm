@@ -426,6 +426,22 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["fine-grained-tool-streaming-2025-05-14"]
 
+    @pytest.mark.parametrize(
+        "provider", ["anthropic", "bedrock", "bedrock_converse", "vertex_ai", "databricks"]
+    )
+    def test_thinking_binding_controls_forwarded(self, provider):
+        """`thinking.block_binding` (preserved thinking, Claude Fable 5.1) is only
+        accepted alongside thinking-binding-controls-2026-08-01. The body field is
+        forwarded untouched, so stripping the header (previously unknown, hence
+        dropped) makes Bedrock and Vertex reject the request with
+        "thinking.adaptive.block_binding: Extra inputs are not permitted"."""
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=["thinking-binding-controls-2026-08-01"],
+            provider=provider,
+        )
+
+        assert filtered == ["thinking-binding-controls-2026-08-01"]
+
     def test_null_value_headers_filtered(self):
         """Test that headers with null values are always filtered out."""
         for provider in [

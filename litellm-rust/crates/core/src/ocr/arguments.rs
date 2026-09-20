@@ -1,5 +1,7 @@
+use litellm_core_utils::call_arguments::ArgumentSpec;
+use litellm_llms::base_llm::ocr::error::Error;
+
 use super::provider_config::{OcrConfigKind, resolve_provider_config};
-use crate::call_arguments::ArgumentSpec;
 
 const COMMON_OPTION_FIELDS: &[&str] = &["req_format", "extra_body", "max_response_bytes"];
 const AZURE_AUTH_OPTION_FIELDS: &[&str] = &[
@@ -12,6 +14,18 @@ const AZURE_AUTH_OPTION_FIELDS: &[&str] = &[
     "azure_credential",
     "azure_federated_token_file",
     "enable_azure_ad_token_refresh",
+];
+const AWS_AUTH_OPTION_FIELDS: &[&str] = &[
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "aws_session_token",
+    "aws_region_name",
+    "aws_session_name",
+    "aws_profile_name",
+    "aws_role_name",
+    "aws_web_identity_token",
+    "aws_sts_endpoint",
+    "aws_external_id",
 ];
 const VERTEX_AUTH_OPTION_FIELDS: &[&str] = &[
     "vertex_credentials",
@@ -29,10 +43,11 @@ pub fn is_supported_request(model: &str, custom_llm_provider: Option<&str>) -> b
 pub fn consumed_optional_param_names(
     model: &str,
     custom_llm_provider: Option<&str>,
-) -> Result<Vec<&'static str>, super::Error> {
+) -> Result<Vec<&'static str>, Error> {
     let (model, config) = resolve_provider_config(model, custom_llm_provider)?;
     let provider_fields = config.get_supported_ocr_params(&model);
     let auth_fields: &[&str] = match config {
+        OcrConfigKind::AwsTextract | OcrConfigKind::AwsTextractAnalyze => AWS_AUTH_OPTION_FIELDS,
         OcrConfigKind::AzureAi
         | OcrConfigKind::AzureDocumentIntelligence
         | OcrConfigKind::AzureCohere => AZURE_AUTH_OPTION_FIELDS,
@@ -47,23 +62,30 @@ pub fn consumed_optional_param_names(
         .collect())
 }
 
+pub(crate) fn is_secret_param(name: &str) -> bool {
+    matches!(
+        name,
+        "azure_ad_token"
+            | "client_secret"
+            | "azure_federated_token_file"
+            | "vertex_credentials"
+            | "vertex_ai_credentials"
+            | "aws_secret_access_key"
+            | "aws_session_token"
+            | "aws_web_identity_token"
+    )
+}
+
 pub fn consumed_optional_params(
     model: &str,
     custom_llm_provider: Option<&str>,
-) -> Result<Vec<ArgumentSpec>, super::Error> {
+) -> Result<Vec<ArgumentSpec>, Error> {
     consumed_optional_param_names(model, custom_llm_provider).map(|names| {
         names
             .into_iter()
             .map(|name| ArgumentSpec {
                 name,
-                secret: matches!(
-                    name,
-                    "azure_ad_token"
-                        | "client_secret"
-                        | "azure_federated_token_file"
-                        | "vertex_credentials"
-                        | "vertex_ai_credentials"
-                ),
+                secret: is_secret_param(name),
             })
             .collect()
     })
