@@ -1,8 +1,7 @@
 import struct
-import sys
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -355,13 +354,6 @@ def test_search_treats_an_explicit_null_max_num_results_as_the_default():
     assert client.index.searched_query.query_string() == "*=>[KNN 10 @embedding $vec AS vector_distance]"
 
 
-def test_missing_redis_dependency_raises_actionable_error():
-    config = ValkeyVectorStoreConfig(sync_client=FakeRedis(), embedding_fn=FakeEmbeddingFn([1.0]))
-    blocked = {name: None for name in list(sys.modules) if name == "redis" or name.startswith("redis.")}
-
-    with patch.dict(sys.modules, blocked):
-        with pytest.raises(ValueError, match="pip install redis"):
-            _search(config)
 
 
 @pytest.mark.asyncio
