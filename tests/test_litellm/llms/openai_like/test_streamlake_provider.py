@@ -1,7 +1,10 @@
 import json
 from pathlib import Path
+from typing import Final
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -213,6 +216,89 @@ class TestStreamlakeProviderConfig:
             assert "tools" not in supported
             assert "tool_choice" not in supported
             assert "reasoning_effort" not in supported
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "is_async, api_base",
+    (
+        (False, None),
+        (False, "https://custom.streamlake.example/v1"),
+        (False, "https://custom.streamlake.example/v1/"),
+        (True, None),
+        (True, "https://custom.streamlake.example/v1"),
+        (True, "https://custom.streamlake.example/v1/"),
+    ),
+    ids=(
+        "sync-default",
+        "sync-override",
+        "sync-override-trailing-slash",
+        "async-default",
+        "async-override",
+        "async-override-trailing-slash",
+    ),
+)
+async def test_streamlake_completion_uses_openai_compatible_http(
+    is_async: bool, api_base: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response_body: Final[dict[str, object]] = {
+        "id": "chatcmpl-streamlake-test",
+        "object": "chat.completion",
+        "created": 1710000000,
+        "model": "ep-test-endpoint",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "StreamLake response"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+    }
+    expected_url: Final[str] = f"{(api_base or STREAMLAKE_BASE_URL).rstrip('/')}/chat/completions"
+    expected_request_body: Final[dict[str, object]] = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "model": "ep-test-endpoint",
+        "max_tokens": 512,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert str(request.url) == expected_url
+        assert request.headers["authorization"] == "Bearer sk-streamlake-test"
+        assert request.headers["content-type"] == "application/json"
+        assert json.loads(request.content) == expected_request_body
+        return httpx.Response(200, json=response_body, request=request)
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.post(expected_url).mock(side_effect=handler)
+        if is_async:
+            response: Final = await litellm.acompletion(
+                model="streamlake/ep-test-endpoint",
+                messages=[{"role": "user", "content": "hello"}],
+                api_key="sk-streamlake-test",
+                api_base=api_base,
+                max_completion_tokens=512,
+            )
+        else:
+            response: Final = litellm.completion(
+                model="streamlake/ep-test-endpoint",
+                messages=[{"role": "user", "content": "hello"}],
+                api_key="sk-streamlake-test",
+                api_base=api_base,
+                max_completion_tokens=512,
+            )
+
+    assert route.call_count == 1
+    assert len(response.choices) == 1
+    assert response.choices[0].message.role == "assistant"
+    assert response.choices[0].message.content == "StreamLake response"
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 3
+    assert response.usage.completion_tokens == 2
+    assert response.usage.total_tokens == 5
 
 
 class TestStreamlakeNoHardcodedEndpointIds:

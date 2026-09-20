@@ -22,7 +22,13 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
   usePtuCostAttributionEnabled: () => mockPtuEnabled(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({ useModelCostMap: () => ({ data: {} }) }));
+vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
+  useModelCostMap: () => ({
+    data: {
+      "streamlake/GLM-5.3": { litellm_provider: "streamlake" },
+    },
+  }),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
   useCredentials: () => ({ data: { credentials: [] } }),
@@ -59,6 +65,13 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
           { key: "api_key", label: "API Key", field_type: "password", required: false },
           { key: "api_base", label: "API Base", field_type: "text", required: false },
         ],
+      },
+      {
+        provider: "StreamLake",
+        provider_display_name: "StreamLake",
+        litellm_provider: "streamlake",
+        default_model_placeholder: "streamlake/<model-or-endpoint>",
+        credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
       },
     ],
     isLoading: false,
@@ -150,6 +163,27 @@ describe("AddModelPanel submit payload contract", () => {
     expect(lastCreatedModel()).toStrictEqual({
       model_name: "gpt-4o",
       litellm_params: { ...alwaysMounted },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
+  it("creates a StreamLake model from a public model selection and API key", async () => {
+    const { user, submit } = await setup();
+
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("StreamLake"));
+    await user.click(screen.getByRole("combobox", { name: "Select models" }));
+    await user.click(await screen.findByText("streamlake/GLM-5.3"));
+    await user.type(screen.getByLabelText("API Key"), "sk-streamlake-test");
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "streamlake/GLM-5.3",
+      litellm_params: {
+        model: "streamlake/GLM-5.3",
+        custom_llm_provider: "streamlake",
+        api_key: "sk-streamlake-test",
+      },
       model_info: { ...baseModelInfo },
     });
   });
