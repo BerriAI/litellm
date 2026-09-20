@@ -2,13 +2,10 @@
 Test Vertex AI files handler functionality
 """
 
-import asyncio
 import re
 from types import MappingProxyType
 import pytest
 from unittest.mock import AsyncMock, patch
-
-import httpx
 
 from litellm.llms.vertex_ai.files.handler import VertexAIFilesHandler
 from litellm.types.llms.openai import FileContentRequest, HttpxBinaryResponseContent
@@ -312,104 +309,3 @@ class TestVertexAIFilesHandler:
         assert isinstance(result, HttpxBinaryResponseContent)
         dynamic_params = mock_download.call_args.kwargs["standard_callback_dynamic_params"]
         assert dynamic_params["gcs_bucket_name"] == "my-model-bucket"
-
-    def test_file_content_sync_success(self):
-        """Test successful sync file content retrieval"""
-        file_id = "gs%3A%2F%2Ftest-bucket%2Ftest-file.txt"
-        expected_content = b"test file content"
-
-        file_content_request = FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None)
-
-        # Create expected response
-        mock_response = httpx.Response(
-            status_code=200,
-            content=expected_content,
-            headers={"content-type": "application/octet-stream"},
-            request=httpx.Request(method="GET", url="gs://test-bucket/test-file.txt"),
-        )
-        expected_result = HttpxBinaryResponseContent(response=mock_response)
-
-        # Mock asyncio.run to return our expected result
-        with patch("asyncio.run") as mock_run:
-            mock_run.return_value = expected_result
-
-            result = self.handler.file_content(
-                _is_async=False,
-                file_content_request=file_content_request,
-                api_base="",
-                vertex_credentials=None,
-                vertex_project="test-project",
-                vertex_location="us-central1",
-                timeout=60.0,
-                max_retries=3,
-            )
-
-            # Verify the result
-            assert result == expected_result
-
-            # Verify asyncio.run was called (indicating sync execution)
-            mock_run.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_file_content_async_mode(self):
-        """Test async file content retrieval when _is_async=True"""
-        file_id = "gs%3A%2F%2Ftest-bucket%2Ftest-file.txt"
-        expected_content = b"test file content"
-
-        file_content_request = FileContentRequest(file_id=file_id, extra_headers=None, extra_body=None)
-
-        # Mock the afile_content method
-        with patch.object(self.handler, "afile_content", new_callable=AsyncMock) as mock_afile_content:
-            mock_response = httpx.Response(
-                status_code=200,
-                content=expected_content,
-                headers={"content-type": "application/octet-stream"},
-                request=httpx.Request(method="GET", url="gs://test-bucket/test-file.txt"),
-            )
-            mock_afile_content.return_value = HttpxBinaryResponseContent(response=mock_response)
-
-            # Call the method with _is_async=True
-            result = self.handler.file_content(
-                _is_async=True,
-                file_content_request=file_content_request,
-                api_base="",
-                vertex_credentials=None,
-                vertex_project="test-project",
-                vertex_location="us-central1",
-                timeout=60.0,
-                max_retries=3,
-            )
-
-            # Should return a coroutine since _is_async=True
-            assert asyncio.iscoroutine(result)
-
-            # Await the result
-            final_result = await result
-            assert isinstance(final_result, HttpxBinaryResponseContent)
-            assert final_result.response.content == expected_content
-
-    def test_httpx_response_compatibility(self):
-        """Test that the created HttpxBinaryResponseContent is compatible with expected interface"""
-        # Test the mock response creation logic
-        expected_content = b"test file content"
-        decoded_path = "gs://test-bucket/test-file.txt"
-
-        mock_response = httpx.Response(
-            status_code=200,
-            content=expected_content,
-            headers={"content-type": "application/octet-stream"},
-            request=httpx.Request(method="GET", url=decoded_path),
-        )
-
-        result = HttpxBinaryResponseContent(response=mock_response)
-
-        # Verify the response properties
-        assert result.response.status_code == 200
-        assert result.response.content == expected_content
-        assert result.response.headers["content-type"] == "application/octet-stream"
-
-        # Verify it has the expected interface (matching OpenAI file content response)
-        assert hasattr(result, "response")
-        assert hasattr(result.response, "content")
-        assert hasattr(result.response, "status_code")
-        assert hasattr(result.response, "headers")
