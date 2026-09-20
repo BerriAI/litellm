@@ -4,14 +4,33 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
-    MAX_PAGINATION_PAGES,
     ContextCachingEndpoints,
 )
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled in-repo cost map so capability and pricing assertions do not
+    depend on the network-fetched ``main`` copy, which lags this branch until merge.
+
+    ``get_model_info`` is lru_cached, so swapping ``model_cost`` is not enough on its
+    own; clear on the way in and out so entries warmed against either map never leak
+    across tests."""
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
 
 
 class TestContextCachingEndpoints:
@@ -1899,12 +1918,9 @@ class TestCheckCachePagination:
     def test_check_cache_pagination_max_pages_limit(
         self, mock_get_token_url, custom_llm_provider
     ):
-        """Test that pagination stops after MAX_PAGINATION_PAGES iterations"""
-        # Setup
         mock_get_token_url.return_value = ("token", "https://test-url.com")
         cache_key_to_find = "nonexistent_cache_key"
 
-        # Create mock response that always has nextPageToken (infinite pagination scenario)
         def create_page_response(page_num):
             response = MagicMock()
             response.json.return_value = {
@@ -1915,12 +1931,10 @@ class TestCheckCachePagination:
             }
             return response
 
-        # Create MAX_PAGINATION_PAGES responses, each with a nextPageToken
         self.mock_client.get.side_effect = [
-            create_page_response(i) for i in range(MAX_PAGINATION_PAGES)
+            create_page_response(i) for i in range(100)
         ]
 
-        # Execute
         result = self.context_caching.check_cache(
             cache_key=cache_key_to_find,
             client=self.mock_client,
@@ -1934,10 +1948,8 @@ class TestCheckCachePagination:
             vertex_auth_header="Bearer test-token",
         )
 
-        # Assert - should return None after exhausting all pages without finding match
         assert result is None
-        # Verify exactly MAX_PAGINATION_PAGES API calls were made (not more)
-        assert self.mock_client.get.call_count == MAX_PAGINATION_PAGES
+        assert self.mock_client.get.call_count == 100
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1947,12 +1959,9 @@ class TestCheckCachePagination:
     async def test_async_check_cache_pagination_max_pages_limit(
         self, mock_get_token_url, custom_llm_provider
     ):
-        """Test that async pagination stops after MAX_PAGINATION_PAGES iterations"""
-        # Setup
         mock_get_token_url.return_value = ("token", "https://test-url.com")
         cache_key_to_find = "nonexistent_cache_key"
 
-        # Create mock response that always has nextPageToken (infinite pagination scenario)
         def create_page_response(page_num):
             response = MagicMock()
             response.json.return_value = {
@@ -1963,12 +1972,10 @@ class TestCheckCachePagination:
             }
             return response
 
-        # Create MAX_PAGINATION_PAGES responses, each with a nextPageToken
         self.mock_async_client.get = AsyncMock(
-            side_effect=[create_page_response(i) for i in range(MAX_PAGINATION_PAGES)]
+            side_effect=[create_page_response(i) for i in range(100)]
         )
 
-        # Execute
         result = await self.context_caching.async_check_cache(
             cache_key=cache_key_to_find,
             client=self.mock_async_client,
@@ -1982,10 +1989,10 @@ class TestCheckCachePagination:
             vertex_auth_header="Bearer test-token",
         )
 
-        # Assert - should return None after exhausting all pages without finding match
         assert result is None
-        # Verify exactly MAX_PAGINATION_PAGES async API calls were made (not more)
-        assert self.mock_async_client.get.call_count == MAX_PAGINATION_PAGES
+        assert self.mock_async_client.get.call_count == 100
+
+
 
 
 class TestVertexAIGlobalLocation:

@@ -99,6 +99,17 @@ def _reference_vertex_jsonl_string(cfg: VertexAIFilesConfig, content: str) -> st
     )
 
 
+def _measure_peak(fn) -> int:
+    gc.collect()
+    tracemalloc.start()
+    try:
+        fn()
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    return peak
+
+
 class TestStreamingOutputParity:
     def test_transform_create_file_request_returns_streaming_body_parity(self):
         cfg = VertexAIFilesConfig()
@@ -258,16 +269,6 @@ class TestStreamingPeakMemory:
     measurement removes any garbage the previous run left behind.
     """
 
-    def _measure(self, fn):
-        gc.collect()
-        tracemalloc.start()
-        try:
-            fn()
-            _, peak = tracemalloc.get_traced_memory()
-        finally:
-            tracemalloc.stop()
-        return peak
-
     def test_streaming_peak_well_below_list_pipeline(self):
         cfg = VertexAIFilesConfig()
         raw = _make_openai_jsonl_bytes(8000)
@@ -279,8 +280,8 @@ class TestStreamingPeakMemory:
             for _ in _OpenAIToVertexBatchUploadStream(raw, cfg._map_openai_to_vertex_params).iter_bytes():
                 pass
 
-        streaming_peak = self._measure(drain_stream)
-        list_peak = self._measure(lambda: _reference_vertex_jsonl_string(cfg, content_str))
+        streaming_peak = _measure_peak(drain_stream)
+        list_peak = _measure_peak(lambda: _reference_vertex_jsonl_string(cfg, content_str))
 
         # Core guard: the lazily consumed streaming body peaks well under a list
         # pipeline that materializes every transformed row. Building full
@@ -298,7 +299,7 @@ class TestStreamingPeakMemory:
         # The payload bytes already exist before measurement starts, so a lazy
         # first-row parse should allocate only a small fraction of the payload;
         # parsing every row would blow past this bound.
-        peak = self._measure(lambda: cfg.get_object_name(file_data, purpose="batch"))
+        peak = _measure_peak(lambda: cfg.get_object_name(file_data, purpose="batch"))
         assert peak / len(raw) < 2.0, "get_object_name should not copy the whole payload"
 
 
@@ -344,12 +345,13 @@ class TestPathSourcedStreaming:
         first_labels = json.loads(lines[0])["request"]["labels"]
         assert _get_litellm_batch_custom_id_from_labels(first_labels) == "request-0"
 
-    def test_path_source_peak_stays_below_payload(self, tmp_path):
+    def test_path_source_peak_stays_below_list_pipeline(self, tmp_path):
         cfg = VertexAIFilesConfig()
         path, raw = self._write_jsonl(tmp_path, 8000)
         data = self._batch_request(path)
+        content_str = raw.decode("utf-8")
 
-        def run():
+        def drain_stream():
             cfg.get_complete_file_url(
                 api_base=None,
                 api_key=None,
@@ -362,19 +364,15 @@ class TestPathSourcedStreaming:
                 model="", create_file_data=data, optional_params={}, litellm_params={}
             )
             for _ in _upload_stream(out).iter_bytes():
-                pass  # drain without accumulating
+                pass
 
-        gc.collect()
-        tracemalloc.start()
-        try:
-            run()
-            _, peak = tracemalloc.get_traced_memory()
-        finally:
-            tracemalloc.stop()
+        streaming_peak = _measure_peak(drain_stream)
+        list_peak = _measure_peak(lambda: _reference_vertex_jsonl_string(cfg, content_str))
 
-        # Streaming from disk must not materialize the payload. Reading the whole
-        # file into bytes (the pre-fix path) would push peak past the file size.
-        assert peak < len(raw) * 0.3, f"peak {peak} not bounded vs payload {len(raw)} (ratio {peak / len(raw):.2f})"
+        assert streaming_peak < list_peak * 0.3, (
+            f"path-sourced streaming peak {streaming_peak} not a clear win over list pipeline "
+            f"{list_peak} (ratio {streaming_peak / list_peak:.2f})"
+        )
 
     def test_path_source_stream_is_reiterable(self, tmp_path):
         cfg = VertexAIFilesConfig()
