@@ -552,19 +552,16 @@ async def _fetch_before_delete(
 ) -> InteractionsAPIResponse | None:
     try:
         return await fetch_interaction(context)
-    except Exception as e:  # noqa: BLE001  # unfetchable pre-delete state settles by releasing the reservation
+    except Exception as e:  # noqa: BLE001  # the caller decides what an unfetchable pre-delete state means
         verbose_logger.debug(
-            "Could not fetch background interaction %s before delete, releasing its reservation: %s",
-            context.interaction_id,
-            e,
+            "Could not fetch background interaction %s before its delete: %s", context.interaction_id, e
         )
         return None
 
 
 async def _settle_before_delete(
-    context: BackgroundInteractionPollContext, fetch_interaction: FetchInteraction
+    context: BackgroundInteractionPollContext, response: InteractionsAPIResponse | None
 ) -> SettlementOutcome | None:
-    response: Final = await _fetch_before_delete(context, fetch_interaction)
     if not await _claim(context):
         return None
     if response is None:
@@ -581,7 +578,7 @@ async def maybe_settle_background_interaction_before_delete(
 ) -> SettlementOutcome | None:
     entry: Final = _ACTIVE_POLLS.get(interaction_id)
     if entry is not None:
-        return await _settle_before_delete(entry.context, fetch_interaction)
+        return await _settle_before_delete(entry.context, await _fetch_before_delete(entry.context, fetch_interaction))
     settlement_store: Final = store or _STORE.store
     pending: Final = await _pending(settlement_store, interaction_id)
     if pending is None:
@@ -596,7 +593,15 @@ async def maybe_settle_background_interaction_before_delete(
         api_base=api_base if isinstance(api_base, str) else None,
         store=settlement_store,
     )
-    return await _settle_before_delete(context, fetch_interaction)
+    response: Final = await _fetch_before_delete(context, fetch_interaction)
+    if response is None:
+        verbose_logger.debug(
+            "Leaving background interaction %s to the poll that created it: this process could not fetch it with "
+            "the delete's credentials, so the delete is about to fail the same way",
+            interaction_id,
+        )
+        return None
+    return await _settle_before_delete(context, response)
 
 
 async def _unclaimed(store: BackgroundSettlementStore) -> Sequence[PendingBackgroundInteraction]:
