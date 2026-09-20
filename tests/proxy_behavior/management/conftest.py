@@ -13,7 +13,7 @@ from prisma import Json
 
 from litellm.proxy.utils import hash_token
 
-MASTER_KEY = "sk-1234"
+MASTER_KEY = "sk-proxy-behavior-master-key"
 SCRATCH_PREFIX = "scratch-"
 
 

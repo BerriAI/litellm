@@ -20,8 +20,7 @@ use super::constants::{
     AWS_ACCESS_KEY_ID, AWS_EXTERNAL_ID, AWS_PROFILE_NAME, AWS_REGION, AWS_REGION_NAME,
     AWS_ROLE_ARN, AWS_ROLE_NAME, AWS_SECRET_ACCESS_KEY, AWS_SESSION_NAME, AWS_SESSION_TOKEN,
     AWS_SIGNED_HEADER_NAMES, AWS_STS_ENDPOINT, AWS_WEB_IDENTITY_TOKEN, AWS_WEB_IDENTITY_TOKEN_FILE,
-    BEDROCK_SERVICE, DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX,
-    SIGV4_COMPUTED_HEADER_NAMES,
+    DEFAULT_BEDROCK_REGION, DEFAULT_SESSION_NAME_PREFIX, SIGV4_COMPUTED_HEADER_NAMES,
 };
 
 const STATIC_CREDENTIALS_TTL: Duration = Duration::from_secs(3600 - 60);
@@ -451,11 +450,12 @@ pub fn is_sigv4_computed_header(name: &str) -> bool {
     SIGV4_COMPUTED_HEADER_NAMES.contains(&name.to_ascii_lowercase().as_str())
 }
 
-pub fn sign_bedrock_post(
+pub fn sign_post(
     url: &str,
     body: &[u8],
     headers: &BTreeMap<String, String>,
     region: &str,
+    service: &str,
     credentials: &Credentials,
     signing_time: SystemTime,
 ) -> Result<BTreeMap<String, String>, Error> {
@@ -463,7 +463,7 @@ pub fn sign_bedrock_post(
     let params = v4::SigningParams::builder()
         .identity(&identity)
         .region(region)
-        .name(BEDROCK_SERVICE)
+        .name(service)
         .time(signing_time)
         .settings(SigningSettings::default())
         .build()
@@ -534,22 +534,28 @@ fn is_bedrock_region(value: &str) -> bool {
             .all(|char| char.is_ascii_alphanumeric() || char == '-')
 }
 
+/// The region a caller configured: `aws_region_name`, then the model's own
+/// region, then the environment. Each service decides what a missing one means.
+pub fn resolve_aws_region(
+    model_region: Option<&str>,
+    optional_params: &Map<String, Value>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Option<String> {
+    optional_params
+        .get("aws_region_name")
+        .and_then(Value::as_str)
+        .or(model_region)
+        .map(str::to_string)
+        .or_else(|| env_lookup(AWS_REGION_NAME))
+        .or_else(|| env_lookup(AWS_REGION))
+}
+
 pub fn resolve_bedrock_region(
     model_region: Option<&str>,
     optional_params: &Map<String, Value>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    if let Some(region) = optional_params
-        .get("aws_region_name")
-        .and_then(Value::as_str)
-    {
-        return region.to_string();
-    }
-    if let Some(region) = model_region {
-        return region.to_string();
-    }
-    env_lookup(AWS_REGION_NAME)
-        .or_else(|| env_lookup(AWS_REGION))
+    resolve_aws_region(model_region, optional_params, env_lookup)
         .unwrap_or_else(|| DEFAULT_BEDROCK_REGION.to_string())
 }
 
@@ -609,9 +615,34 @@ pub fn host_supplied_credentials(optional_params: &Map<String, Value>) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::constants::BEDROCK_SERVICE;
 
     fn no_env(_: &str) -> Option<String> {
         None
+    }
+
+    #[test]
+    fn a_region_comes_from_the_call_then_the_model_then_the_environment() {
+        let params = Map::from_iter([("aws_region_name".to_string(), Value::from("eu-west-1"))]);
+        let region_name = |key: &str| (key == AWS_REGION_NAME).then(|| "ap-south-1".to_string());
+        let region = |key: &str| (key == AWS_REGION).then(|| "sa-east-1".to_string());
+
+        let resolved = [
+            resolve_aws_region(Some("us-east-2"), &params, &region_name),
+            resolve_aws_region(Some("us-east-2"), &Map::new(), &region_name),
+            resolve_aws_region(None, &Map::new(), &region_name),
+            resolve_aws_region(None, &Map::new(), &region),
+            resolve_aws_region(None, &Map::new(), &no_env),
+        ];
+
+        assert_eq!(
+            resolved.map(|region| region.unwrap_or_else(|| "none".into())),
+            ["eu-west-1", "us-east-2", "ap-south-1", "sa-east-1", "none"]
+        );
+        assert_eq!(
+            resolve_bedrock_region(None, &Map::new(), &no_env),
+            DEFAULT_BEDROCK_REGION
+        );
     }
 
     fn parity_inputs() -> (String, Vec<u8>, BTreeMap<String, String>) {
@@ -811,11 +842,12 @@ mod tests {
             None,
             "test",
         );
-        let signed = sign_bedrock_post(
+        let signed = sign_post(
             &url,
             &body,
             &signable,
             "us-east-1",
+            BEDROCK_SERVICE,
             &credentials,
             SystemTime::UNIX_EPOCH,
         )
@@ -843,11 +875,12 @@ mod tests {
             None,
             "test",
         );
-        let signed = sign_bedrock_post(
+        let signed = sign_post(
             &url,
             &body,
             &headers,
             "us-east-1",
+            BEDROCK_SERVICE,
             &credentials,
             UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645),
         )
@@ -878,11 +911,12 @@ mod tests {
             None,
             "test",
         );
-        let signed = sign_bedrock_post(
+        let signed = sign_post(
             &url,
             &body,
             &headers,
             "us-east-1",
+            BEDROCK_SERVICE,
             &credentials,
             UNIX_EPOCH + std::time::Duration::from_secs(1_704_164_645),
         )
@@ -915,11 +949,12 @@ mod tests {
             let url = format!(
                 "https://bedrock-runtime.{region}.amazonaws.com/model/us.anthropic.claude-opus-4-8/invoke"
             );
-            let signed_headers = sign_bedrock_post(
+            let signed_headers = sign_post(
                 &url,
                 &body,
                 &headers,
                 region,
+                BEDROCK_SERVICE,
                 &credentials,
                 SystemTime::now(),
             )?;

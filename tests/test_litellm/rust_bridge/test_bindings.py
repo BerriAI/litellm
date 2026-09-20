@@ -43,8 +43,8 @@ def test_binding_validates_native_attribute(
 ROUTE_BINDINGS: Final = (
     ("completion", chat_completions.NATIVE_COMPLETION),
     ("acompletion", chat_completions.NATIVE_ACOMPLETION),
-    ("anthropic_messages_handler", messages.NATIVE_MESSAGES),
-    ("anthropic_messages", messages.NATIVE_AMESSAGES),
+    ("messages", messages.NATIVE_MESSAGES),
+    ("amessages", messages.NATIVE_AMESSAGES),
     ("responses", responses.NATIVE_RESPONSES),
     ("aresponses", responses.NATIVE_ARESPONSES),
     ("ocr", ocr.NATIVE_OCR),

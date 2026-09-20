@@ -1,6 +1,9 @@
 from collections.abc import Mapping
+from typing import Final
 
 import pytest
+
+from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 
 from litellm.router_utils.auto_router_model_naming import (
     carries_complexity_router_settings,
@@ -169,6 +172,52 @@ def test_validate_rejects_ambiguous_tier_labels(tier_labels, expected_fragment):
 )
 def test_validate_accepts_loadable_complexity_config(complexity_router_config):
     assert validate_complexity_router_config_write(complexity_router_config=complexity_router_config) is None
+
+
+def _fuse_write_config(profiles: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "classifier_type": "llm_v2",
+        "classifier_llm_config": {"model": "judge"},
+        "tiers": {"SIMPLE": ["opaque-efficient"], "REASONING": ["opaque-capable"]},
+        "llm_v2_config": {"max_quality_gap": 0.05, **profiles},
+    }
+
+
+def test_fuse_write_accepts_presets_and_custom_text_with_the_same_entitlement() -> None:
+    catalog: Final = get_fuse_presets()
+    presets: Final = _fuse_write_config(
+        {
+            "efficient_profile_preset": catalog.models[0].id,
+            "capable_profile_preset": catalog.models[-1].id,
+            "harness_preset": catalog.harnesses[0].id,
+        }
+    )
+    custom: Final = _fuse_write_config(
+        {
+            "efficient_profile": catalog.models[0].text,
+            "capable_profile": catalog.models[-1].text,
+            "harness": catalog.harnesses[0].text,
+        }
+    )
+    assert validate_complexity_router_config_write(presets) is None
+    assert validate_complexity_router_config_write(custom) is None
+    assert claimed_capability(presets) is claimed_capability(custom)
+    assert claimed_capability(presets) is not None
+
+
+@pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
+def test_fuse_write_rejects_unknown_preset_even_with_custom_text(field: str) -> None:
+    config: Final = _fuse_write_config(
+        {
+            "efficient_profile": "Custom efficient solver",
+            "capable_profile": "Custom capable solver",
+            "harness": "Custom runtime",
+            f"{field}_preset": "unknown-v1",
+        }
+    )
+    violation: Final = validate_complexity_router_config_write(config)
+    assert violation is not None
+    assert f"{field}_preset" in violation
 
 
 def test_naming_check_ignores_the_config_entirely():
