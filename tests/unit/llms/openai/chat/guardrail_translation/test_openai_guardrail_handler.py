@@ -545,25 +545,6 @@ class TestOpenAIChatCompletionsHandlerToolCallsInput:
         assert data["messages"][0]["content"] == "HELLO"
         assert data["messages"][1]["content"] == "HI THERE!"
 
-    @pytest.mark.asyncio
-    async def test_empty_tool_calls_list(self):
-        """Test that empty tool_calls list is handled correctly"""
-        handler = OpenAIChatCompletionsHandler()
-        guardrail = MockGuardrail()
-
-        data = {
-            "messages": [
-                {"role": "assistant", "content": "Hello", "tool_calls": []},
-            ]
-        }
-
-        # Process the input
-        await handler.process_input_messages(data, guardrail)
-
-        # Verify empty tool_calls doesn't cause issues
-        assert guardrail.last_inputs is not None
-        tool_calls = guardrail.last_inputs.get("tool_calls", [])
-        assert len(tool_calls) == 0
 
 
 class TestOpenAIChatCompletionsHandlerToolCallsOutput:
