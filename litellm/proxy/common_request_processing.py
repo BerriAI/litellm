@@ -3667,9 +3667,7 @@ class ProxyBaseLLMRequestProcessing:
             if bug_report_enabled():
                 proxy_server_request: Final = self.data.get("proxy_server_request")
                 request_url: Final = (
-                    proxy_server_request.get("url")
-                    if isinstance(proxy_server_request, Mapping)
-                    else None
+                    proxy_server_request.get("url") if isinstance(proxy_server_request, Mapping) else None
                 )
                 request_path: Final = urlparse(str(request_url)).path if request_url is not None else None
                 verbose_proxy_logger.error(

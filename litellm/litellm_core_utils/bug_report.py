@@ -140,11 +140,7 @@ def bug_report_issue_url(report: BugReport) -> str:
     message: Final = report.exception_message
     candidates: Final = (
         *(_issue_url(report, message, frames[index:]) for index in range(len(frames) + 1)),
-        *(
-            _issue_url(report, message[:length], ())
-            for length in _SHORTENED_MESSAGE_LENGTHS
-            if length < len(message)
-        ),
+        *(_issue_url(report, message[:length], ()) for length in _SHORTENED_MESSAGE_LENGTHS if length < len(message)),
     )
     return next((candidate for candidate in candidates if len(candidate) <= MAX_URL_LENGTH), _issue_url(report, "", ()))
 
