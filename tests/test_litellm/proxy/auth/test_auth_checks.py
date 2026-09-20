@@ -8900,9 +8900,6 @@ def test_request_skips_budget_checks_extends_route_rule_with_zero_cost_models() 
     assert request_skips_budget_checks(route="/v1/chat/completions", model=None, llm_router=None) is False
 
 
-# Agent access group model ceiling
-
-
 def _agent_model_ceiling_resolver(
     models: frozenset[str] | None,
 ) -> tuple[CeilingResolver, list[str]]:

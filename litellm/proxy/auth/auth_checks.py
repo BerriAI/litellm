@@ -4332,7 +4332,7 @@ async def _check_agent_access_group_model_access(
     llm_router: Router | None,
     resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
 ) -> Literal[True]:
-    """Attached groups naming no model deny every model, unlike the empty allowlist ``_can_object_call_model`` allows."""
+    """Attached groups naming no model deny every model; the empty allowlist in ``_can_object_call_model`` allows."""
     if not model or valid_token is None or not valid_token.agent_id:
         return True
     ceiling: Final = await resolve_ceiling(valid_token.agent_id)
