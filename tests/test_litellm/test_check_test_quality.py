@@ -642,7 +642,7 @@ _VIOLATING_SNIPPETS: Final = MappingProxyType(
 
 
 def test_rule_codes_match_every_code_the_checker_emits(tmp_path):
-    emitted = frozenset(
+    emitted: Final = frozenset(
         v.code
         for name, source in _VIOLATING_SNIPPETS.values()
         for v in checker.check_file(_written(tmp_path, source, name))
