@@ -1,9 +1,30 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { PrettyMessagesView } from "./PrettyMessagesView";
 
 describe("PrettyMessagesView", () => {
+  it("bounds rendered WebSocket turns and lets operators navigate all pages", () => {
+    const response = Array.from({ length: 101 }, (_, index) => ({
+      type: "response.completed",
+      response: { id: `resp_${index}`, output: [] },
+    }));
+    render(<PrettyMessagesView request={{}} response={response} />);
+    expect(screen.getAllByRole("region", { name: /^Turn / })).toHaveLength(50);
+    expect(screen.getByText("Turns 1–50 of 101")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous turns" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Next turns" }));
+    expect(screen.queryByText("Turn 1 · Completed")).not.toBeInTheDocument();
+    expect(screen.getByText("Turn 51 · Completed")).toBeInTheDocument();
+    expect(screen.getAllByRole("region", { name: /^Turn / })).toHaveLength(50);
+    fireEvent.click(screen.getByRole("button", { name: "Next turns" }));
+    expect(screen.getByText("Turns 101–101 of 101")).toBeInTheDocument();
+    expect(screen.getAllByRole("region", { name: /^Turn / })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Next turns" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Previous turns" }));
+    expect(screen.getByText("Turn 51 · Completed")).toBeInTheDocument();
+  });
+
   it.each([false, true])("renders separate WebSocket turns (wrapped: %s)", (wrapped) => {
     const events = [
       { type: "response.created", response: { id: "resp_1", output: [] } },

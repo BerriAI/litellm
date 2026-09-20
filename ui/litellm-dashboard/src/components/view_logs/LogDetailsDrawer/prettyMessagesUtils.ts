@@ -71,16 +71,17 @@ export const parseResponsesWebSocketTurns = (response: unknown): ResponsesWebSoc
     "response.incomplete": "Incomplete",
     "response.failed": "Failed",
   };
-  return events.flatMap((event, index): ResponsesWebSocketTurn[] => {
+  const terminalIds = new Set(
+    events.flatMap((event) =>
+      terminalTypes.includes(asString(event.type)) && isRecord(event.response) ? [asString(event.response.id)] : [],
+    ),
+  );
+  const seenTerminalIds = new Set<string>();
+  return events.flatMap((event): ResponsesWebSocketTurn[] => {
     const body = isRecord(event.response) ? event.response : {};
     const id = asString(body.id);
     if (event.type === "response.created") {
-      const hasTerminal = events.some(
-        (other) =>
-          terminalTypes.includes(asString(other.type)) &&
-          isRecord(other.response) &&
-          asString(other.response.id) === id,
-      );
+      const hasTerminal = terminalIds.has(id);
       return hasTerminal ? [] : [{ id, status: "No terminal event recorded", message: null, detail: "" }];
     }
     if (event.type === "error") {
@@ -88,16 +89,8 @@ export const parseResponsesWebSocketTurns = (response: unknown): ResponsesWebSoc
       return [{ id: "", status: "Error", message: null, detail: asString(error.message) || asString(error.code) }];
     }
     if (!terminalTypes.includes(asString(event.type))) return [];
-    if (
-      id &&
-      events
-        .slice(0, index)
-        .some(
-          (other) =>
-            terminalTypes.includes(asString(other.type)) && isRecord(other.response) && other.response.id === id,
-        )
-    )
-      return [];
+    if (id && seenTerminalIds.has(id)) return [];
+    if (id) seenTerminalIds.add(id);
     const error = isRecord(body.error) ? body.error : {};
     const incomplete = isRecord(body.incomplete_details) ? body.incomplete_details : {};
     return [

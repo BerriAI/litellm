@@ -2,6 +2,23 @@ import { describe, expect, it } from "vitest";
 import { parseResponsesWebSocketTurns } from "./prettyMessagesUtils";
 
 describe("parseResponsesWebSocketTurns", () => {
+  it("reads event types a bounded number of times for a large session", () => {
+    const reads = { count: 0 };
+    const events = Array.from({ length: 2000 }, (_, index) =>
+      ["response.created", "response.completed", "response.completed"].map((type) => ({
+        get type() {
+          reads.count += 1;
+          return type;
+        },
+        response: { id: `resp_${index}`, output: [] },
+      })),
+    ).flat();
+    const turns = parseResponsesWebSocketTurns(events);
+    expect(turns).toHaveLength(2000);
+    expect(turns?.[1999].id).toBe("resp_1999");
+    expect(reads.count).toBeLessThan(events.length * 20);
+  });
+
   it.each([
     null,
     {},
