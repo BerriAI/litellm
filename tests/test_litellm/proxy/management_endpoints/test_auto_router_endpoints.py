@@ -2384,7 +2384,9 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case", ["allowed", "missing", "blocked", "key", "budget", "team", "not-router"])
+@pytest.mark.parametrize(
+    "case", ["allowed", "credential-free", "missing", "blocked", "key", "budget", "team", "not-router"]
+)
 async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     router: Final = RecordingRouter("SIMPLE")
     stored_key: Final = "synthetic-server-jev-key"
@@ -2429,7 +2431,11 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             "team_id": "member-preview-team" if case == "team" else None,
         },
         classifier_type="jev",
-        jev_classifier_config={"api_key": "masked-key", "api_base": "https://browser-override.test"},
+        jev_classifier_config=(
+            {"model": "jev-latest", "timeout_ms": 3000}
+            if case == "credential-free"
+            else {"api_key": "masked-key", "api_base": "https://browser-override.test"}
+        ),
     )
     with respx.mock(assert_all_called=False) as http:
         handler: Final = http_handler.AsyncHTTPHandler()
@@ -2466,7 +2472,7 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             assert result.routed_model == "cheap-model"
             assert evaluation.calls.last.request.headers["authorization"] == f"Bearer {stored_key}"
             assert stored_key not in result.model_dump_json()
-        assert evaluation.call_count == (1 if case == "allowed" else 0)
+        assert evaluation.call_count == (1 if case in ("allowed", "credential-free") else 0)
         assert router.recorded_calls == []
         await handler.client.aclose()
 

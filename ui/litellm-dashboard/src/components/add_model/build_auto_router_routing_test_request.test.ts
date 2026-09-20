@@ -5,6 +5,7 @@ import {
   JEV_CONNECTION_TEST_PROMPT,
 } from "./build_auto_router_routing_test_request";
 import { ComplexityRouterConfigPayload } from "./build_complexity_router_config";
+import { defaultJevClassifierConfig } from "./jev_classifier_config";
 
 const CONFIG = {
   tiers: { SIMPLE: ["cheap"], MEDIUM: ["mid"], COMPLEX: ["strong"], REASONING: ["o3"] },
@@ -31,10 +32,16 @@ describe("buildAutoRouterRoutingTestRequest", () => {
     );
     const expectedRequest = {
       prompt: JEV_CONNECTION_TEST_PROMPT,
-      complexity_router_config: { classifier_type: "jev", tiers: CONFIG.tiers },
+      complexity_router_config: {
+        classifier_type: "jev",
+        tiers: CONFIG.tiers,
+        jev_classifier_config: defaultJevClassifierConfig(),
+      },
       saved_model_id: "saved-id",
     };
     expect(request).toEqual(expectedRequest);
+    expect(request?.complexity_router_config.jev_classifier_config).not.toHaveProperty("api_key");
+    expect(request?.complexity_router_config.jev_classifier_config).not.toHaveProperty("api_base");
   });
   it.each(["object", "json"])("probes saved JEV %s configuration with custom tiers and team context", (format) => {
     const config = {
@@ -47,7 +54,7 @@ describe("buildAutoRouterRoutingTestRequest", () => {
     };
     const expectedRequest = {
       prompt: JEV_CONNECTION_TEST_PROMPT,
-      complexity_router_config: { ...config, jev_classifier_config: undefined },
+      complexity_router_config: config,
       saved_model_id: "saved-id",
       team_id: "team-1",
     };

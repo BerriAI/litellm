@@ -101,7 +101,7 @@ describe("JEV network probes", () => {
       const routingCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/auto_router/test_routing"));
       const expectedRequest = {
         prompt: JEV_CONNECTION_TEST_PROMPT,
-        complexity_router_config: { ...config, jev_classifier_config: undefined },
+        complexity_router_config: config,
         saved_model_id: "saved-id",
       };
       expect(JSON.parse(String(routingCall?.[1]?.body))).toEqual(expectedRequest);
