@@ -1438,9 +1438,12 @@ def test_openai_compatible_vendor_400_keeps_body_but_not_headers():
 
 
 @pytest.mark.parametrize(
-    ("status_code", "mapped_class"), [(429, litellm.RateLimitError), (500, litellm.InternalServerError)]
+    ("status_code", "mapped_class", "reported_type"),
+    [(429, litellm.RateLimitError, "throttling_error"), (500, litellm.InternalServerError, "internal_server_error")],
 )
-def test_openai_429_and_500_keep_body(status_code: int, mapped_class: type[openai.APIError]):
+def test_openai_429_and_500_keep_body_but_report_litellm_type(
+    status_code: int, mapped_class: type[openai.APIError], reported_type: str
+):
     with pytest.raises(mapped_class) as exc_info:
         exception_type(
             model="gpt-5.4-mini",
@@ -1458,6 +1461,7 @@ def test_openai_429_and_500_keep_body(status_code: int, mapped_class: type[opena
         "code": str(status_code),
         "message": "upstream cannot complete this response",
     }
+    assert exc_info.value.type == reported_type
 
 
 def test_litellm_proxy_repeated_response_header_keeps_each_value():

@@ -4,43 +4,42 @@ import json
 import os
 import sys
 from collections.abc import AsyncIterator
-from importlib import metadata
 from pathlib import Path
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import anyio
-import httpx
+import httpx2
 import pytest
-import respx
-from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
-from mcp import McpError
+from mcp import MCPError
 from mcp.client.streamable_http import streamable_http_client
-from pydantic import ValidationError
 from mcp.shared.message import SessionMessage
 from mcp.types import (
-    LATEST_PROTOCOL_VERSION,
+    CONNECTION_CLOSED,
+    INTERNAL_ERROR,
+    REQUEST_TIMEOUT,
+    CallToolRequestParams,
     CallToolResult,
     ErrorData,
     Implementation,
     InitializeResult,
     JSONRPCError,
     JSONRPCMessage,
+    JSONRPCRequest,
     JSONRPCResponse,
     LoggingMessageNotificationParams,
     ServerCapabilities,
 )
+from mcp_types.version import LATEST_HANDSHAKE_VERSION
+from pydantic import TypeAdapter, ValidationError
 
 # Add the parent directory to the path so we can import litellm
-
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import (
-    MCP_STREAMABLE_HTTP_REQUIREMENT,
     MCPClient,
     _first_non_cancelled_cause,
     _TransportContext,
     as_mcp_read_timeout,
-    missing_streamable_http_client_error,
     strip_auth_scheme,
 )
 from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
@@ -50,8 +49,25 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     _format_byok_openapi_auth_header,
 )
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+_JSONRPC_MESSAGE_ADAPTER: Final = TypeAdapter(JSONRPCMessage)
+
+
+class _MockTransportClient(MCPClient):
+    """An MCPClient whose streamable-HTTP transport runs on an httpx2 MockTransport."""
+
+    def __init__(self, respond, **kwargs):
+        super().__init__(**kwargs)
+        self._respond = respond
+
+    def _create_transport_context(self) -> tuple[_TransportContext, httpx2.AsyncClient]:
+        http_client: Final = self._create_httpx_client_factory(transport=httpx2.MockTransport(self._respond))(
+            headers=self._get_auth_headers(), timeout=httpx2.Timeout(self.timeout)
+        )
+        return streamable_http_client(self.server_url, http_client=http_client), http_client
 
 
 class _FakeExceptionGroup(Exception):
@@ -171,14 +187,14 @@ class TestMCPClient:
             call_kwargs = mock_streamable_http_client.call_args[1]
             assert "http_client" in call_kwargs
             http_client = call_kwargs["http_client"]
-            assert isinstance(http_client, httpx.AsyncClient)
+            assert isinstance(http_client, httpx2.AsyncClient)
 
             # Test the factory still creates a client with proper SSL config
             httpx_factory = client._create_httpx_client_factory()
             test_client = httpx_factory(headers={"test": "header"})
 
             assert test_client is not None
-            assert isinstance(test_client, httpx.AsyncClient)
+            assert isinstance(test_client, httpx2.AsyncClient)
             assert test_client.headers is not None
             await test_client.aclose()
 
@@ -228,7 +244,7 @@ class TestMCPClient:
 
             # Verify the client was created successfully
             assert test_client is not None
-            assert isinstance(test_client, httpx.AsyncClient)
+            assert isinstance(test_client, httpx2.AsyncClient)
             # Verify it has the expected properties
             assert test_client.headers is not None
             # Clean up
@@ -272,13 +288,13 @@ class TestMCPClient:
             call_kwargs = mock_streamable_http_client.call_args[1]
             assert "http_client" in call_kwargs
             http_client = call_kwargs["http_client"]
-            assert isinstance(http_client, httpx.AsyncClient)
+            assert isinstance(http_client, httpx2.AsyncClient)
 
             httpx_factory = client._create_httpx_client_factory()
             test_client = httpx_factory(headers={"test": "header"})
 
             assert test_client is not None
-            assert isinstance(test_client, httpx.AsyncClient)
+            assert isinstance(test_client, httpx2.AsyncClient)
             assert test_client.headers is not None
             await test_client.aclose()
 
@@ -460,12 +476,12 @@ class TestFirstNonCancelledCause:
         assert _first_non_cancelled_cause(asyncio.CancelledError()) is None
 
     def test_unwraps_group_to_non_cancelled_leaf(self):
-        target = httpx.ConnectError("refused")
+        target = httpx2.ConnectError("refused")
         group = _FakeExceptionGroup("g", [asyncio.CancelledError(), target])
         assert _first_non_cancelled_cause(group) is target
 
     def test_unwraps_nested_group(self):
-        target = httpx.LocalProtocolError("Illegal header value")
+        target = httpx2.LocalProtocolError("Illegal header value")
         inner = _FakeExceptionGroup("inner", [asyncio.CancelledError(), target])
         outer = _FakeExceptionGroup("outer", [asyncio.CancelledError(), inner])
         assert _first_non_cancelled_cause(outer) is target
@@ -476,7 +492,7 @@ class TestFirstNonCancelledCause:
 
     @pytest.mark.skipif(sys.version_info < (3, 11), reason="builtin ExceptionGroup requires 3.11+")
     def test_unwraps_builtin_exception_group(self):
-        target = httpx.ConnectError("refused")
+        target = httpx2.ConnectError("refused")
         group = ExceptionGroup("transport failed", [target])  # noqa: F821
         assert _first_non_cancelled_cause(group) is target
 
@@ -512,13 +528,13 @@ class TestExecuteSessionOperationSurfacesTransportError:
             mock_session_cls,
             AsyncMock(side_effect=asyncio.CancelledError("cancelled by group")),
         )
-        connect_error = httpx.ConnectError("All connection attempts failed")
+        connect_error = httpx2.ConnectError("All connection attempts failed")
         transport_ctx = self._make_transport(_FakeExceptionGroup("transport", [connect_error]))
 
         async def _op(session):
             return "done"
 
-        with pytest.raises(httpx.ConnectError):
+        with pytest.raises(httpx2.ConnectError):
             await client._execute_session_operation(transport_ctx, _op)
 
     @pytest.mark.asyncio
@@ -541,7 +557,7 @@ class TestExecuteSessionOperationSurfacesTransportError:
         init_result = MagicMock()
         init_result.instructions = None
         self._make_session(mock_session_cls, AsyncMock(return_value=init_result))
-        transport_ctx = self._make_transport(_FakeExceptionGroup("late", [httpx.ConnectError("late cleanup error")]))
+        transport_ctx = self._make_transport(_FakeExceptionGroup("late", [httpx2.ConnectError("late cleanup error")]))
 
         async def _op(session):
             return "done"
@@ -551,11 +567,11 @@ class TestExecuteSessionOperationSurfacesTransportError:
 
 
 class TestMCPClientResolvedAuth:
-    """A pre-resolved httpx.Auth is attached to the upstream client's auth= slot."""
+    """A pre-resolved httpx2.Auth is attached to the upstream client's auth= slot."""
 
     @pytest.mark.asyncio
     async def test_resolved_auth_feeds_the_auth_slot(self):
-        resolved = httpx.Auth()
+        resolved = httpx2.Auth()
         client = MCPClient(server_url="https://upstream.example.com", resolved_auth=resolved)
         http_client = client._create_httpx_client_factory()()
         try:
@@ -565,11 +581,11 @@ class TestMCPClientResolvedAuth:
 
     @pytest.mark.asyncio
     async def test_resolved_auth_takes_precedence_over_aws_auth(self):
-        resolved = httpx.Auth()
+        resolved = httpx2.Auth()
         client = MCPClient(
             server_url="https://upstream.example.com",
             resolved_auth=resolved,
-            aws_auth=httpx.Auth(),
+            aws_auth=httpx2.Auth(),
         )
         http_client = client._create_httpx_client_factory()()
         try:
@@ -579,7 +595,7 @@ class TestMCPClientResolvedAuth:
 
     @pytest.mark.asyncio
     async def test_without_resolved_auth_falls_back_to_aws_auth(self):
-        aws = httpx.Auth()
+        aws = httpx2.Auth()
         client = MCPClient(server_url="https://upstream.example.com", aws_auth=aws)
         http_client = client._create_httpx_client_factory()()
         try:
@@ -672,7 +688,7 @@ async def test_call_tool_raise_on_error_logs_at_debug_not_error():
     with patch.object(client, "run_with_session", side_effect=_raise):
         with patch.object(mcp_client_module, "verbose_logger") as mock_log:
             result = await client.call_tool(params, raise_on_error=False)
-            assert result.isError is True
+            assert result.is_error is True
             assert mock_log.error.called, "swallow path must keep error-level visibility"
 
 
@@ -766,15 +782,15 @@ class _ScriptedUpstream:
         return await self._task_group.__aexit__(None, None, None)
 
     async def _send(self, message):
-        await self._to_client_tx.send(SessionMessage(JSONRPCMessage(message)))
+        await self._to_client_tx.send(SessionMessage(message))
 
     async def _serve(self):
         async for session_message in self._from_client_rx:
-            request = session_message.message.root
+            request = session_message.message
             method = getattr(request, "method", None)
             if method == "initialize":
                 result = InitializeResult(
-                    protocolVersion=LATEST_PROTOCOL_VERSION,
+                    protocolVersion=LATEST_HANDSHAKE_VERSION,
                     capabilities=ServerCapabilities(),
                     serverInfo=Implementation(name="scripted-upstream", version="1.0.0"),
                 )
@@ -835,36 +851,36 @@ async def test_upstream_json_rpc_error_408_is_not_reported_as_a_client_timeout()
     """The SDK reports its own elapsed read timeout and relays an upstream JSON-RPC error through
     the same exception class and the same numeric field, and JSON-RPC error codes are a different
     namespace from HTTP status codes. An upstream answering with application code 408 must keep
-    travelling as ``McpError`` so it is never blamed on the gateway as a 504.
+    travelling as ``MCPError`` so it is never blamed on the gateway as a 504.
 
     This is the other half of the pair: the same real transport and the same real session, so one
     mechanism pins both directions.
     """
     client = _ScriptedClient(
         timeout=30,
-        tools_list_error=ErrorData(code=int(httpx.codes.REQUEST_TIMEOUT), message="re-authenticate and retry"),
+        tools_list_error=ErrorData(code=REQUEST_TIMEOUT, message="re-authenticate and retry"),
     )
 
-    with pytest.raises(McpError) as exc_info:
+    with pytest.raises(MCPError) as exc_info:
         await asyncio.wait_for(client.list_tools(raise_on_error=True), timeout=10)
 
     assert not isinstance(exc_info.value, TimeoutError), "an upstream application error is not a gateway timeout"
-    assert exc_info.value.error.code == int(httpx.codes.REQUEST_TIMEOUT)
+    assert exc_info.value.error.code == REQUEST_TIMEOUT
 
     fault = classify_list_exception(exc_info.value)
     assert fault.tag != "timeout", "an upstream's own application error must never be reported as a gateway timeout"
     assert list_fault_http_status(fault) != 504
 
 
-def _raise_mcp_error_while_handling_a_timeout(code: int, message: str) -> McpError:
-    """An ``McpError`` carrying the context chain it would have if it were raised while a
+def _raise_mcp_error_while_handling_a_timeout(code: int, message: str) -> MCPError:
+    """An ``MCPError`` carrying the context chain it would have if it were raised while a
     ``TimeoutError`` was in flight, which is how the SDK raises its own read timeout."""
     try:
         try:
             raise TimeoutError()
         except TimeoutError:
-            raise McpError(ErrorData(code=code, message=message))
-    except McpError as raised:
+            raise MCPError(code=code, message=message)
+    except MCPError as raised:
         return raised
 
 
@@ -873,20 +889,20 @@ def test_as_mcp_read_timeout_separates_the_sdk_timeout_from_a_relayed_upstream_e
     upstream JSON-RPC error that happens to use 408, and the context chain alone cannot separate it
     from any other relayed error that surfaces while a timeout is being handled, so both must hold.
     """
-    timeout_code = int(httpx.codes.REQUEST_TIMEOUT)
+    timeout_code = REQUEST_TIMEOUT
 
     translated = as_mcp_read_timeout(_raise_mcp_error_while_handling_a_timeout(timeout_code, "Timed out while waiting"))
     assert isinstance(translated, TimeoutError)
     assert str(translated) == "Timed out while waiting"
 
-    relayed_408 = McpError(ErrorData(code=timeout_code, message="upstream said 408"))
+    relayed_408 = MCPError(code=timeout_code, message="upstream said 408")
     assert as_mcp_read_timeout(relayed_408) is None, "an upstream 408 with no elapsed timeout is not our timeout"
 
     relayed_other = _raise_mcp_error_while_handling_a_timeout(-32603, "upstream internal error")
     assert as_mcp_read_timeout(relayed_other) is None, "a non-timeout code is not our timeout, whatever the chain"
 
-    assert as_mcp_read_timeout(McpError(ErrorData(code=-32603, message="boom"))) is None
-    assert as_mcp_read_timeout(RuntimeError("not an McpError")) is None
+    assert as_mcp_read_timeout(MCPError(code=-32603, message="boom")) is None
+    assert as_mcp_read_timeout(RuntimeError("not an MCPError")) is None
 
 
 @pytest.mark.asyncio
@@ -1065,28 +1081,6 @@ def test_openapi_byok_auth_header_emits_exactly_one_scheme(auth_type, auth_value
     assert _format_byok_openapi_auth_header(server, auth_value) == expected
 
 
-def test_missing_streamable_http_client_error_names_requirement_and_remedy():
-    message = str(missing_streamable_http_client_error())
-
-    assert MCP_STREAMABLE_HTTP_REQUIREMENT in message
-    assert "pip install 'litellm[mcp]'" in message
-    assert metadata.version("mcp") in message
-
-
-@pytest.mark.asyncio
-async def test_http_transport_without_streamable_http_client_raises_actionable_import_error():
-    client = MCPClient(
-        server_url="https://mcp-server.example.com",
-        transport_type=MCPTransport.http,
-    )
-
-    with patch.object(  # test-quality-ok: simulates mcp<1.24.0 whose module lacks this import-time symbol
-        mcp_client_module, "streamable_http_client", None
-    ):
-        with pytest.raises(ImportError, match=r"pip install 'litellm\[mcp\]'"):
-            await client.list_tools(raise_on_error=True)
-
-
 def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
     try:
         import tomllib
@@ -1096,17 +1090,50 @@ def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
 
     pyproject_path = Path(__file__).parents[3] / "pyproject.toml"
     with pyproject_path.open("rb") as f:
-        extras = tomllib.load(f)["project"]["optional-dependencies"]
+        project = tomllib.load(f)
+    extras = project["project"]["optional-dependencies"]
 
-    mcp_extra = extras["mcp"]
-    assert len(mcp_extra) == 1
+    sdk2_names: Final = frozenset(("mcp", "httpx2", "pydantic"))
+    mcp_extra: Final = {Requirement(req).name: req for req in extras["mcp"]}
+    assert mcp_extra == {
+        name: req
+        for req in extras["proxy"]
+        if (name := Requirement(req).name) in sdk2_names
+    }
 
-    proxy_mcp_requirements = [req for req in extras["proxy"] if Requirement(req).name == "mcp"]
-    assert mcp_extra == proxy_mcp_requirements
+    specifier: Final = Requirement(mcp_extra["mcp"]).specifier
+    assert not specifier.contains("1.28.1")
+    assert specifier.contains("2.2.0")
+    with (pyproject_path.parent / "uv.lock").open("rb") as f:
+        locked = tomllib.load(f)
+    mcp_versions: Final = [package["version"] for package in locked["package"] if package["name"] == "mcp"]
+    assert len(mcp_versions) == 1
+    assert specifier.contains(mcp_versions[0])
 
-    specifier = Requirement(mcp_extra[0]).specifier
-    assert not specifier.contains("1.23.0")
-    assert specifier.contains("1.28.1")
+
+@pytest.mark.parametrize("module", ["mcp", "mcp_types", "httpx2", "httpcore2"])
+def test_base_sdk_guard_rejects_mcp_dependencies(tmp_path: Path, module: str) -> None:
+    import subprocess
+    import sys
+
+    (tmp_path / f"{module}.py").write_text("")
+    checker = Path(__file__).parents[2] / "base_sdk_tests" / "check_base_sdk_install.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-S",
+            "-c",
+            "import runpy, sys; sys.path.insert(0, sys.argv[2]); "
+            "runpy.run_path(sys.argv[1])['check_environment_is_base_only']()",
+            str(checker),
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0, f"base-only guard accepted installed {module}"
+    assert f"{module} installed" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -1156,18 +1183,119 @@ def test_v1_static_headers_still_win_their_own_slot():
 
 
 @pytest.mark.asyncio
+async def test_sdk_same_origin_redirect_lists_and_calls_tools() -> None:
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/mcp":
+            return httpx2.Response(307, headers={"Location": "/final/mcp"})
+        assert request.url == "https://upstream.example.com/final/mcp"
+        assert request.headers["x-upstream-token"] == "Bearer synthetic-token"
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        match payload.method:
+            case "initialize":
+                return httpx2.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload.id,
+                        "result": {
+                            "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "redirect-test", "version": "1"},
+                        },
+                    },
+                )
+            case "tools/list":
+                return httpx2.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload.id,
+                        "result": {"tools": [{"name": "add", "inputSchema": {"type": "object"}}]},
+                    },
+                )
+            case "tools/call":
+                assert payload.params is not None
+                assert payload.params["name"] == "add"
+                assert payload.params["arguments"] == {"a": 2, "b": 3}
+                return httpx2.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload.id,
+                        "result": {"content": [{"type": "text", "text": "5"}], "isError": False},
+                    },
+                )
+            case _:
+                pytest.fail(f"Unexpected MCP request: {payload.method}")
+
+    responder: Final = Mock(side_effect=respond)
+    client: Final = _MockTransportClient(
+        responder,
+        server_url="https://upstream.example.com/mcp",
+        auth_type=MCPAuth.bearer_token,
+        auth_value="synthetic-token",
+        auth_header_name="x-upstream-token",
+        timeout=5,
+    )
+    with anyio.fail_after(10):
+        tools: Final = await client.list_tools(raise_on_error=True)
+        result: Final = await client.call_tool(
+            CallToolRequestParams(name="add", arguments={"a": 2, "b": 3}), raise_on_error=True
+        )
+    assert [tool.name for tool in tools] == ["add"]
+    assert result.is_error is False
+    assert len(result.content) == 1
+    assert result.content[0].type == "text"
+    assert result.content[0].text == "5"
+    assert any(call.args[0].url.path == "/mcp" for call in responder.call_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("list", "call"))
+async def test_sdk_cross_origin_redirect_never_contacts_destination(operation: str) -> None:
+    responder: Final = Mock(
+        return_value=httpx2.Response(307, headers={"Location": "https://destination.example.com/mcp"})
+    )
+    client: Final = _MockTransportClient(
+        responder,
+        server_url="https://upstream.example.com/mcp",
+        auth_type=MCPAuth.bearer_token,
+        auth_value="synthetic-token",
+        auth_header_name="x-upstream-token",
+        timeout=5,
+    )
+    pending_operation: Final = (
+        client.list_tools(raise_on_error=True)
+        if operation == "list"
+        else client.call_tool(CallToolRequestParams(name="add", arguments={"a": 2, "b": 3}), raise_on_error=True)
+    )
+    with anyio.fail_after(10), pytest.raises(MCPError):
+        await pending_operation
+    assert responder.call_count == 1
+    request: Final = responder.call_args.args[0]
+    assert request.method == "POST"
+    assert request.url == "https://upstream.example.com/mcp"
+    assert request.headers["x-upstream-token"] == "Bearer synthetic-token"
+    assert all(call.args[0].url.host != "destination.example.com" for call in responder.call_args_list)
+
+
+@pytest.mark.asyncio
 async def test_a_custom_credential_header_is_stripped_when_a_redirect_crosses_origin():
     """httpx drops Authorization across origins but keeps every other header, so a credential the
     operator moved to its own slot would be replayed to whatever host the upstream redirects to.
     Verified against real httpx redirect handling, not a hand-built request.
     """
-    seen: "list[tuple[str, str]]" = []
+    seen: list[tuple[str, str]] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append((request.url.host, request.headers.get("esb-oauth", "<stripped>")))
         if request.url.host == "upstream.example.com":
-            return httpx.Response(302, headers={"Location": "https://attacker.example.com/collect"})
-        return httpx.Response(200)
+            return httpx2.Response(302, headers={"Location": "https://attacker.example.com/collect"})
+        return httpx2.Response(200)
 
     client = MCPClient(
         server_url="https://upstream.example.com/mcp",
@@ -1177,7 +1305,7 @@ async def test_a_custom_credential_header_is_stripped_when_a_redirect_crosses_or
     client.update_auth_value("minted-token")
     factory = client._create_httpx_client_factory()
     async with factory(headers=client._get_auth_headers(), timeout=None) as http_client:
-        http_client._transport = httpx.MockTransport(handler)
+        http_client._transport = httpx2.MockTransport(handler)
         await http_client.get("https://upstream.example.com/mcp")
 
     assert seen[0] == ("upstream.example.com", "Bearer minted-token")
@@ -1253,9 +1381,9 @@ async def test_the_guard_agrees_with_httpx_about_authorization(start: str, targe
     outcomes. A future httpx that changes its redirect rule reds here instead of silently leaving
     the custom slot forwarded where Authorization is not (or stripped where it is not needed).
     """
-    seen: "list[tuple[str, str, str]]" = []
+    seen: list[tuple[str, str, str]] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(
             (
                 str(request.url),
@@ -1264,13 +1392,13 @@ async def test_the_guard_agrees_with_httpx_about_authorization(start: str, targe
             )
         )
         if str(request.url) == start:
-            return httpx.Response(302, headers={"Location": target})
-        return httpx.Response(200)
+            return httpx2.Response(302, headers={"Location": target})
+        return httpx2.Response(200)
 
     client = MCPClient(server_url=start, auth_type=MCPAuth.oauth2, auth_header_name="esb-oauth")
     factory = client._create_httpx_client_factory()
     async with factory(headers={"Authorization": "Bearer AUTH", "esb-oauth": "Bearer ESB"}, timeout=None) as http:
-        http._transport = httpx.MockTransport(handler)
+        http._transport = httpx2.MockTransport(handler)
         await http.get(start)
 
     _url, authorization, esb = seen[-1]
@@ -1298,11 +1426,12 @@ def test_a_differently_cased_injected_header_cannot_shadow_the_slot() -> None:
 @pytest.mark.parametrize(
     ("content_type", "body", "expected_type"),
     [
-        ("text/html", b"<html>secret-page</html>", ValueError),
-        ("application/json", b"secret-invalid-json", ValidationError),
-        ("application/json", b"", ValidationError),
-        ("application/json", b'{"secret":"invalid-rpc"}', ValidationError),
-        ("application/json", b'{"jsonrpc":"2.0","id":0,"result":{"secret":"invalid-schema"}}', ValidationError),
+        ("text/html", b"<html>secret-page</html>", MCPError),
+        ("application/json", b"secret-invalid-json", MCPError),
+        ("application/json", b"", MCPError),
+        ("application/json", b'{"secret":"invalid-rpc"}', MCPError),
+        ("application/json", b'{"jsonrpc":"2.0","id":0}', MCPError),
+        ("application/json", b'{"jsonrpc":"2.0","id":0,"result":{"secret":"bad-schema"}}', ValidationError),
     ],
 )
 async def test_invalid_http_response_surfaces_without_waiting_for_timeout(
@@ -1310,10 +1439,12 @@ async def test_invalid_http_response_surfaces_without_waiting_for_timeout(
 ) -> None:
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
-    def respond(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"Content-Type": content_type}, content=body)
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if expected_type is ValidationError:
+            return httpx2.Response(200, json={**json.loads(body), "id": json.loads(request.content)["id"]})
+        return httpx2.Response(200, headers={"Content-Type": content_type}, content=body)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http_client:
         client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
         with pytest.raises(expected_type) as caught:
             await asyncio.wait_for(
@@ -1331,27 +1462,27 @@ async def test_invalid_http_response_surfaces_without_waiting_for_timeout(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status_code", [200, 401, 503])
+@pytest.mark.parametrize("status_code", [200, 401, 403, 429, 503])
 async def test_http_response_handler_preserves_success_and_http_errors(status_code: int) -> None:
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
-            return httpx.Response(200)
+            return httpx2.Response(200)
         payload: Final = json.loads(request.content)
         if "id" not in payload:
-            return httpx.Response(202)
+            return httpx2.Response(202)
         result: Final = (
             {
-                "protocolVersion": LATEST_PROTOCOL_VERSION,
+                "protocolVersion": payload["params"]["protocolVersion"],
                 "capabilities": {},
                 "serverInfo": {"name": "test", "version": "1"},
             }
             if payload["method"] == "initialize"
             else {"tools": []}
         )
-        return httpx.Response(status_code, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
+        return httpx2.Response(status_code, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
-        client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+    client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
+    async with client._create_httpx_client_factory(transport=httpx2.MockTransport(respond))() as http_client:
         operation: Final = client._execute_session_operation(
             streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
         )
@@ -1359,9 +1490,33 @@ async def test_http_response_handler_preserves_success_and_http_errors(status_co
             result: Final = await asyncio.wait_for(operation, timeout=3)
             assert result.tools == []
         else:
-            with pytest.raises(httpx.HTTPStatusError) as caught:
+            with pytest.raises(httpx2.HTTPStatusError) as caught:
                 await asyncio.wait_for(operation, timeout=3)
             assert caught.value.response.status_code == status_code
+
+
+@pytest.mark.asyncio
+async def test_http_status_check_allows_auth_refresh_before_rejecting() -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.client_credentials import ClientCredentialsBearerAuth
+
+    seen = []
+
+    async def refresh(failed):
+        assert failed == "stale"
+        return "fresh"
+
+    def respond(request):
+        seen.append(request.headers["authorization"])
+        return httpx2.Response(401 if len(seen) == 1 else 200, json={"ok": True})
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import ClientCredentialsConfig
+
+    auth = ClientCredentialsBearerAuth("stale", refresh, ClientCredentialsConfig())
+    client = MCPClient(server_url="https://example.com/mcp", resolved_auth=auth)
+    async with client._create_httpx_client_factory(transport=httpx2.MockTransport(respond))() as http_client:
+        response = await http_client.post(client.server_url, json={"method": "tools/list"})
+        assert response.status_code == 200
+    assert seen == ["Bearer stale", "Bearer fresh"]
 
 
 @pytest.mark.asyncio
@@ -1373,20 +1528,20 @@ async def test_http_response_handler_preserves_notifications_and_tool_listing() 
     }
     logging_callback: Final = AsyncMock()
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
-            return httpx.Response(200)
+            return httpx2.Response(200)
         payload: Final = json.loads(request.content)
         if "id" not in payload:
-            return httpx.Response(202)
+            return httpx2.Response(202)
         if payload["method"] == "initialize":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "jsonrpc": "2.0",
                     "id": payload["id"],
                     "result": {
-                        "protocolVersion": LATEST_PROTOCOL_VERSION,
+                        "protocolVersion": payload["params"]["protocolVersion"],
                         "capabilities": {"logging": {}, "tools": {}},
                         "serverInfo": {"name": "test", "version": "1"},
                     },
@@ -1397,13 +1552,13 @@ async def test_http_response_handler_preserves_notifications_and_tool_listing() 
             "id": payload["id"],
             "result": {"tools": [{"name": "search", "inputSchema": {"type": "object"}}]},
         }
-        return httpx.Response(
+        return httpx2.Response(
             200,
             headers={"Content-Type": "text/event-stream"},
             content="".join(f"event: message\ndata: {json.dumps(message)}\n\n" for message in (notification, response)),
         )
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http_client:
         client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30, logging_callback=logging_callback)
         result: Final = await asyncio.wait_for(
             client._execute_session_operation(
@@ -1420,24 +1575,24 @@ async def test_http_response_handler_preserves_notifications_and_tool_listing() 
 async def test_invalid_tool_list_schema_is_identified_as_an_upstream_response() -> None:
     from litellm.proxy._experimental.mcp_server.rest_endpoints import _connection_error_message
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
-            return httpx.Response(200)
+            return httpx2.Response(200)
         payload: Final = json.loads(request.content)
         if "id" not in payload:
-            return httpx.Response(202)
+            return httpx2.Response(202)
         result: Final = (
             {
-                "protocolVersion": LATEST_PROTOCOL_VERSION,
+                "protocolVersion": payload["params"]["protocolVersion"],
                 "capabilities": {},
                 "serverInfo": {"name": "test", "version": "1"},
             }
             if payload["method"] == "initialize"
             else {"tools": "secret-invalid-tools"}
         )
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": result})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http_client:
         client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
         with pytest.raises(ValidationError) as caught:
             await asyncio.wait_for(
@@ -1453,7 +1608,7 @@ async def test_invalid_tool_list_schema_is_identified_as_an_upstream_response() 
     assert "secret" not in message
 
 
-class _DiagnosticSSEStream(httpx.AsyncByteStream):
+class _DiagnosticSSEStream(httpx2.AsyncByteStream):
     def __init__(self, messages: asyncio.Queue[bytes | Exception | None]) -> None:
         self.messages = messages
 
@@ -1510,26 +1665,26 @@ def _diagnostic_transport(transport: MCPTransport, mode: str, failure_method: st
         )
     messages: Final[asyncio.Queue[bytes | Exception | None]] = asyncio.Queue()
 
-    async def respond(request: httpx.Request) -> httpx.Response:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "GET":
-            return httpx.Response(
+            return httpx2.Response(
                 200, headers={"Content-Type": "text/event-stream"}, stream=_DiagnosticSSEStream(messages)
             )
         payload: Final = json.loads(request.content)
         if "method" not in payload or "id" not in payload:
-            return httpx.Response(202)
+            return httpx2.Response(202)
         if payload["method"] == failure_method and mode != "ok":
             if mode == "bad-json":
                 await messages.put(b"secret-invalid-json")
             elif mode == "io-error":
-                await messages.put(httpx.ReadError("secret-read-error"))
+                await messages.put(httpx2.ReadError("secret-read-error"))
             elif mode == "closed":
                 await messages.put(None)
             elif mode == "silent":
                 await messages.put(
                     b'{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"Waiting"}}'
                 )
-            return httpx.Response(202)
+            return httpx2.Response(202)
         if payload["method"] == "tools/list":
             for message in (
                 {
@@ -1543,7 +1698,7 @@ def _diagnostic_transport(transport: MCPTransport, mode: str, failure_method: st
                 await messages.put(json.dumps(message).encode())
         result: Final = (
             {
-                "protocolVersion": LATEST_PROTOCOL_VERSION,
+                "protocolVersion": payload["params"]["protocolVersion"],
                 "capabilities": {"tools": {}, "logging": {}},
                 "serverInfo": {"name": "diagnostic", "version": "1"},
             }
@@ -1553,14 +1708,14 @@ def _diagnostic_transport(transport: MCPTransport, mode: str, failure_method: st
             else {"content": [{"type": "text", "text": "pong"}], "isError": False}
         )
         await messages.put(json.dumps({"jsonrpc": "2.0", "id": payload["id"], "result": result}).encode())
-        return httpx.Response(202)
+        return httpx2.Response(202)
 
     def factory(
         headers: dict[str, str] | None = None,
-        timeout: httpx.Timeout | None = None,
-        auth: httpx.Auth | None = None,
-    ) -> httpx.AsyncClient:
-        return httpx.AsyncClient(transport=httpx.MockTransport(respond), headers=headers, timeout=timeout, auth=auth)
+        timeout: httpx2.Timeout | None = None,
+        auth: httpx2.Auth | None = None,
+    ) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(respond), headers=headers, timeout=timeout, auth=auth)
 
     return sse_client("https://example.com/sse", httpx_client_factory=factory)
 
@@ -1582,7 +1737,7 @@ async def test_transport_parsing_failure_is_preserved(transport: MCPTransport, f
 @pytest.mark.asyncio
 async def test_sse_read_failure_is_preserved() -> None:
     client: Final = MCPClient(server_url="https://example.com/sse", transport_type=MCPTransport.sse, timeout=0.2)
-    with pytest.raises(httpx.ReadError, match="secret-read-error"):
+    with pytest.raises(httpx2.ReadError, match="secret-read-error"):
         await asyncio.wait_for(
             client._execute_session_operation(
                 _diagnostic_transport(MCPTransport.sse, "io-error", "tools/list"), lambda session: session.list_tools()
@@ -1611,11 +1766,11 @@ async def test_transport_completion_and_normal_messages(transport: MCPTransport,
     pending: Final = client._execute_session_operation(_diagnostic_transport(transport, mode, "tools/list"), operation)
     if mode == "ok":
         result: Final = await asyncio.wait_for(pending, timeout=3)
-        assert result.isError is False
+        assert result.is_error is False
         assert result.content[0].text == "pong"
         logging_callback.assert_awaited_once_with(LoggingMessageNotificationParams(level="info", data="Listing tools"))
     else:
-        with pytest.raises(McpError) as caught:
+        with pytest.raises(MCPError) as caught:
             await asyncio.wait_for(pending, timeout=3)
         if mode == "closed":
             assert "connection was closed" in _connection_error_message(caught.value, client.server_url, 0.2)
@@ -1648,20 +1803,20 @@ async def test_transport_cancellation_cleans_up_a_pending_request(transport: MCP
             await asyncio.wait_for(task, timeout=3)
 
 
-class _InterruptedHTTPBody(httpx.AsyncByteStream):
+class _InterruptedHTTPBody(httpx2.AsyncByteStream):
     async def __aiter__(self) -> AsyncIterator[bytes]:
         yield b'{"jsonrpc":'
-        raise httpx.RemoteProtocolError("secret-incomplete-response")
+        raise httpx2.RemoteProtocolError("secret-incomplete-response")
 
 
 @pytest.mark.asyncio
 async def test_interrupted_http_response_preserves_the_transport_failure() -> None:
-    def respond(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"Content-Type": "application/json"}, stream=_InterruptedHTTPBody())
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, headers={"Content-Type": "application/json"}, stream=_InterruptedHTTPBody())
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http_client:
         client: Final = MCPClient(server_url="https://example.com/mcp", timeout=30)
-        with pytest.raises(httpx.RemoteProtocolError, match="secret-incomplete-response"):
+        with pytest.raises(httpx2.RemoteProtocolError, match="secret-incomplete-response"):
             await asyncio.wait_for(
                 client._execute_session_operation(
                     streamable_http_client(client.server_url, http_client=http_client),
@@ -1673,12 +1828,12 @@ async def test_interrupted_http_response_preserves_the_transport_failure() -> No
 
 @pytest.mark.asyncio
 async def test_empty_http_event_stream_uses_the_existing_request_deadline() -> None:
-    def respond(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, content=b"")
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, headers={"Content-Type": "text/event-stream"}, content=b"")
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(respond)) as http_client:
         client: Final = MCPClient(server_url="https://example.com/mcp", timeout=0.2)
-        with pytest.raises(McpError) as caught:
+        with pytest.raises(MCPError) as caught:
             await asyncio.wait_for(
                 client._execute_session_operation(
                     streamable_http_client(client.server_url, http_client=http_client),
@@ -1686,7 +1841,8 @@ async def test_empty_http_event_stream_uses_the_existing_request_deadline() -> N
                 ),
                 timeout=3,
             )
-    assert isinstance(as_mcp_read_timeout(caught.value), TimeoutError)
+    assert caught.value.error.code == CONNECTION_CLOSED
+    assert "SSE stream ended" in caught.value.error.message
 
 
 @pytest.mark.asyncio
@@ -1726,14 +1882,14 @@ async def test_optional_discovery_capabilities_and_errors(
         "resources/templates/list": {"name": "example", "uriTemplate": "test://{name}"},
     }[method]
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
-            return httpx.Response(200)
-        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
         if not isinstance(payload, JSONRPCRequest):
-            return httpx.Response(202)
+            return httpx2.Response(202)
         if outcome == "initialize_not_found":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "jsonrpc": "2.0",
@@ -1742,13 +1898,13 @@ async def test_optional_discovery_capabilities_and_errors(
                 },
             )
         if payload.method == "initialize":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "jsonrpc": "2.0",
                     "id": payload.id,
                     "result": {
-                        "protocolVersion": LATEST_PROTOCOL_VERSION,
+                        "protocolVersion": payload.params["protocolVersion"],
                         "capabilities": {}
                         if outcome == "absent"
                         else {advertised if outcome == "other_capability" else capability: {}},
@@ -1757,11 +1913,11 @@ async def test_optional_discovery_capabilities_and_errors(
                 },
             )
         if outcome == "timeout":
-            raise httpx.ReadTimeout("Optional list timed out", request=request)
+            raise httpx2.ReadTimeout("Optional list timed out", request=request)
         if outcome == "unauthorized":
-            return httpx.Response(401)
+            return httpx2.Response(401)
         if outcome in ("method_not_found", "internal_error", "absent", "other_capability"):
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "jsonrpc": "2.0",
@@ -1772,26 +1928,24 @@ async def test_optional_discovery_capabilities_and_errors(
                     },
                 },
             )
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {field: [entry]}})
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {field: [entry]}})
 
     responder: Final = Mock(side_effect=respond)
     caplog.set_level(logging.DEBUG, logger="LiteLLM")
-    with respx.mock(base_url="https://example.com") as router:
-        router.route().mock(side_effect=responder)
-        client: Final = MCPClient(server_url="https://example.com/mcp")
-        operation: Final = {
-            "prompts/list": client.list_prompts,
-            "resources/list": client.list_resources,
-            "resources/templates/list": client.list_resource_templates,
-        }[method]
-        if raise_on_error and outcome in ("internal_error", "unauthorized", "timeout", "initialize_not_found"):
-            with pytest.raises((McpError, httpx.HTTPError)):
-                await operation(raise_on_error=True)
-            return
-        result: Final = await operation(raise_on_error=raise_on_error)
+    client: Final = _MockTransportClient(responder, server_url="https://example.com/mcp")
+    operation: Final = {
+        "prompts/list": client.list_prompts,
+        "resources/list": client.list_resources,
+        "resources/templates/list": client.list_resource_templates,
+    }[method]
+    if raise_on_error and outcome in ("internal_error", "unauthorized", "timeout", "initialize_not_found"):
+        with pytest.raises((MCPError, httpx2.HTTPError)):
+            await operation(raise_on_error=True)
+        return
+    result: Final = await operation(raise_on_error=raise_on_error)
 
     requests: Final = tuple(
-        JSONRPCMessage.model_validate_json(call.args[0].content).root
+        _JSONRPC_MESSAGE_ADAPTER.validate_json(call.args[0].content)
         for call in responder.call_args_list
         if call.args[0].method == "POST"
     )
@@ -1816,38 +1970,37 @@ async def test_optional_discovery_capabilities_and_errors(
 @pytest.mark.parametrize("supports_first", (True, False))
 async def test_optional_discovery_uses_each_sessions_capabilities(supports_first: bool) -> None:
     from unittest.mock import Mock
+
     from mcp.types import JSONRPCRequest
 
     capabilities: Final = iter(({"resources": {}}, {}) if supports_first else ({}, {"resources": {}}))
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
-            return httpx.Response(200)
-        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
         if not isinstance(payload, JSONRPCRequest):
-            return httpx.Response(202)
+            return httpx2.Response(202)
         result: Final = (
             {
-                "protocolVersion": LATEST_PROTOCOL_VERSION,
+                "protocolVersion": payload.params["protocolVersion"],
                 "capabilities": next(capabilities),
                 "serverInfo": {"name": "changing", "version": "1"},
             }
             if payload.method == "initialize"
             else {"resources": [{"name": "example", "uri": "test://example"}]}
         )
-        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
 
     responder: Final = Mock(side_effect=respond)
-    with respx.mock(base_url="https://example.com") as router:
-        router.route().mock(side_effect=responder)
-        client: Final = MCPClient(server_url="https://example.com/mcp")
-        first: Final = await client.list_resources()
-        second: Final = await client.list_resources()
+    client: Final = _MockTransportClient(responder, server_url="https://example.com/mcp")
+    first: Final = await client.list_resources()
+    second: Final = await client.list_resources()
 
     assert [item.name for item in first] == (["example"] if supports_first else [])
     assert [item.name for item in second] == ([] if supports_first else ["example"])
     requests: Final = tuple(
-        JSONRPCMessage.model_validate_json(call.args[0].content).root
+        _JSONRPC_MESSAGE_ADAPTER.validate_json(call.args[0].content)
         for call in responder.call_args_list
         if call.args[0].method == "POST"
     )
@@ -1862,20 +2015,20 @@ async def test_optional_discovery_preserves_cancellation(method: str) -> None:
     ready: Final = asyncio.Event()
     pending: Final = asyncio.Event()
 
-    async def respond(request: httpx.Request) -> httpx.Response:
+    async def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
-            return httpx.Response(200)
-        payload: Final = JSONRPCMessage.model_validate_json(request.content).root
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
         if not isinstance(payload, JSONRPCRequest):
-            return httpx.Response(202)
+            return httpx2.Response(202)
         if payload.method == "initialize":
-            return httpx.Response(
+            return httpx2.Response(
                 200,
                 json={
                     "jsonrpc": "2.0",
                     "id": payload.id,
                     "result": {
-                        "protocolVersion": LATEST_PROTOCOL_VERSION,
+                        "protocolVersion": payload.params["protocolVersion"],
                         "capabilities": {"resources": {}, "prompts": {}},
                         "serverInfo": {"name": "pending", "version": "1"},
                     },
@@ -1883,23 +2036,21 @@ async def test_optional_discovery_preserves_cancellation(method: str) -> None:
             )
         ready.set()
         await pending.wait()
-        return httpx.Response(202)
+        return httpx2.Response(202)
 
-    with respx.mock(base_url="https://example.com") as router:
-        router.route().mock(side_effect=respond)
-        client: Final = MCPClient(server_url="https://example.com/mcp")
-        operation: Final = {
-            "prompts/list": client.list_prompts,
-            "resources/list": client.list_resources,
-            "resources/templates/list": client.list_resource_templates,
-        }[method]
-        task: Final = asyncio.create_task(operation())
-        try:
-            await asyncio.wait_for(ready.wait(), timeout=3)
-        finally:
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await asyncio.wait_for(task, timeout=3)
+    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp")
+    operation: Final = {
+        "prompts/list": client.list_prompts,
+        "resources/list": client.list_resources,
+        "resources/templates/list": client.list_resource_templates,
+    }[method]
+    task: Final = asyncio.create_task(operation())
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=3)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3)
 
 
 
@@ -1949,3 +2100,63 @@ async def test_request_auth_preview_uses_the_same_effective_headers_as_egress() 
     assert str(request.url) == "https://upstream.example/mcp"
     assert request.headers["Authorization"] == "Bearer resolved"
     assert request.headers["X-Trace"] == "trace"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rpc_error", [False, True])
+async def test_expired_session_preserves_sdk_error_and_next_operation_reinitializes(rpc_error: bool) -> None:
+    from mcp.types import INVALID_REQUEST, METHOD_NOT_FOUND
+
+    requests = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method != "POST":
+            return httpx2.Response(405)
+        payload = json.loads(request.content)
+        if "id" not in payload:
+            return httpx2.Response(202)
+        requests.append((payload["method"], request.headers.get("mcp-session-id")))
+        if payload["method"] == "initialize":
+            return httpx2.Response(200, headers={"mcp-session-id": f"session-{len(requests)}"}, json={
+                "jsonrpc": "2.0", "id": payload["id"], "result": {
+                    "protocolVersion": "2025-06-18", "capabilities": {},
+                    "serverInfo": {"name": "expiry-test", "version": "1"},
+                },
+            })
+        if len(requests) == 2:
+            if rpc_error:
+                return httpx2.Response(404, json={
+                    "jsonrpc": "2.0", "id": payload["id"],
+                    "error": {"code": METHOD_NOT_FOUND, "message": "Tool catalog unavailable"},
+                })
+            return httpx2.Response(404)
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": {"tools": []}})
+
+    client = MCPClient(server_url="https://example.com/mcp", timeout=3)
+    async with client._create_httpx_client_factory(transport=httpx2.MockTransport(respond))() as http_client:
+        with pytest.raises(MCPError) as caught:
+            await client._execute_session_operation(
+                streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
+            )
+        assert caught.value.error.code == (METHOD_NOT_FOUND if rpc_error else INVALID_REQUEST)
+        assert caught.value.error.message == ("Tool catalog unavailable" if rpc_error else "Session terminated")
+        result = await client._execute_session_operation(
+            streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
+        )
+    assert result.tools == []
+    assert requests == [("initialize", None), ("tools/list", "session-1"), ("initialize", None), ("tools/list", "session-3")]
+
+
+@pytest.mark.asyncio
+async def test_404_before_session_initialization_preserves_method_not_found() -> None:
+    from mcp.types import METHOD_NOT_FOUND
+
+    client = MCPClient(server_url="https://example.com/mcp", timeout=3)
+    transport = httpx2.MockTransport(lambda request: httpx2.Response(404))
+    async with client._create_httpx_client_factory(transport=transport)() as http_client:
+        with pytest.raises(MCPError) as caught:
+            await client._execute_session_operation(
+                streamable_http_client(client.server_url, http_client=http_client), lambda session: session.list_tools()
+            )
+    assert caught.value.error.code == METHOD_NOT_FOUND
+    assert caught.value.error.message == "Not Found"

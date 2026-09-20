@@ -49,6 +49,7 @@ from litellm.router import (
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
 
@@ -1007,6 +1008,338 @@ async def test_arouter_aretrieve_batch():
         print(mock_aretrieve_batch.call_args.kwargs)
         assert mock_aretrieve_batch.call_args.kwargs["api_key"] == "my-custom-key"
         assert mock_aretrieve_batch.call_args.kwargs["api_base"] == "my-custom-base"
+
+
+_BATCH_GROUP = "gemini-batch-group"
+_BATCH_DEPLOYMENT_MODEL = "openai/gpt-4o-mini"
+_BATCH_API_BASE = "http://localhost:4001/v1"
+_BATCH_ID = "batch-1"
+_BATCH_ROWS = 2
+_BATCH_TOKENS_PER_ROW = 600
+
+_BATCH_COMPLETED = {
+    "id": _BATCH_ID,
+    "object": "batch",
+    "endpoint": "/v1/chat/completions",
+    "errors": None,
+    "input_file_id": "file-in-1",
+    "completion_window": "24h",
+    "status": "completed",
+    "output_file_id": "file-out-1",
+    "error_file_id": None,
+    "created_at": 0,
+    "completed_at": 1,
+    "request_counts": {"total": _BATCH_ROWS, "completed": _BATCH_ROWS, "failed": 0},
+    "metadata": None,
+}
+
+_BATCH_OUTPUT_JSONL = "\n".join(
+    json.dumps(
+        {
+            "id": f"req-{row}",
+            "custom_id": f"row-{row}",
+            "response": {
+                "status_code": 200,
+                "body": {
+                    "id": f"chatcmpl-{row}",
+                    "object": "chat.completion",
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {
+                        "prompt_tokens": 500,
+                        "completion_tokens": 100,
+                        "total_tokens": _BATCH_TOKENS_PER_ROW,
+                    },
+                },
+            },
+        }
+    )
+    for row in range(_BATCH_ROWS)
+)
+
+
+class _BatchPayloadCollector(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.payloads = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payloads.append(kwargs.get("standard_logging_object"))
+
+    async def retrieve_batch_payload(self):
+        for _ in range(100):
+            for payload in self.payloads:
+                if payload and payload.get("call_type") == "aretrieve_batch":
+                    return payload
+            await asyncio.sleep(0.05)
+        raise AssertionError(f"no aretrieve_batch payload was emitted: {self.payloads}")
+
+
+def _batch_model_group_router():
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+            }
+        ]
+    )
+
+
+def _mock_batch_provider(respx_mock):
+    respx_mock.get(f"{_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+        return_value=httpx.Response(200, json=_BATCH_COMPLETED)
+    )
+    respx_mock.get(f"{_BATCH_API_BASE}/files/file-out-1/content").mock(
+        return_value=httpx.Response(200, text=_BATCH_OUTPUT_JSONL)
+    )
+
+
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_without_model_stamps_model_group(monkeypatch: pytest.MonkeyPatch):
+    """
+    The proxy retrieves a managed batch by id only - no `model` in the request.
+    The router fans out over its deployments, so the model group is only known
+    from the deployment that answered.
+    """
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    router = _batch_model_group_router()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        payload = await collector.retrieve_batch_payload()
+
+    assert response.id == _BATCH_ID
+    assert payload["total_tokens"] == _BATCH_ROWS * _BATCH_TOKENS_PER_ROW
+    assert payload["model"] == _BATCH_DEPLOYMENT_MODEL
+    assert payload["model_group"] == _BATCH_GROUP
+
+
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_with_model_stamps_requested_model_group(monkeypatch: pytest.MonkeyPatch):
+    """An explicitly requested model group is what gets logged."""
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    router = _batch_model_group_router()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        await router.aretrieve_batch(model=_BATCH_GROUP, batch_id=_BATCH_ID)
+        payload = await collector.retrieve_batch_payload()
+
+    assert payload["model_group"] == _BATCH_GROUP
+
+
+_UNRELATED_BATCH_GROUP = "unrelated-batch-group"
+_UNRELATED_BATCH_API_BASE = "http://localhost:4002/v1"
+
+_BATCH_NOT_FOUND = {
+    "error": {
+        "message": f"No batch found with id '{_BATCH_ID}'.",
+        "type": "invalid_request_error",
+        "code": "batch_not_found",
+    }
+}
+
+
+async def _router_usage_keys(router, timeout: float = 2.0) -> list[str]:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        keys = sorted(k for k in router.cache.in_memory_cache.cache_dict if k.startswith("global_router:"))
+        if keys:
+            return keys
+        await asyncio.sleep(0.05)
+    return []
+
+
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_does_not_consume_deployment_rate_limits(monkeypatch: pytest.MonkeyPatch):
+    """
+    A batch reports the whole job's tokens on retrieve, and reports them again on every
+    poll of the finished batch, so they are not a measure of load in the current minute.
+    The fan-out also probes deployments the caller never named. Neither may reach the
+    per-minute tpm/rpm counters that gate live traffic.
+    """
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "batch-dep"},
+                "tpm": 1000,
+                "rpm": 10,
+            },
+            {
+                "model_name": _UNRELATED_BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _UNRELATED_BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "unrelated-dep"},
+                "tpm": 1000,
+                "rpm": 10,
+            },
+        ]
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        respx_mock.get(f"{_UNRELATED_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+            return_value=httpx.Response(404, json=_BATCH_NOT_FOUND)
+        )
+        response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        payload = await collector.retrieve_batch_payload()
+        usage_keys = await _router_usage_keys(router)
+
+    assert response.id == _BATCH_ID
+    assert payload["model_group"] == _BATCH_GROUP
+    assert usage_keys == []
+
+
+@pytest.mark.parametrize(
+    ("call_type", "expected_key", "expected_successes"),
+    [
+        ("aretrieve_batch", None, 0),
+        ("retrieve_batch", None, 0),
+        ("acompletion", "batch-dep:successes", 1),
+    ],
+)
+def test_sync_deployment_callback_on_success_skips_batch_retrieves(
+    call_type: str, expected_key: str | None, expected_successes: int
+):
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {"model": _BATCH_DEPLOYMENT_MODEL, "api_base": _BATCH_API_BASE, "api_key": "sk-fake"},
+                "model_info": {"id": "batch-dep"},
+            }
+        ]
+    )
+
+    key = router.sync_deployment_callback_on_success(
+        kwargs={
+            "call_type": call_type,
+            "litellm_params": {"metadata": {"model_group": _BATCH_GROUP}, "model_info": {"id": "batch-dep"}},
+        },
+        completion_response=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert key == expected_key
+    assert (
+        get_deployment_successes_for_current_minute(litellm_router_instance=router, deployment_id="batch-dep")
+        == expected_successes
+    )
+
+_ROUTING_STRATEGY_CACHE_MARKERS = ("_map", "_request_count", ":tpm:", ":rpm:")
+
+
+async def _moved_routing_counters(router, timeout: float = 2.0) -> list[str]:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        cache_dict = router.cache.in_memory_cache.cache_dict
+        moved = sorted(
+            f"{key}={cache_dict[key]}"
+            for key in cache_dict
+            if any(marker in key for marker in _ROUTING_STRATEGY_CACHE_MARKERS)
+            and cache_dict[key]
+        )
+        if moved:
+            return moved
+        await asyncio.sleep(0.05)
+    return []
+
+
+def _batch_fan_out_router(routing_strategy: str):
+    return litellm.Router(
+        routing_strategy=routing_strategy,
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "batch-dep"},
+            },
+            {
+                "model_name": _UNRELATED_BATCH_GROUP,
+                "litellm_params": {
+                    "model": _BATCH_DEPLOYMENT_MODEL,
+                    "api_base": _UNRELATED_BATCH_API_BASE,
+                    "api_key": "sk-fake",
+                },
+                "model_info": {"id": "unrelated-dep"},
+            },
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "routing_strategy",
+    [
+        "usage-based-routing",
+        "usage-based-routing-v2",
+        "latency-based-routing",
+        "cost-based-routing",
+        "least-busy",
+    ],
+)
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_does_not_feed_routing_strategies(
+    monkeypatch: pytest.MonkeyPatch, routing_strategy: str
+):
+    """
+    Every routing strategy picks a deployment from what recent live traffic did.
+    A batch retrieve reports the whole job on every poll and probes deployments the
+    caller never named, so polling a finished batch must not move the numbers that
+    decide where the next chat request goes.
+    """
+    import respx
+
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _batch_fan_out_router(routing_strategy)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        respx_mock.get(f"{_UNRELATED_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+            return_value=httpx.Response(404, json=_BATCH_NOT_FOUND)
+        )
+        for _ in range(3):
+            response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        await collector.retrieve_batch_payload()
+        moved_counters = await _moved_routing_counters(router)
+
+    assert response.id == _BATCH_ID
+    assert moved_counters == []
 
 
 @pytest.mark.asyncio
@@ -5745,6 +6078,93 @@ async def test_router_unknown_model_error_message_renders_model_name_literally()
     assert "          " not in message  # no padding run from an expanded format field
 
 
+def test_get_credential_deployment_is_the_deployment_credentials_resolve_to():
+    """Regression: a batch retrieved with credentials resolved by model name was priced
+    without its deployment id, so per-deployment pricing never applied. The deployment
+    behind the credentials must be reachable by name and by id, carrying its model_info."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mistral-ocr",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "sk-ocr"},
+                "model_info": {"id": "ocr-dep", "ocr_cost_per_page_batches": 0.0123},
+            }
+        ]
+    )
+
+    by_name = router.get_credential_deployment(model_id="mistral-ocr")
+    by_id = router.get_credential_deployment(model_id="ocr-dep")
+
+    assert by_name is not None and by_id is not None
+    assert by_name.model_info.id == by_id.model_info.id == "ocr-dep"
+    assert by_name.model_info.model_dump()["ocr_cost_per_page_batches"] == 0.0123
+    assert router.get_deployment_credentials_with_provider(model_id="mistral-ocr")["api_key"] == "sk-ocr"
+    assert router.get_credential_deployment(model_id="no-such-model") is None
+
+
+def test_get_credential_deployment_skips_a_paused_deployment():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "paused-ocr",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "sk-ocr"},
+                "model_info": {"id": "paused-dep", "blocked": True},
+            }
+        ]
+    )
+
+    assert router.get_credential_deployment(model_id="paused-ocr") is None
+    assert router.get_credential_deployment(model_id="paused-dep") is None
+
+
+def test_get_team_public_name_deployment_only_resolves_the_owning_team():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mistral/mistral-ocr-latest",
+                "litellm_params": {"model": "mistral/mistral-ocr-latest", "api_key": "sk-team-a"},
+                "model_info": {"id": "team-a-ocr", "team_id": "team-a", "team_public_model_name": "ocr"},
+            }
+        ]
+    )
+
+    owning_team = router._get_team_public_name_deployment(model_id="ocr", team_id="team-a")
+
+    assert owning_team is not None and owning_team.model_info.id == "team-a-ocr"
+    assert router._get_team_public_name_deployment(model_id="ocr", team_id="team-b") is None
+    assert router._get_team_public_name_deployment(model_id="ocr", team_id=None) is None
+    assert router.get_credential_deployment(model_id="ocr", team_id="team-a").model_info.id == "team-a-ocr"
+    assert router.get_credential_deployment(model_id="ocr", team_id="team-b") is None
+
+
+def test_get_wildcard_deployment_usable_by_team_prefers_the_team_pattern():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mistral/*",
+                "litellm_params": {"model": "mistral/*", "api_key": "sk-shared"},
+                "model_info": {"id": "shared-wildcard"},
+            },
+            {
+                "model_name": "mistral/*",
+                "litellm_params": {"model": "mistral/*", "api_key": "sk-team-a"},
+                "model_info": {"id": "team-a-wildcard", "team_id": "team-a", "team_public_model_name": "mistral/*"},
+            },
+        ]
+    )
+    ocr = "mistral/mistral-ocr-latest"
+
+    team_match = router._get_wildcard_deployment_usable_by_team(model_id=ocr, team_id="team-a")
+    other_team_match = router._get_wildcard_deployment_usable_by_team(model_id=ocr, team_id="team-b")
+    anonymous_match = router._get_wildcard_deployment_usable_by_team(model_id=ocr, team_id=None)
+
+    assert team_match is not None and team_match.model_info.id == "team-a-wildcard"
+    assert other_team_match is not None and other_team_match.model_info.id == "shared-wildcard"
+    assert anonymous_match is not None and anonymous_match.model_info.id == "shared-wildcard"
+    assert router._get_wildcard_deployment_usable_by_team(model_id="openai/gpt-5.6", team_id="team-a") is None
+    assert router.get_credential_deployment(model_id=ocr, team_id="team-b").model_info.id == "shared-wildcard"
+
+
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
     """
     Test that get_deployment_credentials_with_provider correctly copies
@@ -8690,6 +9110,128 @@ class TestAdvisorSubCallCooldown:
             is False
         )
         assert "dep-1" not in self._cooled_down_ids(router)
+
+
+class TestBackgroundResponseCostPollCooldown:
+    def _router(self):
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4.1",
+                    "litellm_params": {"model": "openai/gpt-4.1"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+            allowed_fails=0,
+        )
+
+    def _cooled_down_ids(self, router):
+        active = router.cooldown_cache.get_active_cooldowns(model_ids=["dep-1"], parent_otel_span=None)
+        return [entry[0] for entry in active]
+
+    def _not_found(self):
+        return litellm.NotFoundError(
+            message="Response with id 'resp_gone' not found.", llm_provider="openai", model="gpt-4.1"
+        )
+
+    def _deployment_callback_on_failure(self, router, kwargs):
+        from datetime import datetime
+
+        now = datetime.now()
+        return router.deployment_callback_on_failure(kwargs, None, now, now)
+
+    @pytest.mark.asyncio
+    async def test_untagged_not_found_cools_down_deployment(self):
+        router = self._router()
+        assert (
+            self._deployment_callback_on_failure(
+                router,
+                {
+                    "exception": self._not_found(),
+                    "litellm_params": {"model_info": {"id": "dep-1"}, "metadata": {}},
+                },
+            )
+            is True
+        )
+        assert "dep-1" in self._cooled_down_ids(router)
+
+    def test_cost_poll_not_found_does_not_cool_down_deployment(self):
+        from datetime import datetime
+
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.router_utils.router_callbacks.track_deployment_metrics import (
+            get_deployment_failures_for_current_minute,
+        )
+        from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+
+        router = self._router()
+        now = datetime.now()
+        assert (
+            router.deployment_callback_on_failure(
+                {
+                    "exception": self._not_found(),
+                    "litellm_params": {
+                        "model_info": {"id": "dep-1"},
+                        "litellm_metadata": {
+                            INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+                        },
+                    },
+                },
+                None,
+                now,
+                now,
+            )
+            is False
+        )
+        assert self._cooled_down_ids(router) == []
+        value = get_deployment_failures_for_current_minute(litellm_router_instance=router, deployment_id="dep-1")
+        assert not value
+
+    @pytest.mark.asyncio
+    async def test_cost_poll_non_404_still_cools_down_deployment(self):
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+
+        router = self._router()
+        assert (
+            self._deployment_callback_on_failure(
+                router,
+                {
+                    "exception": litellm.InternalServerError(
+                        message="upstream 500", llm_provider="openai", model="gpt-4.1"
+                    ),
+                    "litellm_params": {
+                        "model_info": {"id": "dep-1"},
+                        "litellm_metadata": {
+                            INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+                        },
+                    },
+                },
+            )
+            is True
+        )
+        assert "dep-1" in self._cooled_down_ids(router)
+
+    @pytest.mark.asyncio
+    async def test_other_internal_origin_not_found_still_cools_down_deployment(self):
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+
+        router = self._router()
+        assert (
+            self._deployment_callback_on_failure(
+                router,
+                {
+                    "exception": self._not_found(),
+                    "litellm_params": {
+                        "model_info": {"id": "dep-1"},
+                        "litellm_metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN},
+                    },
+                },
+            )
+            is True
+        )
+        assert "dep-1" in self._cooled_down_ids(router)
 
 
 class TestCallerTimeoutCooldown:
@@ -15301,6 +15843,53 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
         with pytest.raises(error_type):
             await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
 
+    assert upstream.call_count == expected_upstream_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_body,error_type",
+    [
+        ({"message": "model is down", "type": "server_error"}, litellm.NotFoundError),
+        ({"message": "Response with id 'resp_x' not found.", "type": "invalid_request_error"}, litellm.BadRequestError),
+    ],
+)
+@pytest.mark.parametrize(
+    "retry_policy,expected_upstream_calls",
+    [
+        ({"DefaultRetries": 3}, 4),
+        ({"DefaultRetries": 3, "NotFoundErrorRetries": 0}, 1),
+        ({"NotFoundErrorRetries": 2}, 3),
+    ],
+)
+async def test_router_not_found_retries_governs_every_404_shape(
+    monkeypatch: pytest.MonkeyPatch, retry_policy, expected_upstream_calls, error_body, error_type
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://retry-policy.local/v1",
+                },
+            }
+        ],
+        num_retries=2,
+        retry_policy=retry_policy,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream = respx_mock.post("https://retry-policy.local/v1/chat/completions").mock(
+            return_value=httpx.Response(404, headers={"retry-after": "0"}, json={"error": error_body})
+        )
+        with pytest.raises(error_type) as raised:
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert raised.value.status_code == 404
     assert upstream.call_count == expected_upstream_calls
 
 

@@ -8,8 +8,8 @@ use serde_json::{Map, Value, json};
 
 use crate::base_llm::{
     audio_transcription::transformation::{
-        AudioTranscriptionAuth, AudioTranscriptionRequestData, AudioTranscriptionResponseData,
-        BaseAudioTranscriptionConfig,
+        AudioTranscriptionRequestData, AudioTranscriptionResponseData,
+        BaseAudioTranscriptionConfig, RequestAuth,
     },
     chat::transformation::Error,
 };
@@ -136,9 +136,9 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<AudioTranscriptionAuth, Error> {
+    ) -> Result<RequestAuth, Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
-        Ok(AudioTranscriptionAuth::AwsSigV4 {
+        Ok(RequestAuth::AwsSigV4 {
             region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
             service: BEDROCK_SERVICE,
         })

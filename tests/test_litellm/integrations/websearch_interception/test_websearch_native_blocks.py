@@ -419,7 +419,7 @@ class TestFailedSearchOutcome:
             {"id": "toolu_two", "type": "tool_use", "name": "litellm_web_search", "input": {"query": "works"}},
         ]
 
-        async def search(query, kwargs=None):
+        async def search(query, kwargs=None, rich=None):
             if query == "fails":
                 raise RateLimitError("slow down", llm_provider="tavily", model="tavily")
             return ("Title: x", _make_search_response())

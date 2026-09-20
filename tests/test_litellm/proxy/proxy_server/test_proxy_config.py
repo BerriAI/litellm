@@ -16,7 +16,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -2633,6 +2633,113 @@ def test_ProxyConfig_get_model_info_with_id_returns_router_model_info():
     assert snapshot == {"id": "m-1", "db_model": True, "blocked": False}
 
 
+PINNED_MODEL_INFO: Final = MappingProxyType(
+    {
+        "id": "pinned-row",
+        "key": "gpt-5.6",
+        "mode": "chat",
+        "access_groups": ["prod"],
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2e-05,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-07,
+    }
+)
+
+
+def test_ProxyConfig_get_model_info_with_id_ignores_cost_map_pricing_echoed_into_model_info():
+    """LIT-8064. A pre-1.102 Admin UI save wrote the whole ``/model/info`` response back into
+    the row's ``model_info``, cost-map pricing included. Only that response carries ``key``, so
+    a stored blob with it holds a copy of the map, not a price anyone typed, and the deployment
+    must keep following the live cost map."""
+    pc = ProxyConfig()
+    model = SimpleNamespace(model_id="pinned-row", model_info=dict(PINNED_MODEL_INFO), blocked=False)
+    out = pc.get_model_info_with_id(model=model, db_model=True).model_dump(exclude_none=True)
+    assert out["access_groups"] == ["prod"]
+    assert out["mode"] == "chat"
+    for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost_above_272k_tokens"):
+        assert field not in out, f"{field} still pins the deployment to the cost map of the day it was saved"
+
+
+def test_ProxyConfig_get_model_info_with_id_keeps_pricing_typed_into_model_info():
+    """A custom-priced deployment the cost map does not know never got ``key``, so its
+    ``model_info`` pricing is the operator's own and stays."""
+    pc = ProxyConfig()
+    model = SimpleNamespace(
+        model_id="custom-row",
+        model_info={"id": "custom-row", "input_cost_per_token": 7e-06, "output_cost_per_token": 9e-06},
+        blocked=False,
+    )
+    out = pc.get_model_info_with_id(model=model, db_model=True).model_dump(exclude_none=True)
+    assert (out["input_cost_per_token"], out["output_cost_per_token"]) == (7e-06, 9e-06)
+
+
+def test_ProxyConfig__add_deployment_pinned_row_follows_the_cost_map_across_reloads(monkeypatch, local_model_cost_map):
+    """The customer's symptom end to end: a row pinned before 1.102 must bill at the live cost
+    map price on boot and again after Reload Price Data, while a price typed on
+    ``litellm_params`` keeps overriding it."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    pinned = SimpleNamespace(
+        model_id="pinned-row",
+        model_name="gpt-5.6",
+        model_info=dict(PINNED_MODEL_INFO),
+        litellm_params={"model": "openai/gpt-5.6", "api_key": "sk-test"},
+        blocked=False,
+    )
+    typed = SimpleNamespace(
+        model_id="typed-row",
+        model_name="gpt-5.6-typed",
+        model_info={"id": "typed-row", "key": "gpt-5.6", "input_cost_per_token": 4e-06},
+        litellm_params={"model": "openai/gpt-5.6", "api_key": "sk-test", "input_cost_per_token": 3e-06},
+        blocked=False,
+    )
+
+    assert ProxyConfig()._add_deployment(db_models=[pinned, typed]) == 2
+
+    monkeypatch.setitem(litellm.model_cost["gpt-5.6"], "input_cost_per_token", 1e-06)
+    router._replay_model_cost_registrations()
+
+    assert litellm.model_cost.get("pinned-row", {}).get("input_cost_per_token") is None
+    assert router.get_deployment(model_id="pinned-row").model_info.input_cost_per_token is None
+    assert litellm.get_model_info("openai/gpt-5.6")["input_cost_per_token"] == 1e-06
+    assert litellm.model_cost["typed-row"]["input_cost_per_token"] == 3e-06
+
+
+def test_ProxyConfig__add_deployment_ptu_row_with_a_cost_map_copy_still_bills_zero(monkeypatch, local_model_cost_map):
+    """A PTU deployment bills nothing per token: the proxy writes zeros to both blobs. When such
+    a row also carries the echoed cost map, dropping the ``model_info`` copy must not send it
+    back to the per-token price, because the ``litellm_params`` zeros are the operator's."""
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.decrypt_value_helper",
+        lambda value, key, return_original_value: value,
+    )
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    ptu = SimpleNamespace(
+        model_id="ptu-row",
+        model_name="gpt-5.6-ptu",
+        model_info={**PINNED_MODEL_INFO, "id": "ptu-row", "input_cost_per_token": 0.0, "output_cost_per_token": 0.0},
+        litellm_params={
+            "model": "openai/gpt-5.6",
+            "api_key": "sk-test",
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+        blocked=False,
+    )
+
+    assert ProxyConfig()._add_deployment(db_models=[ptu]) == 1
+    router._replay_model_cost_registrations()
+
+    assert litellm.model_cost["ptu-row"]["input_cost_per_token"] == 0.0
+    assert litellm.model_cost["ptu-row"]["output_cost_per_token"] == 0.0
+    assert router.get_deployment(model_id="ptu-row").model_info.input_cost_per_token == 0.0
+
+
 def test_ProxyConfig_get_model_info_with_id_missing_model_id_raises(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     pc = ProxyConfig()
@@ -4419,3 +4526,191 @@ async def test_add_deployment_syncs_ui_settings_even_when_the_model_reconcile_fa
     await config.add_deployment(prisma_client=prisma_client, proxy_logging_obj=MagicMock())
 
     assert general_settings["allow_agents_for_team_admins"] is True
+
+
+def _websearch_logger_cls():
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    return WebSearchInterceptionLogger
+
+
+def _run_websearch_init(monkeypatch, stored_params, starting_callbacks):
+    pc = ProxyConfig()
+    monkeypatch.setattr(litellm, "callbacks", list(starting_callbacks))
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_config_param",
+        AsyncMock(return_value=SimpleNamespace(param_value={"websearch_interception_params": stored_params}))
+        if stored_params is not None
+        else AsyncMock(return_value=SimpleNamespace(param_value={})),
+    )
+    asyncio.run(pc.init_websearch_interception_settings_in_db(prisma_client=MagicMock()))
+    return pc
+
+
+def _poll_websearch_init(pc, monkeypatch, stored_params):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_config_param",
+        AsyncMock(return_value=SimpleNamespace(param_value={"websearch_interception_params": stored_params})),
+    )
+    asyncio.run(pc.init_websearch_interception_settings_in_db(prisma_client=MagicMock()))
+
+
+def test_init_websearch_interception_resyncs_after_a_write_drops_the_enabled_flag(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    pc = ProxyConfig()
+    monkeypatch.setattr(litellm, "callbacks", [])
+
+    _poll_websearch_init(pc, monkeypatch, {"enabled": True, "search_tool_name": "old-tool"})
+    _poll_websearch_init(pc, monkeypatch, {"search_tool_name": "new-tool"})
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].search_tool_name == "new-tool"
+
+
+def test_init_websearch_interception_ignores_a_non_list_providers_value(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "enabled_providers": "bedrock", "search_tool_name": "stored-tool"},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].enabled_providers == ["bedrock"]
+
+
+def test_init_websearch_interception_absent_key_leaves_callbacks_untouched(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    config_registered = logger_cls(search_tool_name="from-config-yaml")
+
+    _run_websearch_init(monkeypatch, stored_params=None, starting_callbacks=[config_registered])
+
+    assert litellm.callbacks == [config_registered]
+
+
+def test_init_websearch_interception_without_enabled_key_leaves_callbacks_untouched(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    config_registered = logger_cls(search_tool_name="from-config-yaml")
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"search_tool_name": "stored-tool"},
+        starting_callbacks=[config_registered],
+    )
+
+    assert litellm.callbacks == [config_registered]
+
+
+def test_init_websearch_interception_registers_when_explicitly_enabled(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "search_tool_name": "stored-tool"},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].search_tool_name == "stored-tool"
+
+
+def test_init_websearch_interception_treats_string_false_as_disabled(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    existing = logger_cls(search_tool_name="stored-tool")
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": "false", "search_tool_name": "stored-tool"},
+        starting_callbacks=[existing],
+    )
+
+    assert [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)] == []
+
+
+def test_init_websearch_interception_empty_providers_falls_back_to_handler_default(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "enabled_providers": [], "search_tool_name": "stored-tool"},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].enabled_providers == ["bedrock"]
+
+
+def test_init_websearch_interception_keeps_working_callback_when_new_one_cannot_be_built(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    working = logger_cls(search_tool_name="stored-tool", max_agentic_loops=3)
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "search_tool_name": "stored-tool", "max_agentic_loops": 0},
+        starting_callbacks=[working],
+    )
+
+    assert litellm.callbacks == [working]
+
+
+def test_init_websearch_interception_disabled_removes_the_callback(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    existing = logger_cls(search_tool_name="stored-tool")
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": False, "search_tool_name": "stored-tool"},
+        starting_callbacks=[existing],
+    )
+
+    assert [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)] == []
+
+
+def test_init_websearch_interception_replaces_stale_instance_on_param_change(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+    stale = logger_cls(search_tool_name="old-tool", max_agentic_loops=2)
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "search_tool_name": "new-tool", "max_agentic_loops": 7},
+        starting_callbacks=[stale],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert (registered[0].search_tool_name, registered[0].max_agentic_loops) == ("new-tool", 7)
+
+
+def test_init_websearch_interception_honors_enabled_providers(monkeypatch):
+    logger_cls = _websearch_logger_cls()
+
+    _run_websearch_init(
+        monkeypatch,
+        stored_params={"enabled": True, "enabled_providers": ["bedrock", "vertex_ai"]},
+        starting_callbacks=[],
+    )
+
+    registered = [cb for cb in litellm.callbacks if isinstance(cb, logger_cls)]
+    assert len(registered) == 1
+    assert registered[0].enabled_providers == ["bedrock", "vertex_ai"]
+
+
+def test_websearch_interception_settings_can_be_named_in_supported_db_objects(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    allowlist = ConfigGeneralSettings(supported_db_objects=["websearch_interception_settings"]).supported_db_objects
+    assert allowlist
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": allowlist})
+    assert proxy_server.should_load_db_object(object_type="websearch_interception_settings") is True
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["models"]})
+    assert proxy_server.should_load_db_object(object_type="websearch_interception_settings") is False
