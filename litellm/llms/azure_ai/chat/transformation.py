@@ -1,6 +1,7 @@
 import copy
 import enum
 import re
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -96,19 +97,32 @@ class AzureAIStudioConfig(OpenAIConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: OpenAIConfig.map_openai_params signature
-        if not azureAIGPT5Config.is_model_gpt_5_model(model):
-            return super().map_openai_params(
+        if azureAIGPT5Config.is_model_gpt_5_model(model):
+            return azureAIGPT5Config.map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
             )
-        return azureAIGPT5Config.map_openai_params(
+        super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
         )
+
+        if "max_completion_tokens" not in optional_params:
+            return optional_params
+
+        max_tokens: Final = optional_params["max_completion_tokens"]
+        token_limit_params: Final = frozenset(("max_tokens", "max_completion_tokens"))
+        params_without_token_limits: Final = MappingProxyType(
+            {key: value for key, value in optional_params.items() if key not in token_limit_params}
+        )
+        return {  # mutable-ok: BaseConfig mapping contract requires a request dict
+            **params_without_token_limits,
+            "max_tokens": max_tokens,
+        }
 
     def _supports_stop_reason(self, model: str) -> bool:
         """
