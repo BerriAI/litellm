@@ -14510,6 +14510,7 @@
         "supports_native_structured_output": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_sampling_params": false,
@@ -14547,6 +14548,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_native_structured_output": true,
@@ -14698,6 +14700,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_native_structured_output": true,
@@ -14727,6 +14730,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_native_structured_output": true,
@@ -14759,6 +14763,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_native_structured_output": true,
@@ -14796,6 +14801,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_native_structured_output": true,
@@ -14831,6 +14837,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_native_structured_output": true,
@@ -14869,6 +14876,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_native_structured_output": true,
@@ -14986,6 +14994,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_native_structured_output": true,
@@ -15027,6 +15036,7 @@
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
+        "supports_thinking_cache_preservation": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_native_structured_output": true,
@@ -22789,6 +22799,127 @@
         "output_cost_per_image": 0.03,
         "supported_endpoints": [
             "/v1/images/generations"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.5/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.473,
+        "output_cost_per_second_480p": 0.2205,
+        "output_cost_per_second_720p": 0.473,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.5/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.473,
+        "output_cost_per_second_480p": 0.2205,
+        "output_cost_per_second_720p": 0.473,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.5/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.473,
+        "output_cost_per_second_480p": 0.2205,
+        "output_cost_per_second_720p": 0.473,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3034,
+        "output_cost_per_second_480p": 0.1346,
+        "output_cost_per_second_720p": 0.3034,
+        "output_cost_per_second_1080p": 0.682,
+        "output_cost_per_second_4k": 1.5552,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/text-to-video",
+        "metadata": {
+            "comment": "fal bills $0.014 per 1k tokens (480p/720p/1080p) and $0.008 per 1k tokens (4k) with tokens = h*w*seconds*24/1024; 480p and 4k rates derived from that formula at 854x480 and 3840x2160"
+        },
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3034,
+        "output_cost_per_second_480p": 0.1346,
+        "output_cost_per_second_720p": 0.3034,
+        "output_cost_per_second_1080p": 0.682,
+        "output_cost_per_second_4k": 1.5552,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/image-to-video",
+        "metadata": {
+            "comment": "fal bills $0.014 per 1k tokens (480p/720p/1080p) and $0.008 per 1k tokens (4k) with tokens = h*w*seconds*24/1024; 480p and 4k rates derived from that formula at 854x480 and 3840x2160"
+        },
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3034,
+        "output_cost_per_second_480p": 0.1346,
+        "output_cost_per_second_720p": 0.3034,
+        "output_cost_per_second_1080p": 0.682,
+        "output_cost_per_second_4k": 1.5552,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/reference-to-video",
+        "metadata": {
+            "comment": "fal bills $0.014 per 1k tokens (480p/720p/1080p) and $0.008 per 1k tokens (4k) with tokens = h*w*seconds*24/1024; 480p and 4k rates derived from that formula at 854x480 and 3840x2160"
+        },
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
         ]
     },
     "fal_ai/fal-ai/ideogram/v3": {
@@ -41319,6 +41450,7 @@
     },
     "openrouter/deepseek/deepseek-v3.2": {
         "cache_read_input_token_cost": 1.345e-07,
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 2.69e-07,
         "input_cost_per_token_cache_hit": 1.345e-07,
         "litellm_provider": "openrouter",
@@ -41340,6 +41472,7 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v3.2-exp": {
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 2.7e-07,
         "input_cost_per_token_cache_hit": 2e-08,
         "litellm_provider": "openrouter",
@@ -41446,21 +41579,22 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4-pro-0813": {
-        "input_cost_per_token": 5.7816e-07,
+        "input_cost_per_token": 5.2668e-07,
         "input_cost_per_token_cache_hit": 4.4e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 393216,
-        "max_tokens": 393216,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.73448e-06,
+        "output_cost_per_token": 1.58004e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "cache_read_input_token_cost": 1.8396e-08,
+        "cache_read_input_token_cost": 1.7556e-08,
+        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":5.2668e-7,"output_cost_per_token":0.00000158004,"cache_read_input_token_cost":1.6968e-8},
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_vision": false,
@@ -41963,12 +42097,12 @@
         "max_tokens": 102400,
         "mode": "chat",
         "output_cost_per_token": 5.55e-07,
-        "supports_tool_choice": false,
+        "supports_tool_choice": true,
         "max_input_tokens": 128000,
         "max_output_tokens": 102400,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
-        "supports_function_calling": false,
+        "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": false,
         "supports_reasoning": false,
@@ -42641,7 +42775,7 @@
         "supports_pdf_input": false,
         "supports_prompt_caching": false,
         "supports_reasoning": false,
-        "supports_response_schema": false,
+        "supports_response_schema": true,
         "supports_tool_choice": false,
         "supports_vision": false,
         "supports_web_search": false
@@ -42760,13 +42894,13 @@
         "supports_web_search": false
     },
     "openrouter/qwen/qwen3.5-35b-a3b": {
-        "input_cost_per_token": 1.625e-07,
+        "input_cost_per_token": 3.125e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": 65536,
-        "max_tokens": 65536,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 1.3e-06,
+        "output_cost_per_token": 1.25e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -42775,7 +42909,7 @@
         "cache_read_input_token_cost": 1.5625e-07,
         "supports_audio_input": false,
         "supports_pdf_input": false,
-        "supports_prompt_caching": false,
+        "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_web_search": false
     },
@@ -43103,6 +43237,7 @@
         "output_cost_per_token": 1.2e-06,
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 3e-08,
+        "deprecation_date": "2026-10-08",
         "litellm_provider": "openrouter",
         "max_input_tokens": 204800,
         "max_output_tokens": 131072,
@@ -65629,7 +65764,7 @@
         "thinking_always_on": true,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
-        "supports_tool_choice": false,
+        "supports_tool_choice": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_vision": true,
@@ -66456,9 +66591,9 @@
         "supports_web_search": false
     },
     "openrouter/qwen/qwen3.8-27b": {
-        "input_cost_per_token": 2.14e-07,
+        "input_cost_per_token": 2e-07,
         "output_cost_per_token": 2.55e-06,
-        "cache_read_input_token_cost": 1.5e-07,
+        "cache_read_input_token_cost": 8.5e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1000000,
         "max_output_tokens": 131072,
@@ -66762,9 +66897,9 @@
         "supports_web_search": true
     },
     "openrouter/z-ai/glm-5.2": {
-        "input_cost_per_token": 5.544e-07,
-        "output_cost_per_token": 1.7424e-06,
-        "cache_read_input_token_cost": 1.0296e-07,
+        "input_cost_per_token": 6.496e-07,
+        "output_cost_per_token": 2.0416e-06,
+        "cache_read_input_token_cost": 1.2064e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
@@ -67020,8 +67155,8 @@
         "supports_web_search": false
     },
     "openrouter/qwen/qwen3.6-35b-a3b": {
-        "input_cost_per_token": 1e-07,
-        "output_cost_per_token": 9e-07,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 1e-06,
         "cache_read_input_token_cost": 5e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
@@ -67124,9 +67259,9 @@
         "supports_web_search": true
     },
     "openrouter/deepseek/deepseek-v4-flash": {
-        "input_cost_per_token": 4.032e-08,
-        "output_cost_per_token": 8.064e-08,
-        "cache_read_input_token_cost": 8.064e-09,
+        "input_cost_per_token": 3.556e-08,
+        "output_cost_per_token": 7.112e-08,
+        "cache_read_input_token_cost": 7.112e-09,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
@@ -67382,8 +67517,8 @@
         "output_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 262144,
-        "max_output_tokens": 235929,
-        "max_tokens": 235929,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
         "mode": "chat",
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
@@ -67939,6 +68074,7 @@
         "input_cost_per_token": 2.7e-07,
         "output_cost_per_token": 1e-06,
         "cache_read_input_token_cost": 1.35e-07,
+        "deprecation_date": "2026-09-28",
         "litellm_provider": "openrouter",
         "max_input_tokens": 163840,
         "max_output_tokens": 32768,
@@ -68680,6 +68816,7 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-r1-distill-llama-70b": {
+        "deprecation_date": "2026-09-28",
         "input_cost_per_token": 8e-07,
         "output_cost_per_token": 8e-07,
         "litellm_provider": "openrouter",
@@ -71088,7 +71225,7 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": false,
+        "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true
     },
@@ -71159,14 +71296,15 @@
         "supports_web_search": true
     },
     "openrouter/~deepseek/deepseek-flash-latest": {
-        "cache_read_input_token_cost": 2.6e-09,
-        "input_cost_per_token": 1.3e-07,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 5.2e-07,
+        "off_peak_pricing": {"windows":[{"weekdays":["saturday","sunday"],"hours_utc":"00:00-00:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"00:00-01:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"04:00-06:00"},{"weekdays":["monday","tuesday","wednesday","thursday","friday"],"hours_utc":"10:00-00:00"}],"input_cost_per_token":1.5e-7,"output_cost_per_token":6e-7,"cache_read_input_token_cost":3e-9},
+        "output_cost_per_token": 1.2e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -71179,14 +71317,14 @@
         "supports_web_search": false
     },
     "openrouter/~deepseek/deepseek-pro-latest": {
-        "cache_read_input_token_cost": 1.8396e-08,
-        "input_cost_per_token": 5.7816e-07,
+        "cache_read_input_token_cost": 1.7556e-08,
+        "input_cost_per_token": 5.2668e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 393216,
-        "max_tokens": 393216,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.73448e-06,
+        "output_cost_per_token": 1.58004e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -71431,14 +71569,14 @@
         "supports_web_search": true
     },
     "openrouter/~z-ai/glm-flash-latest": {
-        "cache_read_input_token_cost": 1.5e-08,
-        "input_cost_per_token": 7.5e-08,
+        "cache_read_input_token_cost": 1.8e-08,
+        "input_cost_per_token": 9e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
+        "max_output_tokens": 943718,
+        "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 3e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -71451,14 +71589,14 @@
         "supports_web_search": false
     },
     "openrouter/~z-ai/glm-latest": {
-        "cache_read_input_token_cost": 1.5678e-07,
-        "input_cost_per_token": 8.442e-07,
+        "cache_read_input_token_cost": 1.69e-07,
+        "input_cost_per_token": 9.1e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1310720,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 2.6532e-06,
+        "output_cost_per_token": 2.86e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -71953,6 +72091,7 @@
         "supports_web_search": false
     },
     "openrouter/baidu/ernie-4.5-vl-424b-a47b": {
+        "deprecation_date": "2026-10-08",
         "input_cost_per_token": 4.2e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 123000,
@@ -72884,13 +73023,13 @@
     },
     "openrouter/meta/muse-glimmer-30b": {
         "cache_read_input_token_cost": 4e-08,
-        "input_cost_per_token": 3.5e-07,
+        "input_cost_per_token": 3e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 131072,
-        "max_output_tokens": 117964,
-        "max_tokens": 117964,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 1.2e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,

@@ -214,6 +214,7 @@ if TYPE_CHECKING:
     from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
     from litellm.litellm_core_utils.llm_cost_calc.utils import BilledTokenRates
     from litellm.llms.base_llm.passthrough.transformation import PassthroughStreamCollector
+    from litellm.proxy.hooks.autorouter_baseline_cache import BaselineCacheContext, CapturedBaselineObservation
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -503,6 +504,8 @@ class Logging(LiteLLMLoggingBaseClass):
     litellm_request_debug: bool = False
     streamed_anthropic_message_id: str | None = None
     classifier_input: Mapping[str, JsonValue] | None = None
+    baseline_cache_context: "BaselineCacheContext | None" = None
+    baseline_observation: "CapturedBaselineObservation | None" = None
 
     def __init__(
         self,
@@ -510,7 +513,7 @@ class Logging(LiteLLMLoggingBaseClass):
         messages,
         stream,
         call_type,
-        start_time,
+        start_time: datetime.datetime,
         litellm_call_id: str,
         function_id: str,
         litellm_trace_id: str | None = None,
@@ -2183,6 +2186,7 @@ class Logging(LiteLLMLoggingBaseClass):
         logging_result,
         start_time,
         end_time,
+        build_logging_payload: bool = True,
     ):
         """Resolve hidden params, compute response cost, and emit the standard logging payload."""
         hidden_params: Final = getattr(logging_result, "_hidden_params", {})
@@ -2207,6 +2211,9 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             self.model_call_details["response_cost"] = self._response_cost_calculator(result=logging_result)
 
+        if not build_logging_payload:
+            return
+
         self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
             logging_result, start_time, end_time
         )
@@ -2216,6 +2223,19 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         if standard_logging_payload is not None:
             emit_standard_logging_payload(standard_logging_payload)
+
+    async def _prepare_baseline_cache_estimate(self, response_obj: object) -> None:
+        if self.baseline_cache_context is None:
+            return
+        from litellm.proxy.hooks.autorouter_baseline_cache import finalize_baseline_cache
+
+        await finalize_baseline_cache(self, response_obj)
+
+    async def invalidate_baseline_cache_estimate(self, reason: str, *, completed: bool = False) -> None:
+        """Invalidate uncertain attempts; retire the reservation at logical completion."""
+        from litellm.proxy.hooks.autorouter_baseline_cache import invalidate_baseline_cache
+
+        await invalidate_baseline_cache(self, reason, completed=completed)
 
     def _build_standard_logging_payload(
         self, init_response_obj: object, start_time: Any, end_time: Any
@@ -2268,6 +2288,7 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time=None,
         cache_hit=None,
         standard_logging_object: StandardLoggingPayload | None = None,
+        build_logging_payload: bool = True,
     ):
         try:
             if start_time is None:
@@ -2305,6 +2326,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         logging_result=logging_result,
                         start_time=start_time,
                         end_time=end_time,
+                        build_logging_payload=build_logging_payload,
                     )
             elif standard_logging_object is not None:
                 self.model_call_details["standard_logging_object"] = standard_logging_object
@@ -3053,7 +3075,16 @@ class Logging(LiteLLMLoggingBaseClass):
             result=result,
             cache_hit=cache_hit,
             standard_logging_object=kwargs.get("standard_logging_object", None),
+            build_logging_payload=self.baseline_cache_context is None,
         )
+
+        if self.stream is not True and self.baseline_cache_context is not None:
+            await self._prepare_baseline_cache_estimate(result)
+            self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
+                result, start_time, end_time
+            )
+            if (prepared_payload := self.model_call_details.get("standard_logging_object")) is not None:
+                emit_standard_logging_payload(prepared_payload)
 
         ## BUILD COMPLETE STREAMED RESPONSE
         if "async_complete_streaming_response" in self.model_call_details:
@@ -3099,6 +3130,8 @@ class Logging(LiteLLMLoggingBaseClass):
 
             self._merge_hidden_params_from_response_into_metadata(complete_streaming_response)
 
+            await self._prepare_baseline_cache_estimate(complete_streaming_response)
+
             ## STANDARDIZED LOGGING PAYLOAD
             try:
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
@@ -3127,6 +3160,7 @@ class Logging(LiteLLMLoggingBaseClass):
             # Only build standard_logging_object if not already built by
             # _success_handler_helper_fn
             if self.model_call_details.get("standard_logging_object") is None:
+                await self._prepare_baseline_cache_estimate(result)
                 ## STANDARDIZED LOGGING PAYLOAD
                 self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
                     result, start_time, end_time
@@ -3633,6 +3667,8 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         Implementing async callbacks, to handle asyncio event loop issues when custom integrations need to use async functions.
         """
+        if self.baseline_cache_context is not None:
+            await self.invalidate_baseline_cache_estimate("failed_request")
         await self.special_failure_handlers(exception=exception)
         if not self.should_run_logging(event_type="async_failure"):  # prevent double logging
             return
@@ -5530,6 +5566,10 @@ class StandardLoggingPayloadSetup:
             for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
                 clean_metadata[key] = metadata[key]
 
+            recorded_guardrails: Final = metadata.get("applied_guardrails")
+            if applied_guardrails and isinstance(recorded_guardrails, list):
+                clean_metadata["applied_guardrails"] = list(dict.fromkeys([*applied_guardrails, *recorded_guardrails]))
+
             user_api_key: Final = metadata.get("user_api_key")
             if user_api_key and isinstance(user_api_key, str) and is_valid_sha256_hash(user_api_key):
                 clean_metadata["user_api_key_hash"] = user_api_key
@@ -6151,6 +6191,8 @@ def _autorouter_savings_for_payload(
     model_id: str | None,
     usage_object: Mapping[str, object] | None,
     cost_breakdown: Mapping[str, object] | None,
+    baseline_usage: Usage | None = None,
+    baseline_provenance: Literal["observed_initial", "modeled"] | None = None,
 ) -> float | None:
     """The auto-router savings figure for the payload, or ``None`` when there is none.
 
@@ -6169,6 +6211,8 @@ def _autorouter_savings_for_payload(
             model_id=model_id,
             usage_object=usage_object,
             cost_breakdown=cost_breakdown,
+            baseline_usage=baseline_usage,
+            baseline_provenance=baseline_provenance,
         )
     except Exception as e:  # noqa: BLE001  # a savings figure must never fail request logging
         verbose_logger.debug("autorouter savings skipped on logging payload: %s", e)
@@ -6386,13 +6430,18 @@ def get_standard_logging_object_payload(
                 response_time=end_time_float - start_time_float,
             )
         )
-        autorouter_savings: Final = _autorouter_savings_for_payload(
-            request_metadata=metadata,
-            model=model_name,
-            custom_llm_provider=custom_llm_provider,
-            model_id=_model_id,
-            usage_object=usage_dict,
-            cost_breakdown=request_cost_breakdown,
+        captured_baseline: Final = logging_obj.baseline_observation
+        autorouter_savings: Final = (
+            None
+            if status != "success" or cache_hit or logging_obj.baseline_cache_context is not None
+            else _autorouter_savings_for_payload(
+                request_metadata=metadata,
+                model=model_name,
+                custom_llm_provider=custom_llm_provider,
+                model_id=_model_id,
+                usage_object=usage_dict,
+                cost_breakdown=request_cost_breakdown,
+            )
         )
 
         payload: Final[StandardLoggingPayload] = StandardLoggingPayload(
@@ -6441,6 +6490,26 @@ def get_standard_logging_object_payload(
             response_impact=response_impact,
             response_impact_failure_debug_info=response_impact_failure_debug_info,
             autorouter_savings=autorouter_savings,
+            autorouter_savings_estimate=(
+                {
+                    "version": 3,
+                    "status": "unknown",
+                    "reason": "pending_projection",
+                }  # mutable-ok: spend-log JSON serialization requires plain mappings
+                if captured_baseline is not None
+                else (
+                    {  # mutable-ok: spend-log JSON serialization requires plain mappings
+                        "version": 1,
+                        "status": "estimated" if autorouter_savings is not None else "unknown",
+                        "reason": "uncached_usage" if autorouter_savings is not None else "baseline_unavailable",
+                    }
+                    if metadata.get("routing_decision")
+                    else None
+                )
+            ),
+            autorouter_baseline_observation=(
+                captured_baseline.model_dump_json() if captured_baseline is not None else None
+            ),
             total_tokens=usage_dict.get("total_tokens", 0),
             prompt_tokens=usage_dict.get("prompt_tokens", 0),
             completion_tokens=usage_dict.get("completion_tokens", 0),

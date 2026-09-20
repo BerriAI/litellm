@@ -200,8 +200,8 @@ class GitLabTemplateManager:
             metadata=metadata,
         )
 
-    def _parse_yaml_basic(self, yaml_str: str) -> dict[str, Any]:
-        result: Final[dict[str, Any]] = {}
+    def _parse_yaml_basic(self, yaml_str: str) -> dict[str, bool | int | float | str]:
+        result: Final[dict[str, bool | int | float | str]] = {}
         for line in yaml_str.split("\n"):
             line = line.strip()
             if ":" in line and not line.startswith("#"):

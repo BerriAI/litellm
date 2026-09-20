@@ -1169,10 +1169,22 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             choice.index for response in responses_so_far for choice in response.choices
         )
         fragments_by_tool_call: Final = self._function_tool_call_fragments(responses_so_far)
-        if len(stream_choice_indices) != 1 or len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
+        if len(stream_choice_indices) != 1:
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the stream carries {len(stream_choice_indices)} choices and tool-call rewrites are only written "
+                "back on single-choice streams",
+            )
+        if len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
+                f"{len(fragments_by_tool_call)}",
+            )
         for before, (name, arguments), fragments in zip(
             pre_guardrail_tool_calls, post_guardrail_tool_calls, fragments_by_tool_call
         ):

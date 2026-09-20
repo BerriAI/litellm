@@ -56,8 +56,6 @@ if litellm_mode == "DEV":
     load_dotenv()
 from enum import Enum
 
-telemetry: Final = None
-
 
 class LiteLLMDatabaseConnectionPool(Enum):
     database_connection_pool_limit = 10
@@ -758,9 +756,11 @@ class ProxyInitializationHelpers:
 )
 @click.option(
     "--telemetry",
-    default=True,
+    default=None,
     type=bool,
-    help="Helps us know if people are using this feature. Turn this off by doing `--telemetry False`",
+    hidden=True,
+    expose_value=False,
+    help="Deprecated no-op kept so existing start commands still parse",
 )
 @click.option(
     "--log_config",
@@ -977,7 +977,6 @@ def run_server(
     add_function_to_prompt,
     config,
     max_budget,
-    telemetry,
     test,
     local,
     num_workers,
@@ -1082,7 +1081,6 @@ def run_server(
             max_tokens=max_tokens,
             request_timeout=request_timeout,
             max_budget=max_budget,
-            telemetry=telemetry,
             drop_params=drop_params,
             add_function_to_prompt=add_function_to_prompt,
             headers=headers,

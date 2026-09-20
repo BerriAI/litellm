@@ -3188,6 +3188,214 @@ class TestMcpToolSearchSettingsEndpoints:
         assert mock_proxy_config["save_call_count"]() == 0
 
 
+class TestWebSearchInterceptionSettingsEndpoints:
+    @staticmethod
+    def _override_auth(role: LitellmUserRoles):
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="u", api_key="hashed", user_role=role
+        )
+
+    def test_get_returns_stored_values_and_field_schema(self, mock_proxy_config, mock_auth, monkeypatch):
+        import litellm
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="running")])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+            "enabled": True,
+            "enabled_providers": ["bedrock", "vertex_ai"],
+            "search_tool_name": "my-perplexity-search",
+        }
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"] == {
+            "enabled": True,
+            "enabled_providers": ["bedrock", "vertex_ai"],
+            "search_tool_name": "my-perplexity-search",
+            "max_agentic_loops": None,
+        }
+        assert resp.json()["field_schema"]["properties"]["enabled_providers"]["type"] == "array"
+
+    def test_update_requires_proxy_admin(self, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.INTERNAL_USER)
+        try:
+            resp = client.patch("/update/websearch_interception_settings", json={"enabled": True})
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 403
+        assert "proxy admin" in resp.json()["detail"].lower()
+
+    def test_update_persists_settings(self, mock_proxy_config, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        payload = {
+            "enabled": True,
+            "enabled_providers": ["bedrock"],
+            "search_tool_name": "my-perplexity-search",
+            "max_agentic_loops": 5,
+        }
+        try:
+            resp = client.patch("/update/websearch_interception_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert mock_proxy_config["save_call_count"]() == 1
+        assert mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] == payload
+
+    def test_get_reports_enabled_while_the_callback_is_running_without_a_stored_flag(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="from-config")])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+            "enabled_providers": ["bedrock"],
+            "search_tool_name": "my-perplexity-search",
+        }
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"]["enabled"] is True
+
+    def test_get_reports_disabled_when_nothing_is_stored_and_nothing_is_running(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+            "enabled_providers": ["bedrock"],
+        }
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"]["enabled"] is False
+        assert resp.json()["values"]["enabled_providers"] == ["bedrock"]
+
+    def test_update_reapplies_settings_to_the_running_proxy(self, mock_proxy_config, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        reapply = AsyncMock()
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config.init_websearch_interception_settings_in_db",
+            reapply,
+        )
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        try:
+            resp = client.patch("/update/websearch_interception_settings", json={"enabled": True})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        reapply.assert_awaited_once()
+
+    def test_get_keeps_the_stored_flag_when_this_pod_has_not_reinitialized(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {
+            "enabled": True,
+            "search_tool_name": "cluster-search",
+        }
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"]["enabled"] is True
+
+    def test_get_flags_a_pod_that_has_not_applied_the_stored_setting(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {"enabled": True}
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["values"]["enabled"] is True
+        assert resp.json()["active_on_this_pod"] is False
+
+    def test_get_reports_the_pod_as_active_once_the_callback_is_registered(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        import litellm
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(search_tool_name="running")])
+        mock_proxy_config["config"]["litellm_settings"]["websearch_interception_params"] = {"enabled": True}
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["active_on_this_pod"] is True
+
+    def test_get_reports_no_database_instead_of_empty_settings(self, mock_proxy_config, mock_auth, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+        resp = client.get("/get/websearch_interception_settings")
+
+        assert resp.status_code == 500, resp.text
+        assert "Database not connected" in resp.json()["detail"]["error"]
+
+    def test_update_still_saves_when_the_live_reinit_fails(self, mock_proxy_config, monkeypatch):
+        from unittest.mock import AsyncMock
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.proxy_config.init_websearch_interception_settings_in_db",
+            AsyncMock(side_effect=RuntimeError("callback blew up")),
+        )
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        try:
+            resp = client.patch("/update/websearch_interception_settings", json={"enabled": True})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        assert mock_proxy_config["save_call_count"]() == 1
+
+    def test_update_rejects_zero_max_agentic_loops(self, mock_proxy_config, monkeypatch):
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        try:
+            resp = client.patch(
+                "/update/websearch_interception_settings",
+                json={"enabled": True, "max_agentic_loops": 0},
+            )
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 422
+        assert mock_proxy_config["save_call_count"]() == 0
+
+
 def test_upload_logo_requires_proxy_admin(monkeypatch):
     """Any authenticated key could previously write a file to the server's disk here."""
     from litellm.proxy._types import UserAPIKeyAuth
