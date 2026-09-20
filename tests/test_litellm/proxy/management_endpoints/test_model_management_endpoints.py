@@ -4114,6 +4114,35 @@ class TestModelInfoCostMapEchoFilter:
         info = json.loads(result["model_info"])
         assert "max_input_tokens" not in info, info
 
+    def test_reset_to_a_remote_catalog_value_that_differs_from_the_bundled_one(self, monkeypatch: pytest.MonkeyPatch):
+        from types import MappingProxyType
+
+        import litellm
+
+        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        bundled = litellm.get_model_info("openai/gpt-5.6")
+        remote = {**bundled, "max_input_tokens": bundled["max_input_tokens"] + 1}
+        monkeypatch.setattr(
+            GetModelCostMap, "_loaded_catalog", MappingProxyType({remote["key"]: MappingProxyType(remote)})
+        )
+        monkeypatch.setattr(litellm, "get_model_info", lambda model, **_: {**remote, "max_input_tokens": 2048})
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="dep-echo-9", max_input_tokens=2048),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**{**remote, "id": "dep-echo-9", "db_model": True})),
+        )
+
+        info = json.loads(result["model_info"])
+        assert "max_input_tokens" not in info, info
+
     def test_echo_is_compared_against_the_deployments_lookup_not_the_key(self):
         import litellm
 

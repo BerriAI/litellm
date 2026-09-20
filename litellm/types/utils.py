@@ -3786,7 +3786,7 @@ def echoed_cost_map_fields(model_info: Mapping[str, Any], *cost_map_entries: Map
     response. Anything in it that still equals a resolved cost-map entry is a display value
     nobody typed; a value the operator edited differs from every entry and stays a real override.
     Callers pass both the live entry, which the router rewrites with each deployment's own
-    overrides, and the bundled entry, so a reset to the catalog value reads as an echo either way.
+    overrides, and the catalog entry as loaded, so a reset to the catalog value reads as an echo either way.
     """
     if COST_MAP_LOOKUP_KEY not in model_info:
         return ()

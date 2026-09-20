@@ -888,11 +888,11 @@ def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, obje
         return MappingProxyType({})
 
 
-def _bundled_cost_map_entry(incoming_model_info: Mapping[str, object]) -> Mapping[str, object]:
+def _loaded_catalog_entry(incoming_model_info: Mapping[str, object]) -> Mapping[str, object]:
     catalog_key: Final = incoming_model_info.get(COST_MAP_LOOKUP_KEY)
     if not isinstance(catalog_key, str):
         return MappingProxyType({})
-    return GetModelCostMap.bundled_model_cost_map().get(catalog_key, MappingProxyType({}))
+    return GetModelCostMap.loaded_model_cost_map().get(catalog_key, MappingProxyType({}))
 
 
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
@@ -921,7 +921,7 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
         echoed_fields: Final = echoed_cost_map_fields(
             incoming_model_info,
             _cost_map_entry(db_model, incoming_model_info),
-            _bundled_cost_map_entry(incoming_model_info),
+            _loaded_catalog_entry(incoming_model_info),
         )
         merged_model_info.update(
             MappingProxyType(
