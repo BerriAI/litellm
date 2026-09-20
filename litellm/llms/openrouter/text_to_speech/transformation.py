@@ -32,7 +32,7 @@ class OpenrouterTextToSpeechConfig(BaseTextToSpeechConfig):
         drop_params: bool = False,
         kwargs: dict | None = None,  # mutable-ok: override abstract method signature
     ) -> tuple[str | None, dict]:  # mutable-ok: override abstract method signature
-        mapped_voice: Final[str | None] = str(voice) if voice is not None else None
+        mapped_voice: Final[str | None] = voice if isinstance(voice, str) else None
         return mapped_voice, optional_params
 
     def validate_environment(
@@ -47,11 +47,20 @@ class OpenrouterTextToSpeechConfig(BaseTextToSpeechConfig):
     def is_trusted_api_base(self, api_base: str | None) -> bool:
         if not api_base:
             return True
-        configured_base: Final = get_secret_str("OPENROUTER_API_BASE") or litellm.api_base or self.DEFAULT_BASE_URL
-        if api_base.rstrip("/") == configured_base.rstrip("/"):
-            return True
         parsed: Final = urlparse(api_base)
-        return parsed.netloc == "openrouter.ai" or parsed.netloc.endswith(".openrouter.ai")
+        scheme: Final = parsed.scheme.lower()
+        if scheme != "https":
+            configured_base: Final = get_secret_str("OPENROUTER_API_BASE") or litellm.api_base
+            return bool(
+                configured_base is not None
+                and api_base.rstrip("/") == configured_base.rstrip("/")
+                and parsed.hostname in ("localhost", "127.0.0.1")
+            )
+        configured_base: Final = get_secret_str("OPENROUTER_API_BASE") or litellm.api_base
+        if configured_base is not None and api_base.rstrip("/") == configured_base.rstrip("/"):
+            return True
+        hostname: Final = parsed.hostname or ""
+        return hostname == "openrouter.ai" or hostname.endswith(".openrouter.ai")
 
     def resolve_api_base_and_key(
         self,
