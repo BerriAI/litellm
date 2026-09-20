@@ -108,18 +108,23 @@ async def _estimate_compressible_tokens(model: object, messages: list[dict[str, 
 
     Only rows whose flattened content is a plain string count: the service
     passes list-of-parts rows through untouched, so their tokens can never
-    turn into savings. A disabled global counter reports 0 for everything,
-    so None keeps that case on the compression path.
+    turn into savings. None keeps the request on the compression path: a
+    disabled global counter reports 0 for everything, and a row shape the
+    counter rejects must not turn into a failed request.
     """
     if litellm.disable_token_counter:
         return None
     string_rows: Final = [m for m in messages if isinstance(m.get("content"), str)]
     if not string_rows:
         return 0
-    return await offload_token_count(token_counter)(
-        model=model if isinstance(model, str) else "",
-        messages=string_rows,
-    )
+    try:
+        return await offload_token_count(token_counter)(
+            model=model if isinstance(model, str) else "",
+            messages=string_rows,
+        )
+    except ValueError as e:
+        verbose_proxy_logger.debug("Headroom: token estimate unavailable, compressing: %s", e)
+        return None
 
 
 def _restore_content_shapes(

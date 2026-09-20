@@ -381,6 +381,24 @@ async def test_apply_guardrail_min_tokens_ignores_rows_the_service_cannot_compre
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_compresses_when_a_row_shape_cannot_be_counted():
+    odd_row = {"role": "user", "content": "Run it.", "tool_calls": "not-a-list"}
+    messages = [ORIGINAL_MESSAGES[0], odd_row, ORIGINAL_MESSAGES[2], ORIGINAL_MESSAGES[3]]
+    inputs = GenericGuardrailAPIInputs(texts=["Run it."], structured_messages=messages)
+    request_data = {"model": "gpt-4o"}
+    guardrail = _make_guardrail(min_tokens=1_000_000)
+
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock, return_value=_make_compress_response([odd_row])
+    ) as post:
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+
+    post.assert_awaited_once()
+    assert result["structured_messages"] is not None
+    assert "skipped" not in _recorded_guardrail_response(request_data)
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_compresses_when_token_counter_disabled(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_token_counter", True)
     short_messages = [
