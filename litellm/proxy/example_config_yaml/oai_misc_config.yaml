@@ -38,7 +38,6 @@ litellm_settings:
   # budget_duration: 30d
   num_retries: 5
   request_timeout: 600
-  telemetry: False
   context_window_fallbacks: [{"gpt-5-mini": ["gpt-5.5"]}]
   default_team_settings: 
     - team_id: team-1
