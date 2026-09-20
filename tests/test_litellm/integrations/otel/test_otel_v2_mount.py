@@ -199,6 +199,24 @@ def test_proxy_response_omits_trace_id_without_a_recording_span(monkeypatch):
     assert LITELLM_TRACE_ID_HEADER not in response.headers
 
 
+def test_proxy_websocket_bypasses_trace_correlation(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    app = fastapi.FastAPI()
+
+    @app.websocket("/socket")
+    async def socket(websocket: fastapi.WebSocket):
+        await websocket.accept()
+        await websocket.send_text("connected")
+
+    logger = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", logger._tracer_provider)
+    instrument_fastapi_app(app)
+
+    with TestClient(app).websocket_connect("/socket") as websocket:
+        assert websocket.receive_text() == "connected"
+
+
 def test_logger_and_instrumentor_share_provider():
     """Gen-ai spans (logger) and server spans (instrumentor) write to one provider."""
     _, logger = _instrumented_app()
