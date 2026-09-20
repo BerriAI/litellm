@@ -6328,3 +6328,148 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+_GROUNDING_METADATA: Final = {
+    "webSearchQueries": ["current price of gold"],
+    "groundingChunks": [
+        {"web": {"uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC123", "title": "kitco"}},
+        {"web": {"uri": "https://vertexaisearch.cloud.google.com/grounding-api-redirect/DeF456", "title": "reuters"}},
+    ],
+    "groundingSupports": [
+        {"segment": {"startIndex": 0, "endIndex": 42}, "groundingChunkIndices": [0]},
+        {"segment": {"startIndex": 43, "endIndex": 80}, "groundingChunkIndices": [1]},
+    ],
+}
+_GROUNDED_TEXT: Final = "As of today spot gold trades near $4,270"
+_GROUNDING_URIS: Final = [
+    "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC123",
+    "https://vertexaisearch.cloud.google.com/grounding-api-redirect/DeF456",
+]
+
+
+def _gemini_stream_iterator():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
+
+    logging_obj = MagicMock()
+    logging_obj.optional_params = {}
+    return ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
+
+
+def _delta_annotations(model_response):
+    found: list = []
+    for choice in model_response.choices:
+        annotations = getattr(getattr(choice, "delta", None), "annotations", None)
+        if annotations:
+            found.extend(annotations)
+    return found
+
+
+def _citation_urls(annotations):
+    return [annotation["url_citation"]["url"] for annotation in annotations]
+
+
+def test_streaming_grounding_on_the_final_chunk_produces_annotations():
+    """Gemini often sends groundingMetadata on a candidate with finishReason and no parts"""
+    iterator = _gemini_stream_iterator()
+    iterator.chunk_parser({"candidates": [{"index": 0, "content": {"role": "model", "parts": [{"text": _GROUNDED_TEXT}]}}]})
+
+    final = iterator.chunk_parser(
+        {"candidates": [{"index": 0, "finishReason": "STOP", "groundingMetadata": _GROUNDING_METADATA}]}
+    )
+
+    assert _citation_urls(_delta_annotations(final)) == _GROUNDING_URIS
+
+
+def test_streaming_grounding_alongside_text_produces_annotations():
+    """The shape that already worked keeps working"""
+    iterator = _gemini_stream_iterator()
+
+    chunk = iterator.chunk_parser(
+        {
+            "candidates": [
+                {
+                    "index": 0,
+                    "content": {"role": "model", "parts": [{"text": _GROUNDED_TEXT}]},
+                    "groundingMetadata": _GROUNDING_METADATA,
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+    )
+
+    annotations = _delta_annotations(chunk)
+    assert _citation_urls(annotations) == _GROUNDING_URIS
+    assert annotations[0]["type"] == "url_citation"
+    assert annotations[0]["url_citation"]["start_index"] == 0
+
+
+def test_streaming_without_grounding_carries_no_annotations():
+    iterator = _gemini_stream_iterator()
+
+    chunk = iterator.chunk_parser(
+        {"candidates": [{"index": 0, "content": {"role": "model", "parts": [{"text": "Paris."}]}, "finishReason": "STOP"}]}
+    )
+
+    assert _delta_annotations(chunk) == []
+
+
+def test_streaming_grounding_without_web_chunks_carries_no_annotations():
+    """Maps grounding has no web URI to cite, so it must not invent one"""
+    iterator = _gemini_stream_iterator()
+
+    chunk = iterator.chunk_parser(
+        {
+            "candidates": [
+                {
+                    "index": 0,
+                    "finishReason": "STOP",
+                    "groundingMetadata": {
+                        "groundingChunks": [{"maps": {"placeId": "abc"}}],
+                        "groundingSupports": [
+                            {"segment": {"startIndex": 0, "endIndex": 5}, "groundingChunkIndices": [0]}
+                        ],
+                    },
+                }
+            ]
+        }
+    )
+
+    assert _delta_annotations(chunk) == []
+
+
+def test_non_streaming_grounding_annotations_are_unchanged():
+    model_response = ModelResponse()
+    VertexGeminiConfig._process_candidates(
+        [
+            {
+                "index": 0,
+                "content": {"role": "model", "parts": [{"text": _GROUNDED_TEXT}]},
+                "groundingMetadata": _GROUNDING_METADATA,
+                "finishReason": "STOP",
+            }
+        ],
+        model_response,
+        {},
+    )
+
+    annotations = getattr(model_response.choices[-1].message, "annotations", None)
+    assert _citation_urls(annotations or []) == _GROUNDING_URIS
+
+
+def test_streamed_grounding_survives_reassembly():
+    """A client rebuilding the stream ends up with the citations a non-streaming call returns"""
+    iterator = _gemini_stream_iterator()
+    chunks = [
+        iterator.chunk_parser(
+            {"candidates": [{"index": 0, "content": {"role": "model", "parts": [{"text": _GROUNDED_TEXT}]}}]}
+        ),
+        iterator.chunk_parser(
+            {"candidates": [{"index": 0, "finishReason": "STOP", "groundingMetadata": _GROUNDING_METADATA}]}
+        ),
+    ]
+
+    rebuilt = litellm.stream_chunk_builder(chunks=[chunk for chunk in chunks if chunk is not None])
+
+    assert rebuilt is not None
+    assert _citation_urls(getattr(rebuilt.choices[0].message, "annotations", None) or []) == _GROUNDING_URIS

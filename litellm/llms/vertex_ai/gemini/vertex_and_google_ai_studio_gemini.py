@@ -2218,6 +2218,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 continue
 
             image_response: list[ImageURLListItem] | None = None
+            content: str | None = None
             chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
             chat_completion_logprobs: ChoiceLogprobs | None = None
             tools: list[ChatCompletionToolCallChunk] | None = None
@@ -2279,13 +2280,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if reasoning_content is not None:
                     chat_completion_message["reasoning_content"] = reasoning_content
 
-                if candidate_grounding_metadata:
-                    annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
-                        grounding_metadata=candidate_grounding_metadata,
-                        content_text=content,
-                    )
-                    if annotations:
-                        chat_completion_message["annotations"] = annotations
                 (
                     functions,
                     tools,
@@ -2295,6 +2289,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     cumulative_tool_call_idx=cumulative_tool_call_index,
                     is_function_call=is_function_call(standard_optional_params),
                 )
+
+            # Outside the "content"/"parts" branch on purpose. Gemini does not
+            # promise to put groundingMetadata on a chunk that also carries text:
+            # streaming commonly delivers it on the final candidate, which has a
+            # finishReason and no parts at all. Converting only when parts were
+            # present dropped the citations for exactly those responses, which is
+            # why the same prompt produced annotations on some runs and not
+            # others while non-streaming -- one candidate, always with parts --
+            # produced them every time.
+            if candidate_grounding_metadata:
+                annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
+                    grounding_metadata=candidate_grounding_metadata,
+                    content_text=content,
+                )
+                if annotations:
+                    chat_completion_message["annotations"] = annotations
 
             if "logprobsResult" in candidate:
                 chat_completion_logprobs = VertexGeminiConfig._transform_logprobs(
