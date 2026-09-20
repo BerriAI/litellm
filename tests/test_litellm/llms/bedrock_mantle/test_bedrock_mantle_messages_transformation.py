@@ -79,7 +79,10 @@ _SSE_EVENTS = (
         },
     ),
     ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-    ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "pong"}}),
+    (
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "pong"}},
+    ),
     ("content_block_stop", {"type": "content_block_stop", "index": 0}),
     ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}),
     ("message_stop", {"type": "message_stop"}),
@@ -152,7 +155,10 @@ class TestURL:
 
     def test_default_host_comes_from_mantle_region_env(self, monkeypatch):
         monkeypatch.setenv("BEDROCK_MANTLE_REGION", "ap-northeast-1")
-        assert build_mantle_native_messages_url(None, {}) == f"https://bedrock-mantle.ap-northeast-1.api.aws{MESSAGES_PATH}"
+        assert (
+            build_mantle_native_messages_url(None, {})
+            == f"https://bedrock-mantle.ap-northeast-1.api.aws{MESSAGES_PATH}"
+        )
 
     def test_config_get_complete_url_reads_litellm_params(self):
         config = BedrockMantleAnthropicMessagesConfig()
@@ -344,3 +350,116 @@ class TestWireRequest:
         authorization = route.calls.last.request.headers["authorization"]
         assert authorization.startswith("AWS4-HMAC-SHA256")
         assert "/us-east-1/bedrock/aws4_request" in authorization
+
+
+def _sent_betas(route: respx.Route) -> list[str]:
+    return route.calls.last.request.headers["anthropic-beta"].split(",")
+
+
+@pytest.mark.usefixtures("local_beta_headers_config")
+class TestBetaHeadersOnTheWire:
+    async def _send(self, **request_params) -> respx.Route:
+        route = _mantle_messages_route("us-east-1").mock(return_value=_anthropic_response())
+        await litellm.anthropic_messages(
+            model="bedrock_mantle/anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "ping"}],
+            max_tokens=8,
+            api_key="test-bearer",
+            aws_region_name="us-east-1",
+            **request_params,
+        )
+        return route
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_betas_mantle_accepts_reach_it_in_the_header(self):
+        route = await self._send(
+            extra_headers={
+                "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27"
+            }
+        )
+
+        assert _sent_betas(route) == [
+            "claude-code-20250219",
+            "context-management-2025-06-27",
+            "interleaved-thinking-2025-05-14",
+        ]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_betas_mantle_rejects_are_dropped_before_the_request(self):
+        route = await self._send(
+            extra_headers={"anthropic-beta": "code-execution-2025-08-25,context-1m-2025-08-07,files-api-2025-04-14"}
+        )
+
+        assert _sent_betas(route) == ["context-1m-2025-08-07"]
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_no_beta_header_is_sent_when_every_value_is_rejected(self):
+        route = await self._send(extra_headers={"anthropic-beta": "code-execution-2025-08-25"})
+
+        assert "anthropic-beta" not in route.calls.last.request.headers
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_advanced_tool_use_is_renamed_to_the_beta_mantle_knows(self):
+        route = await self._send(extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"})
+
+        assert "tool-search-tool-2025-10-19" in _sent_betas(route)
+        assert "advanced-tool-use-2025-11-20" not in _sent_betas(route)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_a_feature_beta_joins_the_callers_betas_in_the_header(self):
+        route = await self._send(
+            extra_headers={"anthropic-beta": "context-1m-2025-08-07"},
+            context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
+        )
+
+        assert _sent_betas(route) == ["context-1m-2025-08-07", "context-management-2025-06-27"]
+        assert _sent_body(route)["context_management"] == {"edits": [{"type": "clear_tool_uses_20250919"}]}
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_betas_and_version_never_travel_in_the_body(self):
+        route = await self._send(
+            extra_headers={"anthropic-beta": "context-1m-2025-08-07"},
+            context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
+            anthropic_version="bedrock-2023-05-31",
+        )
+
+        body = _sent_body(route)
+        assert "anthropic_beta" not in body
+        assert "anthropic_version" not in body
+        assert route.calls.last.request.headers["anthropic-version"] == "2023-06-01"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_clear_thinking_edit_is_forwarded_with_thinking_on(self):
+        edits = [{"type": "clear_thinking_20251015", "keep": "all"}, {"type": "clear_tool_uses_20250919"}]
+        route = await self._send(
+            context_management={"edits": edits},
+            thinking={"type": "adaptive"},
+        )
+
+        body = _sent_body(route)
+        assert body["context_management"] == {"edits": edits}
+        assert body["thinking"] == {"type": "adaptive"}
+        assert "context-management-2025-06-27" in _sent_betas(route)
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_tools_reach_mantle_unchanged(self):
+        tools = [
+            {
+                "name": "get_weather",
+                "description": "Look up the weather",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+            }
+        ]
+        route = await self._send(tools=tools, tool_choice={"type": "auto"})
+
+        body = _sent_body(route)
+        assert body["tools"] == tools
+        assert body["tool_choice"] == {"type": "auto"}
