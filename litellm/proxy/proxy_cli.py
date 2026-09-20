@@ -755,6 +755,14 @@ class ProxyInitializationHelpers:
     help="Set max budget for API calls - works for hosted models like OpenAI, TogetherAI, Anthropic, etc.`",
 )
 @click.option(
+    "--telemetry",
+    default=None,
+    type=bool,
+    hidden=True,
+    expose_value=False,
+    help="Deprecated no-op kept so existing start commands still parse",
+)
+@click.option(
     "--log_config",
     default=None,
     type=str,
