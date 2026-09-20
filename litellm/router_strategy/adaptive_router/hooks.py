@@ -86,7 +86,7 @@ def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _last_user_content(messages: list[dict[str, Any]] | None) -> str | None:
+def _last_user_content(messages: Sequence[Mapping[str, object]] | None) -> str | None:
     if not messages:
         return None
     for msg in reversed(messages):
