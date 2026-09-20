@@ -12,7 +12,8 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _get_highest_media_resolution,
     _extract_max_media_resolution_from_messages,
 )
-from litellm.types.llms.vertex_ai import BlobType
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.vertex_ai import BlobType, RequestBody
 from litellm.types.utils import Message
 
 
@@ -2781,3 +2782,64 @@ def test_gemini_server_side_tool_signature_not_duplicated_on_text():
     assert "thoughtSignature" not in text_part
     tool_call_part = next(p for p in parts if "toolCall" in p)
     assert tool_call_part["thoughtSignature"] == "server_side_signature"
+
+
+def _gemini_request_body(messages: list[AllMessageValues]) -> RequestBody:
+    return _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params={},
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+
+def test_mid_conversation_system_message_keeps_prompt_prefix_stable():
+    """Regression for #42104: a mid-conversation system message must not rewrite the cached prefix."""
+    turn_one: list[AllMessageValues] = [
+        {"role": "system", "content": "You are a helpful assistant"},
+        {"role": "user", "content": "first question"},
+    ]
+    turn_two: list[AllMessageValues] = turn_one + [
+        {"role": "assistant", "content": "first answer"},
+        {"role": "system", "content": "the user just enabled verbose mode"},
+        {"role": "user", "content": "second question"},
+    ]
+
+    first = _gemini_request_body(list(turn_one))
+    second = _gemini_request_body(list(turn_two))
+
+    assert second["system_instruction"] == first["system_instruction"]
+    assert second["contents"][: len(first["contents"])] == first["contents"]
+    assert {"text": "the user just enabled verbose mode"} in second["contents"][-1]["parts"]
+
+
+def test_leading_system_messages_are_hoisted_in_order():
+    body = _gemini_request_body(
+        [
+            {"role": "system", "content": "first instruction"},
+            {"role": "system", "content": [{"type": "text", "text": "second instruction"}]},
+            {"role": "user", "content": "hello"},
+        ]
+    )
+
+    assert body["system_instruction"]["parts"] == [
+        {"text": "first instruction"},
+        {"text": "second instruction"},
+    ]
+    assert body["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
+
+
+def test_system_message_without_leading_system_stays_inline():
+    body = _gemini_request_body(
+        [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi"},
+            {"role": "system", "content": "answer in JSON"},
+            {"role": "user", "content": "now what"},
+        ]
+    )
+
+    assert "system_instruction" not in body
+    assert body["contents"][-1]["parts"] == [{"text": "answer in JSON"}, {"text": "now what"}]

@@ -8,6 +8,7 @@ import json
 import os
 import re
 from collections.abc import Mapping
+from itertools import takewhile
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
@@ -1405,47 +1406,45 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     return ChatCompletionUserMessage(content=".", role="user")
 
 
+def _system_message_to_part(message: AllMessageValues) -> PartType | None:
+    if message["role"] != "system":
+        return None
+    content: Final = message["content"]
+    if isinstance(content, str):
+        return PartType(text=content)
+    if isinstance(content, list):
+        return PartType(text="".join(block.get("text") or "" for block in content))
+    return None
+
+
 def _transform_system_message(
     supports_system_message: bool, messages: list[AllMessageValues]
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
-    Extracts the system message from the openai message list.
+    Extracts the leading system messages from the openai message list.
 
-    Converts the system message to Gemini format
+    Only the leading run is hoisted into `system_instruction`. A system message sent
+    mid-conversation stays where it is, because `system_instruction` sits at the front of
+    the prompt, so hoisting it would rewrite the cached prefix on every turn.
+    Relevant Issue - https://github.com/BerriAI/litellm/issues/42104
 
     Returns
     - system_content_blocks: Optional[SystemInstructions] - the system message list in Gemini format.
     - messages: List[AllMessageValues] - filtered list of messages in OpenAI format (transformed separately)
     """
-    # Separate system prompt from rest of message
-    system_prompt_indices: Final = []
-    system_content_blocks: Final[list[PartType]] = []
-    if supports_system_message is True:
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                _system_content_block: PartType | None = None
-                if isinstance(message["content"], str):
-                    _system_content_block = PartType(text=message["content"])
-                elif isinstance(message["content"], list):
-                    system_text = ""
-                    for content in message["content"]:
-                        system_text += content.get("text") or ""
-                    _system_content_block = PartType(text=system_text)
-                if _system_content_block is not None:
-                    system_content_blocks.append(_system_content_block)
-                    system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
+    if supports_system_message is not True:
+        return None, messages
 
-    if len(system_content_blocks) > 0:
-        #########################################################
-        # If no messages are passed in, add a blank user message
-        # Relevant Issue - https://github.com/BerriAI/litellm/issues/13769
-        #########################################################
-        if len(messages) == 0:
-            messages.append(_default_user_message_when_system_message_passed())
-        #########################################################
-        return SystemInstructions(parts=system_content_blocks), messages
+    leading_system_messages: Final = tuple(takewhile(lambda message: message["role"] == "system", messages))
+    system_content_parts: Final = tuple(
+        part for part in map(_system_message_to_part, leading_system_messages) if part is not None
+    )
+    if len(system_content_parts) == 0:
+        return None, messages
 
-    return None, messages
+    #########################################################
+    # If no messages are left, add a blank user message
+    # Relevant Issue - https://github.com/BerriAI/litellm/issues/13769
+    #########################################################
+    remaining: Final = messages[len(leading_system_messages) :] or (_default_user_message_when_system_message_passed(),)
+    return SystemInstructions(parts=list(system_content_parts)), list(remaining)
