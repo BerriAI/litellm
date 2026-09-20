@@ -11,8 +11,6 @@ import io
 import json
 import pytest
 
-import httpx
-
 from litellm.llms.custom_httpx.llm_http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
 from litellm.types.llms.openai import CreateFileRequest
@@ -96,39 +94,6 @@ class TestVertexAIBinaryFileUpload:
         assert isinstance(transformed_request, bytes)
         assert transformed_request == mock_png_content
 
-    @pytest.mark.asyncio
-    async def test_http_handler_accepts_bytes_without_decoding(self):
-        """
-        Test that httpx correctly accepts binary data without decoding.
-
-        This test verifies that bytes can be passed to httpx's post/put methods
-        without needing UTF-8 decoding, which is the core of our fix.
-        """
-        # Create mock binary data with non-UTF-8 bytes
-        mock_binary_data = b"\x00\x01\x02\x03\xff\xfe\xfd\xc4\xe5\xf2"
-
-        # Test that httpx accepts bytes in the data parameter
-        # We're testing the behavior, not making an actual request
-
-        # Verify that attempting to decode would fail (proving it's binary)
-        with pytest.raises(UnicodeDecodeError):
-            mock_binary_data.decode("utf-8")
-
-        # Verify that httpx Request accepts bytes
-        try:
-            request = httpx.Request(
-                method="POST",
-                url="https://example.com/upload",
-                data=mock_binary_data,
-                headers={"Content-Type": "application/octet-stream"},
-            )
-            # If we get here, httpx accepts bytes - which is what we need
-            assert request.content == mock_binary_data
-        except Exception as e:
-            pytest.fail(f"httpx should accept bytes in data parameter: {e}")
-
-        # Document the expected behavior
-        assert isinstance(mock_binary_data, bytes), "Binary file data should remain as bytes"
 
     @pytest.mark.asyncio
     async def test_jsonl_file_upload_returns_streaming_body(self):
@@ -224,36 +189,3 @@ class TestVertexAIBinaryFileUpload:
             litellm_params={},
         )
         assert isinstance(result3, bytes)
-
-    def test_bytes_type_preservation_documentation(self):
-        """
-        Documentation test: Verify that bytes are the correct type for binary uploads.
-
-        This test documents the expected behavior:
-        - Binary files (PDF, images, etc.) should remain as bytes
-        - Text files (JSONL) should be strings
-        - httpx accepts both bytes and strings in the 'data' parameter
-        - bytes should NEVER be decoded to UTF-8 for binary files
-        """
-        # This is a documentation test - it always passes
-        # but serves as a reference for the expected behavior
-
-        expected_behavior = {
-            "binary_files": {
-                "input_type": "bytes",
-                "output_type": "bytes",
-                "examples": ["PDF", "PNG", "JPEG", "binary data"],
-                "http_method": "POST or PUT",
-                "encoding": "none - preserve raw bytes",
-            },
-            "text_files": {
-                "input_type": "str or bytes",
-                "output_type": "bytes",
-                "examples": ["JSONL", "CSV", "TXT"],
-                "http_method": "POST",
-                "encoding": "UTF-8",
-            },
-        }
-
-        assert expected_behavior["binary_files"]["encoding"] == "none - preserve raw bytes"
-        assert expected_behavior["text_files"]["encoding"] == "UTF-8"

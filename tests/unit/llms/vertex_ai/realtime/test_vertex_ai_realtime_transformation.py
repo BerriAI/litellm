@@ -391,11 +391,6 @@ def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog)
 async def test_async_realtime_does_not_forward_client_query_params_to_vertex_backend(
     monkeypatch,
 ):
-    """Regression: forwarding client ?model=/?intent= to the Vertex Live WSS URL causes 1007 errors.
-
-    Exercises ``async_realtime`` end-to-end so that re-adding ``_append_query_params``
-    (the reverted bug) would push ``model=``/``intent=`` onto the backend URL and fail here.
-    """
     import websockets
 
     from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -404,7 +399,7 @@ async def test_async_realtime_does_not_forward_client_query_params_to_vertex_bac
         access_token="tok", project="my-proj", location="us-central1"
     )
 
-    captured: dict = {}
+    captured = {}
 
     def fake_connect(url, *args, **kwargs):
         captured["url"] = url
@@ -412,25 +407,23 @@ async def test_async_realtime_does_not_forward_client_query_params_to_vertex_bac
 
     monkeypatch.setattr(websockets, "connect", fake_connect)
 
-    try:
-        await BaseLLMHTTPHandler().async_realtime(
-            model="gemini-live-2.5-flash-preview-native-audio-09-2025",
-            websocket=AsyncMock(),
-            logging_obj=MagicMock(),
-            provider_config=cfg,
-            headers={},
-            query_params={
-                "model": "gemini-live-2.5-flash-preview-native-audio-09-2025",
-                "intent": "chat",
-            },
-        )
-    except (RuntimeError, Exception):
-        pass
+    await BaseLLMHTTPHandler().async_realtime(
+        model="gemini-live-2.5-flash-preview-native-audio-09-2025",
+        websocket=AsyncMock(),
+        logging_obj=MagicMock(),
+        provider_config=cfg,
+        headers={},
+        query_params={
+            "model": "gemini-live-2.5-flash-preview-native-audio-09-2025",
+            "intent": "chat",
+        },
+    )
 
-    assert "url" in captured, "websockets.connect was never called"
     assert "?" not in captured["url"]
     assert "model=" not in captured["url"]
     assert "intent=" not in captured["url"]
+
+
 
 
 def test_vertex_function_call_output_omits_id():
