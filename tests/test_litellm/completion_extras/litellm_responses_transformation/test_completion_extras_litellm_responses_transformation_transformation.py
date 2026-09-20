@@ -4523,3 +4523,105 @@ def test_chunk_parser_falls_back_to_static_translation_for_unsupported_chunks():
     iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
     with pytest.raises(ValueError):
         iterator.chunk_parser("not a structured chunk")
+# ------------------------------------------------------------------------
+# #41109/#41117: duplicate message-item suppression and text merging
+# ------------------------------------------------------------------------
+
+
+def test_merge_text_merges_into_existing_text():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    merged = LiteLLMResponsesTransformationHandler._merge_text(
+        {"text": {"format": {"type": "text"}}}, {"verbosity": "high"}
+    )
+    assert merged == {"format": {"type": "text"}, "verbosity": "high"}
+
+    merged2 = LiteLLMResponsesTransformationHandler._merge_text({}, {"verbosity": "low"})
+    assert merged2 == {"verbosity": "low"}
+
+
+def test_map_optional_params_merges_response_format_and_verbosity_into_text():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    request: dict = {}
+    handler._map_optional_params_to_responses_api_request(
+        {"response_format": {"type": "json_object"}, "verbosity": "high"}, request
+    )
+    assert request["text"]["format"]["type"] == "json_object"
+    assert request["text"]["verbosity"] == "high"
+
+
+def test_duplicate_message_item_verbatim_repeat_is_dropped():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    # first message item streams its text
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "Hello"})
+
+    # a later message item starts (gpt-5.4+ multi-message turn, #37299)
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_2"}}
+    )
+
+    # deltas are buffered while the item is pending -> empty chunk
+    buffered = iterator.chunk_parser({"type": "response.output_text.delta", "delta": "Hello"})
+    assert buffered.choices[0].delta.content == ""
+
+    # item completes with only a verbatim repeat of the already-streamed text -> dropped
+    done = iterator.chunk_parser(
+        {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_2", "content": []}}
+    )
+    assert done.choices[0].delta.content != "Hello"
+
+
+def test_duplicate_message_item_new_content_is_flushed():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "Hello"})
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "item": {"type": "message", "id": "msg_3"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": " World"})
+
+    # item completes with new content: buffered text is flushed on the terminal event
+    done = iterator.chunk_parser(
+        {"type": "response.output_item.done", "item": {"type": "message", "id": "msg_3", "content": []}}
+    )
+    assert done.choices[0].delta.content == " World"
+
+
+def test_pending_message_buffer_ignores_unrelated_items_and_flushes_on_completed():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "A"})
+    iterator.chunk_parser(
+        {"type": "response.output_item.added", "item": {"type": "message", "id": "m"}}
+    )
+    iterator.chunk_parser({"type": "response.output_text.delta", "delta": "B"})
+
+    # an unrelated item completing leaves the message buffer alone
+    iterator.chunk_parser(
+        {"type": "response.output_item.done", "item": {"type": "function_call", "id": "fc_1"}}
+    )
+
+    # the terminal event flushes the buffered new content
+    done = iterator.chunk_parser({"type": "response.completed"})
+    assert done.choices[0].delta.content == "B"
+
+
