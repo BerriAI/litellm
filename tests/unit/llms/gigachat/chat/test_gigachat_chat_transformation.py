@@ -141,6 +141,25 @@ class TestValidateEnvironment:
         assert self.config._current_credentials == "my-creds"
         assert self.config._current_api_base == "https://my-api.example.com"
 
+    @patch(
+        f"{TRANSFORM_MODULE}.get_access_token",
+        side_effect=lambda credentials, litellm_params: f"token-for-{credentials}",
+    )
+    def test_falls_back_to_env_credentials_when_api_key_missing(
+        self, mock_get_token, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("GIGACHAT_CREDENTIALS", "env-creds")
+        result = self.config.validate_environment(
+            headers={},
+            model="GigaChat",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
+        assert result["Authorization"] == "Bearer token-for-env-creds"
+        assert self.config._current_credentials == "env-creds"
 
 
 class TestGetSupportedOpenAiParams:
