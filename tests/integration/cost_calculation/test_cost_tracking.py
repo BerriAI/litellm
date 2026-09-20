@@ -380,11 +380,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
         if case.response.content_type == "text/event-stream":
             _assert_stream_has_no_error(response.text)
-        rows: Final = (
-            poll_rows(key, len(responses))
-            if len(responses) > 1 or fallback_deployment is not None
-            else (poll_cost_row(key),)
-        )
+        rows: Final = poll_rows(key, len(responses))
         if isinstance(expected, RecountExpected):
             row: Final = rows[0]
             _assert_recount(case, expected, row)
@@ -417,7 +413,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert deployment is not None and team_id is not None and user_id is not None
             assert end_user_id is not None
             target_spend: Final = expected.spend * 3
-            rollups: Final = poll_rollups(key, team_id, user_id, end_user_id, 3, target_spend)
+            rollups: Final = poll_rollups(key, team_id, user_id, end_user_id, requests=3, spend=target_spend)
             assert approx_equal(rollups.key_spend, target_spend)
             assert approx_equal(rollups.team_spend, target_spend)
             assert approx_equal(rollups.user_spend, target_spend)
