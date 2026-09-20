@@ -693,6 +693,35 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return redacted_text["text"]
 
+    @staticmethod
+    def _resolve_overlapping_spans(
+        analyze_results: list[dict[str, Any]] | list[PresidioAnalyzeResponseItem],
+    ) -> list[dict[str, Any]]:
+        if not analyze_results:
+            return []
+
+        sorted_by_priority = sorted(
+            analyze_results,
+            key=lambda x: (
+                -x.get("score", 0),
+                -(x.get("end", 0) - x.get("start", 0)),
+                x.get("start", 0),
+            ),
+        )
+        accepted_spans: list[dict[str, Any]] = []
+        for candidate in sorted_by_priority:
+            c_start = candidate["start"]
+            c_end = candidate["end"]
+            overlaps = False
+            for acc in accepted_spans:
+                if max(c_start, acc["start"]) < min(c_end, acc["end"]):
+                    overlaps = True
+                    break
+            if not overlaps:
+                accepted_spans.append(candidate)
+
+        return sorted(accepted_spans, key=lambda x: x["start"])
+
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
@@ -718,9 +747,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens: Final = request_data["metadata"]["pii_tokens"]
 
+        valid_analyze_results = self._resolve_overlapping_spans(analyze_results)
+
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
-        sorted_forward: Final = sorted(analyze_results, key=lambda x: x["start"])
+        sorted_forward: Final = sorted(valid_analyze_results, key=lambda x: x["start"])
         seq_map: Final = {}
         for idx, ar in enumerate(sorted_forward, start=1):
             seq_map[(ar["start"], ar["end"])] = idx

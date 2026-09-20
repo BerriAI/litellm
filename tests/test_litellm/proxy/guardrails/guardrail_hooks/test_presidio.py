@@ -3114,6 +3114,99 @@ async def test_output_parse_pii_numbered_tokens_across_chunks():
     assert pii_tokens["<CREDIT_CARD_2>"] == CHUNK_MARKER_TWO
 
 
+def test_finalize_presidio_anonymize_numbered_tokens_overlapping_spans():
+    import re
+
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    text = "My name is John Smith, phone +1 415 555 2671, please check the order."
+    analyze_results = [
+        {"entity_type": "PERSON", "start": 11, "end": 21, "score": 0.9},
+        {"entity_type": "PHONE_NUMBER", "start": 29, "end": 44, "score": 0.85},
+        {"entity_type": "UK_NHS", "start": 32, "end": 44, "score": 0.6},
+    ]
+    request_data = {"metadata": {}}
+    masked_entity_count = {}
+    result = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=text,
+        analyze_results=analyze_results,
+        request_data=request_data,
+        masked_entity_count=masked_entity_count,
+    )
+    assert result == "My name is <PERSON_1>, phone <PHONE_NUMBER_2>, please check the order."
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert pii_tokens["<PERSON_1>"] == "John Smith"
+    assert pii_tokens["<PHONE_NUMBER_2>"] == "+1 415 555 2671"
+    assert "<UK_NHS_" not in pii_tokens
+    assert set(re.findall(r"<[A-Z_]+_\d+>", result)) == set(pii_tokens.keys())
+
+
+def test_finalize_presidio_anonymize_numbered_tokens_three_way_overlap():
+    import re
+
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    text = "Contact: +1 415 555 2671, please call soon."
+    analyze_results = [
+        {"entity_type": "PHONE_NUMBER", "start": 9, "end": 24, "score": 0.85},
+        {"entity_type": "US_BANK_NUMBER", "start": 12, "end": 24, "score": 0.75},
+        {"entity_type": "UK_NHS", "start": 16, "end": 24, "score": 0.6},
+    ]
+    request_data = {"metadata": {}}
+    masked_entity_count = {}
+    result = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=text,
+        analyze_results=analyze_results,
+        request_data=request_data,
+        masked_entity_count=masked_entity_count,
+    )
+    assert result == "Contact: <PHONE_NUMBER_1>, please call soon."
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert pii_tokens["<PHONE_NUMBER_1>"] == "+1 415 555 2671"
+    assert "<US_BANK_NUMBER_" not in pii_tokens
+    assert "<UK_NHS_" not in pii_tokens
+    assert set(re.findall(r"<[A-Z_]+_\d+>", result)) == set(pii_tokens.keys())
+
+
+def test_finalize_presidio_anonymize_numbered_tokens_identical_spans():
+    import re
+
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    text = "Account: 9876543210 status."
+    analyze_results = [
+        {"entity_type": "PHONE_NUMBER", "start": 9, "end": 19, "score": 0.85},
+        {"entity_type": "US_BANK_NUMBER", "start": 9, "end": 19, "score": 0.70},
+    ]
+    request_data = {"metadata": {}}
+    masked_entity_count = {}
+    result = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=text,
+        analyze_results=analyze_results,
+        request_data=request_data,
+        masked_entity_count=masked_entity_count,
+    )
+    assert result == "Account: <PHONE_NUMBER_1> status."
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert pii_tokens["<PHONE_NUMBER_1>"] == "9876543210"
+    assert "<US_BANK_NUMBER_" not in pii_tokens
+    assert set(re.findall(r"<[A-Z_]+_\d+>", result)) == set(pii_tokens.keys())
+
+
+def test_resolve_overlapping_spans_empty_and_disjoint():
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+
+    assert _OPTIONAL_PresidioPIIMasking._resolve_overlapping_spans([]) == []
+    disjoint = [
+        {"entity_type": "PERSON", "start": 0, "end": 5, "score": 0.9},
+        {"entity_type": "PHONE_NUMBER", "start": 10, "end": 20, "score": 0.8},
+    ]
+    assert _OPTIONAL_PresidioPIIMasking._resolve_overlapping_spans(disjoint) == disjoint
+
+
 @pytest.mark.asyncio
 async def test_analyze_text_chunked_failure_stays_fail_closed():
     """If one chunk still fails, the chunked path raises exactly like a single
