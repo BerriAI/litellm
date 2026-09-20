@@ -357,7 +357,12 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             total_tokens: Final = standard_logging_object.get("total_tokens", 0)
-            model: Final = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
+            model: Final = (
+                standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
+                or standard_logging_object.get("model")
+                or (kwargs.get("litellm_params") or {}).get("model")
+                or kwargs.get("model")
+            )
 
             verbose_router_logger.debug(
                 "[TPM TRACKING] model_id=%s, total_tokens=%s, model=%s", model_id, total_tokens, model
@@ -421,7 +426,12 @@ class ModelRateLimitingCheck(CustomLogger):
                 return
 
             total_tokens: Final = standard_logging_object.get("total_tokens", 0)
-            model: Final = standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
+            model: Final = (
+                standard_logging_object.get("hidden_params", {}).get("litellm_model_name")
+                or standard_logging_object.get("model")
+                or (kwargs.get("litellm_params") or {}).get("model")
+                or kwargs.get("model")
+            )
 
             if not model or not total_tokens:
                 return
