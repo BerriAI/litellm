@@ -694,36 +694,46 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         return redacted_text["text"]
 
     @staticmethod
-    def _resolve_overlapping_spans(analyze_results: list[dict] | Any) -> list[dict]:
-        """
-        Filter out overlapping entity spans, prioritizing higher confidence scores,
-        then longer spans, then earlier start positions.
-        This prevents text corruption when applying replacements in reverse order.
-        """
+    def _resolve_overlapping_spans(
+        analyze_results: Sequence[PresidioAnalyzeResponseItem],
+    ) -> Sequence[PresidioAnalyzeResponseItem]:
         if not analyze_results:
-            return []
+            return ()
 
-        sorted_by_priority = sorted(
+        sorted_by_span = sorted(
             analyze_results,
             key=lambda x: (
-                -x.get("score", 0),
-                -(x.get("end", 0) - x.get("start", 0)),
-                x.get("start", 0),
+                int(x.get("start") or 0),
+                -int(x.get("end") or 0),
+                -float(x.get("score") or 0.0),
             ),
         )
-        accepted_spans: list[dict] = []
-        for candidate in sorted_by_priority:
-            c_start = candidate["start"]
-            c_end = candidate["end"]
-            overlaps = False
-            for acc in accepted_spans:
-                if max(c_start, acc["start"]) < min(c_end, acc["end"]):
-                    overlaps = True
-                    break
-            if not overlaps:
-                accepted_spans.append(candidate)
 
-        return sorted(accepted_spans, key=lambda x: x["start"])
+        merged: list[PresidioAnalyzeResponseItem] = []  # mutable-ok: required for sequential boundary merge
+        for item in sorted_by_span:
+            s = int(item.get("start") or 0)
+            e = int(item.get("end") or 0)
+            if s >= e:
+                continue
+            if not merged:
+                merged.append(dict(item))  # type: ignore[arg-type] # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # shallow copy
+                continue
+
+            prev = merged[-1]
+            prev_s = int(prev.get("start") or 0)
+            prev_e = int(prev.get("end") or 0)
+
+            if s < prev_e:
+                curr_score = float(item.get("score") or 0.0)
+                prev_score = float(prev.get("score") or 0.0)
+                prev["end"] = max(prev_e, e)
+                if curr_score > prev_score:
+                    prev["entity_type"] = item.get("entity_type")
+                    prev["score"] = curr_score
+            else:
+                merged.append(dict(item))  # type: ignore[arg-type] # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # shallow copy
+
+        return tuple(merged)
 
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
@@ -750,9 +760,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens: Final = request_data["metadata"]["pii_tokens"]
 
-        # Resolve overlapping spans before numbering so reverse-order
-        # replacement operates only on non-overlapping intervals,
-        # preventing spliced placeholders or eaten trailing characters.
         valid_analyze_results = self._resolve_overlapping_spans(analyze_results)
 
         # Assign sequence numbers in forward (left-to-right) order so
