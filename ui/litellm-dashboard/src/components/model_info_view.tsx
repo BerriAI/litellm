@@ -849,8 +849,7 @@ export default function ModelInfoView({
               targets={autoRouterTestTargets}
               jevRequest={buildSavedJevConnectionTestRequest(
                 (localModelData ?? modelData)?.litellm_params?.complexity_router_config,
-                (localModelData ?? modelData)?.litellm_params?.complexity_router_default_model,
-                (localModelData ?? modelData)?.model_name,
+                (localModelData ?? modelData)?.model_info?.id,
                 (localModelData ?? modelData)?.model_info?.team_id,
               )}
             />

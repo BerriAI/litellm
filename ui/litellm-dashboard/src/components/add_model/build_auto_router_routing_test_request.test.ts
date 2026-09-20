@@ -20,6 +20,22 @@ const params = {
 };
 
 describe("buildAutoRouterRoutingTestRequest", () => {
+  it("references the saved deployment without copying masked credentials or client overrides", () => {
+    const request = buildSavedJevConnectionTestRequest(
+      {
+        classifier_type: "jev",
+        tiers: CONFIG.tiers,
+        jev_classifier_config: { api_key: "sk-masked****", api_base: "https://custom-jev.test" },
+      },
+      "saved-id",
+    );
+    const expectedRequest = {
+      prompt: JEV_CONNECTION_TEST_PROMPT,
+      complexity_router_config: { classifier_type: "jev", tiers: CONFIG.tiers },
+      saved_model_id: "saved-id",
+    };
+    expect(request).toEqual(expectedRequest);
+  });
   it.each(["object", "json"])("probes saved JEV %s configuration with custom tiers and team context", (format) => {
     const config = {
       classifier_type: "jev",
@@ -31,24 +47,18 @@ describe("buildAutoRouterRoutingTestRequest", () => {
     };
     const expectedRequest = {
       prompt: JEV_CONNECTION_TEST_PROMPT,
-      complexity_router_config: config,
-      default_model: "strong",
-      router_name: "saved-router",
+      complexity_router_config: { ...config, jev_classifier_config: undefined },
+      saved_model_id: "saved-id",
       team_id: "team-1",
     };
     expect(
-      buildSavedJevConnectionTestRequest(
-        format === "json" ? JSON.stringify(config) : config,
-        "strong",
-        "saved-router",
-        "team-1",
-      ),
+      buildSavedJevConnectionTestRequest(format === "json" ? JSON.stringify(config) : config, "saved-id", "team-1"),
     ).toEqual(expectedRequest);
   });
   it.each([undefined, null, "not json", "[]", {}, { classifier_type: "llm", tiers: {} }, { classifier_type: "jev" }])(
     "does not build a JEV probe for invalid or other classifier configurations: %j",
     (config) => {
-      expect(buildSavedJevConnectionTestRequest(config)).toBeUndefined();
+      expect(buildSavedJevConnectionTestRequest(config, "saved-id")).toBeUndefined();
     },
   );
   it("sends the prompt with the config being edited", () => {

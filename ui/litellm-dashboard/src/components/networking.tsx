@@ -2327,6 +2327,7 @@ export const testModelGroupConnection = async (
 export interface AutoRouterRoutingTestRequest {
   prompt: string;
   complexity_router_config: ComplexityRouterConfigPayload | Record<string, unknown>;
+  saved_model_id?: string;
   default_model?: string;
   router_name?: string;
   team_id?: string;

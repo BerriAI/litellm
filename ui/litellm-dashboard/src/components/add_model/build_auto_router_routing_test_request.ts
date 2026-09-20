@@ -6,10 +6,10 @@ export const JEV_CONNECTION_TEST_PROMPT = "What is 2 plus 2?";
 
 export const buildSavedJevConnectionTestRequest = (
   rawConfig: unknown,
-  defaultModel?: string,
-  routerName?: string,
+  savedModelId?: string,
   teamId?: string,
 ): AutoRouterRoutingTestRequest | undefined => {
+  if (!savedModelId) return undefined;
   const parsed: unknown =
     typeof rawConfig === "string"
       ? (() => {
@@ -27,9 +27,8 @@ export const buildSavedJevConnectionTestRequest = (
   if (!result.success) return undefined;
   return {
     prompt: JEV_CONNECTION_TEST_PROMPT,
-    complexity_router_config: result.data,
-    ...(defaultModel && { default_model: defaultModel }),
-    ...(routerName && { router_name: routerName }),
+    complexity_router_config: { ...result.data, jev_classifier_config: undefined },
+    saved_model_id: savedModelId,
     ...(teamId && { team_id: teamId }),
   };
 };
