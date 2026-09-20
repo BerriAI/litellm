@@ -1,3 +1,5 @@
+import pytest
+
 import litellm
 from litellm.llms.deepseek.chat.transformation import DeepSeekChatConfig
 
@@ -564,3 +566,236 @@ class TestDeepSeekThinkingParams:
         assert result["tools"] == [{"type": "function", "function": {"name": "get_weather"}}]
         assert "tool_choice" not in result
         assert result["parallel_tool_calls"] is True
+
+
+class TestDeepSeekThinkingModeAndReasoningContent:
+    def setup_method(self):
+        self.config = DeepSeekChatConfig()
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "deepseek-reasoner",
+            "deepseek/deepseek-reasoner",
+            "deepseek-r1",
+            "deepseek/deepseek-r1",
+            "deepseek-v4-pro",
+            "deepseek-v4-flash",
+        ],
+    )
+    def test_thinking_mode_active_by_default_for_reasoning_models(self, model: str):
+        assert self.config._thinking_mode_active(model=model, optional_params={}) is True
+        assert self.config._thinking_mode_active(model=model, optional_params={"thinking": None}) is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "deepseek-reasoner",
+            "deepseek/deepseek-reasoner",
+            "deepseek-r1",
+            "deepseek-v4-pro",
+        ],
+    )
+    def test_thinking_mode_active_explicitly_disabled(self, model: str):
+        optional_params = {"thinking": {"type": "disabled"}}
+        assert self.config._thinking_mode_active(model=model, optional_params=optional_params) is False
+
+    def test_thinking_mode_active_opt_in_model(self):
+        assert self.config._thinking_mode_active(model="deepseek-v3.2", optional_params={}) is False
+        assert (
+            self.config._thinking_mode_active(model="deepseek-v3.2", optional_params={"thinking": {"type": "enabled"}})
+            is True
+        )
+        assert (
+            self.config._thinking_mode_active(model="deepseek-v3.2", optional_params={"thinking": {"type": "disabled"}})
+            is False
+        )
+
+    def test_thinking_mode_active_non_reasoning_models(self):
+        assert self.config._thinking_mode_active(model="deepseek-chat", optional_params={}) is False
+        assert (
+            self.config._thinking_mode_active(model="deepseek-chat", optional_params={"thinking": {"type": "enabled"}})
+            is False
+        )
+
+    @pytest.mark.parametrize(
+        "invalid_thinking",
+        [
+            True,
+            False,
+            "enabled",
+            123,
+            {"type": "unknown"},
+            {"other_key": "val"},
+        ],
+    )
+    def test_thinking_mode_active_malformed_thinking_values(self, invalid_thinking):
+        assert (
+            self.config._thinking_mode_active(model="deepseek-reasoner", optional_params={"thinking": invalid_thinking})
+            is False
+        )
+
+    def test_transform_request_promotes_reasoning_content_on_default_reasoner(self):
+        messages = [
+            {"role": "user", "content": "What is 2+2?"},
+            {
+                "role": "assistant",
+                "content": "4",
+                "provider_specific_fields": {"reasoning_content": "2+2 equals 4 through basic arithmetic"},
+            },
+            {"role": "user", "content": "Are you sure?"},
+        ]
+
+        result = self.config.transform_request(
+            model="deepseek-reasoner",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed_assistant = result["messages"][1]
+        assert transformed_assistant["role"] == "assistant"
+        assert transformed_assistant["content"] == "4"
+        assert transformed_assistant["reasoning_content"] == "2+2 equals 4 through basic arithmetic"
+        assert "provider_specific_fields" not in transformed_assistant
+
+    def test_transform_request_promotes_prefixed_model(self):
+        messages = [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": "hi",
+                "provider_specific_fields": {"reasoning_content": "greeting thought"},
+            },
+            {"role": "user", "content": "how are you?"},
+        ]
+
+        result = self.config.transform_request(
+            model="deepseek/deepseek-reasoner",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed_assistant = result["messages"][1]
+        assert transformed_assistant["reasoning_content"] == "greeting thought"
+        assert "provider_specific_fields" not in transformed_assistant
+
+    def test_transform_request_preserves_other_provider_specific_fields(self):
+        messages = [
+            {
+                "role": "assistant",
+                "content": "result",
+                "provider_specific_fields": {
+                    "reasoning_content": "thinking process",
+                    "custom_metadata": "kept",
+                },
+            }
+        ]
+
+        result = self.config.transform_request(
+            model="deepseek-reasoner",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed_assistant = result["messages"][0]
+        assert transformed_assistant["reasoning_content"] == "thinking process"
+        assert transformed_assistant.get("provider_specific_fields") == {"custom_metadata": "kept"}
+
+    def test_transform_request_injects_space_placeholder_when_missing_on_reasoner(self):
+        messages = [
+            {"role": "user", "content": "Calculate 3*3"},
+            {"role": "assistant", "content": "9"},
+            {"role": "user", "content": "Next step"},
+        ]
+
+        result = self.config.transform_request(
+            model="deepseek-reasoner",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed_assistant = result["messages"][1]
+        assert transformed_assistant["reasoning_content"] == " "
+
+    def test_transform_request_does_not_mutate_non_reasoning_model(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "hello",
+                "provider_specific_fields": {"reasoning_content": "should not promote"},
+            },
+            {"role": "user", "content": "bye"},
+        ]
+
+        result = self.config.transform_request(
+            model="deepseek-chat",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed_assistant = result["messages"][1]
+        assert "reasoning_content" not in transformed_assistant
+        assert transformed_assistant.get("provider_specific_fields") == {"reasoning_content": "should not promote"}
+
+    def test_transform_request_opt_in_model_behavior(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": "hello",
+                "provider_specific_fields": {"reasoning_content": "opt-in reasoning"},
+            },
+            {"role": "user", "content": "bye"},
+        ]
+
+        result_without_opt_in = self.config.transform_request(
+            model="deepseek-v3.2",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert "reasoning_content" not in result_without_opt_in["messages"][1]
+
+        result_with_opt_in = self.config.transform_request(
+            model="deepseek-v3.2",
+            messages=messages,
+            optional_params={"thinking": {"type": "enabled"}},
+            litellm_params={},
+            headers={},
+        )
+        assert result_with_opt_in["messages"][1]["reasoning_content"] == "opt-in reasoning"
+
+    async def test_async_transform_request_promotes_reasoning_content(self):
+        messages = [
+            {"role": "user", "content": "solve x+1=2"},
+            {
+                "role": "assistant",
+                "content": "x=1",
+                "provider_specific_fields": {"reasoning_content": "subtract 1 from both sides"},
+            },
+            {"role": "user", "content": "verified"},
+        ]
+
+        result = await self.config.async_transform_request(
+            model="deepseek-reasoner",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        transformed_assistant = result["messages"][1]
+        assert transformed_assistant["reasoning_content"] == "subtract 1 from both sides"
+        assert "provider_specific_fields" not in transformed_assistant
