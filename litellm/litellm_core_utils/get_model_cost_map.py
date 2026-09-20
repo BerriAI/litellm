@@ -99,7 +99,7 @@ class GetModelCostMap:
         return cls._loaded_catalog
 
     @classmethod
-    def _snapshot_loaded_catalog(cls, model_cost: dict) -> None:
+    def _snapshot_loaded_catalog(cls, model_cost: Mapping[str, object]) -> None:
         raw: Final = _CATALOG_ADAPTER.validate_python(model_cost)
         cls._loaded_catalog = MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()})
 

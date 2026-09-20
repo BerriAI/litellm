@@ -3779,7 +3779,9 @@ def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, 
     return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
 
 
-def echoed_cost_map_fields(model_info: Mapping[str, Any], *cost_map_entries: Mapping[str, Any]) -> tuple[str, ...]:
+def echoed_cost_map_fields(
+    model_info: Mapping[str, object], *cost_map_entries: Mapping[str, object]
+) -> tuple[str, ...]:
     """Fields a ``/model/info`` echo copied from the cost map unchanged.
 
     Only ``litellm.get_model_info`` emits ``key``, so a blob carrying it is an echo of that
