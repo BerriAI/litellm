@@ -24,6 +24,9 @@ litellm-core-utils = { path = "crates/core-utils" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-token-counter = { path = "crates/token-counter" }
+litellm-token-counter-fast = { path = "crates/token-counter-fast" }
+litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" }
+litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
 
 bytes = "1"
@@ -45,6 +48,7 @@ serde_with = { version = "=3.16.1", default-features = false, features = ["std",
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2.0"
+tiktoken-rs = "0.12.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }

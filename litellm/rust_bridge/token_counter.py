@@ -11,14 +11,21 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.default_encoding import cl100k_base_rank_file, o200k_base_rank_file
 from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding, uses_legacy_message_accounting
 from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.configuration import rust_enabled
 from litellm.rust_bridge.runtime import BridgeErrorContext, RustHandled, aattempt
 from litellm.utils import claude_json_str, huggingface_tokenizer_kind
 
-RustTokenizer = Literal["anthropic", "cl100k_base", "o200k_base"]
+RustTokenizer = Literal[
+    "anthropic",
+    "cl100k_base",
+    "o200k_base",
+    "o200k_harmony",
+    "p50k_base",
+    "p50k_edit",
+    "r50k_base",
+]
 
 
 class RustTokenCounter(Protocol):
@@ -30,10 +37,7 @@ class RustTokenCounterFactory(Protocol):
     def __call__(self, tokenizer_json: str) -> RustTokenCounter:
         raise NotImplementedError
 
-    def from_cl100k_ranks(self, rank_file: str) -> RustTokenCounter:
-        raise NotImplementedError
-
-    def from_o200k_ranks(self, rank_file: str) -> RustTokenCounter:
+    def from_tiktoken(self, encoding: RustTokenizer) -> RustTokenCounter:
         raise NotImplementedError
 
 
@@ -63,9 +67,8 @@ def rust_tokenizer(model: str) -> RustTokenizer | None:
     """The Rust counter for the tokenizer `litellm.token_counter` selects for `model`, `None` when Python must count.
 
     Mirrors `_select_tokenizer_helper`: the Anthropic tokenizer has a Rust port, the other HuggingFace
-    downloads do not, and of the tiktoken encodings `cl100k_base` and `o200k_base` do (p50k/r50k do not). Rust
-    prices every message with the default constants, so the legacy `gpt-3.5-turbo-0301` accounting stays in
-    Python."""
+    downloads do not. All tiktoken encodings used by Python are backed by tiktoken-rs. Rust prices every
+    message with the default constants, so the legacy `gpt-3.5-turbo-0301` accounting stays in Python."""
     if litellm.disable_token_counter is True:
         return None
     kind: Final = None if litellm.disable_hf_tokenizer_download is True else huggingface_tokenizer_kind(model)
@@ -73,24 +76,19 @@ def rust_tokenizer(model: str) -> RustTokenizer | None:
         return "anthropic"
     if kind is not None or uses_legacy_message_accounting(model):
         return None
-    match openai_tokenizer_encoding(model).name:
-        case "cl100k_base":
-            return "cl100k_base"
-        case "o200k_base":
-            return "o200k_base"
-        case _:
-            return None
+    encoding: Final = openai_tokenizer_encoding(model).name
+    if encoding in {"cl100k_base", "o200k_base", "o200k_harmony", "p50k_base", "p50k_edit", "r50k_base"}:
+        return cast(RustTokenizer, encoding)
+    return None
 
 
-@lru_cache(maxsize=4)
+@lru_cache(maxsize=8)
 def _counter(factory: RustTokenCounterFactory, tokenizer: RustTokenizer) -> RustTokenCounter:
     match tokenizer:
         case "anthropic":
             return factory(claude_json_str)
-        case "cl100k_base":
-            return factory.from_cl100k_ranks(cl100k_base_rank_file())
-        case "o200k_base":
-            return factory.from_o200k_ranks(o200k_base_rank_file())
+        case _:
+            return factory.from_tiktoken(tokenizer)
 
 
 async def count_input_tokens(body: bytes, tokenizer: RustTokenizer) -> InputTokenCount | None:

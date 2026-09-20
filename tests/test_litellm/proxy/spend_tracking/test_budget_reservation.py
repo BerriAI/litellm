@@ -256,7 +256,7 @@ class _RecordingCounter:
 
 
 class _RecordingFactory:
-    """Stands in for the native `TokenCounter` class: called with tokenizer JSON, or `from_*_ranks`."""
+    """Stands in for the native `TokenCounter` class."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[rust_token_counter.RustTokenizer, bytes]] = []
@@ -264,11 +264,8 @@ class _RecordingFactory:
     def __call__(self, tokenizer_json: str) -> _RecordingCounter:
         return _RecordingCounter(self, "anthropic")
 
-    def from_cl100k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "cl100k_base")
-
-    def from_o200k_ranks(self, rank_file: str) -> _RecordingCounter:
-        return _RecordingCounter(self, "o200k_base")
+    def from_tiktoken(self, encoding: rust_token_counter.RustTokenizer) -> _RecordingCounter:
+        return _RecordingCounter(self, encoding)
 
 
 class _DecliningCounter:
@@ -280,10 +277,7 @@ class _DecliningFactory:
     def __call__(self, tokenizer_json: str) -> _DecliningCounter:
         return _DecliningCounter()
 
-    def from_cl100k_ranks(self, rank_file: str) -> _DecliningCounter:
-        return _DecliningCounter()
-
-    def from_o200k_ranks(self, rank_file: str) -> _DecliningCounter:
+    def from_tiktoken(self, encoding: rust_token_counter.RustTokenizer) -> _DecliningCounter:
         return _DecliningCounter()
 
 

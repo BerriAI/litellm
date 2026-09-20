@@ -8,7 +8,6 @@ cases need the extension and are skipped when it is not built.
 from __future__ import annotations
 
 import json
-from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -27,7 +26,6 @@ MODEL: Final = "claude-sonnet-4-5-20250929"
 CL100K_MODEL: Final = "gpt-4"
 O200K_MODEL: Final = "gpt-4o"
 TOKENIZERS: Final[tuple[bridge.RustTokenizer, ...]] = ("anthropic", "cl100k_base", "o200k_base")
-RANK_FILE_LINES: Final = MappingProxyType({"cl100k_base": 100_256, "o200k_base": 199_998})
 BODY: Final = json.dumps({"model": MODEL, "messages": [{"role": "user", "content": "hello"}]}).encode()
 
 
@@ -55,24 +53,20 @@ class _RecordingCounter:
 
 
 class _RecordingFactory:
-    """Stands in for the native `TokenCounter` class: callable for tokenizer JSON, `from_*_ranks` for rank files."""
+    """Stands in for the native `TokenCounter` class."""
 
     def __init__(self) -> None:
         self.counters: list[_RecordingCounter] = []
-        self.rank_files: list[str] = []
+        self.encodings: list[str] = []
 
     def __call__(self, tokenizer_json: str) -> _RecordingCounter:
         counter = _RecordingCounter(tokenizer_json)
         self.counters.append(counter)
         return counter
 
-    def from_cl100k_ranks(self, rank_file: str) -> _RecordingCounter:
-        self.rank_files.append(rank_file)
-        return self("cl100k_base")
-
-    def from_o200k_ranks(self, rank_file: str) -> _RecordingCounter:
-        self.rank_files.append(rank_file)
-        return self("o200k_base")
+    def from_tiktoken(self, encoding: bridge.RustTokenizer) -> _RecordingCounter:
+        self.encodings.append(encoding)
+        return self(encoding)
 
 
 class _RaisingCounter:
@@ -92,10 +86,7 @@ class _RaisingFactory:
     def __call__(self, tokenizer_json: str) -> _RaisingCounter:
         return _RaisingCounter(self.error)
 
-    def from_cl100k_ranks(self, rank_file: str) -> _RaisingCounter:
-        return _RaisingCounter(self.error)
-
-    def from_o200k_ranks(self, rank_file: str) -> _RaisingCounter:
+    def from_tiktoken(self, encoding: bridge.RustTokenizer) -> _RaisingCounter:
         return _RaisingCounter(self.error)
 
 
@@ -140,7 +131,7 @@ async def test_enabled_bridge_returns_typed_count_and_reuses_one_counter() -> No
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokenizer", ("cl100k_base", "o200k_base"))
-async def test_tiktoken_counter_is_built_from_the_vendored_rank_file_once(tokenizer: bridge.RustTokenizer) -> None:
+async def test_tiktoken_counter_is_built_from_the_encoding_once(tokenizer: bridge.RustTokenizer) -> None:
     factory: Final = _RecordingFactory()
     litellm.rust(True)
     bridge.TOKEN_COUNTER.override(factory)
@@ -149,9 +140,7 @@ async def test_tiktoken_counter_is_built_from_the_vendored_rank_file_once(tokeni
     second: Final = await bridge.count_input_tokens(BODY, tokenizer)
 
     assert first == second == bridge.InputTokenCount(model=MODEL, input_tokens=42)
-    assert len(factory.rank_files) == 1
-    assert factory.rank_files[0].startswith("IQ== 0\n")
-    assert factory.rank_files[0].count("\n") == RANK_FILE_LINES[tokenizer]
+    assert factory.encodings == [tokenizer]
     assert factory.counters[0].tokenizer_json == tokenizer
     assert factory.counters[0].bodies == [BODY, BODY]
 
@@ -235,13 +224,13 @@ def test_rust_tokenizer_mirrors_python_tokenizer_selection(model: str, expected:
     ("model", "python_encoding"),
     (("text-davinci-003", "p50k_base"), ("gpt-oss-120b", "o200k_harmony")),
 )
-def test_rust_tokenizer_declines_tiktoken_encodings_rust_does_not_have(
-    monkeypatch: pytest.MonkeyPatch, model: str, python_encoding: str
+def test_rust_tokenizer_uses_every_tiktoken_encoding_supported_by_rust(
+    monkeypatch: pytest.MonkeyPatch, model: str, python_encoding: bridge.RustTokenizer
 ) -> None:
     monkeypatch.setattr(litellm, "open_ai_chat_completion_models", litellm.open_ai_chat_completion_models | {model})
 
     assert openai_tokenizer_encoding(model).name == python_encoding
-    assert bridge.rust_tokenizer(model) is None
+    assert bridge.rust_tokenizer(model) == python_encoding
 
 
 def test_rust_tokenizer_declines_the_cohere_tokenizer_download(monkeypatch: pytest.MonkeyPatch) -> None:
