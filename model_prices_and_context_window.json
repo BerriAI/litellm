@@ -66772,9 +66772,9 @@
         "supports_web_search": true
     },
     "openrouter/z-ai/glm-5.2": {
-        "input_cost_per_token": 5.544e-07,
-        "output_cost_per_token": 1.7424e-06,
-        "cache_read_input_token_cost": 1.0296e-07,
+        "input_cost_per_token": 6.496e-07,
+        "output_cost_per_token": 2.0416e-06,
+        "cache_read_input_token_cost": 1.2064e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 131072,
@@ -67134,9 +67134,9 @@
         "supports_web_search": true
     },
     "openrouter/deepseek/deepseek-v4-flash": {
-        "input_cost_per_token": 4.032e-08,
-        "output_cost_per_token": 8.064e-08,
-        "cache_read_input_token_cost": 8.064e-09,
+        "input_cost_per_token": 3.78e-08,
+        "output_cost_per_token": 7.56e-08,
+        "cache_read_input_token_cost": 7.56e-09,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
