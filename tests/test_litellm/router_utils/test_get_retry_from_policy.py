@@ -1,6 +1,7 @@
 from types import MappingProxyType
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
@@ -16,6 +17,7 @@ _EXCEPTION_FOR_FIELD: Final = MappingProxyType(
         "ContentPolicyViolationErrorRetries": litellm.ContentPolicyViolationError,
         "InternalServerErrorRetries": litellm.InternalServerError,
         "ServiceUnavailableErrorRetries": litellm.ServiceUnavailableError,
+        "NotFoundErrorRetries": litellm.NotFoundError,
     }
 )
 
@@ -24,6 +26,17 @@ _SPECIFIC_FIELDS: Final = tuple(name for name in RetryPolicy.model_fields if nam
 
 def _error(exception_type: type[Exception]) -> Exception:
     return exception_type(message="boom", llm_provider="openai", model="gpt-5.6")
+
+
+def _bad_request_answered_with_404() -> litellm.BadRequestError:
+    upstream: Final = httpx.Response(
+        404, request=httpx.Request("GET", "https://api.openai.com/v1/responses/resp_missing")
+    )
+    exception: Final = litellm.BadRequestError(
+        message="Response with id 'resp_missing' not found.", llm_provider="openai", model="gpt-5.6", response=upstream
+    )
+    assert exception.status_code == 404
+    return exception
 
 
 @pytest.mark.parametrize("field", _SPECIFIC_FIELDS)
@@ -66,7 +79,7 @@ def test_subclass_falls_back_to_the_parent_field():
     )
 
 
-@pytest.mark.parametrize("exception_type", (litellm.BadGatewayError, litellm.NotFoundError))
+@pytest.mark.parametrize("exception_type", (litellm.BadGatewayError,))
 def test_default_retries_covers_exceptions_without_a_specific_field(exception_type: type[Exception]):
     exception: Final = _error(exception_type)
 
@@ -84,6 +97,46 @@ def test_specific_field_wins_over_default_retries():
 
     assert get_num_retries_from_retry_policy(exception=_error(litellm.RateLimitError), retry_policy=policy) == 3
     assert get_num_retries_from_retry_policy(exception=_error(litellm.BadGatewayError), retry_policy=policy) == 0
+
+
+def test_not_found_retries_governs_a_bad_request_error_answered_with_404():
+    exception: Final = _bad_request_answered_with_404()
+
+    assert get_num_retries_from_retry_policy(exception=exception, retry_policy=RetryPolicy(NotFoundErrorRetries=0)) == 0
+    assert get_num_retries_from_retry_policy(exception=exception, retry_policy=RetryPolicy(NotFoundErrorRetries=4)) == 4
+
+
+def test_not_found_retries_wins_over_bad_request_and_default_retries_for_a_404():
+    policy: Final = RetryPolicy(NotFoundErrorRetries=0, BadRequestErrorRetries=5, DefaultRetries=3)
+
+    assert get_num_retries_from_retry_policy(exception=_bad_request_answered_with_404(), retry_policy=policy) == 0
+    assert get_num_retries_from_retry_policy(exception=_error(litellm.NotFoundError), retry_policy=policy) == 0
+
+
+def test_a_404_without_not_found_retries_falls_back_to_bad_request_then_default_retries():
+    exception: Final = _bad_request_answered_with_404()
+
+    assert (
+        get_num_retries_from_retry_policy(
+            exception=exception, retry_policy=RetryPolicy(BadRequestErrorRetries=0, DefaultRetries=3)
+        )
+        == 0
+    )
+    assert get_num_retries_from_retry_policy(exception=exception, retry_policy=RetryPolicy(DefaultRetries=3)) == 3
+    assert get_num_retries_from_retry_policy(exception=_error(litellm.NotFoundError), retry_policy=RetryPolicy(DefaultRetries=3)) == 3
+
+
+def test_not_found_retries_leaves_a_plain_400_alone():
+    exception: Final = _error(litellm.BadRequestError)
+    assert exception.status_code == 400
+
+    assert get_num_retries_from_retry_policy(exception=exception, retry_policy=RetryPolicy(NotFoundErrorRetries=0)) is None
+    assert (
+        get_num_retries_from_retry_policy(
+            exception=exception, retry_policy=RetryPolicy(NotFoundErrorRetries=0, BadRequestErrorRetries=2)
+        )
+        == 2
+    )
 
 
 def test_default_retries_applies_when_the_specific_field_is_unset():
