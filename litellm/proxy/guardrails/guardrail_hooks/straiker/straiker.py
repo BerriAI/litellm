@@ -15,6 +15,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
     BadRequestError,
     GuardrailRaisedException,
@@ -72,6 +73,8 @@ V3_DERIVED_SESSION_PREFIX: Final = "litellm-"
 V3_AGENT_HEADER: Final = "x-s6r-agent"
 V3_RESPONSE_PHASE: Final = "response-sync"
 V3_BLOCK_DECISIONS: Final = frozenset({"block", "deny"})
+V3_BLOCKED_TURN_MEMORY: Final = 10_000
+V3_BLOCKED_TURN_TTL_SECONDS: Final = 24 * 60 * 60
 # An allowlist: the hook's request dict merges the client body with proxy state (`deployment`
 # carries the resolved credential), so only fields named here are relayed.
 _V3_PROVIDER_BODY_KEYS: Final = frozenset(
@@ -633,6 +636,29 @@ def _v3_payload(
     )
 
 
+def _v3_conversation_prefixes(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    """A fingerprint of the conversation after each of its messages, first to last.
+
+    The last one names the conversation as sent; the earlier ones let a request that
+    carries a blocked exchange as its history be recognised, not only an exact resend.
+    A `prompt` or a string `input` has one fingerprint.
+    """
+    messages: Final = _v3_messages(request_body)
+    if messages:
+        digest: Final = hashlib.sha256()
+
+        def after(message: object) -> str:
+            digest.update(json.dumps(message, sort_keys=True, default=str).encode("utf-8"))
+            digest.update(b"\x1e")
+            return digest.copy().hexdigest()
+
+        return tuple(after(message) for message in messages)
+    plain: Final = request_body.get("input") if "input" in request_body else request_body.get("prompt")
+    if plain is None:
+        return ()
+    return (hashlib.sha256(json.dumps(plain, sort_keys=True, default=str).encode("utf-8")).hexdigest(),)
+
+
 def _v3_session_id(
     envelope: StraikerWebhookRequest,
     request_data: Mapping[str, object],
@@ -874,6 +900,13 @@ class StraikerGuardrail(CustomGuardrail):
         if format_hint is not None and format_hint not in ("anthropic.messages", "openai.chat"):
             raise ValueError(f"format_hint must be 'anthropic.messages' or 'openai.chat'; got {format_hint!r}")
         self.format_hint = format_hint
+        # Blocked conversations by session, so a resend or a conversation grown past a blocked
+        # turn is blocked again here: Straiker de-duplicates turns it has already scored per
+        # session and answers a replay `allow`, whatever the original verdict was (measured
+        # 2026-09-20). Per process; a replica that did not see the block asks Straiker.
+        self._v3_blocked_turns = InMemoryCache(
+            max_size_in_memory=V3_BLOCKED_TURN_MEMORY, default_ttl=V3_BLOCKED_TURN_TTL_SECONDS
+        )
         self.source = source
         self.timeout = float(timeout)
         self.max_retries = max(0, int(max_retries))
@@ -1165,6 +1198,9 @@ class StraikerGuardrail(CustomGuardrail):
             )
             payload: Final = _v3_payload(envelope, inputs, request_data, input_type)
             headers: Final = _v3_headers(request_data, self.agent_ref, self.client, self.format_hint)
+            request_body: Final = _v3_request_body(request_data)
+            session: Final = _v3_session_id(envelope, request_data, request_body) or ""
+            prefixes: Final = _v3_conversation_prefixes(request_body)
         except (ValidationError, TypeError, ValueError) as error:
             return self._fail(
                 inputs=inputs,
@@ -1173,6 +1209,10 @@ class StraikerGuardrail(CustomGuardrail):
                 error=str(error),
                 is_unreachable=False,
             )
+
+        replayed: Final = self._v3_replayed_block(session, prefixes) if input_type == "request" else None
+        if replayed is not None:
+            self._block(request_data=request_data, input_type=input_type, message=replayed, blocked_content=True)
 
         parsed, failure = await self._post_webhook(payload, headers)
         if failure is not None or parsed is None:
@@ -1185,13 +1225,24 @@ class StraikerGuardrail(CustomGuardrail):
             )
         self._record(request_data=request_data, logging_obj=logging_obj, parsed=parsed)
         if parsed.action == "BLOCKED":
-            self._block(
-                request_data=request_data,
-                input_type=input_type,
-                message=parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE,
-                blocked_content=True,
-            )
+            message: Final = parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE
+            if prefixes:
+                self._v3_blocked_turns.set_cache(f"{session}\0{prefixes[-1]}", message)
+            self._block(request_data=request_data, input_type=input_type, message=message, blocked_content=True)
         return inputs
+
+    def _v3_replayed_block(self, session: str, prefixes: tuple[str, ...]) -> str | None:
+        """The block message a conversation already earned, when this request repeats or
+        extends a conversation this process blocked in the same session."""
+        for prefix in prefixes:
+            message: str | None = self._v3_blocked_turns.get_cache(f"{session}\0{prefix}")
+            if message is not None:
+                if self.verbose:
+                    verbose_proxy_logger.info(
+                        json.dumps({"event": "straiker.replay_blocked", "session_id": session, "prefix": prefix})
+                    )
+                return message
+        return None
 
     @log_guardrail_information
     async def apply_guardrail(
