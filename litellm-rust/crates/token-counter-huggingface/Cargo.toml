@@ -7,4 +7,4 @@ repository.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
+tokenizers.workspace = true

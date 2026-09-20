@@ -1,14 +1,8 @@
 #![forbid(unsafe_code)]
 
-use thiserror::Error as ThisError;
+mod error;
 
-#[derive(Debug, ThisError)]
-pub enum Error {
-    #[error("failed to load tokenizer: {0}")]
-    Load(#[source] tokenizers::Error),
-    #[error("tokenization failed: {0}")]
-    Encode(#[source] tokenizers::Error),
-}
+pub use error::Error;
 
 pub struct HuggingFaceTokenizer(Box<tokenizers::Tokenizer>);
 

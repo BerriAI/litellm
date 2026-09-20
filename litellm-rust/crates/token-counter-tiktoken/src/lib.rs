@@ -1,10 +1,8 @@
 #![forbid(unsafe_code)]
 
-use thiserror::Error as ThisError;
+mod error;
 
-#[derive(Debug, ThisError)]
-#[error("unsupported tokenizer: {0}")]
-pub struct UnsupportedTokenizer(pub String);
+pub use error::UnsupportedTokenizer;
 
 pub struct TiktokenTokenizer(&'static tiktoken_rs::CoreBPE);
 
@@ -32,23 +30,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn special_tokens_are_counted_as_ordinary_text() {
-        let counter = TiktokenTokenizer::from_name("cl100k_base").unwrap();
-        assert!(counter.count_tokens("<|endoftext|>") > 1);
+    fn named_encodings_match_their_reference_counts() {
+        let encodings = [
+            ("cl100k_base", tiktoken_rs::cl100k_base_singleton()),
+            ("o200k_base", tiktoken_rs::o200k_base_singleton()),
+            ("o200k_harmony", tiktoken_rs::o200k_harmony_singleton()),
+            ("p50k_base", tiktoken_rs::p50k_base_singleton()),
+            ("p50k_edit", tiktoken_rs::p50k_edit_singleton()),
+            ("r50k_base", tiktoken_rs::r50k_base_singleton()),
+            ("gpt2", tiktoken_rs::r50k_base_singleton()),
+        ];
+        let texts = [
+            "",
+            "Hello, how are you today?",
+            "é e\u{301} 漢字 ع ३ 🙂 ＡﬁⅣ",
+            "  def function():\n    return 123456789\r\n",
+            "<|endoftext|><|fim_prefix|><|start|>assistant<|message|>",
+        ];
+        for (name, reference) in encodings {
+            let counter = TiktokenTokenizer::from_name(name).unwrap();
+            for text in texts {
+                assert_eq!(
+                    counter.count_tokens(text),
+                    reference.encode_ordinary(text).len(),
+                    "{name}: {text:?}",
+                );
+            }
+        }
     }
 
     #[test]
-    fn all_python_tiktoken_encodings_are_available() {
-        for name in [
-            "cl100k_base",
-            "o200k_base",
-            "o200k_harmony",
-            "p50k_base",
-            "p50k_edit",
-            "r50k_base",
-            "gpt2",
-        ] {
-            assert!(TiktokenTokenizer::from_name(name).is_ok(), "{name}");
-        }
+    fn unsupported_encoding_preserves_its_name() {
+        let Err(UnsupportedTokenizer(name)) = TiktokenTokenizer::from_name("unknown-encoding")
+        else {
+            panic!("unknown encoding must be rejected");
+        };
+        assert_eq!(name, "unknown-encoding");
     }
 }

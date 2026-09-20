@@ -81,6 +81,9 @@ fn parse_line(line: &str) -> Result<(Box<[u8]>, Rank), Error> {
     let rank = rank
         .parse()
         .map_err(|error| Error::Ranks(format!("rank is not an integer: {error}")))?;
+    if rank == NO_RANK {
+        return Err(Error::Ranks(format!("rank {rank} is reserved")));
+    }
     Ok((bytes.into_boxed_slice(), rank))
 }
 
@@ -210,6 +213,21 @@ mod tests {
             large < small * 64,
             "{small:?} for 2^14 bytes, {large:?} for 2^18"
         );
+    }
+
+    #[test]
+    fn reserved_merge_rank_is_rejected() {
+        let bytes = (0..=u8::MAX)
+            .map(|byte| format!("{} {byte}\n", STANDARD.encode([byte])))
+            .collect::<String>();
+        let rank_file = format!("{bytes}{} {NO_RANK}\n", STANDARD.encode(b"ab"));
+        assert!(matches!(
+            MergeRanks::parse(&rank_file),
+            Err(Error::Ranks(_))
+        ));
+        let valid_rank_file = format!("{bytes}{} {}\n", STANDARD.encode(b"ab"), NO_RANK - 1);
+        let ranks = MergeRanks::parse(&valid_rank_file).unwrap();
+        assert_eq!(ranks.count_piece(b"aab", &mut MergeScratch::default()), 2);
     }
 
     #[test]
