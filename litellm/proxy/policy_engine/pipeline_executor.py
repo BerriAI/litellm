@@ -8,7 +8,7 @@ pass/fail actions (allow, block, next, modify_response) and data forwarding.
 import copy
 import time
 from collections.abc import Callable, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
 from pydantic import BaseModel
 
@@ -314,11 +314,11 @@ class PipelineExecutor:
         steps: list[PipelineStep],
         mode: str,
         data: dict,
-        user_api_key_dict: Any,
+        user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
         policy_name: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
-        streaming_chunks: list[Any] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
+        streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
     ) -> PipelineExecutionResult:
         """
@@ -490,10 +490,10 @@ class PipelineExecutor:
         step: PipelineStep,
         mode: str,
         data: dict,
-        user_api_key_dict: Any,
+        user_api_key_dict: "UserAPIKeyAuth",
         call_type: str,
         raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
-        streaming_chunks: list[Any] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
+        streaming_chunks: list[object] | None = None,  # mutable-ok: shared buffered-stream chunks, read per step
         endpoint_translation: "BaseTranslation | None" = None,
     ) -> tuple[
         Literal["pass", "fail", "error"],
@@ -722,7 +722,7 @@ def _extract_error_message(e: Exception) -> str:
     if isinstance(e, ModifyResponseException):
         return str(e)
     if HTTPException is not None and isinstance(e, HTTPException):
-        detail: Final = getattr(e, "detail", None)
+        detail: Final[object] = getattr(e, "detail", None)
         if detail:
             return str(detail)
     return str(e)

@@ -110,7 +110,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         headers: dict,
     ) -> dict:
         input_prompt: Final = self._convert_messages_to_prompt(messages=messages)
-        request_data: Final[dict[str, Any]] = {"inputPrompt": input_prompt}
+        request_data: Final[dict[str, object]] = {"inputPrompt": input_prompt}
 
         media_source: Final = self._build_media_source(optional_params)
         if media_source is not None:
