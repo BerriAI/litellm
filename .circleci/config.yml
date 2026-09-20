@@ -1561,9 +1561,10 @@ jobs:
           url: tcp://localhost:5432
           timeout: "60"
       - run:
-          name: Run legacy migration resolver proxy smoke test
+          name: Run both migration resolvers against Postgres
           command: |
             uv run --no-sync python -m pytest -vv \
+              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings \
               tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_legacy_resolver
 
   helm_chart_testing:
