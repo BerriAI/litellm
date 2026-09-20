@@ -1,6 +1,8 @@
 import asyncio
+import base64
 import json
 import uuid
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -15,6 +17,80 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transfor
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+
+ONE_PIXEL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.fixture
+def async_only_image_fetch(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates import factory, image_handling
+    from litellm.llms.gemini.chat import transformation as gemini_chat_transformation
+
+    fetch = SimpleNamespace(
+        fetched=[],
+        base64_png=base64.b64encode(ONE_PIXEL_PNG).decode(),
+        data_url="data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode(),
+    )
+
+    def forbid_sync_fetch(client, url, **kwargs):
+        raise litellm.ImageFetchError(f"sync image fetch ran on the event loop: {url}")
+
+    async def serve_png(client, url, **kwargs):
+        fetch.fetched.append(url)
+        return httpx.Response(
+            200,
+            content=ONE_PIXEL_PNG,
+            headers={"content-type": "image/png"},
+            request=httpx.Request("GET", url),
+        )
+
+    def forbid_sync_convert(url, *args, **kwargs):
+        if url.startswith(("http://", "https://")):
+            raise litellm.ImageFetchError(f"sync convert_url_to_base64 ran on the request path: {url}")
+        return url
+
+    monkeypatch.setattr(image_handling, "safe_get", forbid_sync_fetch)
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_png)
+    for module in (image_handling, factory, gemini_chat_transformation):
+        monkeypatch.setattr(module, "convert_url_to_base64", forbid_sync_convert)
+    return fetch
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled in-repo cost map so capability and pricing assertions do not
+    depend on the network-fetched ``main`` copy, which lags this branch until merge.
+
+    ``get_model_info`` is lru_cached, so swapping ``model_cost`` is not enough on its
+    own; clear on the way in and out so entries warmed against either map never leak
+    across tests."""
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def local_beta_headers_config(monkeypatch):
+    """Pin the bundled ``anthropic_beta_headers_config.json`` so beta header assertions
+    do not depend on the network-fetched copy or on what earlier tests left cached."""
+    from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    try:
+        yield
+    finally:
+        monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+        reload_beta_headers_config()
 
 
 def test_get_supported_params_thinking():

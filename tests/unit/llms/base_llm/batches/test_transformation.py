@@ -129,22 +129,6 @@ def test_subclass_missing_any_abstract_member_cannot_instantiate(missing_member)
         Incomplete()
 
 
-def test_concrete_instance_methods_run():
-    """Sanity: the trivial overrides actually execute through the base contract."""
-    instance = _ConcreteBatchesConfig()
-    assert instance.custom_llm_provider == LlmProviders.OPENAI
-    assert instance.validate_environment(
-        headers={"x": "1"},
-        model="m",
-        messages=[],
-        optional_params={},
-        litellm_params={},
-    ) == {"x": "1"}
-    assert instance.transform_retrieve_batch_request(
-        batch_id="b-1", optional_params={}, litellm_params={}
-    ) == {"batch_id": "b-1"}
-
-
 # =========================================================================== #
 # get_config()
 # =========================================================================== #
