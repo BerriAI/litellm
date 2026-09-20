@@ -23,7 +23,13 @@ def _isolate_host_aws_config(monkeypatch, tmp_path):
     monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "credentials"))
     monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "config"))
     monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
-    for env_var in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_BEARER_TOKEN_BEDROCK", "AWS_REGION_NAME", "AWS_DEFAULT_REGION"):
+    for env_var in (
+        "AWS_PROFILE",
+        "AWS_DEFAULT_PROFILE",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        "AWS_REGION_NAME",
+        "AWS_DEFAULT_REGION",
+    ):
         monkeypatch.delenv(env_var, raising=False)
 
 

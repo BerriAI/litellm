@@ -11,7 +11,8 @@ def test_bedrock_image_prepare_request_with_arn() -> None:
 
     with (
         patch(
-            "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration._get_boto_credentials_from_optional_params"
+            "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration."
+            "_get_boto_credentials_from_optional_params"
         ),
         patch(
             "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.get_request_headers"
@@ -31,7 +32,8 @@ def test_bedrock_image_prepare_request_with_arn() -> None:
 
     assert (
         request.endpoint_url
-        == "https://bedrock-runtime.test.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aapplication-inference-profile%2Fabcdefghi123/invoke"
+        == "https://bedrock-runtime.test.com/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012"
+        "%3Aapplication-inference-profile%2Fabcdefghi123/invoke"
     )
 
 
@@ -41,7 +43,8 @@ def test_bedrock_image_prepare_request_without_arn() -> None:
 
     with (
         patch(
-            "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration._get_boto_credentials_from_optional_params"
+            "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration."
+            "_get_boto_credentials_from_optional_params"
         ),
         patch(
             "litellm.llms.bedrock.image_generation.image_handler.BedrockImageGeneration.get_request_headers"
