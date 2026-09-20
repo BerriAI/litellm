@@ -11766,6 +11766,42 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+@pytest.mark.asyncio
+async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch):
+    """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with
+    datadog_params.turn_off_message_logging: true must build the DataDogLogger redacted, the
+    same as the identical block in YAML. Regression for the redaction keys being absent from
+    the safe-override allowlist while the callback half of the row was honoured."""
+    import litellm.proxy.proxy_server as ps
+    from litellm.integrations.datadog.datadog import DataDogLogger
+    from litellm.litellm_core_utils import litellm_logging
+
+    monkeypatch.setenv("DD_API_KEY", "test-key")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+    monkeypatch.setattr(litellm, "datadog_params", None)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+
+    db_row = {
+        "success_callback": ["datadog"],
+        "datadog_params": {"turn_off_message_logging": True},
+        "turn_off_message_logging": True,
+    }
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(pc._prepared_db_settings_values("litellm_settings", db_row))
+    pc._add_callbacks_from_db_config({"litellm_settings": db_row})
+
+    datadog_loggers = [cb for cb in litellm.success_callback if isinstance(cb, DataDogLogger)]
+    assert len(datadog_loggers) == 1
+    assert datadog_loggers[0].turn_off_message_logging is True
+    assert litellm.turn_off_message_logging is True
+
+
 def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypatch):
     """The flag defaults to False rather than None, so a plain 'is not None' check would
     report the default as 'In Config' and imply an admin had set it."""
