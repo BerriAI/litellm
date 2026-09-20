@@ -55,10 +55,6 @@ def _search_kwargs(**overrides):
 
 
 class TestS3VectorsVectorStoreConfig:
-    def test_init(self):
-        config = S3VectorsVectorStoreConfig()
-        assert config is not None
-
     def test_get_supported_openai_params(self):
         config = S3VectorsVectorStoreConfig()
         params = config.get_supported_openai_params("test-model")
