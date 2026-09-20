@@ -1,4 +1,3 @@
-import copy
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -11,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -477,7 +476,7 @@ def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
 
 def _restore_fallback_prompt_state(kwargs: dict[str, object]) -> None:
     if "_unrendered_messages" in kwargs:
-        kwargs["messages"] = copy.deepcopy(kwargs["_unrendered_messages"])
+        kwargs["messages"] = safe_deep_copy(kwargs["_unrendered_messages"])
     if "_original_prompt_params" in kwargs and isinstance(kwargs["_original_prompt_params"], dict):
         kwargs.update(kwargs["_original_prompt_params"])
     kwargs.pop("_in_prompt_factory", None)
