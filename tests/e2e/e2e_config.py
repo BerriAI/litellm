@@ -58,6 +58,7 @@ LINEAR_READONLY_TOOL: Final = "list_teams"  # as listed by tools/list on mcp.lin
 # service in docker-compose.yml maps it to host 16686). Trace-completeness tests
 # read exported spans back through it.
 OTEL_QUERY_URL = os.environ.get("E2E_OTEL_QUERY_URL", "http://localhost:16686").rstrip("/")
+OTEL_EXPORTER_ENDPOINT = os.environ.get("E2E_OTEL_EXPORTER_ENDPOINT", "")
 
 # Real-DataDog read-back (no local sink - destination fakes cannot be deployed
 # on the cluster): the proxy delivers with DD_API_KEY as in production, and the

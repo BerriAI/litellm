@@ -9,9 +9,12 @@ import time
 import unittest
 import weakref
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import MappingProxyType
-from parameterized import parameterized
+from typing import Final
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 # Adds the grandparent directory to sys.path to allow importing project modules
 from opentelemetry import trace
@@ -23,6 +26,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader, MetricsData
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from parameterized import parameterized
 
 import litellm
 from litellm.integrations import opentelemetry as otel_module
@@ -2079,6 +2083,64 @@ class TestOpenTelemetryEndpointNormalization(unittest.TestCase):
         # Switch back to traces
         traces = otel._normalize_otel_endpoint(logs, "traces")
         self.assertEqual(traces, "http://collector:4318/v1/traces")
+
+
+def test_resolve_otlp_http_tls_uses_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    certificate_file: Final = tmp_path / "ca.pem"
+    certificate_file.write_text("certificate")
+    monkeypatch.setenv("SSL_CERT_FILE", str(certificate_file))
+    monkeypatch.delenv("SSL_VERIFY", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_CERTIFICATE", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE", raising=False)
+
+    tls: Final = otel_module._resolve_otlp_http_tls("TRACES")
+
+    assert tls.certificate_file == str(certificate_file)
+    assert tls.session is None
+
+
+def test_resolve_otlp_http_tls_disables_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SSL_VERIFY", "false")
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_CERTIFICATE", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE", raising=False)
+
+    tls: Final = otel_module._resolve_otlp_http_tls("TRACES")
+    assert tls.certificate_file is None
+    assert tls.session is not None
+
+    adapter: Final = tls.session.get_adapter("https://example.invalid")
+    connection: Final = adapter.poolmanager.connection_from_url("https://example.invalid")
+    adapter.cert_verify(connection, "https://example.invalid", True, None)
+
+    assert connection.cert_reqs == "CERT_NONE"
+
+
+def test_resolve_otlp_http_tls_prefers_otel_certificate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    certificate_file: Final = tmp_path / "ca.pem"
+    certificate_file.write_text("certificate")
+    monkeypatch.setenv("SSL_CERT_FILE", str(certificate_file))
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_CERTIFICATE", "/otel-ca.pem")
+
+    tls: Final = otel_module._resolve_otlp_http_tls("TRACES")
+
+    assert tls.certificate_file is None
+    assert tls.session is None
+
+
+def test_http_span_exporter_uses_ssl_cert_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    certificate_file: Final = tmp_path / "ca.pem"
+    certificate_file.write_text("certificate")
+    monkeypatch.setenv("SSL_CERT_FILE", str(certificate_file))
+    monkeypatch.delenv("SSL_VERIFY", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_CERTIFICATE", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE", raising=False)
+
+    config: Final = OpenTelemetryConfig(exporter="otlp_http", endpoint="https://collector.invalid:4318")
+    otel: Final = OpenTelemetry(config=config)
+    processor: Final = otel._get_span_processor()
+
+    assert processor.span_exporter._certificate_file == str(certificate_file)
 
 
 class TestOpenTelemetryProtocolSelection(unittest.TestCase):
