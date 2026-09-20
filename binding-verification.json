@@ -1,0 +1,29 @@
+{
+  "all": {
+    "page_counts": [
+      50,
+      16
+    ],
+    "unique_requests": 66,
+    "matches_unpaginated": true
+  },
+  "injected": {
+    "page_counts": [
+      50,
+      14
+    ],
+    "unique_requests": 64,
+    "matches_unpaginated": true
+  },
+  "hits": {
+    "page_counts": [
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "unique_requests": 5,
+    "matches_unpaginated": true
+  }
+}

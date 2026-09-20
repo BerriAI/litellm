@@ -1,1 +1,679 @@
-{"requests":[{"request_id":"chatcmpl-f350e8d3-54f6-4fa9-9379-854b8d030991","start_time":"2026-09-19T23:47:37.073000Z","model":"anthropic/claude-sonnet-5","gateway_injected":false,"cache_read_tokens":4902,"cache_creation_tokens":0,"spend":0.0010624,"net_savings":0.0088236},{"request_id":"chatcmpl-49c52f15-ead7-409d-abeb-649eac874ffc","start_time":"2026-09-19T23:46:45.828000Z","model":"anthropic/claude-sonnet-5","gateway_injected":true,"cache_read_tokens":4902,"cache_creation_tokens":15,"spend":0.0010619,"net_savings":0.008816099999999999},{"request_id":"chatcmpl-e4b313e1-53e7-49b7-9c39-0cbebe791092","start_time":"2026-09-19T23:46:11.061000Z","model":"anthropic/claude-sonnet-5","gateway_injected":true,"cache_read_tokens":0,"cache_creation_tokens":4917,"spend":0.0123365,"net_savings":-0.0024585000000000015}],"page_size":50,"has_more":false,"next_cursor":null}
+[
+  {
+    "requests": [
+      {
+        "request_id": "chatcmpl-d15c3275-1dc0-4560-b49b-8180cdec2b7c",
+        "start_time": "2026-09-20T01:28:04.675000Z",
+        "model": "anthropic/claude-sonnet-5",
+        "gateway_injected": false,
+        "cache_read_tokens": 4902,
+        "cache_creation_tokens": 0,
+        "spend": 0.0010624,
+        "net_savings": 0.0088236
+      },
+      {
+        "request_id": "chatcmpl-a7225282-c905-4888-a6b1-90a74845fad1",
+        "start_time": "2026-09-20T01:28:03.548000Z",
+        "model": "anthropic/claude-sonnet-5",
+        "gateway_injected": true,
+        "cache_read_tokens": 4902,
+        "cache_creation_tokens": 15,
+        "spend": 0.0010619,
+        "net_savings": 0.008816099999999999
+      },
+      {
+        "request_id": "chatcmpl-706e92cb-0b1f-4a8a-8fd1-509159dc62d2",
+        "start_time": "2026-09-20T01:28:02.476000Z",
+        "model": "anthropic/claude-sonnet-5",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 4917,
+        "spend": 0.0123365,
+        "net_savings": -0.0024585000000000015
+      },
+      {
+        "request_id": "chatcmpl-ee2d6464-0a42-49c6-b32e-b52d4c8d8fd2",
+        "start_time": "2026-09-20T00:49:25.994000Z",
+        "model": "anthropic/claude-sonnet-5",
+        "gateway_injected": true,
+        "cache_read_tokens": 4917,
+        "cache_creation_tokens": 0,
+        "spend": 0.0010274,
+        "net_savings": 0.0088506
+      },
+      {
+        "request_id": "chatcmpl-77c18112-263e-47b1-bc44-ddac3691a7e9",
+        "start_time": "2026-09-20T00:46:49.973000Z",
+        "model": "anthropic/claude-sonnet-5",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 4917,
+        "spend": 0.0123365,
+        "net_savings": -0.0024585000000000015
+      },
+      {
+        "request_id": "pagination-qa-055",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-054",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-053",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-052",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-051",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-050",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-049",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-048",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-047",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-046",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-045",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-044",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-043",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-042",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-041",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-040",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-039",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-038",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-037",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-036",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-035",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-034",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-033",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-032",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-031",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-030",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-029",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-028",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-027",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-026",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-025",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-024",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-023",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-022",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-021",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-020",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-019",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-018",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-017",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-016",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-015",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-014",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-013",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-012",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-011",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      }
+    ],
+    "page_size": 50,
+    "has_more": true,
+    "next_cursor": {
+      "start_time": "2026-09-19T23:59:01.123000Z",
+      "request_id": "pagination-qa-011"
+    }
+  },
+  {
+    "requests": [
+      {
+        "request_id": "pagination-qa-010",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-009",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-008",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-007",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-006",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-005",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-004",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-003",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-002",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "pagination-qa-001",
+        "start_time": "2026-09-19T23:59:01.123000Z",
+        "model": "pagination-qa-fixture",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": null
+      },
+      {
+        "request_id": "chatcmpl-f350e8d3-54f6-4fa9-9379-854b8d030991",
+        "start_time": "2026-09-19T23:47:37.073000Z",
+        "model": "anthropic/claude-sonnet-5",
+        "gateway_injected": false,
+        "cache_read_tokens": 4902,
+        "cache_creation_tokens": 0,
+        "spend": 0.0010624,
+        "net_savings": 0.0088236
+      },
+      {
+        "request_id": "chatcmpl-49c52f15-ead7-409d-abeb-649eac874ffc",
+        "start_time": "2026-09-19T23:46:45.828000Z",
+        "model": "anthropic/claude-sonnet-5",
+        "gateway_injected": true,
+        "cache_read_tokens": 4902,
+        "cache_creation_tokens": 15,
+        "spend": 0.0010619,
+        "net_savings": 0.008816099999999999
+      },
+      {
+        "request_id": "chatcmpl-e4b313e1-53e7-49b7-9c39-0cbebe791092",
+        "start_time": "2026-09-19T23:46:11.061000Z",
+        "model": "anthropic/claude-sonnet-5",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 4917,
+        "spend": 0.0123365,
+        "net_savings": -0.0024585000000000015
+      },
+      {
+        "request_id": "a8e3b2d7-25dc-4565-994e-f07e7ef75921",
+        "start_time": "2026-09-19T23:45:25.751000Z",
+        "model": "vertex_ai/claude-sonnet-5",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": 0.0
+      },
+      {
+        "request_id": "19c773d7-10a6-4152-aab9-c7479fdab133",
+        "start_time": "2026-09-19T23:44:39.883000Z",
+        "model": "vertex_ai/claude-sonnet-5",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": 0.0
+      },
+      {
+        "request_id": "8eb2ae4b-3958-4542-a1b2-39d0a0eea4e0",
+        "start_time": "2026-09-19T23:41:05.950000Z",
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "gateway_injected": true,
+        "cache_read_tokens": 0,
+        "cache_creation_tokens": 0,
+        "spend": 0.0,
+        "net_savings": 0.0
+      }
+    ],
+    "page_size": 50,
+    "has_more": false,
+    "next_cursor": null
+  }
+]
