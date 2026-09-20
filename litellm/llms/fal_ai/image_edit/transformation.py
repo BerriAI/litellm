@@ -58,15 +58,13 @@ def _read_image_bytes(image: object) -> bytes:
         return _read_image_bytes(image[1])
     if isinstance(image, os.PathLike):
         return Path(image).read_bytes()
-    if isinstance(image, str):
+    if isinstance(image, str) or not isinstance(image, _Readable):
         raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
-    if not hasattr(image, "read") or not isinstance(image, _Readable):
-        raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
-    position: Final = image.tell() if hasattr(image, "tell") and isinstance(image, _Tellable) else 0
-    if hasattr(image, "seek") and isinstance(image, _Seekable):
+    position: Final = image.tell() if isinstance(image, _Tellable) else 0
+    if isinstance(image, _Seekable):
         image.seek(0)
     data: Final = image.read()
-    if hasattr(image, "seek") and isinstance(image, _Seekable):
+    if isinstance(image, _Seekable):
         image.seek(position)
     return data
 
