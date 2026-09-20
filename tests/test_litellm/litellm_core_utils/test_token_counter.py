@@ -1257,6 +1257,25 @@ def test_token_counter_with_thinking_content():
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
 
+
+def test_token_counter_with_redacted_thinking_content():
+    """
+    A replayed redacted_thinking block (Anthropic redacted reasoning, or the /v1/messages bridge's stand-in
+    for a reasoning item with no summary) counts zero tokens for its encrypted payload, like a thinking
+    block with no text. It used to raise, which made is_prompt_caching_valid_prompt return False and the
+    prompt_caching pre-call check stop pinning the deployment that held the cached prefix.
+    """
+    model = "anthropic/claude-sonnet-4-5-20250929"
+    reply = {"type": "text", "text": "Draw from the box labeled Mixed, because that label must be wrong."}
+    redacted_block = {"type": "redacted_thinking", "data": "EqQBCkYIBRgCKkBjZ2xhc3M" * 30}
+    user_turn = {"role": "user", "content": [{"type": "text", "text": "Which box do you draw from?"}]}
+    follow_up = {"role": "user", "content": [{"type": "text", "text": "Restate that in one sentence."}]}
+
+    without_block = [user_turn, {"role": "assistant", "content": [reply]}, follow_up]
+    with_block = [user_turn, {"role": "assistant", "content": [redacted_block, reply]}, follow_up]
+
+    assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
+
 def test_token_counter_with_tool_reference_block():
     """
     Regression test: a message containing an Anthropic tool-search

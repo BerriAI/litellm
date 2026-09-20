@@ -197,6 +197,58 @@ async def test_async_filter_deployments_narrows_for_group_whose_model_minimum_is
 AUTO_CACHING_MODEL = "anthropic/claude-sonnet-4-5"
 
 
+@pytest.mark.asyncio
+async def test_replayed_redacted_thinking_block_still_records_and_pins():
+    """
+    A model that returns no reasoning summary (gpt-5.x through the /v1/messages bridge, Anthropic with
+    redacted reasoning) hands the client a `redacted_thinking` block, and the client replays it on every
+    later turn. The token count behind `is_prompt_caching_valid_prompt` raised on that block, the helper
+    swallowed it to False, and the check neither recorded the serving deployment nor pinned it, so the
+    conversation bounced across the group and paid a cache write on each deployment.
+    """
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    model = "openai/gpt-5.6-sol"
+    deployments = _deployments(model, model, model)
+    messages = cast(
+        List[AllMessageValues],
+        [
+            *_messages(word_count=3000),
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:" + "Z" * 400},
+                    {"type": "text", "text": "Draw from the box labeled Mixed."},
+                ],
+            },
+            {"role": "user", "content": "Restate that in one sentence."},
+        ],
+    )
+
+    assert is_prompt_caching_valid_prompt(model=model, messages=messages) is True
+
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "call_type": "anthropic_messages",
+                "model": model,
+                "messages": messages,
+                "model_id": "dep-2",
+            }
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+    )
+
+    assert filtered == [deployments[1]]
+
+
 def _auto_caching_messages() -> List[AllMessageValues]:
     """A prompt over the model minimum that carries no client cache_control."""
     return cast(
