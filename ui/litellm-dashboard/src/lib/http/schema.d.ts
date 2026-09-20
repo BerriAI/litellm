@@ -5430,6 +5430,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/websearch_interception_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Websearch Interception Settings
+         * @description Get web search interception configuration.
+         *
+         *     Returns the current settings plus their schema, for the Admin UI to render.
+         */
+        get: operations["get_websearch_interception_settings_get_websearch_interception_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get_favicon": {
         parameters: {
             query?: never;
@@ -7693,6 +7715,10 @@ export interface paths {
          *         - max_budget: Optional[float] - Max budget for key
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
+         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
+         *
+         *     Only the fields an item carries are written: a field left out keeps its current value, and a field
+         *     sent explicitly, null included, is applied exactly as /key/update applies it.
          *
          *     Returns:
          *     - total_requested: int - Total number of keys requested for update
@@ -7801,7 +7827,7 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
-         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
@@ -8282,7 +8308,7 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
-         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - blocked: Optional[bool] - Whether the key is blocked
          *     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -12545,6 +12571,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/complexity_router/fuse_presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Public Fuse Presets */
+        get: operations["get_public_fuse_presets_public_complexity_router_fuse_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/public/complexity_router/scorer_defaults": {
         parameters: {
             query?: never;
@@ -16172,6 +16215,7 @@ export interface paths {
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
+         *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -16814,6 +16858,28 @@ export interface paths {
          *     Only proxy admins are allowed to modify it.
          */
         patch: operations["update_user_banner_update_user_banner_patch"];
+        trace?: never;
+    };
+    "/update/websearch_interception_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Websearch Interception Settings
+         * @description Update web search interception settings in database.
+         *
+         *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
+         */
+        patch: operations["update_websearch_interception_settings_update_websearch_interception_settings_patch"];
         trace?: never;
     };
     "/upload/logo": {
@@ -23818,9 +23884,9 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description spend plus saved_spend: the estimated single-model cost
+             * @description Estimated single-model cost for covered turns only
              */
-            baseline_spend: number;
+            baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
             /**
              * Classifier Cost
@@ -23839,16 +23905,29 @@ export interface components {
             router_type: string;
             /**
              * Saved Pct
-             * @description saved_spend over baseline_spend, as a percentage
+             * @description Covered savings over covered baseline spend, as a percentage
              */
-            saved_pct: number;
-            /** Saved Per Session */
-            saved_per_session: number;
+            saved_pct: number | null;
+            /**
+             * Saved Per Session
+             * @description Average session savings; unavailable unless every turn is covered
+             */
+            saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed dollars saved versus each router's savings baseline (derived from its hardest tier, or the configured override), from the same per-request savings record the usage tab reads
+             * @description Signed savings for covered turns only; null when traffic has no current estimates
              */
-            saved_spend: number;
+            saved_spend: number | null;
+            /**
+             * Savings Estimated Actual Spend
+             * @description Actual spend, including classifier cost, for covered turns only
+             */
+            savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Turns
+             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             */
+            savings_estimated_turns: number;
             /** Sessions */
             sessions: number;
             /**
@@ -23879,9 +23958,9 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description spend plus saved_spend: the estimated single-model cost
+             * @description Estimated single-model cost for covered turns only
              */
-            baseline_spend: number;
+            baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
             /**
              * Classifier Cost
@@ -23890,16 +23969,29 @@ export interface components {
             classifier_cost: number | null;
             /**
              * Saved Pct
-             * @description saved_spend over baseline_spend, as a percentage
+             * @description Covered savings over covered baseline spend, as a percentage
              */
-            saved_pct: number;
-            /** Saved Per Session */
-            saved_per_session: number;
+            saved_pct: number | null;
+            /**
+             * Saved Per Session
+             * @description Average session savings; unavailable unless every turn is covered
+             */
+            saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed dollars saved versus each router's savings baseline (derived from its hardest tier, or the configured override), from the same per-request savings record the usage tab reads
+             * @description Signed savings for covered turns only; null when traffic has no current estimates
              */
-            saved_spend: number;
+            saved_spend: number | null;
+            /**
+             * Savings Estimated Actual Spend
+             * @description Actual spend, including classifier cost, for covered turns only
+             */
+            savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Turns
+             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             */
+            savings_estimated_turns: number;
             /** Sessions */
             sessions: number;
             /**
@@ -24169,21 +24261,21 @@ export interface components {
         AutoRouterSessionResponse: {
             /**
              * Baseline Model
-             * @description The savings baseline most of this session's turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
+             * @description The savings baseline most covered turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
              */
             baseline_model: string | null;
             /**
              * Baseline Models
-             * @description Turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
+             * @description Covered turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
              */
             baseline_models: {
                 [key: string]: number;
             };
             /**
              * Baseline Spend
-             * @description spend plus saved_spend: the estimated single-model cost
+             * @description Estimated single-model cost; unavailable unless every turn is covered
              */
-            baseline_spend: number;
+            baseline_spend: number | null;
             /**
              * Last Model
              * @description The deployment model the most recent turn was routed to
@@ -24201,9 +24293,24 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Estimated savings against the baseline, net of classifier cost
+             * @description Estimated savings for covered turns only, net of classifier cost
              */
-            saved_spend: number;
+            saved_spend: number | null;
+            /**
+             * Savings Estimated Actual Spend
+             * @description Actual spend, including classifier cost, for covered turns only
+             */
+            savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Baseline Spend
+             * @description Estimated single-model cost for covered turns only
+             */
+            savings_estimated_baseline_spend: number | null;
+            /**
+             * Savings Estimated Turns
+             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             */
+            savings_estimated_turns: number;
             /** Session Id */
             session_id: string;
             /**
@@ -25237,7 +25344,7 @@ export interface components {
         };
         /**
          * BulkUpdateKeyRequestItem
-         * @description Individual key update request item
+         * @description One /key/bulk_update item; only the fields it carries are written.
          */
         BulkUpdateKeyRequestItem: {
             /** Budget Id */
@@ -25246,6 +25353,7 @@ export interface components {
             key: string;
             /** Max Budget */
             max_budget?: number | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Tags */
             tags?: string[] | null;
             /** Team Id */
@@ -26722,6 +26830,11 @@ export interface components {
              * @description override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth
              */
             custom_auth?: string | null;
+            /**
+             * Dangerously Permit Weak Or Unset Master Key
+             * @description local development only: start even when master_key is unset, empty, or a publicly known default
+             */
+            dangerously_permit_weak_or_unset_master_key?: boolean | null;
             /** @description custom args for instantiating dynamodb client - e.g. billing provision */
             database_args?: components["schemas"]["DynamoDBArgs"] | null;
             /**
@@ -28575,6 +28688,39 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** FuseHarnessPreset */
+        FuseHarnessPreset: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Sources */
+            sources: string[];
+            /** Text */
+            text: string;
+        };
+        /** FuseModelPreset */
+        FuseModelPreset: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Model */
+            model: string;
+            /** Sources */
+            sources: string[];
+            /** Text */
+            text: string;
+        };
+        /** FusePresetCatalog */
+        FusePresetCatalog: {
+            /** Harnesses */
+            harnesses: components["schemas"]["FuseHarnessPreset"][];
+            /** Models */
+            models: components["schemas"]["FuseModelPreset"][];
+            /** Version */
+            version: string;
+        };
         /**
          * GUARDRAIL_DEFINITION_LOCATION
          * @enum {string}
@@ -29454,6 +29600,8 @@ export interface components {
         KeyMetadata: {
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Exists */
+            key_exists?: boolean | null;
             /** Team Id */
             team_id?: string | null;
             /** User Email */
@@ -29556,21 +29704,27 @@ export interface components {
         LLMV2Config: {
             calibration?: components["schemas"]["LLMV2Calibration"] | null;
             /** Capable Profile */
-            capable_profile: string;
+            capable_profile?: string | null;
+            /** Capable Profile Preset */
+            capable_profile_preset?: string | null;
             /**
              * Capable Tier
              * @default REASONING
              */
             capable_tier: string;
             /** Efficient Profile */
-            efficient_profile: string;
+            efficient_profile?: string | null;
+            /** Efficient Profile Preset */
+            efficient_profile_preset?: string | null;
             /**
              * Efficient Tier
              * @default SIMPLE
              */
             efficient_tier: string;
             /** Harness */
-            harness: string;
+            harness?: string | null;
+            /** Harness Preset */
+            harness_preset?: string | null;
             /**
              * Max Output Tokens
              * @default 1024
@@ -36760,6 +36914,8 @@ export interface components {
             DefaultRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
+            /** Notfounderrorretries */
+            NotFoundErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
             /** Serviceunavailableerrorretries */
@@ -37804,6 +37960,19 @@ export interface components {
              */
             total_tokens: number;
         };
+        /** StandardLoggingHeuristicV2Forecast */
+        StandardLoggingHeuristicV2Forecast: {
+            /** Predicted Tier */
+            predicted_tier: string;
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /** Request Type */
+            request_type: string;
+            /** Threshold */
+            threshold: number;
+        };
         /**
          * StandardLoggingRoutingDecision
          * @description Per-request provenance for a pre-routing strategy (auto-router) decision.
@@ -37860,6 +38029,7 @@ export interface components {
             escalated?: boolean;
             /** Escalation Keyword */
             escalation_keyword?: string;
+            heuristic_v2_forecast?: components["schemas"]["StandardLoggingHeuristicV2Forecast"];
             /** Matched Keyword */
             matched_keyword?: string;
             /** Reasoning Override Min Score */
@@ -38017,7 +38187,7 @@ export interface components {
          *     Use in general_settings.supported_db_objects to specify which objects to load from DB.
          * @enum {string}
          */
-        SupportedDBObjectType: "models" | "mcp" | "guardrails" | "policies" | "vector_stores" | "pass_through_endpoints" | "prompts" | "model_cost_map" | "tools" | "config_overrides";
+        SupportedDBObjectType: "models" | "mcp" | "guardrails" | "policies" | "vector_stores" | "pass_through_endpoints" | "prompts" | "model_cost_map" | "tools" | "config_overrides" | "websearch_interception_settings";
         /** SupportedEndpoint */
         SupportedEndpoint: {
             /** Endpoint */
@@ -41148,6 +41318,53 @@ export interface components {
             } | null;
             /** Vector Store Name */
             vector_store_name?: string | null;
+        };
+        /**
+         * WebSearchInterceptionSettings
+         * @description Configuration for server-side web search interception
+         */
+        WebSearchInterceptionSettings: {
+            /**
+             * Enabled
+             * @description Serve web search tool calls from a configured search tool instead of passing them upstream
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Enabled Providers
+             * @description LLM providers to intercept for (e.g. 'bedrock', 'vertex_ai'). Empty intercepts Bedrock only.
+             */
+            enabled_providers?: string[];
+            /**
+             * Max Agentic Loops
+             * @description How many follow-up model calls one intercepted request may chain. Empty applies the default of 3.
+             */
+            max_agentic_loops?: number | null;
+            /**
+             * Search Tool Name
+             * @description Name of the configured search tool to run searches through. Empty uses the first one available.
+             */
+            search_tool_name?: string | null;
+        };
+        /**
+         * WebSearchInterceptionSettingsResponse
+         * @description Response model for web search interception settings
+         */
+        WebSearchInterceptionSettingsResponse: {
+            /**
+             * Active On This Pod
+             * @description Whether the process answering this request has the interception callback registered. Read-only: it reports what is running here, while values.enabled is the cluster-wide setting, and the two disagree while a pod is still applying a change or failed to apply it.
+             * @default false
+             */
+            active_on_this_pod: boolean;
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
         };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
@@ -49617,6 +49834,26 @@ export interface operations {
             };
         };
     };
+    get_websearch_interception_settings_get_websearch_interception_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebSearchInterceptionSettingsResponse"];
+                };
+            };
+        };
+    };
     get_favicon_get_favicon_get: {
         parameters: {
             query?: never;
@@ -57773,6 +58010,26 @@ export interface operations {
             };
         };
     };
+    get_public_fuse_presets_public_complexity_router_fuse_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FusePresetCatalog"];
+                };
+            };
+        };
+    };
     get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get: {
         parameters: {
             query?: never;
@@ -62731,6 +62988,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpdateUserBannerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_websearch_interception_settings_update_websearch_interception_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebSearchInterceptionSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

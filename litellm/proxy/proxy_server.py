@@ -342,6 +342,15 @@ from litellm.proxy.auth.login_throttle import (
     warn_login_counters_are_per_worker,
     warn_source_login_limit_is_off,
 )
+from litellm.proxy.auth.master_key_boot_check import (
+    MASTER_KEY_ENV_VAR,
+    SALT_KEY_ENV_VAR,
+    WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR,
+    announce_on_stderr_at_exit,
+    enforce_master_key_boot_verdict,
+    master_key_boot_verdict,
+    with_stored_secrets_counted,
+)
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -447,7 +456,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_spend_counter_key,
     tag_cache_key,
 )
-from litellm.proxy.config_resolvers import SettingsStore, resolve_fields
+from litellm.proxy.config_resolvers import SettingsStore, config_ownership_message, resolve_fields
 from litellm.proxy.config_resolvers.alerting import (
     EMAIL_DESCRIPTORS,
     MS_TEAMS_DESCRIPTORS,
@@ -464,6 +473,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -477,6 +487,10 @@ from litellm.proxy.db.gateway_request_tracking import (
     GatewayRequestAccumulator,
     GatewayRequestRedisBuffer,
     flush_gateway_requests,
+)
+from litellm.proxy.db.master_key_migration import (
+    count_values_encrypted_with_or_none,
+    migrate_if_requested,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
@@ -1123,6 +1137,14 @@ async def _initialize_shared_aiohttp_session():
         return None
 
 
+async def _connect_to_count_stored_values() -> SupportsRawQueries:
+    client: Final = prisma_client or PrismaClient(
+        database_url=str(get_secret("DATABASE_URL")), proxy_logging_obj=proxy_logging_obj
+    )
+    await client.connect()
+    return client.writer_db
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     global \
@@ -1215,6 +1237,22 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
 
+    enforce_master_key_boot_verdict(
+        await with_stored_secrets_counted(
+            master_key_boot_verdict(
+                master_key=master_key,
+                environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
+                general_settings=general_settings,
+                config_file_path=user_config_file_path,
+                override_env_is_on=get_secret_bool(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR) is True,
+                salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
+                database_is_configured=prisma_client is not None or get_secret("DATABASE_URL", None) is not None,
+            ),
+            count_values_encrypted_with=partial(count_values_encrypted_with_or_none, _connect_to_count_stored_values),
+        ),
+        announce=announce_on_stderr_at_exit,
+    )
+
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Final[str | None] = get_secret("DATABASE_URL", None)
@@ -1223,6 +1261,14 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
         )
+
+    await migrate_if_requested(
+        environ=os.environ,
+        master_key=master_key,
+        connected_database=lambda: None if prisma_client is None else prisma_client.writer_db,
+        log=verbose_proxy_logger.warning,
+        raise_unless_tolerated=PrismaDBExceptionHandler.handle_db_exception,
+    )
 
     if prisma_client is not None:
 
@@ -4793,6 +4839,22 @@ def _swap_in_model_cost_map(new_model_cost_map: dict) -> int:
     return adopt_model_cost_map(new_model_cost_map)
 
 
+def _websearch_handler_params(stored: Mapping[str, object]) -> dict[str, object]:
+    """
+    Translate stored web search interception settings into handler kwargs.
+
+    Drops ``enabled``, which gates the callback rather than configuring it, and
+    drops an ``enabled_providers`` that is not a non-empty list so the handler
+    applies its own default. An empty list otherwise matches no provider at all,
+    and a bare string is iterated one character at a time.
+    """
+    params: Final = {key: value for key, value in stored.items() if key != "enabled"}
+    providers: Final = params.get("enabled_providers")
+    if not isinstance(providers, list) or not providers:
+        params.pop("enabled_providers", None)
+    return params
+
+
 def should_load_db_object(object_type: str | SupportedDBObjectType) -> bool:
     """
     Check if an object type should be loaded from the database based on general_settings.supported_db_objects.
@@ -4894,6 +4956,7 @@ class ProxyConfig:
     def __init__(self) -> None:
         self.config: Mapping[str, object] = MappingProxyType({})
         self._last_semantic_filter_config: dict[str, object] | None = None
+        self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
         self._last_cyberark_config: dict[str, object] | None = None  # mutable-ok: change-detection cache
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
@@ -4913,6 +4976,7 @@ class ProxyConfig:
         self.router_settings: Final[SettingsStore] = SettingsStore("router_settings")
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
+        self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
                 "general_settings": self.settings,
@@ -5122,6 +5186,15 @@ class ProxyConfig:
             store.apply_db_row(cast(DbRow, section_name), wrote_section)
         await invalidate_config_param(section_name)
 
+    def reject_config_owned_deletes(self, *, section_name: str, keys: tuple[str, ...]) -> None:
+        """Refuse a delete of a setting the config file owns; unlike a write, the value never makes it allowed."""
+        store: Final = self._settings_stores.get(cast(Section, section_name))
+        if store is None:
+            return
+        owned: Final = tuple(sorted(key for key in keys if store.owned_by_config(key)))
+        if owned:
+            self._raise_config_owned(section_name=section_name, rejected=owned, store=store)
+
     def reject_config_owned_writes(self, *, section_name: str, changed_keys: Mapping[str, JsonValue]) -> None:
         """Refuse a write to a setting the config file owns, rather than storing a value that never applies."""
         store: Final = self._settings_stores.get(cast(Section, section_name))
@@ -5130,16 +5203,27 @@ class ProxyConfig:
         rejected: Final = store.rejected_writes(changed_keys)
         if not rejected:
             return
+        self._raise_config_owned(section_name=section_name, rejected=rejected, store=store)
+
+    def _raise_config_owned(self, *, section_name: str, rejected: tuple[str, ...], store: SettingsStore) -> None:
         subject: Final = (
             f"key '{rejected[0]}' is" if len(rejected) == 1 else f"keys {', '.join(repr(key) for key in rejected)} are"
         )
         pronoun: Final = "it" if len(rejected) == 1 else "them"
+        shadowed: Final = tuple(key for key in rejected if store.shadows_db_value(key))
+        stored: Final = (
+            f" The {'value' if len(shadowed) == 1 else 'values'} already stored in the database for "
+            f"{', '.join(shadowed)} {'is' if len(shadowed) == 1 else 'are'} ignored and will never be applied."
+            if shadowed
+            else ""
+        )
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"{section_name} {subject} set in the config file and cannot be changed here",
+                "error": f"{section_name} {subject} set in the config file and cannot be changed here.{stored}",
                 "keys": list(rejected),
                 "section": section_name,
+                "stored_database_values_ignored": list(shadowed),
                 "resolution": (
                     f"edit {user_config_file_path} to change {pronoun}, "
                     f"or remove {pronoun} from the file to let the database own {pronoun}"
@@ -5240,20 +5324,27 @@ class ProxyConfig:
             verbose_proxy_logger.warning("Maximum recursion depth (%s) reached while processing config.", max_depth)
             return config
 
-        for key, value in config.items():
-            if isinstance(value, dict):
-                config[key] = self._check_for_os_environ_vars(config=value, depth=depth + 1, max_depth=max_depth)
-            elif isinstance(value, list):
-                for item in value:
-                    if isinstance(item, dict):
-                        item = self._check_for_os_environ_vars(config=item, depth=depth + 1, max_depth=max_depth)
-            # if the value is a string and starts with "os.environ/" - then it's an environment variable
-            elif isinstance(value, str) and value.startswith("os.environ/"):
-                resolved = get_secret(value)
-                if resolved is None and secret_manager_would_be_consulted(value):
-                    verbose_proxy_logger.warning("%s is absent from the configured secret manager", value)
-                config[key] = resolved
-        return config
+        return {  # mutable-ok: callers deep-copy and mutate this, and a mappingproxy cannot be deep-copied
+            key: self._resolved_config_value(value=value, depth=depth, max_depth=max_depth)
+            for key, value in config.items()
+        }
+
+    def _resolved_config_value(self, value: object, depth: int, max_depth: int) -> object:
+        if isinstance(value, dict):
+            return self._check_for_os_environ_vars(config=value, depth=depth + 1, max_depth=max_depth)
+        if isinstance(value, list):
+            return [  # mutable-ok: config values round-trip through json, where a tuple is not a list
+                self._check_for_os_environ_vars(config=item, depth=depth + 1, max_depth=max_depth)
+                if isinstance(item, dict)
+                else item
+                for item in value
+            ]
+        if isinstance(value, str) and value.startswith("os.environ/"):
+            resolved: Final = get_secret(value)
+            if resolved is None and secret_manager_would_be_consulted(value):
+                verbose_proxy_logger.warning("%s is absent from the configured secret manager", value)
+            return resolved
+        return value
 
     def _initialize_secret_manager_from_raw_config(
         self, config: Mapping[str, object], config_file_path: str | None
@@ -7345,7 +7436,9 @@ class ProxyConfig:
             "disable_auto_add_proxy_admin_to_teams",
             "apply_user_budget_to_team_keys",
         ):
-            if key in db_values and (value := self.settings.get(key)) is not None:
+            if key not in db_values or self.settings.owned_by_config(key):
+                continue
+            if (value := self.settings.get(key)) is not None:
                 self.settings[key] = coerce_bool(value)
 
     async def _apply_cache_size_setting(
@@ -7355,21 +7448,24 @@ class ProxyConfig:
     ) -> None:
         if "user_api_key_cache_max_size" not in db_values and not cache_size_was_db:
             return
+        writable: Final = not self.settings.owned_by_config("user_api_key_cache_max_size")
         cache_value: Final = self.settings.get("user_api_key_cache_max_size")
         try:
             cache_max_size: Final = ConfigGeneralSettings.model_validate(
                 MappingProxyType({"user_api_key_cache_max_size": cache_value})
             ).user_api_key_cache_max_size
         except ValidationError:
-            self.settings.pop("user_api_key_cache_max_size", None)
+            if writable:
+                self.settings.pop("user_api_key_cache_max_size", None)
             verbose_proxy_logger.warning(
                 "Ignoring invalid general_settings.user_api_key_cache_max_size=%r from the DB", cache_value
             )
             return
-        if cache_max_size is None:
-            self.settings.pop("user_api_key_cache_max_size", None)
-        else:
-            self.settings["user_api_key_cache_max_size"] = cache_max_size
+        if writable:
+            if cache_max_size is None:
+                self.settings.pop("user_api_key_cache_max_size", None)
+            else:
+                self.settings["user_api_key_cache_max_size"] = cache_max_size
         user_api_key_cache.update_in_memory_max_size(cache_max_size)
 
     async def _apply_store_model_in_db_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
@@ -7381,7 +7477,8 @@ class ProxyConfig:
             return
         normalized: Final = coerce_bool(value)
         store_model_in_db = normalized if isinstance(normalized, bool) else bool(normalized)
-        self.settings["store_model_in_db"] = store_model_in_db
+        if not self.settings.owned_by_config("store_model_in_db"):
+            self.settings["store_model_in_db"] = store_model_in_db
 
     async def _apply_retention_settings(
         self,
@@ -7423,7 +7520,18 @@ class ProxyConfig:
                     self._prepared_db_settings_values(section, param_value),
                 )
 
+        self._warn_about_shadowed_db_settings()
         return self._config_with_resolved_settings(config)
+
+    def _warn_about_shadowed_db_settings(self) -> None:
+        shadowed: Final[frozenset[tuple[Section, str]]] = frozenset(
+            (section, key) for section, store in self._settings_stores.items() for key in store.shadowed_db_keys()
+        )
+        for section, key in sorted(shadowed - self._warned_shadowed_keys):
+            verbose_proxy_logger.warning(
+                "%s", config_ownership_message(section=section, key=key, shadows_db_value=True)
+            )
+        self._warned_shadowed_keys = shadowed
 
     def _prepared_db_settings_values(self, section: Section, value: object) -> Mapping[str, SettingsJsonValue]:
         if section == "environment_variables":
@@ -7670,6 +7778,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="semantic_filter_settings"):
             await self._init_semantic_filter_settings_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type=SupportedDBObjectType.WEBSEARCH_INTERCEPTION_SETTINGS):
+            await self.init_websearch_interception_settings_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="config_overrides"):
             await self._init_hashicorp_vault_config_override(prisma_client=prisma_client)
             await self._init_cyberark_config_override(prisma_client=prisma_client)
@@ -7747,6 +7858,66 @@ class ProxyConfig:
 
         except Exception as e:
             verbose_proxy_logger.exception("Error initializing semantic filter settings from DB: %s", e)
+
+    async def init_websearch_interception_settings_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize web search interception settings from database.
+        Called periodically (approximately every 10 seconds) by background task to hot-reload settings across all pods.
+        """
+        import json
+
+        import litellm
+        from litellm.integrations.websearch_interception.handler import (
+            WebSearchInterceptionLogger,
+        )
+
+        try:
+            config_record: Final = await get_config_param(prisma_client, "litellm_settings")
+
+            if config_record is None or config_record.param_value is None:
+                return
+
+            litellm_settings = config_record.param_value
+            if isinstance(litellm_settings, str):
+                litellm_settings = json.loads(litellm_settings)
+
+            websearch_config: Final = litellm_settings.get("websearch_interception_params", None)
+
+            if not isinstance(websearch_config, Mapping):
+                return
+
+            if "enabled" not in websearch_config and self._last_websearch_interception_config is None:
+                verbose_proxy_logger.debug(
+                    "Web search interception: stored settings carry no 'enabled' flag and none were applied "
+                    "before, so litellm_settings.callbacks keeps ownership of the callback."
+                )
+                return
+
+            enabled: Final = bool(coerce_bool(websearch_config.get("enabled", True)))
+            registered: Final = bool(
+                litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)
+            )
+            if self._last_websearch_interception_config == websearch_config and registered == enabled:
+                return
+
+            replacement: Final = (
+                WebSearchInterceptionLogger.from_config_yaml(_websearch_handler_params(websearch_config))
+                if enabled
+                else None
+            )
+
+            litellm.logging_callback_manager.remove_callbacks_by_type(litellm.callbacks, WebSearchInterceptionLogger)
+
+            if replacement is not None:
+                litellm.logging_callback_manager.add_litellm_callback(replacement)
+                verbose_proxy_logger.info("Web search interception reinitialized from DB")
+            else:
+                verbose_proxy_logger.info("Web search interception disabled")
+
+            self._last_websearch_interception_config = dict(websearch_config)
+
+        except Exception as e:
+            verbose_proxy_logger.exception("Error initializing web search interception settings from DB: %s", e)
 
     async def _init_sso_settings_in_db(self, prisma_client: PrismaClient):
         """
@@ -9657,10 +9828,12 @@ class ProxyStartupEvent:
         user_api_key_cache: UserApiKeyCache,
     ):
         """Initialize JWT auth on startup"""
-        if general_settings.get("litellm_jwtauth", None) is not None:
-            for k, v in general_settings["litellm_jwtauth"].items():
-                if isinstance(v, str) and v.startswith("os.environ/"):
-                    general_settings["litellm_jwtauth"][k] = get_secret(v)
+        declared_jwtauth: Final = general_settings.get("litellm_jwtauth", None)
+        if declared_jwtauth is not None:
+            resolved_jwtauth: Final = {
+                key: (get_secret(value) if isinstance(value, str) and value.startswith("os.environ/") else value)
+                for key, value in declared_jwtauth.items()
+            }
             # ``user_config_file_path`` is set by ``ProxyConfig._get_config_from_file``
             # during startup. Threading it through lets an operator-
             # configured ``custom_validate: s3://...`` resolve through
@@ -9668,7 +9841,7 @@ class ProxyStartupEvent:
             # file context) hit the gate and refuse remote loads.
             litellm_jwtauth = LiteLLM_JWTAuth(
                 config_file_path=user_config_file_path,
-                **general_settings["litellm_jwtauth"],
+                **resolved_jwtauth,
             )
         else:
             litellm_jwtauth = LiteLLM_JWTAuth()
@@ -17631,9 +17804,12 @@ async def get_config_general_settings(
             detail={"error": f"Field name={field_name} is not set"},
         )
 
+    declared: Final = (
+        settings.config_value(field_name) if settings.owned_by_config(field_name) else settings[field_name]
+    )
     field_value = _redact_general_setting_value(
         field_name,
-        settings[field_name],
+        declared,
         user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
     if field_name == "plugins" and isinstance(field_value, list):
@@ -17674,8 +17850,8 @@ _GENERAL_SETTINGS_UI_LITELLM_FIELDS: Final[dict[str, GeneralSettingsUILiteLLMFie
         "type": "Boolean",
         "tab": "prompt_caching",
         "description": (
-            "Auto-adds cache_control to the system prompt and trailing turn for supported Anthropic "
-            "and Bedrock Claude models. The cache is shared across callers on the same upstream credentials."
+            "Auto-adds cache_control to the system prompt and trailing turn for supported Claude models on "
+            "Anthropic, Bedrock, Vertex AI, and Azure AI. The cache is shared across callers on the same upstream credentials."
         ),
     },
     "anthropic_prompt_caching_ttl": {
@@ -18006,6 +18182,8 @@ async def delete_config_general_settings(
             status_code=400,
             detail={"error": f"Invalid field={data.field_name} passed in."},
         )
+
+    proxy_config.reject_config_owned_deletes(section_name="general_settings", keys=(data.field_name,))
 
     ## get general settings from db
     db_general_settings: Final[_ConfigParamRow | None] = await _config_param_table(prisma_client).find_first(

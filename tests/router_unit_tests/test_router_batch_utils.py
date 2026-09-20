@@ -317,3 +317,18 @@ def test_replace_model_in_jsonl_with_embedded_newlines():
         == "This is a message\nwith multiple\nlines"
     )
     assert result_json["custom_id"] == "test123"
+
+
+def test_is_batch_retrieve_call_type_matches_only_batch_retrieves():
+    from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
+    from litellm.types.utils import CallTypes
+
+    assert is_batch_retrieve_call_type(CallTypes.aretrieve_batch.value) is True
+    assert is_batch_retrieve_call_type(CallTypes.retrieve_batch.value) is True
+
+    for call_type in CallTypes:
+        if call_type in (CallTypes.aretrieve_batch, CallTypes.retrieve_batch):
+            continue
+        assert is_batch_retrieve_call_type(call_type.value) is False
+
+    assert is_batch_retrieve_call_type(None) is False

@@ -1650,6 +1650,7 @@ jobs:
           command: |
             docker run -d \
               -p 4001:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_test" \
               -e LITELLM_MASTER_KEY="sk-1234" \
               --name schema-seed \
@@ -1670,6 +1671,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_test" \
               -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DISABLE_SCHEMA_UPDATE="True" \
@@ -1744,7 +1746,9 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e LITELLM_MASTER_KEY="sk-1234" \
               -e USE_PRISMA_MIGRATE=True \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e AZURE_API_KEY=$AZURE_API_KEY \
@@ -1839,7 +1843,9 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e LITELLM_MASTER_KEY="sk-1234" \
               -e AZURE_API_KEY=$AZURE_API_KEY \
               -e AZURE_API_BASE=$AZURE_API_BASE \
               -e AZURE_API_VERSION="2024-05-01-preview" \
@@ -1927,6 +1933,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -1987,6 +1994,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -2064,6 +2072,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=host.docker.internal \
               -e REDIS_PORT=6379 \
@@ -2146,6 +2155,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -2168,6 +2178,7 @@ jobs:
           command: |
             docker run -d \
               -p 4001:4001 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -2245,6 +2256,7 @@ jobs:
             docker run -d \
               --restart on-failure \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e STORE_MODEL_IN_DB="True" \
               -e LITELLM_MASTER_KEY="sk-1234" \
@@ -2319,6 +2331,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
@@ -2401,6 +2414,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
@@ -2492,6 +2506,7 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
@@ -2673,6 +2688,7 @@ jobs:
           name: Start LiteLLM proxy
           environment:
             LITELLM_MASTER_KEY: "sk-1234"
+            LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY: "true"
             MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
             SERVER_ROOT_PATH: ""
@@ -2816,6 +2832,7 @@ jobs:
           name: Start LiteLLM proxy under a server root path
           environment:
             LITELLM_MASTER_KEY: "sk-1234"
+            LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY: "true"
             MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
           # Output flows to this step's own log, so a boot crash is visible here
@@ -2901,6 +2918,7 @@ jobs:
           command: |
             docker run --name my-app \
               -p 4000:4000 \
+              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DATABASE_URL="postgresql://wrong:wrong@wrong:5432/wrong" \
               myapp:latest \
@@ -3015,7 +3033,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, extensions, sdk, browser]
+              suite: [management, accounting, database, providers, extensions, sdk, cost, browser]
           filters:
             branches:
               only:
