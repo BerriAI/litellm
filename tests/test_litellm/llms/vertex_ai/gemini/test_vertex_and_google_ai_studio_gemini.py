@@ -6331,13 +6331,16 @@ def test_map_function_drops_allowed_callers_with_warning(caplog):
     config = VertexGeminiConfig()
     tools = _strict_function_tool()
     tools[0]["function"]["allowed_callers"] = ["direct"]
+    tools[0]["function"]["name"] = "tool_a\nforged log line"
 
     with caplog.at_level("WARNING", logger="LiteLLM"):
         mapped = config._map_function(value=tools, optional_params={})
 
     declaration = mapped[0]["function_declarations"][0]
     assert "allowed_callers" not in declaration
-    assert any("allowed_callers" in record.message for record in caplog.records)
+    allowed_callers_warning = next(record.message for record in caplog.records if "allowed_callers" in record.message)
+    assert "tool_a\\nforged log line" in allowed_callers_warning
+    assert "tool_a\nforged log line" not in allowed_callers_warning
 
 
 def test_map_function_does_not_warn_for_nested_schema_property_named_strict(caplog):

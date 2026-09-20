@@ -3975,17 +3975,6 @@ def _remove_additional_properties(schema):
     return schema
 
 
-def _schema_contains_key(schema: object, key: str) -> bool:
-    """Return True if the dict key appears anywhere in a nested schema structure."""
-    if isinstance(schema, dict):
-        if key in schema:
-            return True
-        return any(_schema_contains_key(value, key) for value in schema.values())
-    if isinstance(schema, list):
-        return any(_schema_contains_key(item, key) for item in schema)
-    return False
-
-
 def _remove_strict_from_schema(schema):
     """
     Relevant Issues: https://github.com/BerriAI/litellm/issues/6136, https://github.com/BerriAI/litellm/issues/6088

@@ -586,19 +586,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
-    def _tools_have_strict_constraint(self, tools: list) -> bool:
-        """
-        Check only the tool-level 'strict' constraint.
-
-        A recursive key scan would also match JSON Schema properties legitimately
-        named 'strict' nested inside a tool's parameters, which are unrelated to
-        the unsupported tool constraint and must not trigger the warning.
-        """
+    @staticmethod
+    def _tools_have_strict_constraint(tools: Sequence[Mapping[str, object]]) -> bool:
         for tool in tools:
-            if not isinstance(tool, dict):
-                continue
             function_chunk = tool.get("function")
-            if isinstance(function_chunk, dict):
+            if isinstance(function_chunk, Mapping):
                 if "strict" in function_chunk:
                     return True
             elif "strict" in tool:
@@ -629,29 +621,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         googleMaps: dict | None = None
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
-        # Work on a copy: the cleanup helpers below strip unsupported fields
-        # in place, and the caller's tool objects must not be mutated.
-        value = deepcopy(value)
-        # remove 'additionalProperties' from tools
-        value = _remove_additional_properties(value)
-        if self._tools_have_strict_constraint(value):
+        mapped_value: Final = _remove_additional_properties(deepcopy(value))
+        if self._tools_have_strict_constraint(mapped_value):
             verbose_logger.warning(
                 "Gemini function declarations do not support 'strict'. "
                 "Dropping 'strict' from tools; the constraint will not be enforced upstream. "
                 "See https://github.com/BerriAI/litellm/issues/41913"
             )
-        # remove tool-level 'strict' (unsupported by Gemini). Nested JSON Schema
-        # properties legitimately named 'strict' are left untouched.
-        for tool in value:
-            if not isinstance(tool, dict):
-                continue
+        for tool in mapped_value:
             function_chunk = tool.get("function")
             if isinstance(function_chunk, dict):
                 function_chunk.pop("strict", None)
             else:
                 tool.pop("strict", None)
 
-        for tool in value:
+        for tool in mapped_value:
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
@@ -720,10 +704,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif openai_function_object is not None:
                 if openai_function_object.get("allowed_callers") is not None:
                     verbose_logger.warning(
-                        f"Gemini function declarations do not support 'allowed_callers'. "
-                        f"Dropping 'allowed_callers' from tool '{openai_function_object.get('name')}'; "
-                        f"the restriction will not be enforced upstream. "
-                        f"See https://github.com/BerriAI/litellm/issues/41913"
+                        "Gemini function declarations do not support 'allowed_callers'. "
+                        "Dropping 'allowed_callers' from tool %r; the restriction will not be enforced upstream. "
+                        "See https://github.com/BerriAI/litellm/issues/41913",
+                        openai_function_object.get("name"),
                     )
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
