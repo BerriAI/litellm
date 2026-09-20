@@ -715,8 +715,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             e: Final = int(item.get("end") or 0)
             if s >= e:
                 continue
+            item_copy: Final[PresidioAnalyzeResponseItem] = {
+                "entity_type": item.get("entity_type"),
+                "start": s,
+                "end": e,
+                "score": float(item.get("score") or 0.0),
+            }
             if not merged:
-                merged.append(dict(item))  # mutable-ok: shallow copy required for mutable boundary merge # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # shallow copy
+                merged.append(item_copy)
                 continue
 
             prev: Final = merged[-1]
@@ -730,7 +736,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     prev["entity_type"] = item.get("entity_type")
                     prev["score"] = curr_score
             else:
-                merged.append(dict(item))  # mutable-ok: shallow copy required for mutable boundary merge # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # shallow copy
+                merged.append(item_copy)
 
         return tuple(merged)
 
