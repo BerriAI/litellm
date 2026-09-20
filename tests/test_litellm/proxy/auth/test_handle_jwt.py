@@ -7149,16 +7149,17 @@ async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatc
 @pytest.mark.asyncio
 @pytest.mark.parametrize("existing_user", [False, True])
 @pytest.mark.parametrize("warm_cache", [False, True])
+@pytest.mark.parametrize("email", [None, "admin@external.example", "admin@allowed.example"])
 async def test_scope_admin_admission_resolves_existing_user_without_provisioning(
-    monkeypatch: pytest.MonkeyPatch, existing_user: bool, warm_cache: bool
+    monkeypatch: pytest.MonkeyPatch, existing_user: bool, warm_cache: bool, email: str | None
 ) -> None:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     private_key, jwk = _get_rsa_key_and_jwk("admin-status")
     cache: Final = UserApiKeyCache()
     cache.set_cache("litellm_jwt_auth_keys_https://admin.example/jwks", [jwk])
-    user_id: Final = f"admin-status-{existing_user}-{warm_cache}"
-    user: Final = LiteLLM_UserTable(user_id=user_id, metadata={"scim_active": False}, organization_memberships=[])
+    user_id: Final = f"admin-status-{existing_user}-{warm_cache}-{email}"
+    user: Final = LiteLLM_UserTable(user_id=user_id, user_email="admin@allowed.example", metadata={"scim_active": False}, organization_memberships=[])
     if existing_user and warm_cache:
         cache.set_cache(user_id, user)
     database: Final = MagicMock()
@@ -7170,14 +7171,17 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
     handler.update_environment(
         prisma_client=database,
         user_api_key_cache=cache,
-        litellm_jwtauth=LiteLLM_JWTAuth(user_id_jwt_field="sub", user_id_upsert=True),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            user_id_jwt_field="sub", user_id_upsert=True, user_email_jwt_field="email",
+            user_allowed_email_domain="allowed.example",
+        ),
     )
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://admin.example/jwks")
     monkeypatch.setenv("JWT_ISSUER", "https://admin.example")
     monkeypatch.setenv("JWT_AUDIENCE", "gateway")
     token: Final = _encode_rsa_jwt(
         private_key, "https://admin.example", "gateway", "admin-status",
-        {"sub": user_id, "scope": "litellm_proxy_admin"},
+        {"sub": user_id, "scope": "litellm_proxy_admin", **({"email": email} if email else {})},
     )
     result: Final = await JWTAuthManager.auth_builder(
         api_key=token, jwt_handler=handler, prisma_client=database, user_api_key_cache=cache,
@@ -7187,3 +7191,5 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
     assert result["user_id"] == user_id
     assert result["user_object"] == (user if existing_user else None)
     users.create.assert_not_awaited()
+    if existing_user:
+        assert users.find_unique.await_count == (0 if warm_cache else 1)
