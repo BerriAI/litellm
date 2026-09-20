@@ -32,6 +32,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
+from math import isfinite
 from pathlib import Path
 from types import MappingProxyType
 from typing import IO, Final, NamedTuple, Protocol
@@ -43,6 +44,7 @@ FETCH_TIMEOUT_SECONDS: Final = 3
 BAR_WIDTH: Final = 24
 BAR_FULL: Final = "\u2588"
 BAR_EMPTY: Final = "\u2591"
+SEPARATOR: Final = " \u00b7 "
 TRANSCRIPT_SCAN_LIMIT_BYTES: Final = 4 * 1024 * 1024
 CLAUDE_BASE_URL_ENV_KEYS: Final = ("ANTHROPIC_BASE_URL",)
 CLAUDE_API_KEY_ENV_KEYS: Final = ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY")
@@ -63,8 +65,11 @@ class Session(NamedTuple):
     router_name: str
     last_model: str
     spend: float
-    baseline_spend: float
+    baseline_spend: float | None
     baseline_model: str | None
+    turns: int | None = None
+    savings_estimated_turns: int | None = None
+    savings_estimated_actual_spend: float | None = None
 
 
 class Credentials(NamedTuple):
@@ -205,17 +210,38 @@ def _session_from_payload(payload: Mapping[str, object]) -> Session | None:
     router_name: Final = printable(payload.get("router_name"))
     last_model: Final = printable(payload.get("last_model"))
     spend: Final = payload.get("spend")
-    baseline_spend: Final = payload.get("baseline_spend")
+    baseline_spend: Final = payload.get("savings_estimated_baseline_spend", payload.get("baseline_spend"))
+    turns: Final = payload.get("turns")
+    estimated_turns: Final = payload.get("savings_estimated_turns")
+    estimated_actual: Final = payload.get("savings_estimated_actual_spend")
     if not router_name or not last_model:
         return None
-    if not isinstance(spend, (int, float)) or not isinstance(baseline_spend, (int, float)):
+    if not isinstance(spend, (int, float)) or isinstance(spend, bool) or not isfinite(spend):
+        return None
+    if baseline_spend is not None and (
+        not isinstance(baseline_spend, (int, float)) or isinstance(baseline_spend, bool) or not isfinite(baseline_spend)
+    ):
         return None
     return Session(
         router_name=router_name,
         last_model=last_model,
         spend=float(spend),
-        baseline_spend=float(baseline_spend),
+        baseline_spend=float(baseline_spend) if baseline_spend is not None else None,
         baseline_model=printable(payload.get("baseline_model")) or None,
+        turns=turns if isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0 else None,
+        savings_estimated_turns=(
+            estimated_turns
+            if isinstance(estimated_turns, int) and not isinstance(estimated_turns, bool) and estimated_turns >= 0
+            else (0 if estimated_turns is not None else None)
+        ),
+        savings_estimated_actual_spend=(
+            float(estimated_actual)
+            if isinstance(estimated_actual, (int, float))
+            and not isinstance(estimated_actual, bool)
+            and isfinite(estimated_actual)
+            and estimated_actual >= 0
+            else None
+        ),
     )
 
 
@@ -314,15 +340,36 @@ def render(model: str, session: Session | None, config_dir: Path, use_color: boo
         return f"{code}{text}{RESET}" if use_color else text
 
     routed: Final = paint(BOLD, f"Routed to: {model}")
-    if session is None or session.baseline_model is None or session.baseline_spend <= 0:
+    if session is None:
         return routed
+    if session.savings_estimated_turns == 0 or session.baseline_spend is None:
+        return f"{routed}{SEPARATOR}Savings unavailable"
+    if session.baseline_model is None or session.baseline_spend <= 0:
+        return routed
+    if session.savings_estimated_turns is not None and (
+        session.savings_estimated_actual_spend is None
+        or session.turns is None
+        or session.savings_estimated_turns > session.turns
+    ):
+        return f"{routed}{SEPARATOR}Savings unavailable"
+    compared_spend: Final = (
+        session.savings_estimated_actual_spend
+        if session.savings_estimated_turns is not None and session.savings_estimated_actual_spend is not None
+        else session.spend
+    )
+    coverage: Final = (
+        f"{SEPARATOR}{session.savings_estimated_turns} of {session.turns} turns estimated"
+        if session.savings_estimated_turns is not None
+        else ""
+    )
     reference: Final = baseline_label(session.baseline_model, config_dir)
-    pct: Final = (session.baseline_spend - session.spend) / session.baseline_spend * 100
-    delta: Final = paint(LITELLM_COLOR, f"{'-' if pct >= 0 else '+'}{abs(round(pct))}% vs {reference}")
-    peak: Final = max(session.spend, session.baseline_spend)
+    pct: Final = round((session.baseline_spend - compared_spend) / session.baseline_spend * 100)
+    sign: Final = "-" if pct > 0 else "+" if pct < 0 else ""
+    delta: Final = paint(LITELLM_COLOR, f"{sign}{abs(pct)}% vs {reference}")
+    peak: Final = max(compared_spend, session.baseline_spend)
     label_width: Final = max(_display_width(session.router_name), _display_width(reference))
     rows: Final = (
-        (session.router_name, session.spend, LITELLM_COLOR),
+        (session.router_name, compared_spend, LITELLM_COLOR),
         (reference, session.baseline_spend, BASELINE_COLOR),
     )
     lines: Final = (
@@ -331,7 +378,7 @@ def render(model: str, session: Session | None, config_dir: Path, use_color: boo
         f"{paint(DIM, f'${amount:.2f}')}"
         for label, amount, color in rows
     )
-    return "\n".join((f"{routed}  {delta}", *lines))
+    return "\n".join((f"{routed}  {delta}{coverage}", *lines))
 
 
 def color_enabled(env: Mapping[str, str]) -> bool:
