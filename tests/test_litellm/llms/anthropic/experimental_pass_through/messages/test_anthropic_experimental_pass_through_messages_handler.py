@@ -1442,9 +1442,6 @@ async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthropic():
-    """Regression test for LIT-8232. Claude Code auto mode sends a `safeguards` body
-    field paired with a beta value the gateway has never seen. Both must reach
-    api.anthropic.com unchanged or the session falls back to billed classifier calls."""
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
 
     safeguards = {"auto_mode": {"enabled": True, "version": "2026-09-01"}}
@@ -1491,9 +1488,6 @@ async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthro
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_streaming_forwards_safeguards_and_keeps_safeguard_results():
-    """Streaming sibling of the LIT-8232 regression: the request must still carry
-    `safeguards` and the `safeguard_results` Anthropic emits on `message_start` and
-    `message_delta` must reach the client byte for byte."""
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
 
     safeguards = {"auto_mode": {"enabled": True, "version": "2026-09-01"}}

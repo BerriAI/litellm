@@ -531,6 +531,7 @@ class AnthropicStopDetails(TypedDict, total=False):
 class MessageDelta(TypedDict, total=False):
     stop_reason: str | None
     stop_details: ReadOnly[AnthropicStopDetails]
+    safeguard_results: ReadOnly[dict[str, object]]
 
 
 class ServerToolUsage(TypedDict, total=False):
@@ -601,6 +602,7 @@ class MessageChunk(TypedDict, total=False):
     stop_reason: str | None
     stop_sequence: str | None
     usage: UsageDelta
+    safeguard_results: ReadOnly[dict[str, object]]
 
 
 class MessageStartBlock(TypedDict):
