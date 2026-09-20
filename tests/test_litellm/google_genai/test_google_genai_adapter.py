@@ -1544,6 +1544,20 @@ def test_null_parameters_json_schema_falls_back_to_parameters():
     }
 
 
+@pytest.mark.parametrize("parameters", [5, "", "x", [1], True])
+def test_non_object_tool_parameters_are_dropped_instead_of_forwarded(parameters):
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+    tools = [{"functionDeclarations": [{"name": "lookup", "description": "Look it up", "parameters": parameters}]}]
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-4.1", contents={"role": "user", "parts": [{"text": "hi"}]}, tools=tools
+    )
+
+    assert completion_request["tools"][0]["function"] == {"name": "lookup", "description": "Look it up"}
+
+
 def test_streaming_chunk_has_no_top_level_text():
     from litellm.google_genai.adapters.transformation import (
         GoogleGenAIAdapter,

@@ -103,6 +103,7 @@ class _GenAISystemInstruction(TypedDict, total=False):
 _EMPTY_STR_MAPPING: Final[Mapping[str, str]] = MappingProxyType({})
 _RESPONSE_MIME_TYPE_KEYS: Final = ("responseMimeType", "response_mime_type")
 _RESPONSE_SCHEMA_KEYS: Final = ("responseJsonSchema", "response_json_schema", "responseSchema", "response_schema")
+_TOOL_PARAMETERS_KEYS: Final = ("parametersJsonSchema", "parameters")
 _JSON_MIME_TYPE: Final = "application/json"
 _GEMINI_ONLY_SCHEMA_KEYS: Final = frozenset({"propertyOrdering", "property_ordering"})
 _CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -442,7 +443,7 @@ class GoogleGenAIAdapter:
 
                     if "description" in func_decl:
                         function_chunk["description"] = func_decl["description"]
-                    parameters = _first_present(func_decl, ("parametersJsonSchema", "parameters"))
+                    parameters = _validated(_JSON_OBJECT_SCHEMA, _first_present(func_decl, _TOOL_PARAMETERS_KEYS))
                     if parameters is not None:
                         function_chunk["parameters"] = parameters
 
