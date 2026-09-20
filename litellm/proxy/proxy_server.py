@@ -1230,12 +1230,12 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
                 general_settings,
             ) = await proxy_config.load_config(router=llm_router, config_file_path=worker_config)
         elif isinstance(worker_config, dict):
-            await initialize(**worker_config)
+            await initialize_from_worker_config(worker_config)
         else:
             # if not, assume it's a json string
             worker_config = json.loads(worker_config)
             if isinstance(worker_config, dict):
-                await initialize(**worker_config)
+                await initialize_from_worker_config(worker_config)
 
     enforce_master_key_boot_verdict(
         await with_stored_secrets_counted(
@@ -1509,6 +1509,12 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             await prisma_client.stop_db_health_watchdog_task()
         except Exception as e:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
+
+    if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
+        try:
+            await prisma_client.stop_view_setup_task()
+        except Exception as e:
+            verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
     await _drain_spend_event_producer_on_shutdown()
 
@@ -2420,7 +2426,6 @@ user_debug = False
 user_max_tokens = None
 user_request_timeout = None
 user_temperature = None
-user_telemetry = True
 user_config: Final = None
 user_headers = None
 user_config_file_path: str | None = None
@@ -8615,6 +8620,14 @@ def save_worker_config(**data):
     os.environ["WORKER_CONFIG"] = json.dumps(data)
 
 
+LEGACY_WORKER_CONFIG_KEYS: Final = frozenset({"telemetry"})
+
+
+async def initialize_from_worker_config(worker_config: Mapping[str, object]) -> None:
+    supported: Final = MappingProxyType({k: v for k, v in worker_config.items() if k not in LEGACY_WORKER_CONFIG_KEYS})
+    await initialize(**supported)
+
+
 async def initialize(
     model=None,
     alias=None,
@@ -8626,7 +8639,6 @@ async def initialize(
     max_tokens=None,
     request_timeout=600,
     max_budget=None,
-    telemetry=False,
     drop_params=True,
     add_function_to_prompt=True,
     headers=None,
@@ -8642,7 +8654,6 @@ async def initialize(
         user_user_max_tokens, \
         user_request_timeout, \
         user_temperature, \
-        user_telemetry, \
         user_headers, \
         experimental, \
         llm_model_list, \
@@ -8749,7 +8760,6 @@ async def initialize(
         dynamic_config["general"]["max_budget"] = litellm.max_budget
     if experimental:
         pass
-    user_telemetry = telemetry
 
 
 # for streaming
@@ -10808,14 +10818,7 @@ class ProxyStartupEvent:
             if hasattr(prisma_client, "db") and hasattr(prisma_client.db, "start_token_refresh_task"):
                 await prisma_client.db.start_token_refresh_task()
 
-            ## Add necessary views to proxy ##
-            asyncio.create_task(
-                prisma_client.check_view_exists()
-            )  # check if all necessary views exist. Don't block execution
-
-            asyncio.create_task(
-                prisma_client._set_spend_logs_row_count_in_proxy_state()
-            )  # set the spend logs row count in proxy state. Don't block execution
+            prisma_client.start_view_setup_task()
 
             if hasattr(prisma_client, "start_db_health_watchdog_task"):
                 await prisma_client.start_db_health_watchdog_task()

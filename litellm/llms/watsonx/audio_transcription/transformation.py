@@ -4,7 +4,7 @@ Translates from OpenAI's `/v1/audio/transcriptions` to IBM WatsonX's `/ml/v1/aud
 WatsonX follows the OpenAI spec for audio transcription.
 """
 
-from typing import Any, Final
+from typing import Final
 
 from httpx import Response
 
@@ -124,7 +124,7 @@ class IBMWatsonXAudioTranscriptionConfig(IBMWatsonXMixin, OpenAIWhisperAudioTran
         }
 
         # Convert TypedDict to regular dict for AudioTranscriptionRequestData
-        form_data_dict: Final[dict[str, Any]] = dict(form_data)
+        form_data_dict: Final[dict[str, object]] = dict(form_data)
 
         return AudioTranscriptionRequestData(data=form_data_dict, files=files)
 

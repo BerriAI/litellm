@@ -47,7 +47,6 @@ WANDB_REASONING_MODELS: Final = (
 @pytest.fixture
 def wandb_test_config(local_model_cost_map, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "telemetry", False)
     monkeypatch.setattr(litellm, "drop_params", False)
 
 

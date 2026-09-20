@@ -59,7 +59,7 @@ class VantageLogger(FocusLogger):
                     raw_interval,
                 )
 
-        destination_config: Final[dict[str, Any]] = {}
+        destination_config: Final[dict[str, str]] = {}
         if resolved_api_key:
             destination_config["api_key"] = resolved_api_key
         if resolved_token:
@@ -93,7 +93,7 @@ class VantageLogger(FocusLogger):
 
         pod_lock_manager = None
         if proxy_logging_obj is not None:
-            writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
+            writer: Final[object] = getattr(proxy_logging_obj, "db_spend_update_writer", None)
             if writer is not None:
                 pod_lock_manager = getattr(writer, "pod_lock_manager", None)
 
