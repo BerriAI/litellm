@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 import json
 from dataclasses import dataclass, field
 import os
@@ -18,7 +19,7 @@ import uvicorn
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
@@ -223,6 +224,13 @@ class Provider:
                     media_type=response.content_type,
                 )
             case SseResponse():
+                if response.frame_delay_ms > 0:
+                    async def stream() -> AsyncIterator[bytes]:
+                        for frame in response.frames:
+                            yield f"{frame.replace('$REQUEST_ID', scenario_id)}\n\n".encode()
+                            await asyncio.sleep(response.frame_delay_ms / 1000)
+
+                    return StreamingResponse(stream(), media_type=response.content_type)
                 stream_body: Final = ("\n\n".join(response.frames) + "\n\n").replace(
                     "$REQUEST_ID", scenario_id
                 )

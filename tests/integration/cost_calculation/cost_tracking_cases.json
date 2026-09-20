@@ -617,6 +617,11 @@
       "mode": "chat",
       "input_cost_per_token": 1.51e-06,
       "output_cost_per_token": 7.51e-06
+    },
+    "text-embedding-3-large": {
+      "litellm_provider": "openai",
+      "mode": "embedding",
+      "input_cost_per_token": 1.3e-07
     }
   },
   "cases": [
@@ -6947,7 +6952,8 @@
         "input_cost": 0.00552,
         "output_cost": 0.00618,
         "prompt_tokens": 1840,
-        "completion_tokens": 412
+        "completion_tokens": 412,
+        "rollups": true
       }
     },
     {
@@ -7608,7 +7614,9 @@
         "recount": {
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
-        }
+        },
+        "prompt_tokens": 47,
+        "completion_tokens": 10
       }
     },
     {
@@ -7695,7 +7703,9 @@
         "recount": {
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
-        }
+        },
+        "prompt_tokens": 49,
+        "completion_tokens": 111
       }
     },
     {
@@ -7752,7 +7762,9 @@
         "recount": {
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
-        }
+        },
+        "prompt_tokens": 301,
+        "completion_tokens": 9
       }
     },
     {
@@ -12782,7 +12794,9 @@
         "recount": {
           "input_cost_per_token": 5.2e-07,
           "output_cost_per_token": 3.12e-06
-        }
+        },
+        "prompt_tokens": 48,
+        "completion_tokens": 12
       }
     },
     {
@@ -12862,7 +12876,9 @@
         "recount": {
           "input_cost_per_token": 5.2e-07,
           "output_cost_per_token": 3.12e-06
-        }
+        },
+        "prompt_tokens": 46,
+        "completion_tokens": 88
       }
     },
     {
@@ -12914,7 +12930,9 @@
         "recount": {
           "input_cost_per_token": 5.2e-07,
           "output_cost_per_token": 3.12e-06
-        }
+        },
+        "prompt_tokens": 302,
+        "completion_tokens": 10
       }
     },
     {
@@ -20760,7 +20778,8 @@
         "input_cost": 0.00322,
         "output_cost": 0.005768,
         "prompt_tokens": 1840,
-        "completion_tokens": 412
+        "completion_tokens": 412,
+        "rollups": true
       }
     },
     {
@@ -21515,7 +21534,9 @@
         "recount": {
           "input_cost_per_token": 1.75e-06,
           "output_cost_per_token": 1.4e-05
-        }
+        },
+        "prompt_tokens": 49,
+        "completion_tokens": 12
       }
     },
     {
@@ -21601,7 +21622,9 @@
         "recount": {
           "input_cost_per_token": 1.75e-06,
           "output_cost_per_token": 1.4e-05
-        }
+        },
+        "prompt_tokens": 44,
+        "completion_tokens": 105
       }
     },
     {
@@ -21656,7 +21679,9 @@
         "recount": {
           "input_cost_per_token": 1.75e-06,
           "output_cost_per_token": 1.4e-05
-        }
+        },
+        "prompt_tokens": 302,
+        "completion_tokens": 11
       }
     },
     {
@@ -29416,6 +29441,583 @@
         "output_cost": 0.008652,
         "prompt_tokens": 1840,
         "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_400_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 400,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 400",
+            "type": "server_error",
+            "code": "400"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 400
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_401_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 401,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 401",
+            "type": "server_error",
+            "code": "401"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 401
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_500_stream_request_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 500",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 500
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_upstream_500_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "proxy behaviour probe",
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 500",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 500
+        }
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_upstream_500_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 500",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 500
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-fallback_billed_to_answering_deployment",
+      "covers": "quota_management.spend_tracking.routing.fallback_billing",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "gpt-5.6",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "fallback_from": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 500",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-n_2_choices",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "gpt-5.6",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            },
+            {
+              "index": 1,
+              "message": {
+                "role": "assistant",
+                "content": "second choice"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-finish_reason_length",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "gpt-5.6",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "truncated"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-stream_usage_in_empty_choices_chunk",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"scripted answer\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[],\"usage\":{\"prompt_tokens\":1840,\"completion_tokens\":412,\"total_tokens\":2252}}",
+          "data: [DONE]"
+        ]
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-stream_usage_in_last_delta_chunk",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"scripted answer\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1840,\"completion_tokens\":412,\"total_tokens\":2252}}",
+          "data: [DONE]"
+        ]
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-unknown_model_response_model_unknown",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "deployment": {
+        "model": "openai/not-in-any-map-xyz"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "not-in-any-map-xyz",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-unknown_model_response_model_known",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "deployment": {
+        "model": "openai/not-in-any-map-xyz"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "gpt-5.6",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-chat_request_to_embedding_entry",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-3-large",
+      "deployment": {
+        "model": "openai/text-embedding-3-large"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "text-embedding-3-large",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0002392,
+        "input_cost": 0.0002392,
+        "output_cost": 0.0,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-client_disconnect_mid_stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.client_disconnect",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-0\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-1\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-2\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-3\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-4\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-5\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-6\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-7\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-8\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-9\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-10\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-11\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-12\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-13\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-14\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-15\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-16\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-17\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-18\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-19\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: [DONE]"
+        ],
+        "frame_delay_ms": 200
+      },
+      "disconnect_after_frames": 3,
+      "expected": {
+        "recount": {
+          "input_cost_per_token": 1.75e-06,
+          "output_cost_per_token": 1.4e-05
+        }
       }
     }
   ]
