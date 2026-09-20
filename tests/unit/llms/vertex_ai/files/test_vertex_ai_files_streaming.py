@@ -347,8 +347,9 @@ class TestPathSourcedStreaming:
 
     def test_path_source_peak_stays_below_list_pipeline(self, tmp_path):
         cfg = VertexAIFilesConfig()
-        path, _ = self._write_jsonl(tmp_path, 8000)
+        path, raw = self._write_jsonl(tmp_path, 8000)
         data = self._batch_request(path)
+        content_str = raw.decode("utf-8")
 
         def drain_stream():
             cfg.get_complete_file_url(
@@ -366,9 +367,7 @@ class TestPathSourcedStreaming:
                 pass
 
         streaming_peak = _measure_peak(drain_stream)
-        list_peak = _measure_peak(
-            lambda: _reference_vertex_jsonl_string(cfg, path.read_bytes().decode("utf-8"))
-        )
+        list_peak = _measure_peak(lambda: _reference_vertex_jsonl_string(cfg, content_str))
 
         assert streaming_peak < list_peak * 0.3, (
             f"path-sourced streaming peak {streaming_peak} not a clear win over list pipeline "
