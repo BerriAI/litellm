@@ -81,7 +81,7 @@ class BaseTranslation(ABC):
 
     @staticmethod
     def transform_user_api_key_dict_to_metadata(
-        user_api_key_dict: Any | None,
+        user_api_key_dict: Optional["UserAPIKeyAuth"],
     ) -> dict[str, object]:
         """
         Transform user_api_key_dict to a metadata dict with prefixed keys.
