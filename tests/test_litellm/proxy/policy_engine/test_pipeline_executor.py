@@ -6,6 +6,7 @@ Uses mock guardrails to validate pipeline execution without external services.
 
 import copy
 import logging
+import pickle
 from typing import Literal
 from unittest.mock import MagicMock
 
@@ -1727,3 +1728,15 @@ async def test_later_legacy_step_sees_the_stream_as_the_earlier_step_left_it(mon
     assert chunks[0]["text"] == "[REWRITTEN] hello world"
     assert [call["response"] for call in masker.calls] == [_native("hello world")]
     assert [call["response"] for call in auditor.calls] == [_native("[REWRITTEN] hello world")]
+
+
+@pytest.mark.parametrize("clone", [copy.deepcopy, lambda exc: pickle.loads(pickle.dumps(exc))], ids=["deepcopy", "pickle"])
+def test_undeliverable_stream_rewrite_keeps_its_reason_through_a_copy(clone):
+    original = UndeliverableStreamRewrite("masker", "the translation refused it")
+
+    copied = clone(original)
+
+    assert copied.guardrail_name == "masker"
+    assert copied.reason == "the translation refused it"
+    assert str(copied) == str(original)
+    assert str(copied).endswith("cannot be written back to the stream: the translation refused it")
