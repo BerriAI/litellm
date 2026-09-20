@@ -128,12 +128,13 @@ def test_transform_response_maps_fal_images():
     assert [image.url for image in response.data] == ["https://fal.media/out.png"]
 
 
-def test_transform_request_requires_an_image():
+@pytest.mark.parametrize("image", [None, []])
+def test_transform_request_requires_an_image(image):
     with pytest.raises(ValueError, match="input image"):
         FalAIImageEditConfig().transform_image_edit_request(
             model="openai/gpt-image-2.5/flare/edit",
             prompt="make it blue",
-            image=None,
+            image=image,
             image_edit_optional_request_params={},
             litellm_params=GenericLiteLLMParams(),
             headers={},

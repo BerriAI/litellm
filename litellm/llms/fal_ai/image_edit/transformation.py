@@ -138,9 +138,9 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict, RequestFiles]:
-        if image is None:
+        images: Final = tuple(img for img in (image if isinstance(image, list) else (image,)) if img is not None)
+        if not images:
             raise ValueError("Fal AI image edit requires at least one input image")
-        images: Final = tuple(image) if isinstance(image, list) else (image,)
         mask: Final = _first(image_edit_optional_request_params.get("mask"))
         mask_field: Final[Mapping[str, str]] = (
             MappingProxyType({"mask_url": _to_data_url(mask)}) if mask is not None else MappingProxyType({})
@@ -152,7 +152,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         )
         request_body: Final[dict[str, object]] = {  # mutable-ok: base class contract returns a dict
             "prompt": prompt,
-            "image_urls": tuple(_to_data_url(img) for img in images if img is not None),
+            "image_urls": tuple(_to_data_url(img) for img in images),
             **mask_field,
             **provider_params,
         }
