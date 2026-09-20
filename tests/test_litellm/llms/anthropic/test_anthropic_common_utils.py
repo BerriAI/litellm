@@ -2275,3 +2275,64 @@ def test_create_anthropic_model_list_response_lists_ids_as_told():
     assert (gpt["id"], gpt["display_name"], gpt["max_input_tokens"]) == ("claude-router-gpt-4o[1m]", "GPT 4o", 1000000)
     assert (haiku["id"], haiku["display_name"]) == ("claude-haiku-4-5", "claude-haiku-4-5")
     assert (response["first_id"], response["last_id"]) == ("claude-router-gpt-4o[1m]", "claude-haiku-4-5")
+
+
+class TestMalformedContentListItems:
+    """A `content` list holding bare strings is not valid per the OpenAI message
+    schema, but it reaches the Anthropic beta-header helpers before any validation
+    runs. Those helpers membership-test each item, so a non-dict item turned into a
+    substring test and then an unhandled TypeError, surfacing as a 500."""
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            pytest.param(["what type of file is this?"], id="string_containing_type"),
+            pytest.param(["how do I set cache_control?"], id="string_containing_cache_control"),
+            pytest.param([None], id="none_item"),
+            pytest.param([5], id="int_item"),
+            pytest.param([["nested"]], id="list_item"),
+        ],
+    )
+    def test_beta_headers_resolve_for_non_dict_content_items(self, content):
+        """The header path completes instead of raising, so the caller gets the
+        provider's own validation error rather than an internal failure."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        messages = [{"role": "user", "content": content}]
+
+        headers = config.validate_environment(
+            headers={},
+            model="claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            api_key=FAKE_REGULAR_KEY,
+        )
+
+        assert headers["x-api-key"] == FAKE_REGULAR_KEY
+
+    def test_real_content_parts_still_set_their_beta_headers(self):
+        """The guard skips malformed items only; a genuine media part must still be
+        detected, otherwise the pdf beta header would silently stop being sent."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+
+        assert config.is_pdf_used([{"role": "user", "content": [{"type": "image", "source": {}}]}]) is True
+        assert config.is_pdf_used([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]) is False
+        assert (
+            config.is_cache_control_set(
+                [{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]}]
+            )
+            is True
+        )
+
+    def test_mixed_list_keeps_detecting_the_valid_part(self):
+        """A malformed item earlier in the list must not mask a real media part after it."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        messages = [{"role": "user", "content": ["what type of file is this?", {"type": "image", "source": {}}]}]
+
+        assert config.is_pdf_used(messages) is True

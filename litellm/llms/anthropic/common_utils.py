@@ -291,7 +291,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             _message_content = message.get("content")
             if _message_content is not None and isinstance(_message_content, list):
                 for content in _message_content:
-                    if "cache_control" in content:
+                    if isinstance(content, dict) and "cache_control" in content:
                         return True
 
         return False
@@ -336,7 +336,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         for message in messages:
             if "content" in message and message["content"] is not None and isinstance(message["content"], list):
                 for content in message["content"]:
-                    if "type" in content and content["type"] != "text":
+                    if isinstance(content, dict) and "type" in content and content["type"] != "text":
                         return True
         return False
 
