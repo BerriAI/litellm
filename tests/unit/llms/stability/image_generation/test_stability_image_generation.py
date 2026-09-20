@@ -10,10 +10,7 @@ from unittest.mock import MagicMock
 import httpx
 import pytest
 
-from litellm.llms.stability.image_generation import (
-    StabilityImageGenerationConfig,
-    get_stability_image_generation_config,
-)
+from litellm.llms.stability.image_generation import StabilityImageGenerationConfig
 from litellm.types.llms.stability import (
     OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO,
     STABILITY_GENERATION_MODELS,
@@ -264,20 +261,6 @@ class TestStabilityImageGenerationConfig:
             )
 
         assert "filtered" in str(exc_info.value).lower()
-
-
-class TestFactoryFunction:
-    """Test the factory function"""
-
-    def test_get_stability_image_generation_config(self):
-        """Test that factory returns correct config type"""
-        config = get_stability_image_generation_config("stability/sd3")
-        assert isinstance(config, StabilityImageGenerationConfig)
-
-    def test_factory_returns_config_for_any_model(self):
-        """Test that factory works for any model name"""
-        config = get_stability_image_generation_config("stability/custom-model")
-        assert isinstance(config, StabilityImageGenerationConfig)
 
 
 class TestOpenAISizeMapping:
