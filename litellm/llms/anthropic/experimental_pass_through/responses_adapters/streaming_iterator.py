@@ -47,9 +47,11 @@ class AnthropicResponsesStreamWrapper:
         responses_stream: Any,
         model: str,
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
+        input_tokens: int | None = None,
     ) -> None:
         self.responses_stream = responses_stream
         self.model = model
+        self._input_tokens: int = input_tokens if input_tokens is not None else 0
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
@@ -76,7 +78,7 @@ class AnthropicResponsesStreamWrapper:
                 "stop_reason": None,
                 "stop_sequence": None,
                 "usage": {
-                    "input_tokens": 0,
+                    "input_tokens": self._input_tokens,
                     "output_tokens": 0,
                     "cache_creation_input_tokens": 0,
                     "cache_read_input_tokens": 0,
