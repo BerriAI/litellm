@@ -28,6 +28,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.bedrock.request_metadata import bedrock_request_metadata_is_owned
 from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
@@ -37,6 +38,18 @@ if TYPE_CHECKING:
 
 _ERROR_REQUEST_URL: Final = "https://docs.litellm.ai/docs"
 _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
+BedrockRoute = Literal[
+    "converse",
+    "invoke",
+    "claude_platform",
+    "converse_like",
+    "agent",
+    "agentcore",
+    "async_invoke",
+    "openai",
+    "mantle",
+    "chat_completions",
+]
 
 
 def error_response_text(response: httpx.Response) -> str:
@@ -782,17 +795,54 @@ def strip_bedrock_routing_prefix(model: str) -> str:
     return model
 
 
+def _bedrock_price_map_flag(model: str, flag: str) -> bool:
+    entries: Final = (litellm.model_cost.get(key) for key in (model, strip_bedrock_routing_prefix(model)))
+    return any(entry is not None and entry.get(flag) is True for entry in entries)
+
+
 def uses_bedrock_runtime_chat_completions(model: str) -> bool:
     """Whether this Bedrock model should use runtime native Chat Completions.
 
     Data-driven from the price-map ``use_bedrock_runtime_chat_completions`` flag
     so onboarding a model is a JSON change. Explicit ``converse/`` still wins in
-    ``get_bedrock_route`` because prefix routes are checked first.
+    ``get_bedrock_route`` because prefix routes are checked first, and a request
+    that needs a Converse-only feature (``bedrock_request_needs_converse``) is
+    served by Converse even on a flagged model.
     """
-    stripped: Final = strip_bedrock_routing_prefix(model)
-    return any(
-        (litellm.model_cost.get(key) or {}).get("use_bedrock_runtime_chat_completions") is True
-        for key in (model, stripped)
+    return _bedrock_price_map_flag(model, "use_bedrock_runtime_chat_completions")
+
+
+def bedrock_runtime_chat_completions_tools_require_reasoning_none(model: str) -> bool:
+    """Whether AWS's native Chat Completions only serves this model's function tools with ``reasoning_effort="none"``.
+
+    Data-driven from the price-map ``bedrock_runtime_chat_completions_tools_require_reasoning_none``
+    flag (the GPT-5.6 family). Converse serves tools with any effort, so those requests fall back to it.
+    """
+    return _bedrock_price_map_flag(model, "bedrock_runtime_chat_completions_tools_require_reasoning_none")
+
+
+BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
+    ("guardrailConfig", "performanceConfig", "serviceTier", "requestMetadata", "outputConfig")
+)
+
+
+def bedrock_request_needs_converse(model: str, request_params: Mapping[str, object]) -> bool:
+    """Whether a request on a runtime-Chat-Completions model must still be served by Converse.
+
+    Converse-shaped body keys (``BEDROCK_CONVERSE_ONLY_REQUEST_KEYS``) are rejected as malformed input by
+    AWS's native OpenAI surface, operator-owned request metadata is only written onto the Converse body,
+    and function tools on a ``bedrock_runtime_chat_completions_tools_require_reasoning_none`` model are
+    rejected there unless ``reasoning_effort`` is exactly ``"none"``.
+    """
+    if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
+        return True
+    if bedrock_request_metadata_is_owned():
+        return True
+    if not request_params.get("tools"):
+        return False
+    return (
+        bedrock_runtime_chat_completions_tools_require_reasoning_none(model)
+        and request_params.get("reasoning_effort") != "none"
     )
 
 
@@ -1130,20 +1180,13 @@ class BedrockModelInfo(BaseLLMModelInfo):
     @staticmethod
     def get_bedrock_route(
         model: str,
-    ) -> Literal[
-        "converse",
-        "invoke",
-        "claude_platform",
-        "converse_like",
-        "agent",
-        "agentcore",
-        "async_invoke",
-        "openai",
-        "mantle",
-        "chat_completions",
-    ]:
+        request_params: Mapping[str, object] | None = None,
+    ) -> BedrockRoute:
         """
         Get the bedrock route for the given model.
+
+        ``request_params`` (the caller's chat params) lets a runtime Chat Completions
+        model fall back to Converse for the requests only Converse can serve.
         """
         route_mappings: dict[
             str,
@@ -1187,7 +1230,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         if is_bedrock_application_inference_profile_arn(model):
             return "converse"
 
-        if uses_bedrock_runtime_chat_completions(model):
+        if uses_bedrock_runtime_chat_completions(model) and not (
+            request_params is not None and bedrock_request_needs_converse(model, request_params)
+        ):
             return "chat_completions"
 
         base_model: Final = BedrockModelInfo.get_base_model(model)

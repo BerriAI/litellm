@@ -138,9 +138,12 @@ def _bedrock_response(model, usage):
 
 
 @pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)
-def test_bedrock_gpt_5_6_profiles_route_to_converse(profile, local_model_cost_map):
-    """GPT-5.6 is served by Converse on bedrock-runtime, never by Invoke."""
-    assert BedrockModelInfo.get_bedrock_route(f"bedrock/{profile.model_id}") == "converse"
+def test_bedrock_gpt_5_6_profiles_never_route_to_invoke(profile, local_model_cost_map):
+    """GPT-5.6 is served by bedrock-runtime's native Chat Completions, and by Converse when
+    the request carries function tools without reasoning_effort "none", never by Invoke."""
+    assert BedrockModelInfo.get_bedrock_route(f"bedrock/{profile.model_id}") == "chat_completions"
+    tools_with_reasoning = {"tools": [{"type": "function", "function": {"name": "f"}}], "reasoning_effort": "low"}
+    assert BedrockModelInfo.get_bedrock_route(f"bedrock/{profile.model_id}", tools_with_reasoning) == "converse"
 
 
 @pytest.mark.parametrize("profile", GPT_5_6_PROFILES, ids=lambda p: p.model_id)

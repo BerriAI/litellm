@@ -74,6 +74,9 @@
             "xhigh"
           ]
         },
+        "bedrock_runtime_chat_completions_tools_require_reasoning_none": {
+          "type": "boolean"
+        },
         "cache_creation_input_audio_token_cost": {
           "type": "number",
           "minimum": 0

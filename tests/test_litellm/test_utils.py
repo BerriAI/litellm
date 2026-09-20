@@ -878,6 +878,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_video_input": {"type": "boolean"},
                 "supports_vision": {"type": "boolean"},
                 "supports_web_search": {"type": "boolean"},
+                "use_bedrock_runtime_chat_completions": {"type": "boolean"},
+                "bedrock_runtime_chat_completions_tools_require_reasoning_none": {"type": "boolean"},
                 "supports_url_context": {"type": "boolean"},
                 "supports_multimodal": {"type": "boolean"},
                 "uses_embed_content": {"type": "boolean"},
