@@ -7569,6 +7569,69 @@ async def test_reload_active_user_by_id_permanent_engine_fault_is_faulted(proxy_
 
 
 @pytest.mark.asyncio
+async def test_load_active_user_by_id_reads_the_row_from_the_database_not_the_cache(proxy_globals):
+    """JWT auth caches the user it creates before it adds that user to the JWT's team, and adding a
+    member never evicts the cached row, so a credential minted off the cached row refused the very first
+    token exchange as not a member. The database source has to read the row from the database and leave
+    the fresh row in the cache for the requests the credential makes next."""
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import load_active_user_by_id
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="fresh-jwt-user", value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=[]), model_type=LiteLLM_UserTable
+    )
+    prisma = MagicMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="fresh-jwt-user", teams=["team-a"])
+    )
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = prisma
+
+    loaded = await load_active_user_by_id("fresh-jwt-user", source="database")
+
+    assert not isinstance(loaded, str)
+    assert loaded.teams == ["team-a"]
+    cached = await cache.async_get_cache(key="fresh-jwt-user", model_type=LiteLLM_UserTable)
+    assert cached is not None
+    assert cached.teams == ["team-a"]
+
+
+@pytest.mark.asyncio
+async def test_load_active_user_by_id_serves_a_cached_row_without_a_database_read(proxy_globals):
+    """Introspection and refresh revalidation run per call, so the loader's default source is the cache: a
+    cached row answers without a database read, and only a caller that asks for the database row pays for
+    one."""
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
+        _reload_active_user_by_id,
+        load_active_user_by_id,
+    )
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    cache = UserApiKeyCache()
+    await cache.async_set_cache(
+        key="cached-jwt-user",
+        value=LiteLLM_UserTable(user_id="cached-jwt-user", teams=["team-a"]),
+        model_type=LiteLLM_UserTable,
+    )
+    prisma = MagicMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="cached-jwt-user", teams=[])
+    )
+    proxy_globals.user_api_key_cache = cache
+    proxy_globals.prisma_client = prisma
+
+    loaded = await load_active_user_by_id("cached-jwt-user")
+
+    assert not isinstance(loaded, str)
+    assert loaded.teams == ["team-a"]
+    assert await _reload_active_user_by_id("cached-jwt-user") is None
+    prisma.db.litellm_usertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_token_endpoint_uses_client_secret_basic_when_configured():
     """LIT-4091: a server with token_endpoint_auth_method=client_secret_basic must send the
     credentials as an HTTP Basic Authorization header and omit client_secret from the body;
@@ -11048,6 +11111,43 @@ def test_native_client_login_walks_discovery_consent_token_refresh_and_revoke(mo
     assert stranger.json()["error"] == "invalid_client"
 
 
+@pytest.mark.parametrize(
+    "jwt_auth_enabled, virtual_key_claim_field, exchange_servable",
+    [(True, None, True), (False, None, False), (True, "client_id", False)],
+    ids=["jwt auth on", "jwt auth off", "jwts mapped to virtual keys"],
+)
+def test_discovery_advertises_the_exchange_grant_only_where_the_gateway_can_serve_it(
+    monkeypatch, jwt_auth_enabled, virtual_key_claim_field, exchange_servable
+):
+    """Every document a native client reads before it picks a grant (the versioned contract, the
+    aggregate authorization-server metadata, and the registration response) lists the RFC 8693
+    exchange exactly when the running proxy can serve it: JWT auth on, a database, a license, and
+    no JWT-to-virtual-key mapping, since the exchange would mint past the mapped key's policy."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    client, _session_cookie, _minted = _native_client_app(monkeypatch)
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(virtual_key_claim_field=virtual_key_claim_field),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.jwt_handler", handler)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"enable_jwt_auth": jwt_auth_enabled})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", object())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    exchange_grant = ["urn:ietf:params:oauth:grant-type:token-exchange"] if exchange_servable else []
+    expected = ["authorization_code", "refresh_token", *exchange_grant]
+
+    assert client.get("/.well-known/litellm-cli-auth").json()["grant_types_supported"] == expected
+    assert client.get("/.well-known/oauth-authorization-server/mcp").json()["grant_types_supported"] == expected
+    registered = client.post("/register", json={"redirect_uris": ["http://127.0.0.1:51234/callback"]})
+    assert registered.status_code == 201
+    assert registered.json()["grant_types"] == expected
+
+
 def test_native_client_authorize_without_the_proxy_resource_keeps_the_mcp_flow(monkeypatch):
     """A registered client asking for the MCP resource (or no resource) never sees the consent
     page, so existing MCP clients are untouched by the native-client arm."""
@@ -11847,13 +11947,17 @@ async def test_oauth_refresh_revalidates_the_same_active_user_rule(
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import _reload_active_user_by_id
 
     handler, _ = jwt_oauth_identity
-    handler.user_api_key_cache.set_cache(
-        "jwt-owner", LiteLLM_UserTable(user_id="jwt-owner", metadata={"scim_active": state != "inactive"})
-    )
+    user_id: Final = f"jwt-owner-{state}"
+    row: Final = LiteLLM_UserTable(user_id=user_id, metadata={"scim_active": state != "inactive"})
+    proxy_server.prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=row)
     if state == "missing_database":
         monkeypatch.setattr(proxy_server, "prisma_client", None)
     expected: Final = None if state == "active" else "no_active_key" if state == "inactive" else "unresolvable"
-    assert await _reload_active_user_by_id("jwt-owner") == expected
+    assert await _reload_active_user_by_id(user_id) == expected
+    if state != "missing_database":
+        cached: Final = handler.user_api_key_cache.get_cache(user_id, model_type=LiteLLM_UserTable)
+        assert cached is not None
+        assert cached.metadata == row.metadata
 
 
 @pytest.mark.asyncio
@@ -11870,9 +11974,13 @@ async def test_oauth_credential_write_keeps_virtual_key_permissions(
     from litellm.proxy._experimental.mcp_server import mcp_server_manager
     from litellm.proxy._experimental.mcp_server.bridge_token_flow import authorize_oauth_credential_request
     from litellm.proxy._types import UserAPIKeyAuth, hash_token
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+    from litellm.proxy.auth.auth_checks import OrganizationNotFoundError, jwt_key_mapping_cache_key
 
     handler, signing_key = jwt_oauth_identity
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_org_object",
+        AsyncMock(side_effect=OrganizationNotFoundError("Organization doesn't exist in db.")),
+    )
     key: Final = "sk-oauth-permission-test"
     hashed: Final = hash_token(key)
     credential: Final = UserAPIKeyAuth(

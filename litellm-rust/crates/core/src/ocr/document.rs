@@ -1,20 +1,14 @@
-use std::io::Read;
-use std::path::Path;
+use std::{collections::BTreeMap as Map, io::Read, path::Path};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use data_url::mime::Mime;
-use data_url::{DataUrl, DataUrlError, forgiving_base64::DecodeError};
-use reqwest::Url;
-use serde_json::Map;
+use litellm_llms::base_llm::ocr::{
+    error::Error,
+    transformation::{OCR_INLINE_MAX_BYTES, OcrDocument},
+};
 
-use super::error::{OcrError, OcrRequestError, OcrResponseError};
-use super::types::{OcrConnection, OcrDocument, OcrDocumentInput};
-use crate::constants::{OCR_INLINE_MAX_BYTES, OCR_MAX_FETCH_REDIRECTS};
-use crate::media::Error as MediaError;
-use crate::media::{DownloadPolicy, MediaFetcher};
-use crate::transport::Error as TransportError;
+use crate::ocr::types::OcrDocumentInput;
 
-pub fn prepare_document(input: OcrDocumentInput) -> Result<OcrDocument, super::Error> {
+pub fn prepare_document(input: OcrDocumentInput) -> Result<OcrDocument, Error> {
     match input {
         OcrDocumentInput::Document(document) => Ok(document),
         OcrDocumentInput::Path { path, mime_type } => {
@@ -29,46 +23,42 @@ pub fn prepare_document(input: OcrDocumentInput) -> Result<OcrDocument, super::E
             file_name.as_deref(),
             mime_type.as_deref(),
         )?),
-        OcrDocumentInput::HostReader { .. } => Err(super::Error::InvalidRequest(
+        OcrDocumentInput::HostReader { .. } => Err(Error::InvalidRequest(
             "OCR file reader was not read by the host".into(),
         )),
     }
 }
 
-pub fn read_path_document(
-    path: &Path,
-    mime_type: Option<&str>,
-) -> Result<OcrDocument, super::Error> {
+pub fn read_path_document(path: &Path, mime_type: Option<&str>) -> Result<OcrDocument, Error> {
     let mut bytes = Vec::new();
     std::fs::File::open(path)
         .and_then(|file| {
             file.take(OCR_INLINE_MAX_BYTES as u64 + 1)
                 .read_to_end(&mut bytes)
         })
-        .map_err(|source| super::Error::FileRead {
+        .map_err(|source| Error::FileRead {
             path: path.to_owned(),
-            kind: source.kind(),
-            message: source.to_string(),
+            source: std::sync::Arc::new(source),
         })?;
     let name = path.file_name().map(|name| name.to_string_lossy());
-    Ok(encode_file_document(&bytes, name.as_deref(), mime_type)?)
+    encode_file_document(&bytes, name.as_deref(), mime_type)
 }
 
 pub fn encode_file_document(
     bytes: &[u8],
     file_name: Option<&str>,
     mime_type: Option<&str>,
-) -> Result<OcrDocument, OcrRequestError> {
+) -> Result<OcrDocument, Error> {
     if bytes.is_empty() {
-        return Err(OcrRequestError::EmptyFile);
+        return Err(Error::EmptyFile);
     }
     if bytes.len() > OCR_INLINE_MAX_BYTES {
-        return Err(OcrRequestError::InlineDocumentTooLarge);
+        return Err(Error::InlineDocumentTooLarge);
     }
     if let Some(value) = mime_type
         && !valid_mime_type(value)
     {
-        return Err(OcrRequestError::InvalidMimeType(value.into()));
+        return Err(Error::InvalidMimeType(value.into()));
     }
     let mime_type = mime_type
         .map(str::to_string)
@@ -118,105 +108,13 @@ pub fn mime_type_for_name(name: &str) -> &'static str {
     }
 }
 
-pub(crate) struct InlineDocument<'a>(DataUrl<'a>);
-
-impl<'a> InlineDocument<'a> {
-    pub(crate) fn parse(source: &'a str) -> Result<Option<Self>, OcrRequestError> {
-        match DataUrl::process(source) {
-            Ok(url) => Ok(Some(Self(url))),
-            Err(DataUrlError::NotADataUrl) => Ok(None),
-            Err(DataUrlError::NoComma) => Err(OcrRequestError::InvalidDataUri),
-        }
-    }
-
-    pub(crate) fn mime_type(&self) -> &Mime {
-        self.0.mime_type()
-    }
-
-    pub(crate) fn decode(&self, max_bytes: usize) -> Result<Vec<u8>, OcrRequestError> {
-        let mut body = Vec::new();
-        self.0
-            .decode(|bytes| {
-                if bytes.len() > max_bytes.saturating_sub(body.len()) {
-                    return Err(OcrRequestError::InlineDocumentTooLarge);
-                }
-                body.extend_from_slice(bytes);
-                Ok(())
-            })
-            .map_err(|error| match error {
-                DecodeError::InvalidBase64(_) => OcrRequestError::InvalidDataUri,
-                DecodeError::WriteError(error) => error,
-            })?;
-        Ok(body)
-    }
-}
-
-pub(crate) fn validate_inline_document(document: &OcrDocument) -> Result<(), OcrRequestError> {
-    let inline =
-        InlineDocument::parse(document.source())?.ok_or(OcrRequestError::InvalidDataUri)?;
-    inline.decode(crate::constants::OCR_INLINE_MAX_BYTES)?;
-    Ok(())
-}
-
-pub(crate) async fn inline_remote_document(
-    fetcher: &MediaFetcher,
-    document: OcrDocument,
-    connection: &OcrConnection,
-) -> Result<OcrDocument, OcrError> {
-    let source = document.source();
-    if !source.starts_with("http://") && !source.starts_with("https://") {
-        validate_inline_document(&document)?;
-        return Ok(document);
-    }
-    let url = Url::parse(source).map_err(|_| OcrRequestError::RequestField {
-        path: "document URL".into(),
-    })?;
-    let downloaded = fetcher
-        .fetch(
-            url,
-            DownloadPolicy {
-                timeout: connection.timeout,
-                max_bytes: connection.max_download_bytes,
-                max_redirects: OCR_MAX_FETCH_REDIRECTS,
-            },
-        )
-        .await
-        .map_err(map_media_error)?;
-    let result = document.with_source(format!(
-        "data:{};base64,{}",
-        downloaded.content_type,
-        STANDARD.encode(downloaded.bytes)
-    ));
-    validate_inline_document(&result)?;
-    Ok(result)
-}
-
-fn map_media_error(error: MediaError) -> OcrError {
-    match error {
-        MediaError::BlockedUrl => OcrRequestError::BlockedDocumentUrl.into(),
-        MediaError::DownloadDisabled => OcrRequestError::DownloadDisabled.into(),
-        MediaError::DownloadTooLarge => OcrRequestError::DownloadTooLarge.into(),
-        MediaError::TooManyRedirects => OcrRequestError::TooManyRedirects.into(),
-        MediaError::MissingRedirectLocation => OcrResponseError::MissingRedirectLocation.into(),
-        MediaError::InvalidRedirect => OcrResponseError::InvalidRedirect.into(),
-        MediaError::Http(status) => TransportError::Http {
-            status,
-            body: "OCR document download failed".into(),
-        }
-        .into(),
-        MediaError::Timeout => TransportError::Http {
-            status: 408,
-            body: "OCR document download timed out".into(),
-        }
-        .into(),
-        MediaError::Transport(error) => error.into(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap as Map;
+
+    use litellm_llms::base_llm::ocr::document::InlineDocument;
+
     use super::*;
-    use serde_json::Map;
 
     fn document(source: &str) -> OcrDocument {
         OcrDocument::DocumentUrl {
@@ -286,17 +184,17 @@ mod tests {
             document("data:application/pdf;base64,YWJj")
         );
         std::fs::write(&path, vec![b'a'; OCR_INLINE_MAX_BYTES + 1]).unwrap();
-        assert_eq!(
+        assert!(matches!(
             prepare_document(OcrDocumentInput::Path {
                 path: path.clone(),
                 mime_type: None,
             }),
-            Err(OcrRequestError::InlineDocumentTooLarge.into())
-        );
+            Err(Error::InlineDocumentTooLarge)
+        ));
         std::fs::remove_dir_all(&dir).unwrap();
 
         let missing = dir.join("missing.pdf");
-        let Err(super::super::Error::FileRead { path, kind, .. }) =
+        let Err(super::Error::FileRead { path, source, .. }) =
             prepare_document(OcrDocumentInput::Path {
                 path: missing.clone(),
                 mime_type: None,
@@ -305,7 +203,7 @@ mod tests {
             panic!("missing paths must surface a file read error");
         };
         assert_eq!(path, missing);
-        assert_eq!(kind, std::io::ErrorKind::NotFound);
+        assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
     }
 
     #[test]
@@ -325,10 +223,10 @@ mod tests {
     #[test]
     fn file_encoding_enforces_decoded_size_limit() {
         let bytes = vec![b'a'; OCR_INLINE_MAX_BYTES + 1];
-        assert_eq!(
+        assert!(matches!(
             encode_file_document(&bytes, None, None),
-            Err(OcrRequestError::InlineDocumentTooLarge)
-        );
+            Err(Error::InlineDocumentTooLarge)
+        ));
         let document = encode_file_document(&bytes[..OCR_INLINE_MAX_BYTES], None, None).unwrap();
         let inline = InlineDocument::parse(document.source()).unwrap().unwrap();
         assert_eq!(
@@ -348,101 +246,5 @@ mod tests {
         ] {
             assert!(encode_file_document(b"abc", None, Some(mime)).is_err());
         }
-    }
-
-    #[test]
-    fn decodes_data_urls_and_limits_decoded_size() {
-        for (source, expected) in [
-            ("data:application/pdf;base64,YWJj", b"abc".as_slice()),
-            ("DATA:application/pdf;BASE64,YWI", b"ab".as_slice()),
-            ("data:,a%20b%00%FF", b"a b\0\xff".as_slice()),
-        ] {
-            let inline = InlineDocument::parse(source).unwrap().unwrap();
-            assert_eq!(inline.decode(expected.len()).unwrap(), expected);
-            assert_eq!(
-                inline.decode(expected.len() - 1),
-                Err(OcrRequestError::InlineDocumentTooLarge)
-            );
-        }
-    }
-
-    #[test]
-    fn preserves_mime_parameters_and_standard_default() {
-        let inline = InlineDocument::parse("data:application/pdf;version=1.7;base64,YQ==")
-            .unwrap()
-            .unwrap();
-        assert!(inline.mime_type().matches("application", "pdf"));
-        assert_eq!(inline.mime_type().get_parameter("version"), Some("1.7"));
-        let default = InlineDocument::parse("data:,a").unwrap().unwrap();
-        assert!(default.mime_type().matches("text", "plain"));
-        assert_eq!(
-            default.mime_type().get_parameter("charset"),
-            Some("US-ASCII")
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_inline_documents() {
-        for source in [
-            "https://example.com/document.pdf",
-            "data:application/pdf;base64",
-            "data:application/pdf;base64,INVALID!",
-        ] {
-            assert!(validate_inline_document(&document(source)).is_err());
-        }
-    }
-
-    #[tokio::test]
-    async fn remote_conversion_preserves_kind_and_isolates_provider_credentials() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut request = vec![0_u8; 2048];
-            let count = socket.read(&mut request).await.unwrap();
-            socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: image/png; charset=binary\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc")
-                .await
-                .unwrap();
-            String::from_utf8_lossy(&request[..count]).into_owned()
-        });
-        let mut provider_headers = reqwest::header::HeaderMap::new();
-        provider_headers.insert(
-            reqwest::header::AUTHORIZATION,
-            reqwest::header::HeaderValue::from_static("Bearer provider-secret"),
-        );
-        let provider_http = reqwest::Client::builder()
-            .default_headers(provider_headers)
-            .build()
-            .unwrap();
-        let document_http = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap();
-        let client = super::super::OcrClient::for_test(provider_http, document_http);
-        let converted = inline_remote_document(
-            client.document_fetcher(),
-            OcrDocument::ImageUrl {
-                image_url: format!("http://{address}/image"),
-                extra_fields: Map::from_iter([("detail".into(), serde_json::json!("high"))]),
-            },
-            &OcrConnection::default(),
-        )
-        .await
-        .unwrap();
-        let request = server.await.unwrap();
-
-        assert_eq!(
-            converted,
-            OcrDocument::ImageUrl {
-                image_url: "data:image/png;base64,YWJj".into(),
-                extra_fields: Map::from_iter([("detail".into(), serde_json::json!("high"))]),
-            }
-        );
-        assert!(!request.to_ascii_lowercase().contains("authorization"));
-        assert!(!request.contains("provider-secret"));
     }
 }

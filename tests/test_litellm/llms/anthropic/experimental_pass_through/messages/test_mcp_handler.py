@@ -147,6 +147,7 @@ async def test_anthropic_messages_with_mcp_forwards_the_callers_mcp_credentials(
         request_tags=["team-a"],
         litellm_trace_id="trace-123",
         litellm_call_id="call-456",
+        guardrail_context={"metadata": {"guardrails": ("block-all",)}},
     )
 
     process = AsyncMock(return_value=([], {}))
@@ -192,6 +193,8 @@ async def test_anthropic_messages_with_mcp_forwards_the_callers_mcp_credentials(
     assert execution["litellm_call_id"] == "call-456"
     assert execution["litellm_trace_id"] == "trace-123"
     assert execution["request_tags"] == ["team-a"]
+
+    assert execution["guardrail_context"] == {"metadata": {"guardrails": ("block-all",)}}
 
 
 @pytest.mark.asyncio
