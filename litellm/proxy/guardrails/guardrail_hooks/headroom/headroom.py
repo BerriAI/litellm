@@ -104,14 +104,7 @@ def _flatten_messages_for_compression(messages: list[dict[str, object]]) -> list
 
 
 async def _estimate_compressible_tokens(model: object, messages: list[dict[str, object]]) -> int | None:
-    """Token estimate for the min_tokens gate, or None when no trustworthy count exists.
-
-    Only rows whose flattened content is a plain string count: the service
-    passes list-of-parts rows through untouched, so their tokens can never
-    turn into savings. None keeps the request on the compression path: a
-    disabled global counter reports 0 for everything, and a row shape the
-    counter rejects must not turn into a failed request.
-    """
+    """Tokens in the plain-string rows the service can compress, or None to always compress."""
     if litellm.disable_token_counter:
         return None
     string_rows: Final = [m for m in messages if isinstance(m.get("content"), str)]
