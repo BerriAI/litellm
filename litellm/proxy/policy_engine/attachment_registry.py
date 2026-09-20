@@ -5,6 +5,7 @@ Attachments define WHERE policies apply, separate from the policy definitions.
 This allows the same policy to be attached to multiple scopes.
 """
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict
@@ -122,24 +123,34 @@ class AttachmentRegistry:
             default=attachment_data.get("default", False),
         )
 
-    def get_attached_policies(self, context: PolicyMatchContext) -> list[str]:
+    def get_attached_policies(
+        self,
+        context: PolicyMatchContext,
+        policy_applies: Callable[[str], bool] | None = None,
+    ) -> list[str]:
         """
         Get list of policy names attached to the given context.
 
         Args:
             context: The request context to match against
+            policy_applies: Optional predicate; attachments whose policy does not apply are ignored
 
         Returns:
             List of policy names that are attached to matching scopes
         """
-        return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context)]
+        return [r["policy_name"] for r in self.get_attached_policies_with_reasons(context, policy_applies)]
 
-    def get_attached_policies_with_reasons(self, context: PolicyMatchContext) -> list[PolicyAttachmentMatch]:
+    def get_attached_policies_with_reasons(
+        self,
+        context: PolicyMatchContext,
+        policy_applies: Callable[[str], bool] | None = None,
+    ) -> list[PolicyAttachmentMatch]:
         """
         Get list of policy names and match reasons for the given context.
 
         Returns a list of dicts with 'policy_name' and 'matched_via' keys.
         The 'matched_via' describes which dimension caused the match.
+        Attachments whose policy fails `policy_applies` are dropped before defaults are considered.
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
@@ -147,6 +158,7 @@ class AttachmentRegistry:
             attachment
             for attachment in self._attachments
             if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
+            and (policy_applies is None or policy_applies(attachment.policy))
         )
         non_default: Final = tuple(attachment for attachment in in_scope if not attachment.default)
         matching_attachments: Final = sorted(

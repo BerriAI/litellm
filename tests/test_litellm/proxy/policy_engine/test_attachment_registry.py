@@ -14,7 +14,8 @@ from litellm.proxy.policy_engine.attachment_registry import (
     AttachmentRegistry,
     get_attachment_registry,
 )
-from litellm.types.proxy.policy_engine import PolicyMatchContext
+from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails, PolicyMatchContext
 
 
 class TestGetAttachedPolicies:
@@ -560,6 +561,38 @@ class TestDefaultAttachments:
         results = self._registry().get_attached_policies_with_reasons(context)
 
         assert results == [{"policy_name": "guardrail-y", "matched_via": "default:scope:*"}]
+
+    def test_inapplicable_opt_in_policy_does_not_suppress_default(self):
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
+        policies = {
+            "guardrail-y": Policy(guardrails=PolicyGuardrails(add=["y"])),
+            "guardrail-x": Policy(guardrails=PolicyGuardrails(add=["x"]), condition=PolicyCondition(model="claude.*")),
+        }
+
+        results = self._registry().get_attached_policies_with_reasons(
+            context, PolicyMatcher.policy_applies(context, policies)
+        )
+
+        assert results == [{"policy_name": "guardrail-y", "matched_via": "default:scope:*"}]
+
+    def test_attachment_to_missing_policy_does_not_suppress_default(self):
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
+        policies = {"guardrail-y": Policy(guardrails=PolicyGuardrails(add=["y"]))}
+
+        assert self._registry().get_attached_policies(context, PolicyMatcher.policy_applies(context, policies)) == [
+            "guardrail-y"
+        ]
+
+    def test_applicable_opt_in_policy_still_wins_with_predicate(self):
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.2", tags=["opt-in"])
+        policies = {
+            "guardrail-y": Policy(guardrails=PolicyGuardrails(add=["y"])),
+            "guardrail-x": Policy(guardrails=PolicyGuardrails(add=["x"]), condition=PolicyCondition(model="gpt.*")),
+        }
+
+        assert self._registry().get_attached_policies(context, PolicyMatcher.policy_applies(context, policies)) == [
+            "guardrail-x"
+        ]
 
     def test_default_defaults_to_false_when_omitted(self):
         registry = AttachmentRegistry()
