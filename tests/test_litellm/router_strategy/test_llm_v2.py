@@ -477,6 +477,10 @@ async def test_user_turn_mode_reuses_forecast_until_a_new_user_requirement() -> 
     assert first.model == second.model == "efficient"
     assert first.routing_decision["cause"] == "llm_v2_classifier"
     assert first.routing_decision["classifier_cost"] == 0.001
+    assert second is not None and second.routing_decision is not None
+    assert second.routing_decision["cause"] == "user_turn_continuation"
+    assert "classifier_efficient_p_solve" not in second.routing_decision
+    assert "classifier_capable_p_solve" not in second.routing_decision
     client.acompletion.assert_awaited_once()
     client.acompletion.return_value = _response(_verdict(0.3, 0.9).model_dump_json())
     updated: Final = await router.async_pre_routing_hook(
