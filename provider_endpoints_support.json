@@ -2592,6 +2592,23 @@
         "interactions": true
       }
     },
+    "viktor": {
+      "display_name": "Viktor (`viktor`)",
+      "url": "https://docs.litellm.ai/docs/providers/viktor",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "vllm": {
       "display_name": "VLLM (`vllm`)",
       "url": "https://docs.litellm.ai/docs/providers/vllm",
