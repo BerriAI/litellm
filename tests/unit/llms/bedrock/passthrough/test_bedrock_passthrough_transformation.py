@@ -367,8 +367,6 @@ def test_bedrock_passthrough_region_extraction_from_inference_profile_arn():
         assert (
             "us-west-2" in api_base
         ), f"Expected region 'us-west-2' from ARN in base URL, but got: {api_base}"
-
-
 def test_bedrock_passthrough_model_id_arn_encoding():
     """
     Test that model_id ARNs are properly URL-encoded when used in endpoints.
