@@ -55,9 +55,7 @@ def _install_fake_sandbox(monkeypatch, session_cls=_FakeSandboxSession):
 def test_execute_installs_inline_requirements_file(monkeypatch):
     _install_fake_sandbox(monkeypatch)
     executor = SkillsSandboxExecutor()
-    monkeypatch.setattr(
-        executor, "_collect_generated_files", lambda *args, **kwargs: []
-    )
+    monkeypatch.setattr(executor, "_collect_generated_files", lambda *args, **kwargs: [])
 
     requirements = "git+https://example.com/repo.git#egg=foo\n-r extra.txt\n-e ./pkg\n"
     result = executor.execute(
@@ -69,22 +67,15 @@ def test_execute_installs_inline_requirements_file(monkeypatch):
     assert result["success"] is True
 
     created_session = _FakeSandboxSession.last_instance
-    assert created_session.copied_contents[
-        "/sandbox/.litellm_requirements.txt"
-    ] == requirements.encode("utf-8")
-    assert (
-        "pip', 'install', '-r', '.litellm_requirements.txt'"
-        in created_session.run_calls[0]
-    )
+    assert created_session.copied_contents["/sandbox/.litellm_requirements.txt"] == requirements.encode("utf-8")
+    assert "pip', 'install', '-r', '.litellm_requirements.txt'" in created_session.run_calls[0]
     assert "os.chdir('/sandbox')" in created_session.run_calls[1]
 
 
 def test_execute_uses_skill_requirements_txt(monkeypatch):
     _install_fake_sandbox(monkeypatch)
     executor = SkillsSandboxExecutor()
-    monkeypatch.setattr(
-        executor, "_collect_generated_files", lambda *args, **kwargs: []
-    )
+    monkeypatch.setattr(executor, "_collect_generated_files", lambda *args, **kwargs: [])
 
     result = executor.execute(
         code="print('hello')",
@@ -97,9 +88,7 @@ def test_execute_uses_skill_requirements_txt(monkeypatch):
     assert result["success"] is True
 
     created_session = _FakeSandboxSession.last_instance
-    copied_paths = {
-        sandbox_path for _, sandbox_path in created_session.copy_to_runtime_calls
-    }
+    copied_paths = {sandbox_path for _, sandbox_path in created_session.copy_to_runtime_calls}
     assert "/sandbox/requirements.txt" in copied_paths
     assert "/sandbox/.litellm_requirements.txt" not in copied_paths
     assert "pip', 'install', '-r', 'requirements.txt'" in created_session.run_calls[0]
@@ -118,9 +107,7 @@ def test_execute_returns_install_failure(monkeypatch):
 
     _install_fake_sandbox(monkeypatch, session_cls=_FailingSandboxSession)
     executor = SkillsSandboxExecutor()
-    monkeypatch.setattr(
-        executor, "_collect_generated_files", lambda *args, **kwargs: []
-    )
+    monkeypatch.setattr(executor, "_collect_generated_files", lambda *args, **kwargs: [])
 
     result = executor.execute(
         code="print('hello')",
