@@ -1,7 +1,7 @@
 import asyncio
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -11,6 +11,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
 from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
@@ -2400,6 +2401,14 @@ class _ExpiringRedisCache:
         self.expires_at[key] = time.monotonic() + (ttl if ttl is not None else self.default_ttl)
         return True
 
+    async def async_increment_pipeline(
+        self, increment_list: Sequence[RedisPipelineIncrementOperation], **kwargs: object
+    ) -> list[float]:
+        return [await self.async_increment(op["key"], op["increment_value"]) for op in increment_list]
+
+    def get_ttl(self, **kwargs: object) -> int | None:
+        return int(self.default_ttl)
+
 
 @pytest.mark.asyncio
 async def test_reservation_survives_redis_counter_ttl_while_request_in_flight(
@@ -2474,15 +2483,6 @@ async def test_reservation_lease_stops_when_request_task_ends_without_reconcilin
     await asyncio.sleep(0.5)
     assert redis_cache.refresh_count == 0
     assert await redis_cache.async_get_cache(key=counter_key) is None
-
-    async def async_increment_pipeline(self, increment_list, **kwargs):
-        results = []
-        for op in increment_list:
-            results.append(await self.async_increment(op["key"], op["increment_value"]))
-        return results
-
-    def get_ttl(self, **kwargs) -> None:
-        return None
 
 
 class _TeamMembershipFloorDb:
