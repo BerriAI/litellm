@@ -696,23 +696,24 @@ async def test_delete_on_another_replica_releases_the_create_reservation():
 
 
 @pytest.mark.asyncio
-async def test_delete_on_another_replica_leaves_an_unfetchable_create_to_its_own_poll():
+async def test_delete_on_another_replica_fails_when_it_cannot_fetch_and_leaves_the_bill_to_the_creating_poll():
     """
     The settling replica fetches with the delete's credentials, never the
     create's, so a fetch it cannot make (a key only the deployment carries)
-    says nothing about the interaction: the delete is about to fail the same
-    way, and the poll on the creating replica still owns the bill.
+    says nothing about the interaction. Deleting anyway would strand the bill
+    behind a deleted interaction, so the delete fails with the fetch's error
+    and the poll on the creating replica still owns the bill.
     """
     store = InMemoryBackgroundSettlementStore()
     logging_obj = _logging_obj(litellm_params={"metadata": _create_metadata()})
     await _create_on_a_replica_that_then_dies(logging_obj, store)
     fetch, _ = _fetch_sequence(RuntimeError("Google API key is required"))
 
-    outcome = await maybe_settle_background_interaction_before_delete(
-        interaction_id="interactions/bg-abc", delete_kwargs={}, fetch_interaction=fetch, store=store
-    )
+    with pytest.raises(RuntimeError, match="Google API key is required"):
+        await maybe_settle_background_interaction_before_delete(
+            interaction_id="interactions/bg-abc", delete_kwargs={}, fetch_interaction=fetch, store=store
+        )
 
-    assert outcome is None
     assert await store.is_claimed("interactions/bg-abc") is False
     poll_fetch, _ = _fetch_sequence(_response("completed", with_usage=True))
     await asyncio.wait_for(_register_poll(logging_obj, poll_fetch=poll_fetch, store=store), timeout=5)

@@ -593,14 +593,15 @@ async def maybe_settle_background_interaction_before_delete(
         api_base=api_base if isinstance(api_base, str) else None,
         store=settlement_store,
     )
-    response: Final = await _fetch_before_delete(context, fetch_interaction)
-    if response is None:
+    try:
+        response: Final = await fetch_interaction(context)
+    except Exception:
         verbose_logger.debug(
-            "Leaving background interaction %s to the poll that created it: this process could not fetch it with "
-            "the delete's credentials, so the delete is about to fail the same way",
+            "Failing the delete of background interaction %s: this process could not fetch it with the delete's "
+            "credentials, so the poll that created it keeps the bill",
             interaction_id,
         )
-        return None
+        raise
     return await _settle_before_delete(context, response)
 
 
