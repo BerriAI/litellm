@@ -22801,6 +22801,127 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/bytedance/seedance-2.5/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.473,
+        "output_cost_per_second_480p": 0.2205,
+        "output_cost_per_second_720p": 0.473,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.5/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.473,
+        "output_cost_per_second_480p": 0.2205,
+        "output_cost_per_second_720p": 0.473,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/image-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.5/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.473,
+        "output_cost_per_second_480p": 0.2205,
+        "output_cost_per_second_720p": 0.473,
+        "source": "https://fal.ai/models/bytedance/seedance-2.5/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3034,
+        "output_cost_per_second_480p": 0.1346,
+        "output_cost_per_second_720p": 0.3034,
+        "output_cost_per_second_1080p": 0.682,
+        "output_cost_per_second_4k": 1.5552,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/text-to-video",
+        "metadata": {
+            "comment": "fal bills $0.014 per 1k tokens (480p/720p/1080p) and $0.008 per 1k tokens (4k) with tokens = h*w*seconds*24/1024; 480p and 4k rates derived from that formula at 854x480 and 3840x2160"
+        },
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/image-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3034,
+        "output_cost_per_second_480p": 0.1346,
+        "output_cost_per_second_720p": 0.3034,
+        "output_cost_per_second_1080p": 0.682,
+        "output_cost_per_second_4k": 1.5552,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/image-to-video",
+        "metadata": {
+            "comment": "fal bills $0.014 per 1k tokens (480p/720p/1080p) and $0.008 per 1k tokens (4k) with tokens = h*w*seconds*24/1024; 480p and 4k rates derived from that formula at 854x480 and 3840x2160"
+        },
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/bytedance/seedance-2.0/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.3034,
+        "output_cost_per_second_480p": 0.1346,
+        "output_cost_per_second_720p": 0.3034,
+        "output_cost_per_second_1080p": 0.682,
+        "output_cost_per_second_4k": 1.5552,
+        "source": "https://fal.ai/models/bytedance/seedance-2.0/reference-to-video",
+        "metadata": {
+            "comment": "fal bills $0.014 per 1k tokens (480p/720p/1080p) and $0.008 per 1k tokens (4k) with tokens = h*w*seconds*24/1024; 480p and 4k rates derived from that formula at 854x480 and 3840x2160"
+        },
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "fal_ai/fal-ai/ideogram/v3": {
         "litellm_provider": "fal_ai",
         "mode": "image_generation",
