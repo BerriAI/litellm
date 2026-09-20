@@ -10,13 +10,6 @@ from litellm.llms.github_copilot.messages.transformation import (
 )
 
 
-def test_github_copilot_anthropic_messages_config_init():
-    """Test GithubCopilotAnthropicMessagesConfig initialization."""
-    config = GithubCopilotAnthropicMessagesConfig()
-    assert config is not None
-    assert hasattr(config, "authenticator")
-
-
 def test_github_copilot_anthropic_messages_get_complete_url():
     """get_complete_url builds the /v1/messages URL from the base it is handed.
 

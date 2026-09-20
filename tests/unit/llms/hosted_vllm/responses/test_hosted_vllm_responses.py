@@ -68,9 +68,7 @@ def test_hosted_vllm_responses_create_with_string_input():
     Test that hosted_vllm routes directly to the native /v1/responses endpoint
     when the Responses API config is registered, and correctly parses the response.
     """
-    mock_client = _make_mock_http_client(
-        _make_mock_responses_api_response("I'm doing well, thanks!")
-    )
+    mock_client = _make_mock_http_client(_make_mock_responses_api_response("I'm doing well, thanks!"))
 
     with patch(
         "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
@@ -109,10 +107,7 @@ def test_hosted_vllm_responses_create_with_explicit_none_extra_body():
     )
 
     # extra_body=None should be normalized to an empty dict (or absent)
-    assert (
-        optional_params.get("extra_body") is not None
-        or "extra_body" not in optional_params
-    )
+    assert optional_params.get("extra_body") is not None or "extra_body" not in optional_params
 
 
 def test_hosted_vllm_provider_config_registration():

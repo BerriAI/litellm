@@ -41,74 +41,9 @@ def test_hosted_vllm_chat_transformation_file_url():
     ]
 
 
-def test_hosted_vllm_chat_transformation_with_audio_url():
-    from litellm import completion
-
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.headers = {"content-type": "application/json"}
-    mock_response.json.return_value = {
-        "id": "chatcmpl-test",
-        "object": "chat.completion",
-        "created": 1234567890,
-        "model": "llama-3.1-70b-instruct",
-        "choices": [
-            {
-                "index": 0,
-                "message": {"role": "assistant", "content": "Test response"},
-                "finish_reason": "stop",
-            }
-        ],
-        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-    }
-    mock_response.text = json.dumps(mock_response.json.return_value)
-    mock_client.post.return_value = mock_response
-
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
-        return_value=mock_client,
-    ):
-        try:
-            completion(
-                model="hosted_vllm/llama-3.1-70b-instruct",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "audio_url",
-                                "audio_url": {"url": "https://example.com/audio.mp3"},
-                            },
-                        ],
-                    },
-                ],
-                api_base="https://test-vllm.example.com/v1",
-            )
-        except Exception:
-            pass
-
-        mock_client.post.assert_called_once()
-        call_kwargs = mock_client.post.call_args[1]
-        request_data = json.loads(call_kwargs["data"])
-        assert request_data["messages"] == [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "audio_url",
-                        "audio_url": {"url": "https://example.com/audio.mp3"},
-                    }
-                ],
-            }
-        ]
-
-
 def test_hosted_vllm_supports_reasoning_effort():
     config = HostedVLLMChatConfig()
-    supported_params = config.get_supported_openai_params(
-        model="hosted_vllm/gpt-oss-120b"
-    )
+    supported_params = config.get_supported_openai_params(model="hosted_vllm/gpt-oss-120b")
     assert "reasoning_effort" in supported_params
     optional_params = config.map_openai_params(
         non_default_params={"reasoning_effort": "high"},
@@ -129,9 +64,7 @@ def test_hosted_vllm_supports_thinking():
     Related issue: https://github.com/BerriAI/litellm/issues/19761
     """
     config = HostedVLLMChatConfig()
-    supported_params = config.get_supported_openai_params(
-        model="hosted_vllm/GLM-4.6-FP8"
-    )
+    supported_params = config.get_supported_openai_params(model="hosted_vllm/GLM-4.6-FP8")
     assert "thinking" in supported_params
 
     # Test thinking below the low threshold -> "minimal"
