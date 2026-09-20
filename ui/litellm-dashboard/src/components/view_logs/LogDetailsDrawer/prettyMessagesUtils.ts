@@ -8,6 +8,7 @@ import {
   ParsedMessages,
   RequestPayload,
   ResponsePayload,
+  ResponsesWebSocketTurn,
   ToolCall,
 } from "./prettyMessagesTypes";
 
@@ -51,6 +52,64 @@ export const parseMessages = (request: unknown, response: unknown): ParsedMessag
   requestMessages: parseRequestMessages(classifyRequest(request)),
   responseMessage: parseResponseMessage(classifyResponse(response)),
 });
+
+export const parseResponsesWebSocketTurns = (response: unknown): ResponsesWebSocketTurn[] | null => {
+  const results: unknown = isRecord(response) ? response.results : response;
+  if (!Array.isArray(results)) return null;
+  const events = results.filter(isRecord);
+  if (
+    !events.some((event) =>
+      ["response.created", "response.completed", "response.incomplete", "response.failed"].includes(
+        asString(event.type),
+      ),
+    )
+  )
+    return null;
+  const terminalTypes = ["response.completed", "response.incomplete", "response.failed"];
+  const terminalStatuses: Readonly<Record<string, ResponsesWebSocketTurn["status"]>> = {
+    "response.completed": "Completed",
+    "response.incomplete": "Incomplete",
+    "response.failed": "Failed",
+  };
+  return events.flatMap((event, index): ResponsesWebSocketTurn[] => {
+    const body = isRecord(event.response) ? event.response : {};
+    const id = asString(body.id);
+    if (event.type === "response.created") {
+      const hasTerminal = events.some(
+        (other) =>
+          terminalTypes.includes(asString(other.type)) &&
+          isRecord(other.response) &&
+          asString(other.response.id) === id,
+      );
+      return hasTerminal ? [] : [{ id, status: "No terminal event recorded", message: null, detail: "" }];
+    }
+    if (event.type === "error") {
+      const error = isRecord(event.error) ? event.error : event;
+      return [{ id: "", status: "Error", message: null, detail: asString(error.message) || asString(error.code) }];
+    }
+    if (!terminalTypes.includes(asString(event.type))) return [];
+    if (
+      id &&
+      events
+        .slice(0, index)
+        .some(
+          (other) =>
+            terminalTypes.includes(asString(other.type)) && isRecord(other.response) && other.response.id === id,
+        )
+    )
+      return [];
+    const error = isRecord(body.error) ? body.error : {};
+    const incomplete = isRecord(body.incomplete_details) ? body.incomplete_details : {};
+    return [
+      {
+        id,
+        status: terminalStatuses[asString(event.type)],
+        message: parseResponseMessage(classifyResponse(body)),
+        detail: asString(error.message) || asString(error.code) || asString(incomplete.reason),
+      },
+    ];
+  });
+};
 
 const parseRequestMessages = (payload: RequestPayload): ParsedMessage[] => {
   switch (payload.kind) {

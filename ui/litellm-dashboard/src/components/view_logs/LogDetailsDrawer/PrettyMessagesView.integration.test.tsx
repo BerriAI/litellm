@@ -4,6 +4,60 @@ import { describe, it, expect } from "vitest";
 import { PrettyMessagesView } from "./PrettyMessagesView";
 
 describe("PrettyMessagesView", () => {
+  it.each([false, true])("renders separate WebSocket turns (wrapped: %s)", (wrapped) => {
+    const events = [
+      { type: "response.created", response: { id: "resp_1", output: [] } },
+      { type: "response.output_text.delta", delta: "First answer" },
+      {
+        type: "response.completed",
+        response: {
+          id: "resp_1",
+          output: [{ type: "message", content: [{ type: "output_text", text: "First answer" }] }],
+        },
+      },
+      {
+        type: "response.incomplete",
+        response: {
+          id: "resp_2",
+          incomplete_details: { reason: "max_output_tokens" },
+          output: [{ type: "function_call", call_id: "call_1", name: "get_weather", arguments: '{"city":"Hanoi"}' }],
+        },
+      },
+    ];
+    render(
+      <PrettyMessagesView
+        request={{ input: "Check the weather" }}
+        response={wrapped ? { results: events, usage: {} } : events}
+        metrics={{ completion_tokens: 42, output_cost: 0.001 }}
+      />,
+    );
+    expect(screen.getByText("Check the weather")).toBeInTheDocument();
+    expect(screen.getAllByText("First answer")).toHaveLength(1);
+    expect(screen.getByText("Turn 1 · Completed")).toBeInTheDocument();
+    expect(screen.getByText("Turn 2 · Incomplete")).toBeInTheDocument();
+    expect(screen.getByText("max_output_tokens")).toBeInTheDocument();
+    expect(screen.getByText("get_weather")).toBeInTheDocument();
+    expect(screen.getAllByText("Tokens: 42")).toHaveLength(1);
+    expect(screen.getAllByText("Cost: $0.001000")).toHaveLength(1);
+  });
+
+  it("shows failed and unfinished WebSocket turns without inventing output", () => {
+    render(
+      <PrettyMessagesView
+        request={{}}
+        response={{
+          results: [
+            { type: "response.failed", response: { id: "resp_failed", error: { message: "Provider unavailable" } } },
+            { type: "response.created", response: { id: "resp_unfinished" } },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByText("Turn 1 · Failed")).toBeInTheDocument();
+    expect(screen.getByText("Provider unavailable")).toBeInTheDocument();
+    expect(screen.getByText("Turn 2 · No terminal event recorded")).toBeInTheDocument();
+  });
+
   it("should render the component for standard chat completions", () => {
     const request = {
       messages: [{ role: "user", content: "Hello" }],
