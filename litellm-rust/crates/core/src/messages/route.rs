@@ -32,6 +32,8 @@ pub enum MessagesOpResult {
 
 /// The caller's request as the host projects it.
 pub struct MessagesCall {
+    pub cached_response: Option<Value>,
+    pub options: crate::client::ClientOptions,
     pub model: String,
     pub body: Map<String, Value>,
     pub api_key: Option<String>,
@@ -125,8 +127,48 @@ pub fn messages_machine() -> MessagesMachine {
 }
 
 async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
-    let MessagesOpResult::Request(call) = host.route(MessagesOp::ProjectRequest).await?;
+    let MessagesOpResult::Request(mut call) = host.route(MessagesOp::ProjectRequest).await?;
+    if let Some(budget) = &call.options.budget {
+        budget.check()?;
+    }
     let stream = call.streams();
+    let cached = match call.cached_response.take() {
+        Some(response) => Some(response),
+        None => match &call.options.cache {
+            Some(cache) => cache.get().await,
+            None => None,
+        },
+    };
+    if let Some(response) = cached {
+        if !stream
+            && let Ok(message) =
+                serde_json::from_value::<AnthropicMessagesResponse>(response.clone())
+        {
+            call.options
+                .record_messages_usage(message.usage.as_ref().unwrap_or(&Value::Null), true);
+            return Ok(MessagesOutput::Message(Box::new(message)));
+        }
+        if stream
+            && let Some(events) = response
+                .get("litellm_cached_anthropic_sse_events")
+                .and_then(Value::as_array)
+            && events.iter().all(Value::is_string)
+        {
+            if host.open(()).await? == Demand::More {
+                for event in events {
+                    if host
+                        .deliver(Bytes::from(event.as_str().unwrap_or_default().to_owned()))
+                        .await?
+                        == Demand::Detached
+                    {
+                        break;
+                    }
+                }
+            }
+            return Ok(MessagesOutput::Streamed);
+        }
+    }
+    call.options.adjust_max_tokens(&mut call.body);
     let request = prepare_provider_request(MessagesRequest {
         model: &call.model,
         body: Value::Object(call.body.clone()),
@@ -167,15 +209,22 @@ async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
         return Err(provider_error(response).await);
     }
     if stream {
-        return relay(&host, response).await;
+        return relay(&host, response, &call.options).await;
     }
     let text = response.text().await.map_err(network)?;
     host.emit(MachineEvent::ResponseReceived {
         raw: RawResponse { body: text.clone() },
     })
     .await?;
-    decode_response(request.config, &request.model, &text)
-        .map(|message| MessagesOutput::Message(Box::new(message)))
+    let message = decode_response(request.config, &request.model, &text)?;
+    call.options
+        .record_messages_usage(message.usage.as_ref().unwrap_or(&Value::Null), false);
+    if let Some(cache) = &call.options.cache
+        && let Ok(value) = serde_json::to_value(&message)
+    {
+        cache.set(value).await;
+    }
+    Ok(MessagesOutput::Message(Box::new(message)))
 }
 
 /// Hands each upstream chunk to the caller as it arrives. A caller that stops reading
@@ -183,13 +232,25 @@ async fn execute(host: MessagesHost) -> Result<MessagesOutput, Error> {
 async fn relay(
     host: &MessagesHost,
     mut response: reqwest::Response,
+    options: &crate::client::ClientOptions,
 ) -> Result<MessagesOutput, Error> {
     if host.open(()).await? == Demand::Detached {
         return Ok(MessagesOutput::Streamed);
     }
+    let mut collected = Vec::new();
+    let mut detached = false;
     while let Some(chunk) = response.chunk().await.map_err(network)? {
+        collected.extend_from_slice(&chunk);
         if host.deliver(chunk).await? == Demand::Detached {
+            detached = true;
             break;
+        }
+    }
+    if let Some(stream) = litellm_core_utils::messages_stream::MessagesStream::parse(&collected) {
+        options.record_messages_usage(&stream.usage, false);
+        if !detached && let (Some(cache), Some(response)) = (&options.cache, stream.cached_response)
+        {
+            cache.set(response).await;
         }
     }
     Ok(MessagesOutput::Streamed)

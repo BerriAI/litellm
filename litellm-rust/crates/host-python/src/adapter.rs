@@ -14,6 +14,7 @@ pub fn missing_state() -> PyErr {
 pub enum LifecycleStep {
     Await(Py<PyAny>),
     Arguments(Py<PyDict>),
+    Cached(Py<PyAny>),
     Wire(Box<WireRequest>),
     Response(Py<PyAny>),
     Done,

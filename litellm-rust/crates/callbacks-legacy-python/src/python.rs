@@ -25,8 +25,6 @@ pub(crate) enum LegacyPython {
 pub(crate) enum Wrapper {
     #[strum(serialize = "setup")]
     Setup,
-    #[strum(serialize = "check_limits")]
-    CheckLimits,
     #[strum(serialize = "credential_list")]
     CredentialList,
     #[strum(serialize = "warn_unknown_credential")]

@@ -2067,9 +2067,13 @@ dependencies = [
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "litellm-auth",
+ "litellm-cache",
+ "litellm-core-utils",
  "litellm-host",
  "litellm-host-python",
+ "litellm-token-counter",
  "proptest",
  "pyo3",
  "rstest",
@@ -2087,10 +2091,13 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-aws",
  "litellm-auth-gcp",
+ "litellm-cache",
+ "litellm-cache-memory",
  "litellm-core-utils",
  "litellm-host",
  "litellm-http",
  "litellm-llms",
+ "litellm-token-counter",
  "litellm-types",
  "mime_guess",
  "moka",

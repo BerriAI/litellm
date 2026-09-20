@@ -504,6 +504,7 @@ class Logging(LiteLLMLoggingBaseClass):
     classifier_input: Mapping[str, JsonValue] | None = None
     baseline_cache_context: "BaselineCacheContext | None" = None
     baseline_observation: "CapturedBaselineObservation | None" = None
+    _native_response_cost: float | None = None
 
     def __init__(
         self,
@@ -1743,6 +1744,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if cache_hit is True:
             return 0.0
+
+        if self._native_response_cost is not None:
+            return self._native_response_cost
 
         if is_unbilled_non_inference_call(
             self.call_type, StandardLoggingPayloadSetup.merge_litellm_metadata(self.litellm_params), result

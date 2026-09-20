@@ -19,12 +19,21 @@ use serde_json::Value;
 use crate::messages::types::MessagesRequest;
 
 pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
+    messages_with_options(request, crate::client::ClientOptions::default()).await
+}
+
+pub async fn messages_with_options(
+    request: MessagesRequest<'_>,
+    options: crate::client::ClientOptions,
+) -> Result<AnthropicMessagesResponse, Error> {
     let Value::Object(body) = request.body else {
         return Err(Error::InvalidRequest(
             "messages body must be an object".into(),
         ));
     };
     let call = MessagesCall {
+        cached_response: None,
+        options,
         model: request.model.into(),
         body,
         api_key: request.api_key.map(Into::into),
@@ -41,5 +50,7 @@ pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesR
     }
 }
 
+#[cfg(test)]
+mod lifecycle_tests;
 #[cfg(test)]
 mod tests;

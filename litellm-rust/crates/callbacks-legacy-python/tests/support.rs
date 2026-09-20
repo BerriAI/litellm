@@ -27,6 +27,9 @@ for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_le
     sys.modules.setdefault(name, types.ModuleType(name))
 
 legacy = sys.modules['litellm.rust_bridge.callbacks_legacy_python']
+sdk = sys.modules['litellm']
+sdk.max_budget = None
+sdk.num_retries_per_request = None
 CONTRACT = json.loads(python_contract)
 
 
@@ -50,7 +53,6 @@ FAKES = {
         logger=kwargs['logger_factory'](kwargs) if 'logger_factory' in kwargs else kwargs['logger'],
         kwargs=kwargs,
     ),
-    'check_limits': lambda arguments: arguments['logger'].check_limits(arguments),
     'finalize': lambda response, logger, kwargs, start, end: logger.record('finalize', response),
     'update_logging': lambda logger, kwargs, model, optional_params, litellm_params, provider: logger.update_from_kwargs(
         kwargs=kwargs,

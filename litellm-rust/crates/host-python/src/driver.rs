@@ -207,6 +207,10 @@ where
                 self.stage = Stage::Call;
                 self.resume_machine(py, None)
             }
+            (Expect::Arguments, LifecycleStep::Cached(response)) => {
+                self.ended_at = Some(epoch_seconds());
+                self.succeeded(py, response)
+            }
             (Expect::Wire, LifecycleStep::Wire(wire)) => {
                 self.resume_machine(py, Some(Ok(HostResult::BeforeSend(wire))))
             }

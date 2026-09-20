@@ -1,5 +1,6 @@
 pub mod audio_transcription;
 pub mod chat_completions;
+pub mod client;
 pub mod constants;
 pub mod error;
 pub mod messages;

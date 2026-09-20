@@ -9,6 +9,8 @@ autotests = false
 [dependencies]
 litellm-types.workspace = true
 litellm-core-utils.workspace = true
+litellm-cache.workspace = true
+litellm-token-counter.workspace = true
 litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
@@ -36,6 +38,7 @@ url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+litellm-cache-memory.workspace = true
 litellm-auth-gcp.workspace = true
 litellm-llms = { workspace = true, features = ["test-support"] }
 rstest.workspace = true

@@ -1,7 +1,9 @@
 use litellm_llms::base_llm::chat::transformation::Error as LlmError;
 
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    BudgetExceeded(#[from] litellm_core_utils::budget::BudgetExceeded),
     #[error("invalid provider: {0}")]
     InvalidProvider(String),
     #[error("missing required field: {0}")]

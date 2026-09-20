@@ -49,6 +49,9 @@ struct DeliveredStream {
 }
 
 enum Pending {
+    CacheRead,
+    CacheWrite,
+    StreamCacheWrite,
     DeploymentPreCall,
     DeploymentPostCall,
     DeploymentFailure,
@@ -56,6 +59,9 @@ enum Pending {
 }
 
 pub struct LegacyLogging {
+    cache: Option<crate::caching::Caching>,
+    cache_hit: bool,
+    accounted: bool,
     surface: LegacySurface,
     call: PublicCall,
     logger: Option<PythonLogger>,
@@ -88,6 +94,9 @@ impl LegacyLogging {
         asynchronous: bool,
     ) -> Self {
         Self {
+            cache: None,
+            cache_hit: false,
+            accounted: false,
             surface,
             call,
             logger: None,
@@ -120,7 +129,121 @@ impl LegacyLogging {
     fn prepare(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
         let prepared = prepare(py, self.call.kwargs().bind(py), self.logger()?)?.unbind();
         self.call.set_kwargs(prepared);
+        if self.surface.call_type == "anthropic_messages" {
+            self.cache = crate::caching::Caching::prepare(
+                py,
+                &self.call,
+                self.surface.call_type,
+                self.asynchronous,
+            )?;
+            if let Some(cache) = &self.cache
+                && cache.controls.reads()
+            {
+                match cache.read(py, self.asynchronous) {
+                    Ok(value) if self.asynchronous => {
+                        self.pending = Some(Pending::CacheRead);
+                        return Ok(LifecycleStep::Await(value));
+                    }
+                    result => return self.cache_read(py, result),
+                }
+            }
+        }
+        self.arguments(py)
+    }
+
+    fn arguments(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
+        if self.surface.call_type == "anthropic_messages" {
+            if let Err(error) =
+                crate::limits::adjust_max_tokens(py, &self.call, self.surface.call_type)
+                && is_cancellation(py, &error)
+            {
+                return Err(error);
+            }
+        }
         Ok(LifecycleStep::Arguments(self.call.kwargs().clone_ref(py)))
+    }
+
+    fn cache_read(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<LifecycleStep> {
+        let decoded = result.and_then(|value| {
+            self.cache
+                .as_ref()
+                .ok_or_else(missing_state)?
+                .decode(value.bind(py))
+        });
+        let response = match decoded {
+            Ok(Some(response)) => response,
+            Err(error) if is_cancellation(py, &error) => return Err(error),
+            _ => return self.arguments(py),
+        };
+        self.cache_hit = true;
+        self.logger()?
+            .object(py)
+            .getattr("model_call_details")?
+            .set_item("cache_hit", true)?;
+        let cache = self.cache.as_ref().ok_or_else(missing_state)?;
+        self.logger()?
+            .object(py)
+            .getattr("litellm_params")?
+            .set_item("preset_cache_key", &cache.key)?;
+        if response
+            .get("litellm_cached_anthropic_sse_events")
+            .is_some()
+        {
+            self.call
+                .kwargs()
+                .bind(py)
+                .set_item("_rust_messages_cached_response", to_py(py, &response)?)?;
+            return Ok(LifecycleStep::Arguments(self.call.kwargs().clone_ref(py)));
+        }
+        self.end = Some(datetime(py, epoch_seconds())?);
+        self.response = Some(crate::caching::cached_public(py, &response)?);
+        self.finalize(py)?;
+        Ok(LifecycleStep::Cached(
+            self.response
+                .as_ref()
+                .ok_or_else(missing_state)?
+                .clone_ref(py),
+        ))
+    }
+
+    fn cache_write(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
+        if let (Some(cache), Some(response)) = (&self.cache, &self.response)
+            && cache.controls.writes()
+            && !self.cache_hit
+        {
+            match cache.write(py, response.bind(py), self.asynchronous) {
+                Ok(awaitable) if self.asynchronous => {
+                    self.pending = Some(Pending::CacheWrite);
+                    return Ok(LifecycleStep::Await(awaitable));
+                }
+                Err(error) if is_cancellation(py, &error) => return Err(error),
+                _ => {}
+            }
+        }
+        self.finalize(py)
+    }
+
+    fn dispatch_cache_hit(&self, py: Python<'_>) -> PyResult<()> {
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("result", &self.response)?;
+        kwargs.set_item("start_time", &self.start)?;
+        kwargs.set_item("end_time", &self.end)?;
+        kwargs.set_item("cache_hit", true)?;
+        let logger = self.logger()?.object(py);
+        if self.asynchronous {
+            let coroutine = logger.call_method("async_success_handler", (), Some(&kwargs))?;
+            crate::python::Logging::Enqueue.call(py, (coroutine,))?;
+        }
+        logger.call_method(
+            "handle_sync_success_callbacks_for_async_calls",
+            (),
+            Some(&kwargs),
+        )?;
+        Ok(())
     }
 
     fn finalize(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
@@ -138,6 +261,68 @@ impl LegacyLogging {
             .ok_or_else(missing_state)
     }
 
+    fn record_usage(&mut self, py: Python<'_>, usage: &Value) -> PyResult<()> {
+        if self.accounted || self.surface.call_type != "anthropic_messages" {
+            return Ok(());
+        }
+        self.accounted = true;
+        let model = self
+            .call
+            .lookup(py, "model")?
+            .map(|value| value.extract::<String>())
+            .transpose()?;
+        let info = model
+            .map(|model| crate::limits::model_info(py, &model))
+            .transpose()?
+            .flatten();
+        let cost = if self.cache_hit {
+            Some(0.0)
+        } else {
+            info.as_ref()
+                .and_then(|info| litellm_core_utils::cost_calculator::messages_cost(info, usage))
+        };
+        if let Some(cost) = cost {
+            let logger = self.logger()?.object(py);
+            logger.setattr("_native_response_cost", cost)?;
+            logger
+                .getattr("model_call_details")?
+                .set_item("response_cost", cost)?;
+            let sdk = py.import("litellm")?;
+            if !self.cache_hit && sdk.getattr("max_budget")?.is_truthy()? {
+                let current: f64 = sdk.getattr("_current_cost")?.extract()?;
+                sdk.setattr("_current_cost", current + cost)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn finish_stream(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
+        let stream = self.stream.as_ref().ok_or_else(missing_state)?;
+        let mut bytes = Vec::new();
+        for chunk in stream.chunks.bind(py).iter() {
+            bytes.extend_from_slice(chunk.cast::<pyo3::types::PyBytes>()?.as_bytes());
+        }
+        if let Some(parsed) = litellm_core_utils::messages_stream::MessagesStream::parse(&bytes) {
+            self.record_usage(py, &parsed.usage)?;
+            if !self.cache_hit
+                && let (Some(cache), Some(response)) = (&self.cache, parsed.cached_response)
+                && cache.controls.writes()
+            {
+                let response = to_py(py, &response)?;
+                match cache.write(py, response.bind(py), self.asynchronous) {
+                    Ok(awaitable) if self.asynchronous => {
+                        self.pending = Some(Pending::StreamCacheWrite);
+                        return Ok(LifecycleStep::Await(awaitable));
+                    }
+                    Err(error) if is_cancellation(py, &error) => return Err(error),
+                    _ => {}
+                }
+            }
+        }
+        self.stream_success(py, self.stream.as_ref().ok_or_else(missing_state)?)?;
+        Ok(LifecycleStep::Done)
+    }
+
     fn dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
         match self.try_dispatch_success(py) {
             Err(error) if error.is_instance_of::<PyException>(py) => {
@@ -149,6 +334,9 @@ impl LegacyLogging {
     }
 
     fn try_dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
+        if self.cache_hit {
+            return self.dispatch_cache_hit(py);
+        }
         let logger = self.logger()?;
         let pending = || PendingSuccess {
             logger: logger.clone_ref(py),
@@ -361,7 +549,7 @@ impl PythonLifecycle for LegacyLogging {
                 self.surface.call_type,
             )?));
         }
-        self.finalize(py)
+        self.cache_write(py)
     }
 
     fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
@@ -385,10 +573,14 @@ impl PythonLifecycle for LegacyLogging {
             LifecycleEvent::Succeeded { timing, response } => {
                 self.end = Some(datetime(py, timing.end_time)?);
                 self.response = Some(response.clone_ref(py));
-                match &self.stream {
-                    Some(stream) => self.stream_success(py, stream)?,
-                    None => self.dispatch_success(py)?,
+                if self.stream.is_some() {
+                    return self.finish_stream(py);
                 }
+                if self.surface.call_type == "anthropic_messages" {
+                    let value: Value = from_py(response.bind(py))?;
+                    self.record_usage(py, value.get("usage").unwrap_or(&Value::Null))?;
+                }
+                self.dispatch_success(py)?;
                 Ok(LifecycleStep::Done)
             }
             LifecycleEvent::Failed {
@@ -448,7 +640,27 @@ impl PythonLifecycle for LegacyLogging {
             }
             Pending::DeploymentPostCall => {
                 self.response = Some(result?);
+                self.cache_write(py)
+            }
+            Pending::CacheRead => self.cache_read(py, result),
+            Pending::CacheWrite => {
+                if let Err(error) = result
+                    && is_cancellation(py, &error)
+                {
+                    return Err(error);
+                }
                 self.finalize(py)
+            }
+            Pending::StreamCacheWrite => {
+                if let Err(error) = result
+                    && is_cancellation(py, &error)
+                {
+                    return Err(error);
+                }
+                if let Some(stream) = &self.stream {
+                    self.stream_success(py, stream)?;
+                }
+                Ok(LifecycleStep::Done)
             }
             Pending::DeploymentFailure => self.dispatch_failure(py),
             Pending::AsyncFailure => match result {
@@ -467,10 +679,14 @@ impl PythonLifecycle for LegacyLogging {
         self.body = None;
         self.context = None;
         self.stream = None;
+        self.cache = None;
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.call.traverse(visit)?;
+        if let Some(cache) = &self.cache {
+            cache.traverse(visit)?;
+        }
         if let Some(logger) = &self.logger {
             logger.traverse(visit)?;
         }

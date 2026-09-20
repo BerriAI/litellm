@@ -90,8 +90,6 @@ assert prepared['document'] is replacement
 assert prepared['pages'] is replaced_kwargs['pages']
 assert prepared['litellm_logging_obj'] is logger
 assert 'litellm_logging_obj' not in replaced_kwargs
-[checked] = [value for name, value in logger.calls if name == 'check_limits']
-assert checked is prepared
 ",
         );
     });
@@ -126,8 +124,6 @@ kwargs = {'logger': logger, 'vendor_extension': opaque}
             &locals,
             c"
 assert prepared['vendor_extension'] is opaque
-[checked] = [value for name, value in logger.calls if name == 'check_limits']
-assert checked['vendor_extension'] is opaque
 assert hooked == ([opaque] if asynchronous else []), hooked
 ",
         );
@@ -247,7 +243,7 @@ assert all(value is failure for name, value in logger.calls if name.endswith('_h
 #[rstest]
 #[case::synchronous(false)]
 #[case::asynchronous(true)]
-fn a_limit_rejected_before_the_call_surfaces_as_the_callers_error(#[case] asynchronous: bool) {
+fn preparation_failure_before_the_call_preserves_exception_identity(#[case] asynchronous: bool) {
     Python::initialize();
     Python::attach(|py| {
         let locals = namespace(
@@ -258,13 +254,13 @@ class BudgetExceeded(Exception):
 
 rejection = BudgetExceeded('over budget')
 
-class LimitedLogger(StubLogger):
-    def check_limits(self, arguments):
+class RejectedCredential(str):
+    def __bool__(self):
         raise rejection
 
-logger = LimitedLogger()
+logger = StubLogger()
 logger.hooks = {'pre': lambda kwargs: kwargs}
-kwargs = {'logger': logger}
+kwargs = {'logger': logger, 'litellm_credential_name': RejectedCredential('named')}
 ",
         );
         let mut logging = legacy_call(py, &locals, asynchronous);

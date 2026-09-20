@@ -1,6 +1,8 @@
 mod base_cache;
 mod caching;
 mod error;
+mod handler;
+pub use handler::LLMCachingHandler;
 
 pub use base_cache::{
     BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheFuture, CacheKwargs,

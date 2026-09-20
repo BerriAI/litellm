@@ -10,9 +10,11 @@
 //! without keeping a copy.
 
 mod adapter;
+mod caching;
 mod call;
 mod callbacks;
 mod deferred;
+mod limits;
 mod logger;
 mod preparation;
 mod python;

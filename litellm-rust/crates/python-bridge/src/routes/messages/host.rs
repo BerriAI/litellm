@@ -85,6 +85,11 @@ impl MessagesRouteHost {
             .transpose()?
             .flatten();
         Ok(MessagesCall {
+            cached_response: arguments
+                .get_item("_rust_messages_cached_response")?
+                .map(|value| from_py(&value))
+                .transpose()?,
+            options: Default::default(),
             model,
             body,
             api_key: string("api_key")?,

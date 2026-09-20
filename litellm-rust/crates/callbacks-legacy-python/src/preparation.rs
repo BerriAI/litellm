@@ -29,8 +29,58 @@ pub fn prepare<'py>(
             .call(py, ())?
             .cast_into::<PyList>()?)
     })?;
-    Wrapper::CheckLimits.call(py, (&arguments,))?;
+    check_limits(py, &arguments)?;
     Ok(arguments)
+}
+
+fn check_limits(py: Python<'_>, kwargs: &Bound<'_, PyDict>) -> PyResult<()> {
+    let sdk = py.import("litellm")?;
+    check_limits_with_settings(py, kwargs, sdk.as_any())
+}
+
+fn check_limits_with_settings(
+    py: Python<'_>,
+    kwargs: &Bound<'_, PyDict>,
+    sdk: &Bound<'_, PyAny>,
+) -> PyResult<()> {
+    let max_budget = sdk.getattr("max_budget")?.extract::<Option<f64>>()?;
+    if max_budget.is_some_and(|limit| limit != 0.0) {
+        let current_cost = sdk.getattr("_current_cost")?.extract::<f64>()?;
+        if let Err(error) = litellm_core_utils::budget::check_budget(current_cost, max_budget) {
+            let arguments = PyDict::new(py);
+            arguments.set_item("current_cost", error.current_cost)?;
+            arguments.set_item("max_budget", error.max_budget)?;
+            return Err(PyErr::from_value(
+                sdk.getattr("BudgetExceededError")?
+                    .call((), Some(&arguments))?,
+            ));
+        }
+    }
+    let limit = sdk.getattr("num_retries_per_request")?;
+    if limit.is_none() {
+        return Ok(());
+    }
+    let key = if kwargs.contains("litellm_metadata")? {
+        "litellm_metadata"
+    } else {
+        "metadata"
+    };
+    let Some(metadata) = kwargs.get_item(key)? else {
+        return Ok(());
+    };
+    if !metadata.is_instance(&py.import("collections.abc")?.getattr("Mapping")?)? {
+        return Ok(());
+    }
+    let retry = metadata.call_method1("get", ("request_retry_count",))?;
+    if retry.get_type().is(&py.get_type::<pyo3::types::PyInt>())
+        && retry.gt(0)?
+        && retry.ge(limit)?
+    {
+        return Err(pyo3::exceptions::PyRuntimeError::new_err(
+            "Max retries per request hit!",
+        ));
+    }
+    Ok(())
 }
 
 fn inherit_credentials<'py>(
@@ -72,6 +122,58 @@ fn inherit_credentials<'py>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_limits_preserve_budget_and_retry_boundaries() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = eval(
+                py,
+                c"
+import types
+class BudgetExceededError(Exception):
+    def __init__(self, current_cost, max_budget):
+        self.current_cost = current_cost
+        self.max_budget = max_budget
+settings = types.SimpleNamespace(max_budget=2.0, _current_cost=2.0, num_retries_per_request=5,
+    BudgetExceededError=BudgetExceededError)
+",
+            );
+            let settings = locals.get_item("settings").unwrap().unwrap();
+            let arguments = PyDict::new(py);
+            assert!(check_limits_with_settings(py, &arguments, &settings).is_ok());
+            settings.setattr("_current_cost", 3.0).unwrap();
+            let error = check_limits_with_settings(py, &arguments, &settings).unwrap_err();
+            assert_eq!(
+                error
+                    .value(py)
+                    .getattr("current_cost")
+                    .unwrap()
+                    .extract::<f64>()
+                    .unwrap(),
+                3.0
+            );
+            settings.setattr("max_budget", 0.0).unwrap();
+            for key in ["metadata", "litellm_metadata"] {
+                for (count, refused) in [(0, false), (4, false), (5, true), (6, true)] {
+                    let metadata = PyDict::new(py);
+                    metadata.set_item("request_retry_count", count).unwrap();
+                    arguments.set_item(key, metadata).unwrap();
+                    assert_eq!(
+                        check_limits_with_settings(py, &arguments, &settings).is_err(),
+                        refused
+                    );
+                }
+                let metadata = PyDict::new(py);
+                metadata.set_item("request_retry_count", true).unwrap();
+                settings.setattr("num_retries_per_request", 0).unwrap();
+                arguments.set_item(key, metadata).unwrap();
+                assert!(check_limits_with_settings(py, &arguments, &settings).is_ok());
+                arguments.del_item(key).unwrap();
+                settings.setattr("num_retries_per_request", 5).unwrap();
+            }
+        });
+    }
 
     fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
         let locals = PyDict::new(py);

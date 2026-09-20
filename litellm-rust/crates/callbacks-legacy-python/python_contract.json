@@ -6,9 +6,6 @@
     "start_time",
     "asynchronous"
   ],
-  "check_limits": [
-    "kwargs"
-  ],
   "finalize": [
     "response",
     "logger",

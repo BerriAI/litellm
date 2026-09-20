@@ -15,7 +15,7 @@ use super::{
 };
 use crate::messages::types::MessagesRequest;
 
-async fn read_http_request(socket: &mut TcpStream) -> String {
+pub(super) async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
     let header_end = loop {
@@ -48,7 +48,7 @@ async fn read_http_request(socket: &mut TcpStream) -> String {
     String::from_utf8(request).expect("request is utf8")
 }
 
-fn write_response(body: &str) -> String {
+pub(super) fn write_response(body: &str) -> String {
     format!(
         "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
         body.len(),
