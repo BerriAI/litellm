@@ -7738,7 +7738,8 @@ class Router:
                 if len(args) > 0 and isinstance(args[0], list)
                 else []  # mutable-ok: empty message list for kwargs fallback
             )
-            return await self._prompt_management_factory(
+            prompt_factory: Final = getattr(self, "_prompt_management_factory")  # noqa: B009  # dynamic dispatch preserves async_function_with_fallbacks return type
+            return await prompt_factory(
                 model=model_group,
                 messages=input_messages,
                 kwargs=kwargs,
