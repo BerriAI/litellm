@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional
+from typing import TYPE_CHECKING, Any, Final, Optional
 
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
@@ -156,13 +156,12 @@ async def handle_update_object_permission_common(
     if prisma_client is None:
         raise ValueError("Prisma client not found")
 
-    raw_object_permission: Final[dict | str | None] = data_json.pop("object_permission", None)
-    if raw_object_permission is None:
+    new_object_permission: dict | str | None = data_json.pop("object_permission", None)
+    if new_object_permission is None:
         return None
 
-    new_object_permission: Final[object] = (
-        json.loads(raw_object_permission) if isinstance(raw_object_permission, str) else raw_object_permission
-    )
+    if isinstance(new_object_permission, str):
+        new_object_permission = json.loads(new_object_permission)
 
     upsert: Final = await prepare_object_permission_upsert(
         new_object_permission=new_object_permission if isinstance(new_object_permission, dict) else {},
@@ -231,7 +230,7 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return result
 
 
-def _mcp_server_identifier_matches(server: object, identifier: str) -> bool:
+def _mcp_server_identifier_matches(server: Any, identifier: str) -> bool:
     return identifier in {
         getattr(server, "server_id", None),
         getattr(server, "alias", None),
