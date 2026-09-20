@@ -3,8 +3,10 @@ Tests for pipeline field on policy CRUD types (resolver_types.py).
 """
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.types.proxy.policy_engine.resolver_types import (
+    PolicyAttachmentCreateRequest,
     PolicyCreateRequest,
     PolicyDBResponse,
     PolicyUpdateRequest,
@@ -100,3 +102,14 @@ def test_policy_create_request_roundtrip():
     dumped = req.model_dump()
     restored = PolicyCreateRequest(**dumped)
     assert restored.pipeline == pipeline_data
+
+
+@pytest.mark.parametrize("priority", [-2147483648, 2147483647])
+def test_policy_attachment_create_request_accepts_int32_priority(priority: int):
+    assert PolicyAttachmentCreateRequest(policy_name="p", priority=priority).priority == priority
+
+
+@pytest.mark.parametrize("priority", [-2147483649, 2147483648])
+def test_policy_attachment_create_request_rejects_priority_outside_int32(priority: int):
+    with pytest.raises(ValidationError):
+        PolicyAttachmentCreateRequest(policy_name="p", priority=priority)

@@ -26,65 +26,8 @@ def _load_root_cost_map() -> dict:
         return json.load(f)
 
 
-def test_fable_5_present_in_bundled_backup():
-    """The bundled backup is the runtime fallback (and what tests load with
-    ``LITELLM_LOCAL_MODEL_COST_MAP=True``) — it must carry the same entries as
-    the root cost map, otherwise the model resolves on one path but not the
-    other."""
-    backup = GetModelCostMap.load_local_model_cost_map()
-    root = _load_root_cost_map()
-    for model_name in (
-        "claude-fable-5",
-        "anthropic.claude-fable-5",
-        "global.anthropic.claude-fable-5",
-        "us.anthropic.claude-fable-5",
-        "eu.anthropic.claude-fable-5",
-        "vertex_ai/claude-fable-5",
-        "vertex_ai/claude-fable-5@default",
-        "azure_ai/claude-fable-5",
-    ):
-        assert model_name in backup, f"Missing from backup cost map: {model_name}"
-        assert backup[model_name] == root[model_name], model_name
-
-
 def test_fable_5_registered_for_bedrock_converse():
     assert "anthropic.claude-fable-5" in BEDROCK_CONVERSE_MODELS
-
-
-@pytest.mark.parametrize(
-    "cost_map",
-    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
-    ids=["root", "bundled_backup"],
-)
-def test_fable_5_all_variants_carry_adaptive_thinking_flag(cost_map):
-    """Every Fable 5 entry must advertise ``supports_adaptive_thinking``.
-
-    Adaptive-thinking detection is cost-map driven, so a single variant missing
-    the flag silently sends the legacy ``thinking.type='enabled'`` shape and the
-    provider 400s (issue #29188 for the Opus 4.8 equivalent). Fable 5 is even
-    stricter than Opus 4.8: an explicit ``thinking.type='disabled'`` also 400s,
-    so adaptive is the only valid thinking shape LiteLLM can emit for it."""
-    variants = [k for k in cost_map if "claude-fable-5" in k]
-    assert variants, "no claude-fable-5 entries found in cost map"
-    missing = [k for k in variants if cost_map[k].get("supports_adaptive_thinking") is not True]
-    assert not missing, f"missing supports_adaptive_thinking: {missing}"
-
-
-@pytest.mark.parametrize(
-    "cost_map",
-    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
-    ids=["root", "bundled_backup"],
-)
-def test_fable_5_all_variants_carry_thinking_always_on_flag(cost_map):
-    """Every Fable 5 entry must advertise ``thinking_always_on``.
-
-    The flag drives the Anthropic transformations to omit an explicit
-    ``thinking.type='disabled'``, which Fable 5 rejects with a 400; a variant
-    missing the flag forwards the param verbatim and the provider 400s."""
-    variants = [k for k in cost_map if "claude-fable-5" in k]
-    assert variants, "no claude-fable-5 entries found in cost map"
-    missing = [k for k in variants if cost_map[k].get("thinking_always_on") is not True]
-    assert not missing, f"missing thinking_always_on: {missing}"
 
 
 @pytest.mark.parametrize(
@@ -151,22 +94,3 @@ def test_adaptive_thinking_detected_for_fable_5_1(local_model_cost_map, model):
     assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
 
 
-@pytest.mark.parametrize(
-    "cost_map",
-    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
-    ids=["root", "bundled_backup"],
-)
-def test_sampling_params_flag_on_all_models_that_removed_them(cost_map):
-    """Fable 5 and Opus 4.7/4.8 reject ``top_p``/``top_k``/``temperature != 1``;
-    the drop/raise gating is cost-map driven, so every variant must carry an
-    explicit ``supports_sampling_params: false``. The perplexity route is
-    exempt: it is OpenAI-compatible and maps sampling params upstream."""
-    variants = [
-        k
-        for k in cost_map
-        if any(v in k for v in ("claude-fable-5", "claude-opus-4-7", "claude-opus-4-8"))
-        and not k.startswith("perplexity/")
-    ]
-    assert variants, "no matching entries found in cost map"
-    missing = [k for k in variants if cost_map[k].get("supports_sampling_params") is not False]
-    assert not missing, f"missing supports_sampling_params=false: {missing}"

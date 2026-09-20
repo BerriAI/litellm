@@ -4,7 +4,7 @@ import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import { vi, it, expect, beforeEach, describe, Mock, MockedFunction } from "vitest";
 import { chooseSelectOption, renderWithProviders } from "../../../tests/test-utils";
 import { VirtualKeysTable } from "./VirtualKeysTable";
-import { KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
+import { KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
@@ -187,6 +187,7 @@ const lastHistoryMode = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
 
   mockUseKeys.mockReturnValue(keysResult([mockKey]));
   mockUseKeyInfo.mockReturnValue(keyInfoResult(undefined));
@@ -823,16 +824,27 @@ describe("table state lives in the URL so it survives leaving and returning to t
   });
 
   it("restores the drawer filters from the URL on mount", async () => {
-    renderWithProviders(<VirtualKeysTable />, { searchParams: { filter_team: "team-1", filter_user: "user-42" } });
+    const searchParams = {
+      filter_team: "team-1",
+      filter_org: "org-1",
+      filter_user: "user-42",
+      filter_key_id: mockKey.token,
+    };
+    const expectedKeyListOptions = {
+      teamID: "team-1",
+      organizationID: "org-1",
+      userID: "user-42",
+      keyHash: mockKey.token,
+    };
+    renderWithProviders(<VirtualKeysTable />, { searchParams });
 
     await waitFor(() => {
-      expect(mockUseKeys).toHaveBeenLastCalledWith(
-        1,
-        50,
-        expect.objectContaining({ teamID: "team-1", userID: "user-42" }),
-      );
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining(expectedKeyListOptions));
     });
     expect(screen.getByTestId("filter-chip-team_id")).toHaveTextContent("Test Team");
+    expect(screen.getByTestId("filter-chip-org_id")).toHaveTextContent("Test Organization");
+    expect(screen.getByTestId("filter-chip-user_id")).toHaveTextContent("user-42");
+    expect(screen.getByTestId("filter-chip-key_hash")).toHaveTextContent(mockKey.token);
   });
 
   it("restores the status filter from the URL and sends it to /key/list", async () => {
@@ -851,6 +863,21 @@ describe("table state lives in the URL so it survives leaving and returning to t
       expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.objectContaining({ status: undefined }));
     });
     expect(screen.queryByTestId("filter-chip-status")).not.toBeInTheDocument();
+  });
+
+  it("drops a hand-edited status from the URL when another filter chip is removed", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, {
+      searchParams: { filter_status: "bogus", filter_user: "user-42" },
+      onUrlUpdate,
+    });
+
+    fireEvent.click(await screen.findByTestId("filter-chip-remove-user_id"));
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "filter_user")).toBeNull();
+    });
+    expect(lastSearchParam(onUrlUpdate, "filter_status")).toBeNull();
   });
 
   it("writes the search term to the URL", async () => {
@@ -894,6 +921,40 @@ describe("table state lives in the URL so it survives leaving and returning to t
       expect(lastSearchParam(onUrlUpdate, "filter_user")).toBeNull();
     });
     expect(screen.queryByTestId("filter-chip-user_id")).not.toBeInTheDocument();
+  });
+
+  it("writes the Organization and Key ID drawer filters to the URL and clears them again", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<VirtualKeysTable />, { onUrlUpdate });
+
+    openFilters();
+    await chooseSelectOption(user, await screen.findByPlaceholderText(/Select an organization/), /Test Organization/);
+    fireEvent.change(screen.getByPlaceholderText(/Enter Key ID/), { target: { value: mockKey.token } });
+    fireEvent.click(screen.getByTestId("filter-drawer-apply"));
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "filter_org")).toBe("org-1");
+    });
+    expect(lastSearchParam(onUrlUpdate, "filter_key_id")).toBe(mockKey.token);
+    expect(lastSearchParam(onUrlUpdate, "filter_org_id")).toBeNull();
+    expect(lastSearchParam(onUrlUpdate, "filter_key_hash")).toBeNull();
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(
+        1,
+        50,
+        expect.objectContaining({ organizationID: "org-1", keyHash: mockKey.token }),
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("datatable-clear-filters"));
+
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "filter_org")).toBeNull();
+    });
+    expect(lastSearchParam(onUrlUpdate, "filter_key_id")).toBeNull();
+    expect(screen.queryByTestId("filter-chip-org_id")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("filter-chip-key_hash")).not.toBeInTheDocument();
   });
 
   it("returns to page 1 when the search term changes", async () => {
@@ -953,14 +1014,16 @@ describe("table state lives in the URL so it survives leaving and returning to t
     });
   });
 
-  it("falls back to the default sort when the URL names a column the table cannot sort by", async () => {
-    renderWithProviders(<VirtualKeysTable />, { searchParams: { sort_by: "totally_unknown_field" } });
+  it("falls back to the default sort column, keeping the URL's direction, when the table cannot sort by sort_by", async () => {
+    renderWithProviders(<VirtualKeysTable />, {
+      searchParams: { sort_by: "totally_unknown_field", sort_order: "asc" },
+    });
 
     await waitFor(() => {
       expect(mockUseKeys).toHaveBeenLastCalledWith(
         1,
         50,
-        expect.objectContaining({ sortBy: "created_at", sortOrder: "desc" }),
+        expect.objectContaining({ sortBy: "created_at", sortOrder: "asc" }),
       );
     });
     expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
@@ -1000,6 +1063,75 @@ describe("table state lives in the URL so it survives leaving and returning to t
 
     await waitFor(() => {
       expect(lastSearchParam(onUrlUpdate, "key_search")).toBeNull();
+    });
+  });
+});
+
+describe("column choices survive a reload", () => {
+  const STORAGE_KEY = "litellm_table_columns_virtual-keys";
+  const storedColumns = () => JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null");
+
+  it("hides a column that was hidden on a previous visit while the default-hidden columns stay hidden", () => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ budget_reset_at: false }));
+
+    renderWithProviders(<VirtualKeysTable />);
+
+    expect(screen.getByText("Test Key Alias")).toBeInTheDocument();
+    expect(screen.queryByText("Budget Reset")).not.toBeInTheDocument();
+    expect(screen.queryByText("Created By")).not.toBeInTheDocument();
+  });
+
+  it("writes a column toggled on through the Columns menu to storage and shows it again on the next mount", async () => {
+    const user = userEvent.setup();
+    const { unmount } = renderWithProviders(<VirtualKeysTable />);
+    expect(screen.queryByText("Created By")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Columns" }));
+    await user.click(await screen.findByText("Created By"));
+    await user.keyboard("{Escape}");
+
+    expect(storedColumns()).toEqual({ ...KEY_TABLE_HIDDEN_COLUMNS, created_by: true });
+
+    unmount();
+    renderWithProviders(<VirtualKeysTable />);
+
+    expect(screen.getByText("Created By")).toBeInTheDocument();
+  });
+});
+
+describe("a failed keys fetch does not rewrite the URL", () => {
+  const renderOnPage3OfMany = async () => {
+    mockUseKeys.mockReturnValue(keysResult([mockKey], { total_count: 200, total_pages: 4 }));
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const view = renderWithProviders(<VirtualKeysTable />, { searchParams: { page: "3" }, onUrlUpdate });
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(3, 50, expect.anything());
+    });
+    return { ...view, onUrlUpdate };
+  };
+
+  it("keeps ?page=3 when the keys query errors, instead of snapping to page 1 on the empty count", async () => {
+    const { rerender, onUrlUpdate } = await renderOnPage3OfMany();
+
+    mockUseKeys.mockReturnValue(keysResult([], {}, { data: undefined, isError: true }));
+    rerender(<VirtualKeysTable />);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mockUseKeys).toHaveBeenLastCalledWith(3, 50, expect.anything());
+    expect(onUrlUpdate).not.toHaveBeenCalled();
+  });
+
+  it("still snaps ?page=3 back to the first page when the keys query succeeds with no rows", async () => {
+    const { rerender, onUrlUpdate } = await renderOnPage3OfMany();
+
+    mockUseKeys.mockReturnValue(keysResult([]));
+    rerender(<VirtualKeysTable />);
+
+    await waitFor(() => {
+      expect(mockUseKeys).toHaveBeenLastCalledWith(1, 50, expect.anything());
+    });
+    await waitFor(() => {
+      expect(lastSearchParam(onUrlUpdate, "page")).toBeNull();
     });
   });
 });

@@ -22,7 +22,7 @@ from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, SpecialEnums
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, CallTypesLiteral, LLMResponseTypes, SpecialEnums
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 _RESPONSES_API_PROVIDER_PREFIX: Final = "/openai"
 _RESPONSES_API_CREATE_ROUTES: Final = frozenset({"/v1/responses", "/responses"})
 
-_ADDRESSED_RESPONSE_ID_KEY: Final = "_litellm_addressed_response_id"
 _UNMANAGED_RESPONSE_ID_DETAIL: Final = (
     "Forbidden. This response id was not issued by this proxy, so the proxy cannot tell who owns it. "
     "To let keys address responses this proxy did not issue, set "
@@ -132,7 +131,7 @@ class ResponsesIDSecurity(CustomLogger):
         if call_type not in responses_api_call_types:
             return None
         addressed_id_field: Final = "previous_response_id" if call_type == "aresponses" else "response_id"
-        retained_id: Final = data.get(_ADDRESSED_RESPONSE_ID_KEY)
+        retained_id: Final = data.get(ADDRESSED_RESPONSE_ID_FIELD)
         addressed_id: Final = (
             retained_id if isinstance(retained_id, str) and retained_id else data.get(addressed_id_field)
         )
@@ -140,7 +139,7 @@ class ResponsesIDSecurity(CustomLogger):
             return data
         authorized_id: Final = self._authorize_response_id(addressed_id, user_api_key_dict)
         data[addressed_id_field] = authorized_id
-        data[_ADDRESSED_RESPONSE_ID_KEY] = addressed_id
+        data[ADDRESSED_RESPONSE_ID_FIELD] = addressed_id
         return data
 
     def _authorize_response_id(

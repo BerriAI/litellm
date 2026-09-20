@@ -2,7 +2,7 @@
 Tests for backend domain models.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import BaseModel, TypeAdapter
@@ -70,6 +70,34 @@ class TestBudget:
         assert budget.budget_id is None
         assert budget.max_budget is None
         assert budget.allowed_models is None
+
+    def test_effective_max_budget_applies_unexpired_increase(self):
+        budget = LiteLLM_BudgetTable(
+            max_budget=100.0,
+            temp_budget_increase=50.0,
+            temp_budget_expiry=datetime(2100, 1, 1),
+        )
+        assert budget.effective_max_budget(now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 150.0
+
+    def test_effective_max_budget_ignores_expired_increase(self):
+        expiry = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        budget = LiteLLM_BudgetTable(max_budget=100.0, temp_budget_increase=50.0, temp_budget_expiry=expiry)
+        assert budget.effective_max_budget(now=datetime(2026, 1, 1, tzinfo=timezone.utc)) == 100.0
+        assert budget.effective_max_budget(now=expiry) == 100.0
+
+    def test_effective_max_budget_without_increase(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        assert LiteLLM_BudgetTable(max_budget=100.0).effective_max_budget(now=now) == 100.0
+        assert LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0).effective_max_budget(now=now) is None
+
+    def test_active_temp_budget_increase_is_independent_of_max_budget(self):
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        bare = LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0, temp_budget_expiry=datetime(2100, 1, 1))
+        assert bare.active_temp_budget_increase(now=now) == 50.0
+        assert bare.effective_max_budget(now=now) is None
+        expired = LiteLLM_BudgetTable(max_budget=None, temp_budget_increase=50.0, temp_budget_expiry=now)
+        assert expired.active_temp_budget_increase(now=now) == 0.0
+        assert LiteLLM_BudgetTable(max_budget=None).active_temp_budget_increase(now=now) == 0.0
 
 
 class TestCredentials:
@@ -601,7 +629,7 @@ class TestManagedTables:
 
 class TestAutoRouterSession:
     @staticmethod
-    def _row(baseline_models: dict) -> LiteLLM_AutoRouterSession:
+    def _row(estimated_baseline_models: dict[str, int]) -> LiteLLM_AutoRouterSession:
         return LiteLLM_AutoRouterSession(
             api_key="k",
             session_id="s",
@@ -615,7 +643,9 @@ class TestAutoRouterSession:
             saved_spend=0.24,
             classifier_cost=0.0,
             tier_turns={},
-            baseline_models=baseline_models,
+            baseline_models={"legacy-baseline": 100},
+            savings_estimated_turns=sum(estimated_baseline_models.values()),
+            savings_estimated_baseline_models=estimated_baseline_models,
         )
 
     def test_the_baseline_label_is_the_one_most_turns_were_priced_against(self):
@@ -627,5 +657,5 @@ class TestAutoRouterSession:
         assert self._row({"b-model": 1, "a-model": 1}).baseline_model == "b-model"
         assert self._row({"a-model": 1, "b-model": 1}).baseline_model == "b-model"
 
-    def test_a_row_whose_turns_recorded_no_baseline_has_no_label(self):
+    def test_a_row_without_current_estimates_has_no_baseline_label(self) -> None:
         assert self._row({}).baseline_model is None
