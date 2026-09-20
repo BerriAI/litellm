@@ -657,4 +657,49 @@ mod tests {
 
         assert!(matches!(error, Error::CredentialChain(errors) if errors.len() == 2));
     }
+
+    #[derive(Debug)]
+    struct CallerToken(&'static str);
+
+    impl litellm_auth::TokenProvider for CallerToken {
+        fn acquire(&self) -> litellm_auth::TokenFuture<'_> {
+            Box::pin(async move {
+                Ok(ResolvedCredential::AccessToken {
+                    token: SecretValue::new(self.0),
+                    expires_on: None,
+                })
+            })
+        }
+    }
+
+    fn caller_inputs(token: &'static str) -> AzureAuthInputs {
+        let params = json!({"azure_ad_token": "static-token"});
+        AzureAuthInputs {
+            azure_ad_token_provider: Some(litellm_auth::TokenProviderHandle::new(Arc::new(
+                CallerToken(token),
+            ))),
+            ..AzureAuthInputs::from_optional_params(params.as_object().unwrap()).unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn caller_token_is_chosen_over_supplied_static_token() {
+        let credential = AzureAuthService::default()
+            .get_azure_ad_token(&caller_inputs("caller-token"), &|_| None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(credential.value().secret().expose(), "caller-token");
+    }
+
+    #[tokio::test]
+    async fn empty_caller_token_is_rejected() {
+        let error = AzureAuthService::default()
+            .get_azure_ad_token(&caller_inputs(""), &|_| None)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, Error::EmptyAzureToken));
+    }
 }

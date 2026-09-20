@@ -1,5 +1,4 @@
-use std::sync::OnceLock;
-use std::time::Duration;
+use std::{sync::OnceLock, time::Duration};
 
 use crate::constants::AUDIO_TRANSCRIPTION_TIMEOUT_SECS;
 

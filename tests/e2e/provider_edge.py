@@ -46,7 +46,7 @@ import os
 import re
 import threading
 from collections import deque
-from collections.abc import Generator, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import closing, contextmanager
 from dataclasses import dataclass, field, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -538,7 +538,7 @@ class ReplayEdge:
 
 @dataclass(frozen=True, slots=True)
 class LiveEdge:
-    pass
+    observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None
 
 
 type EdgeBackend = RecordEdge | ReplayEdge | LiveEdge | CacheEdge
@@ -787,10 +787,13 @@ def _handle_record(
 def _handle_live(
     method: str, url: str, headers: Mapping[str, str], body: bytes | None, timeout: float,
     cache: CacheEdge | None = None, mount: str = "", test_key: str | None = None,
+    observe_request: Callable[[str, Mapping[str, str], bytes | None], None] | None = None,
 ) -> EdgeOutcome:
     forwarded: Final = {
         name: value for name, value in headers.items() if name.lower() not in _REQUEST_DROPPED_HEADERS
     }
+    if observe_request is not None:
+        observe_request(url, forwarded, body)
     head: Final = (
         forward_stream(method, url, headers=forwarded, body=body, timeout=timeout)
         if cache is None else cache.forward(mount, method, url, forwarded, body, timeout, test_key=test_key)
@@ -868,9 +871,10 @@ def handle_edge_request(
                 method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
                 backend, mount, test_key,
             )
-        case LiveEdge():
+        case LiveEdge(observe_request=observe_request):
             return _handle_live(
-                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout
+                method, _upstream_url(upstream_base, upstream_path, split.query), headers, body, timeout,
+                observe_request=observe_request,
             )
         case RecordEdge():
             return _handle_record(

@@ -168,5 +168,16 @@ cli.add_command(configure_group)
 cli.add_command(unconfigure_group)
 
 
+LITELLM_PROXY_DEPRECATION_NOTICE: Final = (
+    "The `litellm-proxy` command is deprecated and will be removed in a future release; "
+    "run `lite` instead, it takes the same commands and options."
+)
+
+
+def litellm_proxy_cli() -> None:
+    click.secho(LITELLM_PROXY_DEPRECATION_NOTICE, err=True, fg="yellow")
+    cli()
+
+
 if __name__ == "__main__":
     cli()

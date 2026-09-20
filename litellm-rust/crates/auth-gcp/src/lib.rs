@@ -1,16 +1,12 @@
-use std::collections::BTreeMap;
-use std::future::Future;
-use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
+use std::{collections::BTreeMap, future::Future, path::Path, pin::Pin, sync::Arc};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
+use litellm_auth::{
+    CredentialPlacement, Error, InputSource, SecretValue, Sourced, http::apply_credential,
+};
 use moka::future::Cache;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-
-use litellm_auth::http::apply_credential;
-use litellm_auth::{CredentialPlacement, Error, InputSource, SecretValue, Sourced};
 
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const GOOGLE_OAUTH_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
@@ -43,6 +39,16 @@ impl VertexConfig {
             project_id: optional_string(params, &["vertex_project", "vertex_ai_project"])?,
             location: optional_string(params, &["vertex_location", "vertex_ai_location"])?,
         })
+    }
+
+    pub fn or_configured(self, project_id: Option<&str>, location: Option<&str>) -> Self {
+        let configured =
+            |value: Option<&str>| value.filter(|value| !value.is_empty()).map(str::to_string);
+        Self {
+            project_id: self.project_id.or_else(|| configured(project_id)),
+            location: self.location.or_else(|| configured(location)),
+            ..self
+        }
     }
 
     pub fn project_id(&self) -> Option<&str> {
@@ -570,5 +576,30 @@ mod tests {
         }
         assert_eq!(loads.load(Ordering::SeqCst), 1);
         assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn configured_defaults_sit_between_call_params_and_the_environment() {
+        let env = |name: &str| Some(format!("env-{name}"));
+        let from_config =
+            VertexConfig::default().or_configured(Some("global-project"), Some("global-location"));
+        assert_eq!(
+            get_vertex_ai_project(&from_config, &env).as_deref(),
+            Some("global-project")
+        );
+        assert_eq!(
+            get_vertex_ai_location(&from_config, &env).as_deref(),
+            Some("global-location")
+        );
+        let from_call =
+            config(json!({"vertex_project":"call-project","vertex_location":"call-location"}))
+                .or_configured(Some("global-project"), Some("global-location"));
+        assert_eq!(from_call.project_id(), Some("call-project"));
+        assert_eq!(from_call.location(), Some("call-location"));
+        let empty_global = VertexConfig::default().or_configured(Some(""), None);
+        assert_eq!(
+            get_vertex_ai_project(&empty_global, &env).as_deref(),
+            Some("env-VERTEXAI_PROJECT")
+        );
     }
 }

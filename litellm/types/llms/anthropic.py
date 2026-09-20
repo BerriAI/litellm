@@ -56,6 +56,7 @@ class AnthropicMessagesTool(TypedDict, total=False):
     defer_loading: bool
     allowed_callers: list[str] | None
     input_examples: list[dict[str, Any]] | None
+    eager_input_streaming: ReadOnly[bool]
 
 
 class AnthropicComputerTool(TypedDict, total=False):
@@ -754,6 +755,8 @@ ANTHROPIC_TOOL_SEARCH_BETA_HEADER: Final = "advanced-tool-use-2025-11-20"
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
+
+ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER: Final = "fine-grained-tool-streaming-2025-05-14"
 
 # OAuth constants
 ANTHROPIC_OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat"

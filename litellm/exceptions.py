@@ -464,6 +464,7 @@ class RateLimitError(openai.RateLimitError):
         rate_limit_type: str | RateLimitType | None = None,
         headers: dict[str, str] | None = None,
         detail: Any = None,
+        body: object | None = None,
     ):
         self.status_code = 429
         self.message = f"litellm.RateLimitError: {message}"
@@ -500,13 +501,14 @@ class RateLimitError(openai.RateLimitError):
         self.response = httpx.Response(
             status_code=429,
             headers=_response_headers,
+            content=response.content if response is not None else None,
             request=httpx.Request(
                 method="POST",
                 url=" https://cloud.google.com/vertex-ai/",
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
         self.code = "429"
         self.type = "throttling_error"
@@ -764,6 +766,7 @@ class InternalServerError(openai.InternalServerError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: object | None = None,
     ):
         self.status_code = 500
         self.message = f"litellm.InternalServerError: {message}"
@@ -782,8 +785,9 @@ class InternalServerError(openai.InternalServerError):
             ),
         )
         super().__init__(
-            self.message, response=self.response, body=None
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
+        self.type = "internal_server_error"
 
     def __str__(self):
         _message = self.message
@@ -814,6 +818,7 @@ class APIError(openai.APIError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: object | None = None,
     ):
         self.status_code = status_code
         self.message = f"litellm.APIError: {message}"
@@ -824,7 +829,7 @@ class APIError(openai.APIError):
         self.num_retries = num_retries
         if request is None:
             request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        super().__init__(self.message, request=request, body=None)
+        super().__init__(self.message, request=request, body=body)
 
     def __str__(self):
         _message = self.message

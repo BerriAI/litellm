@@ -34,6 +34,7 @@ from urllib.parse import ParseResult, urlparse
 
 import anyio
 import httpx
+import httpx2
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
@@ -194,8 +195,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
-    from mcp.client.session import ClientSession
-    from mcp.shared.context import RequestContext
+    from mcp.client.session import ClientRequestContext
     from mcp.types import CreateMessageRequestParams
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1297,8 +1297,8 @@ def _passthrough_token_from_mcp_auth_header(
     return None
 
 
-async def _materialize_auth_headers(auth: httpx.Auth | None) -> dict[str, str] | None:
-    """Extract the header a resolved ``httpx.Auth`` would set, as a plain dict, or None.
+async def _materialize_auth_headers(auth: httpx2.Auth | None) -> dict[str, str] | None:
+    """Extract the header a resolved ``httpx2.Auth`` would set, as a plain dict, or None.
 
     OpenAPI tool closures egress through ``AsyncHTTPHandler`` methods that accept headers but no
     ``auth``, so a resolved credential must be materialized into a header value. Driving one step
@@ -1313,7 +1313,7 @@ async def _materialize_auth_headers(auth: httpx.Auth | None) -> dict[str, str] |
     header_name: Final = getattr(auth, "header_name", None)
     if not isinstance(header_name, str) or not header_name:
         return None
-    probe: Final = httpx.Request("GET", "http://localhost/")
+    probe: Final = httpx2.Request("GET", "http://localhost/")
     flow: Final = auth.async_auth_flow(probe)
     try:
         first_request: Final = await flow.__anext__()
@@ -1587,7 +1587,7 @@ def _create_sampling_callback(user_api_key_auth: UserAPIKeyAuth | None = None):
         return None
 
     async def _sampling_callback(
-        context: "RequestContext[ClientSession, object]",
+        context: "ClientRequestContext",
         params: "CreateMessageRequestParams",
     ):
         import litellm
@@ -2867,13 +2867,27 @@ class MCPServerManager:
             normalize_server_name(value) for value in (*iter_known_server_prefixes(server), server.name) if value
         )
 
-    def _server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
+    def server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
         owned: Final = self._owned_mapping_values(server)
         mapped_owners: Final = (
             self.tool_name_to_mcp_server_name_mapping.get(spelling)
             for spelling in iter_known_tool_name_spellings(tool_name, server)
         )
         return any(owner is not None and normalize_server_name(owner) in owned for owner in mapped_owners)
+
+    def _known_prefix_to_server(self) -> Mapping[str, MCPServer]:
+        """Every prefix form a tool name may carry, keyed to its server; a form two servers share
+        stays with the one registered first."""
+        return {
+            normalize_server_name(known_prefix): server
+            for server in reversed(tuple(self.get_registry().values()))
+            for known_prefix in iter_known_server_prefixes(server)
+        }
+
+    def server_owning_tool_name_prefix(self, tool_name: str) -> MCPServer | None:
+        prefix_to_server: Final = self._known_prefix_to_server()
+        matched: Final = match_known_server_prefix(tool_name, prefix_to_server.keys())
+        return None if matched is None else prefix_to_server.get(matched[0])
 
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
@@ -4012,7 +4026,7 @@ class MCPServerManager:
         subject_token: str | None,
         user_api_key_auth: UserAPIKeyAuth | None,
         extra_headers: dict[str, str] | None,
-    ) -> tuple[httpx.Auth | None, dict[str, str] | None]:
+    ) -> tuple[httpx2.Auth | None, dict[str, str] | None]:
         """Resolve a v2-owned server's upstream credential into ``(resolved_auth, extra_headers)``.
 
         On a missing/rejected per-user credential this raises the mode's discovery challenge
@@ -5552,7 +5566,7 @@ class MCPServerManager:
             verbose_logger.error(error_msg)
             return CallToolResult(
                 content=[TextContent(type="text", text=error_msg)],
-                isError=True,
+                is_error=True,
             )
 
         try:
@@ -5563,7 +5577,7 @@ class MCPServerManager:
             # Convert the handler result (string response) to CallToolResult format
             result: Final = CallToolResult(
                 content=[TextContent(type="text", text=str(handler_result))],
-                isError=False,
+                is_error=False,
             )
 
             return result
@@ -5579,7 +5593,7 @@ class MCPServerManager:
             verbose_logger.error(error_msg)
             return CallToolResult(
                 content=[TextContent(type="text", text=error_msg)],
-                isError=True,
+                is_error=True,
             )
 
     async def pre_call_tool_check(
@@ -5592,6 +5606,7 @@ class MCPServerManager:
         server: MCPServer,
         raw_headers: dict[str, str] | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -5645,6 +5660,7 @@ class MCPServerManager:
             incoming_bearer_token = auth_hdr[len("bearer ") :]
 
         pre_hook_kwargs: Final = {
+            "guardrail_context": guardrail_context,
             "name": name,
             "arguments": arguments,
             "server_name": server_name,
@@ -5712,6 +5728,7 @@ class MCPServerManager:
         proxy_logging_obj: ProxyLogging,
         start_time: datetime.datetime,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ):
         """Create and return a during hook task for MCP tool calls.
 
@@ -5731,6 +5748,7 @@ class MCPServerManager:
         )
 
         during_hook_kwargs: Final = {
+            "guardrail_context": guardrail_context,
             "name": name,
             "arguments": arguments,
             "server_name": server_name_from_prefix,
@@ -6110,7 +6128,7 @@ class MCPServerManager:
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
 
-        if resolved_by_server_name_only and not self._server_exposes_tool(mcp_server, name):
+        if resolved_by_server_name_only and not self.server_exposes_tool(mcp_server, name):
             raise ValueError(f"Tool {name} not found")
 
         return mcp_server
@@ -6276,6 +6294,7 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         host_progress_callback: Callable | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -6322,6 +6341,7 @@ class MCPServerManager:
             server=mcp_server,
             raw_headers=raw_headers,
             litellm_logging_obj=litellm_logging_obj,
+            guardrail_context=guardrail_context,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -6337,6 +6357,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 start_time=start_time,
                 litellm_logging_obj=litellm_logging_obj,
+                guardrail_context=guardrail_context,
             )
             tasks.append(during_hook_task)
 
@@ -6468,15 +6489,7 @@ class MCPServerManager:
             MCPServer if found, None otherwise
         """
         registry_servers: Final = list(self.get_registry().values())
-
-        # Build prefix → server lookup covering every known form a tool name
-        # may take (alias / server_name / server_id / short ID).  This is what
-        # makes the short-prefix mode work without breaking historical names.
-        prefix_to_server: Final[dict[str, MCPServer]] = {}
-        for server in registry_servers:
-            for known_prefix in iter_known_server_prefixes(server):
-                normalised = normalize_server_name(known_prefix)
-                prefix_to_server.setdefault(normalised, server)
+        prefix_to_server: Final = self._known_prefix_to_server()
 
         # First try with the original tool name
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
@@ -6494,7 +6507,7 @@ class MCPServerManager:
         if matched is not None:
             matched_prefix, original_tool_name = matched
             matched_server: Final = prefix_to_server.get(matched_prefix)
-            if matched_server is not None and self._server_exposes_tool(matched_server, original_tool_name):
+            if matched_server is not None and self.server_exposes_tool(matched_server, original_tool_name):
                 return matched_server
 
         return None

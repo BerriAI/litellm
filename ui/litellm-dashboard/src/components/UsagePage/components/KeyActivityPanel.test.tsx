@@ -68,4 +68,14 @@ describe("KeyActivityPanel", () => {
     expect(screen.getByLabelText("Search keys")).toHaveValue("");
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-alicehash-bob");
   });
+
+  it("says how many keys the proxy left out when only the top spenders were loaded", () => {
+    render(<KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3000 }} />);
+    expect(screen.getByRole("note")).toHaveTextContent("Only the 2 highest-spend keys of 3,000 are loaded");
+  });
+
+  it("shows no truncation note when every key is loaded", () => {
+    render(<KeyActivityPanel keyMetrics={keyMetrics} />);
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
 });

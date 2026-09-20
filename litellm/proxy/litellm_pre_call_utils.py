@@ -2367,6 +2367,7 @@ async def add_litellm_data_to_request(
     # OTel layer can compute pre-request latency, including on the failure
     # path after the logging object is popped.
     data[_metadata_variable_name]["litellm_received_at"] = getattr(request.state, "litellm_received_at", None)
+    data[_metadata_variable_name]["llm_api_timing_windows"] = ()
 
     # OTEL Controls / Tracing
     # Add the OTEL Parent Trace before sending it LiteLLM

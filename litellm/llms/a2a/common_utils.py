@@ -2,7 +2,7 @@
 Common utilities for A2A (Agent-to-Agent) Protocol
 """
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, Final
 
 from pydantic import BaseModel
@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.llms.azure_ai.common_utils import has_azure_entra_params, resolve_azure_ai_agent_auth_header
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 
@@ -142,3 +143,21 @@ def extract_text_from_a2a_response(response_dict: Mapping[str, object], max_dept
         return extract_text_from_a2a_message(first_artifact, depth=0, max_depth=max_depth)
 
     return ""
+
+
+AgentAuthHeaderResolver = Callable[[Mapping[str, object]], Awaitable[Mapping[str, str]]]
+
+
+def a2a_hop_uses_entra(litellm_params: Mapping[str, object], custom_llm_provider: object) -> bool:
+    return not custom_llm_provider and has_azure_entra_params(litellm_params)
+
+
+async def resolve_a2a_hop_auth_header(
+    litellm_params: Mapping[str, object],
+    custom_llm_provider: object,
+    resolve_entra_header: AgentAuthHeaderResolver = resolve_azure_ai_agent_auth_header,
+) -> Mapping[str, str] | None:
+    """Entra credentials authenticate the A2A hop only; a completion-bridge agent hands them to the model provider it bridges to."""
+    if not a2a_hop_uses_entra(litellm_params, custom_llm_provider):
+        return None
+    return await resolve_entra_header(litellm_params)

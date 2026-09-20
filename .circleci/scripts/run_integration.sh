@@ -9,6 +9,7 @@ fi
 suite="${1:?integration suite required}"
 results="test-results/integration-${suite}"
 mkdir -p "$results"
+shard_timeout=11m
 integration_identity="$(.venv/bin/python -c 'import uuid; print(uuid.uuid4().hex)')"
 upstream_pid=""
 proxy_pid=""
@@ -108,13 +109,26 @@ awk '$3 == "REJECT" && $1 > 0 { rejected=1 } END { exit !rejected }' "$results/e
 setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
   .venv/bin/python -m integration._support.upstream > "$results/upstream.log" 2>&1 &
 upstream_pid=$!
+if [ "$suite" = cost ]; then
+  export INTEGRATION_WORKERS=8
+fi
 start_proxy() {
   local port="$1"
   local log_name="$2"
+  local -a cost_map_env
+  if [ "$suite" = cost ]; then
+    cost_map_env=(
+      "LITELLM_MODEL_COST_MAP_URL=$INTEGRATION_UPSTREAM_URL/_cost_map"
+      "MODEL_COST_MAP_MIN_MODEL_COUNT=1"
+      "MODEL_COST_MAP_MAX_SHRINK_RATIO=0"
+    )
+  else
+    cost_map_env=("LITELLM_LOCAL_MODEL_COST_MAP=True")
+  fi
   setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
     DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
-    LITELLM_MODE=PRODUCTION LITELLM_LOCAL_MODEL_COST_MAP=True STORE_MODEL_IN_DB=True \
+    LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True "${cost_map_env[@]}" \
     AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
     .venv/bin/python -m integration._support.proxy --config tests/integration/proxy_config.yaml \
     --host 127.0.0.1 --port "$port" --num_workers 1 --telemetry False \
@@ -125,6 +139,9 @@ start_proxy() {
 start_proxy 4000 proxy.log
 proxy_pid="$launched_pid"
 .venv/bin/python .circleci/scripts/wait_integration_services.py
+curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
+  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
+  -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
 if [ "$suite" = management ]; then
   export INTEGRATION_PEER_URL=http://127.0.0.1:4001
   start_proxy 4001 peer.log
@@ -155,11 +172,12 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
-timeout --signal=TERM --kill-after=20s 11m env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
+timeout --signal=TERM --kill-after=20s "$shard_timeout" env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
   INTEGRATION_PROXY_URL="$INTEGRATION_PROXY_URL" INTEGRATION_PEER_URL="$INTEGRATION_PEER_URL" \
   INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
+  INTEGRATION_WORKERS="${INTEGRATION_WORKERS:-1}" \
   INTEGRATION_MASTER_KEY="$INTEGRATION_MASTER_KEY" LITELLM_MODE=PRODUCTION \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \

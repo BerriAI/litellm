@@ -47,7 +47,6 @@ impl<T> Sourced<T> {
 pub use credential::{
     CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialPlan,
     CredentialPlanResolution, CredentialRef, CredentialResolver, CredentialResolverHandle,
-    credential_default_fields, credential_index,
 };
 pub use error::Error;
 pub use http::{CredentialPlacement, RequestAuth};

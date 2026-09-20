@@ -23,6 +23,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.utils import get_custom_url
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
+from litellm.router_strategy.complexity_router.fuse_presets import FusePresetCatalog, get_fuse_presets
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -422,6 +423,14 @@ async def get_complexity_scorer_defaults() -> ComplexityScorerDefaults:
         token_thresholds=DEFAULT_TOKEN_THRESHOLDS,
         dimension_weights=DEFAULT_DIMENSION_WEIGHTS,
     )
+
+
+@router.get(
+    "/public/complexity_router/fuse_presets",
+    response_model=FusePresetCatalog,
+)
+async def get_public_fuse_presets() -> FusePresetCatalog:
+    return get_fuse_presets()
 
 
 @router.get(

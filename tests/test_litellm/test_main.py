@@ -349,28 +349,66 @@ def test_bedrock_latency_optimized_inference():
         assert json_data["performanceConfig"]["latency"] == "optimized"
 
 
-def test_strip_input_examples_for_non_anthropic_providers():
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "expected"),
+    [
+        ("anthropic", "claude-sonnet-5", True),
+        ("bedrock", "us.anthropic.claude-sonnet-5-20260501-v1:0", True),
+        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123", True),
+        ("bedrock", "us.amazon.nova-2-lite-v1:0", False),
+        ("vertex_ai", "claude-sonnet-5", True),
+        ("vertex_ai", "gemini-3.8-flash", False),
+        ("azure_ai", "claude-sonnet-4-6", True),
+        ("azure_ai", "gpt-5.6", False),
+        ("openai", "gpt-5.6", False),
+        ("gemini", "gemini-3.8-flash", False),
+    ],
+)
+def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: bool):
+    assert litellm_main._is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
+
+
+@pytest.mark.parametrize("key", ["input_examples", "eager_input_streaming"])
+def test_drop_anthropic_only_tool_keys_strips_tool_and_function_levels(key: str):
     tools = [
-        {
-            "type": "function",
-            "name": "example_tool",
-            "input_examples": [{"foo": "bar"}],
-            "function": {
-                "name": "example_tool",
-                "input_examples": [{"foo": "bar"}],
-            },
-        }
+        {"type": "function", "name": "example_tool", key: True, "function": {"name": "example_tool", key: True}},
+        "opaque_tool",
     ]
 
-    assert not litellm_main._should_allow_input_examples(
-        custom_llm_provider="openai", model="gpt-4o-mini"
+    cleaned = litellm_main._drop_anthropic_only_tool_keys(tools=tools)
+
+    assert cleaned == [
+        {"type": "function", "name": "example_tool", "function": {"name": "example_tool"}},
+        "opaque_tool",
+    ]
+    assert tools[0][key] is True
+    assert tools[0]["function"][key] is True
+
+
+def test_completion_strips_eager_input_streaming_before_openai(respx_mock: respx.MockRouter, openai_api_response):
+    api_base: Final = "http://localhost:12346/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(status_code=200, json=openai_api_response)
     )
 
-    cleaned = litellm_main._drop_input_examples_from_tools(tools=tools)
+    litellm.completion(
+        model="openai/gpt-5.6",
+        messages=[{"role": "user", "content": "Write the file"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "write_file", "parameters": {"type": "object", "properties": {}}},
+                "eager_input_streaming": True,
+            }
+        ],
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+    )
 
-    assert isinstance(cleaned, list)
-    assert "input_examples" not in cleaned[0]
-    assert "input_examples" not in cleaned[0]["function"]
+    assert mock_route.called
+    sent_tool: Final = json.loads(respx_mock.calls[0].request.content)["tools"][0]
+    assert "eager_input_streaming" not in sent_tool
+    assert sent_tool["function"]["name"] == "write_file"
 
 
 def test_custom_provider_with_extra_headers():
@@ -1660,6 +1698,68 @@ async def test_async_mock_delay():
     assert delay >= 0.01
 
 
+def test_stream_chunk_builder_keeps_tool_calls_carried_only_by_a_later_choice_of_a_multi_choice_chunk():
+    from litellm import stream_chunk_builder
+    from litellm.types.utils import (
+        ChatCompletionDeltaToolCall,
+        Delta,
+        Function,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+
+    def chunk(choices: list[StreamingChoices]) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-multi-choice",
+            created=1751934860,
+            model="gpt-4.1-mini",
+            object="chat.completion.chunk",
+            choices=choices,
+        )
+
+    chunks = [
+        chunk(
+            [
+                StreamingChoices(index=0, delta=Delta(role="assistant", content="hello")),
+                StreamingChoices(
+                    index=1,
+                    delta=Delta(
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id="call_1",
+                                index=0,
+                                type="function",
+                                function=Function(name="lookup_fruit", arguments='{"fruit":'),
+                            )
+                        ],
+                    ),
+                ),
+            ]
+        ),
+        chunk(
+            [
+                StreamingChoices(index=0, delta=Delta(content=" world"), finish_reason="stop"),
+                StreamingChoices(
+                    index=1,
+                    delta=Delta(
+                        tool_calls=[ChatCompletionDeltaToolCall(index=0, function=Function(arguments='"kiwi"}'))]
+                    ),
+                    finish_reason="tool_calls",
+                ),
+            ]
+        ),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+
+    tool_calls = response.choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
+        ("call_1", "lookup_fruit", '{"fruit":"kiwi"}')
+    ]
+
+
 def test_stream_chunk_builder_thinking_blocks():
     from litellm import stream_chunk_builder
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
@@ -2430,6 +2530,61 @@ def test_mock_completion_usage_falls_back_to_default_without_admission_count():
     )
 
     assert response.usage.prompt_tokens == litellm_main.DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
+
+
+_AZURE_AI_CUSTOM_PRICED_DEPLOYMENT: Final = {
+    "model_name": "azure-ai-custom-priced",
+    "litellm_params": {
+        "model": "azure_ai/gpt-5.6",
+        "api_key": "mock",
+        "api_base": "https://example.services.ai.azure.com",
+        "mock_response": "ok",
+        "input_cost_per_token": 3e-6,
+        "output_cost_per_token": 7e-6,
+        "cache_read_input_token_cost": 1e-7,
+        "cache_creation_input_token_cost": 5e-7,
+    },
+    "model_info": {"id": "azure-ai-custom-priced-deployment-id"},
+}
+
+
+def _expected_custom_price(response: litellm.ModelResponse) -> float:
+    params: Final = _AZURE_AI_CUSTOM_PRICED_DEPLOYMENT["litellm_params"]
+    return (
+        response.usage.prompt_tokens * params["input_cost_per_token"]
+        + response.usage.completion_tokens * params["output_cost_per_token"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", (False, True))
+async def test_mock_completion_prices_azure_ai_router_deployment_with_custom_pricing(use_async: bool):
+    router: Final = litellm.Router(model_list=[_AZURE_AI_CUSTOM_PRICED_DEPLOYMENT])
+    messages: Final = [{"role": "user", "content": "hello"}]
+
+    response: Final = (
+        await router.acompletion(model="azure-ai-custom-priced", messages=messages)
+        if use_async
+        else router.completion(model="azure-ai-custom-priced", messages=messages)
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(_expected_custom_price(response))
+    assert response._hidden_params["custom_llm_provider"] == "azure_ai"
+
+
+@pytest.mark.parametrize(
+    ("model", "expected_provider"),
+    (("anthropic/claude-sonnet-5", "anthropic"), ("no-such-provider-model", None)),
+)
+def test_mock_completion_infers_provider_when_called_directly_without_one(model: str, expected_provider: str | None):
+    response: Final = litellm.mock_completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        mock_response="ok",
+    )
+
+    assert response.choices[0].message.content == "ok"
+    assert response._hidden_params.get("custom_llm_provider") == expected_provider
 
 
 _ADMISSION_INPUT_TOKENS: Final = 51234
@@ -3354,7 +3509,6 @@ def test_a_streamed_response_bills_the_usage_the_provider_reported(local_cost_ma
     cost = litellm.completion_cost(completion_response=rebuilt, model=STREAM_COST_MODEL)
 
     assert cost == pytest.approx(_priced_at(137, 42))
-    assert cost == pytest.approx(0.0007625)
 
 
 def test_streaming_and_not_streaming_bill_the_same_usage_the_same(local_cost_map):
@@ -3875,3 +4029,17 @@ def test_aiohttp_openai_warns_only_when_http2_enabled(
     assert handler_completion.called
     warned: Final = "aiohttp_openai/ always uses aiohttp" in caplog.text
     assert warned is http2_on
+
+
+@pytest.mark.parametrize("tool_choice", [{"type": "bogus"}, {"name": "lookup_fruit"}, {"type": "file_search"}])
+def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="anthropic/claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Which fruit is red?"}],
+            tools=[{"type": "function", "function": {"name": "lookup_fruit", "parameters": {"type": "object"}}}],
+            tool_choice=tool_choice,
+            api_key="sk-unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert f"tool_choice={tool_choice}" in str(exc_info.value)

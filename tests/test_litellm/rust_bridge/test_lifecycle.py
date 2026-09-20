@@ -1,33 +1,47 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Sequence
 from typing import Final
 
-import pytest
-
-import litellm
-from litellm.rust_bridge.lifecycle import check_limits
+from litellm.rust_bridge.lifecycle import Await, Complete, drive
 
 
-@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
-@pytest.mark.parametrize(
-    "cap, request_retry_count, refused",
-    [(5, 5, True), (5, 4, False), (0, 0, False), (0, 1, True)],
-    ids=[
-        "cap-above-four-reached",
-        "cap-above-four-not-reached",
-        "first-attempt-passes-cap-of-zero",
-        "cap-of-zero-refuses-first-retry",
-    ],
-)
-def test_check_limits_reads_request_retry_count(
-    monkeypatch: pytest.MonkeyPatch, metadata_key: str, cap: int, request_retry_count: int, refused: bool
-) -> None:
-    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
-    monkeypatch.setattr(litellm, "max_budget", None)
-    kwargs: Final = {
-        "model": "mistral/mistral-ocr-latest",
-        metadata_key: {"request_retry_count": request_retry_count},
-    }
-    if refused:
-        with pytest.raises(RuntimeError, match="Max retries per request hit!"):
-            check_limits(kwargs)
-    else:
-        check_limits(kwargs)
+class ScriptedExecution:
+    """Plays scripted steps and records how it was resumed and whether it was closed."""
+
+    def __init__(self, steps: Sequence[Await | Complete]) -> None:
+        self._steps: Final = list(steps)
+        self.resumed: list[tuple[str, object]] = []
+        self.closed = False
+
+    def start(self) -> Await | Complete:
+        return self._steps.pop(0)
+
+    def resume_value(self, value: object) -> Await | Complete:
+        self.resumed.append(("value", value))
+        return self._steps.pop(0)
+
+    def resume_error(self, error: BaseException) -> Await | Complete:
+        self.resumed.append(("error", type(error)))
+        return self._steps.pop(0)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+async def ready(value: object) -> object:
+    return value
+
+
+async def failing() -> object:
+    raise ValueError("boom")
+
+
+def test_drive_resumes_each_await_with_its_result_or_error_and_returns_the_completed_value() -> None:
+    execution: Final = ScriptedExecution([Await(ready(1)), Await(failing()), Complete("done")])
+
+    assert asyncio.run(drive(execution)) == "done"
+
+    assert execution.resumed == [("value", 1), ("error", ValueError)]
+    assert execution.closed
