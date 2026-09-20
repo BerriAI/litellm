@@ -6350,10 +6350,8 @@ class PrismaClient:
         if self._view_setup_task is None:
             return
         self._view_setup_task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await self._view_setup_task
-        except asyncio.CancelledError:
-            pass
         self._view_setup_task = None
 
     async def _run_view_setup(

@@ -236,9 +236,6 @@ async def test_disconnect_raises_when_underlying_fails(
 async def test_view_setup_waits_for_the_spend_logs_table_before_creating_views(
     prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """On a fresh database the migrations Job can still be running when the proxy
-    boots. The views reference ``LiteLLM_SpendLogs``, so creating them before the
-    table exists raised inside a fire-and-forget task and the views never appeared."""
     monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
     probe = AsyncMock(side_effect=[_absent(), _absent(), _present()])
     call_order = _wire_view_setup(prisma_client, probe)
@@ -293,9 +290,6 @@ async def test_view_setup_gives_up_when_the_table_never_appears(prisma_client: P
 
 @pytest.mark.asyncio
 async def test_view_setup_retries_when_view_creation_fails_mid_migration(prisma_client: PrismaClient) -> None:
-    """``LiteLLM_SpendLogs`` lands early in the migration set while
-    ``LiteLLM_VerificationTokenView`` references columns the newest migrations add,
-    so the first attempt after the table appears can still fail."""
     probe = AsyncMock(return_value=_present())
     call_order = _wire_view_setup(prisma_client, probe)
     prisma_client.check_view_exists.side_effect = [RuntimeError('column "tpd_limit" does not exist'), None]
@@ -358,8 +352,6 @@ async def test_run_view_setup_logs_an_error_naming_the_table_on_timeout(
 async def test_run_view_setup_reports_the_last_error_when_views_keep_failing_on_a_present_table(
     prisma_client: PrismaClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A database role without CREATE on the schema fails every attempt even though
-    the table is there, so the timeout must blame that error, not missing migrations."""
     _wire_view_setup(prisma_client, AsyncMock(return_value=_present()))
     prisma_client.check_view_exists.side_effect = RuntimeError("permission denied for schema public")
 

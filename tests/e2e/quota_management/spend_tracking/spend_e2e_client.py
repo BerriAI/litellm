@@ -360,8 +360,6 @@ class SpendClient:
         return self.proxy.transport.probe(path, params=params)
 
     def probe_until_healthy(self, path: str, *, params: DateRangeParams) -> ProbeResult:
-        """Re-probe a route that depends on startup work the proxy finishes after it
-        starts serving, such as the spend views it creates once migrations land."""
         outcome: Final = await_converged(
             lambda: self.probe(path, params=params),
             converged=lambda result: result.healthy,
