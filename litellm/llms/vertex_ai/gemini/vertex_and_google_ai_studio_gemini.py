@@ -589,11 +589,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _tools_have_strict_constraint(tools: Sequence[Mapping[str, object]]) -> bool:
         for tool in tools:
+            if "strict" in tool:
+                return True
             function_chunk = tool.get("function")
-            if isinstance(function_chunk, Mapping):
-                if "strict" in function_chunk:
-                    return True
-            elif "strict" in tool:
+            if isinstance(function_chunk, Mapping) and "strict" in function_chunk:
                 return True
         return False
 
@@ -629,11 +628,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "See https://github.com/BerriAI/litellm/issues/41913"
             )
         for tool in mapped_value:
+            tool.pop("strict", None)
             function_chunk = tool.get("function")
             if isinstance(function_chunk, dict):
                 function_chunk.pop("strict", None)
-            else:
-                tool.pop("strict", None)
 
         for tool in mapped_value:
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None

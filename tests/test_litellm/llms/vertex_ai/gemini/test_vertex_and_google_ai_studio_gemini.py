@@ -6313,8 +6313,6 @@ def _strict_function_tool():
 
 
 def test_map_function_drops_strict_with_warning(caplog):
-    """Regression test for BerriAI/litellm#41913: Gemini has no `strict` support,
-    so it is dropped from the declaration and the drop is logged, not silent."""
     config = VertexGeminiConfig()
 
     with caplog.at_level("WARNING", logger="LiteLLM"):
@@ -6325,9 +6323,21 @@ def test_map_function_drops_strict_with_warning(caplog):
     assert any("'strict'" in record.message for record in caplog.records)
 
 
+def test_map_function_drops_top_level_strict_with_warning(caplog):
+    config = VertexGeminiConfig()
+    tools = _strict_function_tool()
+    del tools[0]["function"]["strict"]
+    tools[0]["strict"] = True
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        mapped = config._map_function(value=tools, optional_params={})
+
+    declaration = mapped[0]["function_declarations"][0]
+    assert "strict" not in declaration
+    assert any("'strict'" in record.message for record in caplog.records)
+
+
 def test_map_function_drops_allowed_callers_with_warning(caplog):
-    """Regression test for BerriAI/litellm#41913: Gemini has no `allowed_callers`
-    support, so it is dropped from the declaration and the drop is logged."""
     config = VertexGeminiConfig()
     tools = _strict_function_tool()
     tools[0]["function"]["allowed_callers"] = ["direct"]
@@ -6344,8 +6354,6 @@ def test_map_function_drops_allowed_callers_with_warning(caplog):
 
 
 def test_map_function_does_not_warn_for_nested_schema_property_named_strict(caplog):
-    """A JSON Schema property legitimately named `strict` is unrelated to the
-    unsupported tool-level `strict` constraint and must not trigger the warning."""
     config = VertexGeminiConfig()
     tools = _strict_function_tool()
     del tools[0]["function"]["strict"]
@@ -6360,8 +6368,6 @@ def test_map_function_does_not_warn_for_nested_schema_property_named_strict(capl
 
 
 def test_map_function_does_not_mutate_input_tools(caplog):
-    """The caller's tool objects must be returned unchanged; dropped fields are
-    only omitted from the mapped Gemini declarations."""
     config = VertexGeminiConfig()
     tools = _strict_function_tool()
     tools[0]["function"]["allowed_callers"] = ["direct"]
@@ -6374,8 +6380,6 @@ def test_map_function_does_not_mutate_input_tools(caplog):
 
 
 def test_map_openai_params_drops_parallel_tool_calls_false_with_warning(caplog):
-    """Regression test for BerriAI/litellm#41913: `parallel_tool_calls=False` with
-    multiple tools is unsupported by Gemini, so it is dropped and the drop is logged."""
     config = VertexGeminiConfig()
     tools = [
         {
