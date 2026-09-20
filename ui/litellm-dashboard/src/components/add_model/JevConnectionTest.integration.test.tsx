@@ -45,7 +45,13 @@ const configParams: BuildComplexityRouterConfigParams = {
   returnRawModelName: false,
 };
 const config = buildComplexityRouterConfig(configParams);
-const request = buildSavedJevConnectionTestRequest(JSON.stringify(config), "fast", "my-router");
+const request = buildSavedJevConnectionTestRequest(
+  JSON.stringify({
+    ...config,
+    jev_classifier_config: { api_key: "sk-masked****", api_base: "https://custom-jev.test" },
+  }),
+  "saved-id",
+);
 const targets = buildAutoRouterTestTargets({
   tiers: Object.entries(config.tiers),
   semanticMatchingEnabled: false,
@@ -95,9 +101,8 @@ describe("JEV network probes", () => {
       const routingCall = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/auto_router/test_routing"));
       const expectedRequest = {
         prompt: JEV_CONNECTION_TEST_PROMPT,
-        complexity_router_config: config,
-        default_model: "fast",
-        router_name: "my-router",
+        complexity_router_config: { ...config, jev_classifier_config: undefined },
+        saved_model_id: "saved-id",
       };
       expect(JSON.parse(String(routingCall?.[1]?.body))).toEqual(expectedRequest);
       expect(fetchMock).toHaveBeenCalledTimes(5);
