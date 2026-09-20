@@ -158,6 +158,29 @@ def test_azure_ai_maps_max_completion_tokens_to_max_tokens():
     assert "max_completion_tokens" not in mapped_params
 
 
+def test_azure_ai_keeps_max_completion_tokens_for_gpt_5():
+    mapped_params: Final = litellm.get_optional_params(
+        model="gpt-5",
+        custom_llm_provider="azure_ai",
+        max_completion_tokens=256,
+    )
+
+    assert mapped_params["max_completion_tokens"] == 256
+    assert "max_tokens" not in mapped_params
+
+
+def test_azure_ai_keeps_params_without_max_completion_tokens():
+    mapped_params: Final = litellm.get_optional_params(
+        model="mistral-large-3",
+        custom_llm_provider="azure_ai",
+        temperature=0.2,
+    )
+
+    assert mapped_params["temperature"] == 0.2
+    assert "max_tokens" not in mapped_params
+    assert "max_completion_tokens" not in mapped_params
+
+
 def test_foundry_gpt_6_astra_keeps_sampling_params_when_reasoning_effort_is_none(_local_model_cost_map):
     optional_params = AzureAIStudioConfig().map_openai_params(
         non_default_params={"reasoning_effort": "none", "temperature": 0.2, "top_p": 0.9},
