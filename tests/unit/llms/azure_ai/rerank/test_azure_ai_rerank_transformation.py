@@ -105,7 +105,7 @@ class TestAzureAIRerankConfigValidateEnvironment:
 
         assert headers["Authorization"] == "Bearer my-key"
 
-    def test_falls_back_to_entra_token(self, monkeypatch):
+    def test_falls_back_to_entra_token(self, monkeypatch, no_ambient_azure_credentials):
         monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
         monkeypatch.setattr(litellm, "azure_key", None)
 

@@ -41,7 +41,7 @@ def test_azure_ai_url_generation():
     assert complete_url == expected_url
 
 
-def test_azure_ai_validate_environment_with_entra_token(monkeypatch):
+def test_azure_ai_validate_environment_with_entra_token(monkeypatch, no_ambient_azure_credentials):
     monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
     monkeypatch.setattr(litellm, "api_key", None)
     config = AzureFoundryFluxImageEditConfig()
@@ -55,7 +55,7 @@ def test_azure_ai_validate_environment_with_entra_token(monkeypatch):
     assert headers == {"Authorization": "Bearer entra-token"}
 
 
-def test_flux2_validate_environment_with_entra_token(monkeypatch):
+def test_flux2_validate_environment_with_entra_token(monkeypatch, no_ambient_azure_credentials):
     monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
     monkeypatch.setattr(litellm, "api_key", None)
     config = AzureFoundryFlux2ImageEditConfig()
