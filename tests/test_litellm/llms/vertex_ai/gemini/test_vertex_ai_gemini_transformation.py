@@ -2843,3 +2843,33 @@ def test_system_message_without_leading_system_stays_inline():
 
     assert "system_instruction" not in body
     assert body["contents"][-1]["parts"] == [{"text": "answer in JSON"}, {"text": "now what"}]
+
+
+def test_mid_conversation_system_after_tool_result_keeps_tool_ordering():
+    """A system message after a tool result stays after it, in its own turn, without reordering."""
+    body = _gemini_request_body(
+        [
+            {"role": "system", "content": "You are a helpful weather assistant"},
+            {"role": "user", "content": "weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "18C and sunny"},
+            {"role": "system", "content": "Reminder: reply in one short sentence."},
+        ]
+    )
+
+    assert body["system_instruction"]["parts"] == [{"text": "You are a helpful weather assistant"}]
+    tool_result_index = next(
+        i for i, content in enumerate(body["contents"]) if any("function_response" in part for part in content["parts"])
+    )
+    reminder_index = next(
+        i
+        for i, content in enumerate(body["contents"])
+        if {"text": "Reminder: reply in one short sentence."} in content["parts"]
+    )
+    assert tool_result_index < reminder_index
