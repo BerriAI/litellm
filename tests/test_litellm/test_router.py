@@ -15847,6 +15847,53 @@ async def test_router_retry_policy_controls_upstream_attempt_count(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error_body,error_type",
+    [
+        ({"message": "model is down", "type": "server_error"}, litellm.NotFoundError),
+        ({"message": "Response with id 'resp_x' not found.", "type": "invalid_request_error"}, litellm.BadRequestError),
+    ],
+)
+@pytest.mark.parametrize(
+    "retry_policy,expected_upstream_calls",
+    [
+        ({"DefaultRetries": 3}, 4),
+        ({"DefaultRetries": 3, "NotFoundErrorRetries": 0}, 1),
+        ({"NotFoundErrorRetries": 2}, 3),
+    ],
+)
+async def test_router_not_found_retries_governs_every_404_shape(
+    monkeypatch: pytest.MonkeyPatch, retry_policy, expected_upstream_calls, error_body, error_type
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-5.6",
+                "litellm_params": {
+                    "model": "openai/gpt-5.6",
+                    "api_key": "sk-fake",
+                    "api_base": "https://retry-policy.local/v1",
+                },
+            }
+        ],
+        num_retries=2,
+        retry_policy=retry_policy,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream = respx_mock.post("https://retry-policy.local/v1/chat/completions").mock(
+            return_value=httpx.Response(404, headers={"retry-after": "0"}, json={"error": error_body})
+        )
+        with pytest.raises(error_type) as raised:
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert raised.value.status_code == 404
+    assert upstream.call_count == expected_upstream_calls
+
+
+@pytest.mark.asyncio
 async def test_generic_call_keeps_the_deployment_name_of_an_azure_ai_model_on_an_azure_openai_host(monkeypatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router = litellm.Router(
