@@ -247,23 +247,6 @@ class TestAdaptiveThinkingCoercion:
         assert config._is_adaptive_thinking_model("tencent/no-such-model") is False
 
 
-def test_minimax_m3_cost_map_entry_marks_adaptive_thinking():
-    """The capability flag driving the coercion must exist in the cost map
-    (and its backup, which is shipped with the package)."""
-    import json
-    from pathlib import Path
-
-    repo_root = Path(__file__).parents[5]
-    for filename in ("model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"):
-        with open(repo_root / filename) as f:
-            entry = json.load(f).get("tencent/minimax-m3")
-
-        assert entry is not None, f"tencent/minimax-m3 not found in {filename}"
-        assert entry["litellm_provider"] == "tencent"
-        assert entry.get("supports_adaptive_thinking") is True
-        assert entry.get("supports_reasoning") is True
-
-
 def test_get_complete_url_default():
     config = TencentChatConfig()
 

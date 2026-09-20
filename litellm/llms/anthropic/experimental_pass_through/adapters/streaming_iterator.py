@@ -376,10 +376,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         usage_dict: UsageDelta = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
             chunk.usage
         )
-        merged_chunk["usage"] = usage_dict
         if self.applied_edits and "context_management" not in merged_chunk:
             merged_chunk["context_management"] = ContextManagementResponse(applied_edits=list(self.applied_edits))
-        return self._augment_message_delta_usage(merged_chunk)
+        return self._augment_message_delta_usage({**merged_chunk, "usage": usage_dict})
 
     def _handle_choiceless_chunk(self, chunk: "ModelResponseStream") -> bool:
         """Consume an OpenAI-compatible chunk that carries no ``choices``.
@@ -448,8 +447,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             }
             iterations.append(message_iteration)
         augmented_usage["iterations"] = iterations
-        augmented["usage"] = augmented_usage
-        return augmented
+        return {**augmented, "usage": augmented_usage}
 
     def _next_compaction_event(self) -> dict[str, object] | None:
         """Return the next compaction content-block SSE event, or ``None``.

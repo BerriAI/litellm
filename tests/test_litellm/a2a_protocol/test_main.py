@@ -1,5 +1,7 @@
 """Tests for litellm/a2a_protocol/main.py non-streaming send behavior."""
 
+import asyncio
+
 import httpx
 import pytest
 
@@ -13,7 +15,14 @@ from a2a.compat.v0_3.types import (
 )
 
 import litellm
-from litellm.a2a_protocol.main import _send_message, _stream_messages, create_a2a_client
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.a2a_protocol.main import (
+    _send_message,
+    _stream_messages,
+    aget_agent_card,
+    asend_message,
+    create_a2a_client,
+)
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
 from litellm.llms.custom_httpx.http_handler import (
@@ -233,6 +242,7 @@ class _RequestRecorder:
         self.card = card
         self.rpc_reply = rpc_reply
         self.card_requests = []
+        self.card_urls = []
         self.rpc_requests = []
         self.client = None
 
@@ -240,16 +250,19 @@ class _RequestRecorder:
         headers = {k.lower(): v for k, v in request.headers.items()}
         if request.method == "GET":
             self.card_requests.append(headers)
+            self.card_urls.append(str(request.url))
             return httpx.Response(200, json=self.card)
         self.rpc_requests.append(headers)
         return httpx.Response(200, json=self.rpc_reply)
 
 
-def _a2a_client_cache_key(timeout: float) -> str:
-    return "async_httpx_client" + f"timeout_{timeout}" + httpxSpecialProvider.A2AProvider
+def _a2a_client_cache_key(timeout: float, provider: str = httpxSpecialProvider.A2AProvider) -> str:
+    return "async_httpx_client" + f"timeout_{timeout}" + provider
 
 
-async def _seed_shared_a2a_client(card=_AGENT_CARD, rpc_reply=_RPC_REPLY) -> _RequestRecorder:
+async def _seed_shared_a2a_client(
+    card=_AGENT_CARD, rpc_reply=_RPC_REPLY, provider: str = httpxSpecialProvider.A2AProvider
+) -> _RequestRecorder:
     """Put the one A2A client the cache will hand out behind a mock transport.
 
     Seeding has to happen on the test's own event loop, because the client cache keys on
@@ -262,9 +275,11 @@ async def _seed_shared_a2a_client(card=_AGENT_CARD, rpc_reply=_RPC_REPLY) -> _Re
     handler.client = httpx.AsyncClient(transport=httpx.MockTransport(recorder))
     await owned_client.aclose()
 
-    litellm.in_memory_llm_clients_cache.set_cache(key=_a2a_client_cache_key(DEFAULT_A2A_AGENT_TIMEOUT), value=handler)
+    litellm.in_memory_llm_clients_cache.set_cache(
+        key=_a2a_client_cache_key(DEFAULT_A2A_AGENT_TIMEOUT, provider), value=handler
+    )
     seeded = get_async_httpx_client(
-        llm_provider=httpxSpecialProvider.A2AProvider,
+        llm_provider=provider,
         params={"timeout": DEFAULT_A2A_AGENT_TIMEOUT},
     )
     assert seeded is handler, "cache key drifted from get_async_httpx_client; these tests would test nothing"
@@ -395,6 +410,36 @@ async def test_agent_card_fetch_carries_the_callers_headers(isolated_client_cach
 
 
 @pytest.mark.asyncio
+async def test_agent_card_path_param_fetches_that_path_with_the_agents_headers(isolated_client_cache):
+    """A Microsoft Foundry agent serves its card only at agentCard/v1.0 behind the same Entra bearer
+    as the agent, so an agent registered with agent_card_path fetches exactly that path, authenticated,
+    instead of probing the well-known paths."""
+    recorder = await _seed_shared_a2a_client()
+
+    await asend_message(
+        request=_send_request("req-foundry"),
+        api_base="http://127.0.0.1:9",
+        litellm_params={"agent_card_path": "agentCard/v1.0"},
+        agent_extra_headers=_AGENT_A_HEADERS,
+    )
+
+    assert recorder.card_urls == ["http://127.0.0.1:9/agentCard/v1.0"]
+    assert recorder.card_requests[-1]["x-agent-token"] == "token-for-a"
+
+
+@pytest.mark.asyncio
+async def test_aget_agent_card_carries_the_callers_headers_and_path(isolated_client_cache):
+    recorder = await _seed_shared_a2a_client(provider=httpxSpecialProvider.A2A)
+
+    await aget_agent_card(
+        base_url="http://127.0.0.1:9", extra_headers=_AGENT_A_HEADERS, relative_card_path="agentCard/v1.0"
+    )
+
+    assert recorder.card_urls == ["http://127.0.0.1:9/agentCard/v1.0"]
+    assert recorder.card_requests[-1]["x-agent-token"] == "token-for-a"
+
+
+@pytest.mark.asyncio
 async def test_the_pooled_a2a_client_arrives_with_cookie_persistence_disabled(isolated_client_cache):
     """create_a2a_client takes its client from the shared builder rather than building one,
     and the builder is what refuses to persist cookies. This pins the join between those
@@ -413,3 +458,89 @@ async def test_the_pooled_a2a_client_arrives_with_cookie_persistence_disabled(is
 
     assert dict(handler.client.cookies) == {}, "the pooled A2A client kept an upstream's cookie"
     await handler.close()
+
+
+class _UsageRecorder(CustomLogger):
+    def __init__(self):
+        super().__init__()
+        self.logged = asyncio.Event()
+        self.payload = None
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.payload = kwargs["standard_logging_object"]
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_asend_message_counts_usage_off_the_event_loop(monkeypatch):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("gpt-5.6-luna")
+    recorder = _UsageRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+
+    reply = _conv.pb2_v10.StreamResponse()
+    reply.message.message_id = "reply-1"
+    reply.message.role = _conv.pb2_v10.Role.ROLE_AGENT
+    reply.message.parts.add().text = text * 100
+    request = SendMessageRequest(
+        id="r1",
+        params=MessageSendParams(
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": text * 100}]}
+        ),
+    )
+
+    response, took, lags = await timed_with_loop_lags(
+        lambda: asend_message(a2a_client=_FakeClient(reply), request=request)
+    )
+
+    assert response.id == "r1"
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+    assert recorder.payload["prompt_tokens"] > 100_000
+    assert recorder.payload["completion_tokens"] > 100_000
+    assert_loop_stayed_free(took, lags)
+
+
+def test_streaming_logging_obj_keeps_agent_credentials_out_of_logging_params():
+    """Callbacks receive the streaming logging object's litellm_params as raw kwargs, so an agent's
+    Entra, Databricks, or static credentials must never be copied into it; only pricing keys are."""
+    from litellm.a2a_protocol.main import _build_streaming_logging_obj
+
+    request = SendStreamingMessageRequest(
+        id="rpc-secrets",
+        params=MessageSendParams(
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+
+    logging_obj = _build_streaming_logging_obj(
+        request=request,
+        agent_name="foundry-agent",
+        agent_id="agent-1",
+        litellm_params={
+            "client_secret": "sp-secret",
+            "azure_ad_token": "entra-token",
+            "tenant_id": "tenant",
+            "databricks_oauth": {"client_secret": "dbx-secret"},
+            "api_key": "static-key",
+            "cost_per_query": 0.25,
+        },
+        metadata={"user_api_key": "hashed"},
+        proxy_server_request={"url": "http://localhost:4000"},
+    )
+
+    expected = {
+        "cost_per_query": 0.25,
+        "metadata": {"user_api_key": "hashed"},
+        "proxy_server_request": {"url": "http://localhost:4000"},
+    }
+    assert logging_obj.litellm_params == expected
+    assert logging_obj.optional_params == expected
+    assert logging_obj.model_call_details["litellm_params"] == expected

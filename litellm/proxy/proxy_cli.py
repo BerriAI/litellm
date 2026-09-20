@@ -261,7 +261,7 @@ class ProxyInitializationHelpers:
         import uvicorn
 
         import litellm
-        from litellm._logging import _get_uvicorn_json_log_config
+        from litellm._logging import _get_uvicorn_json_log_config, resolve_log_level
 
         uvicorn_args: Final = {
             "app": "litellm.proxy.proxy_server:app",
@@ -275,6 +275,8 @@ class ProxyInitializationHelpers:
         elif litellm.json_logs:
             # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
+        elif litellm_log := os.environ.get("LITELLM_LOG"):
+            uvicorn_args["log_level"] = resolve_log_level(litellm_log)
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
         if timeout_worker_healthcheck is not None:
@@ -587,6 +589,11 @@ class ProxyInitializationHelpers:
             gunicorn_options["certfile"] = ssl_certfile_path
             gunicorn_options["keyfile"] = ssl_keyfile_path
 
+        # The master preloads the app and then forks every worker, so native routes are
+        # forbidden in it: their runtime threads would not survive the fork.
+        from litellm.rust_bridge.fork_guard import reserve_process_for_forking
+
+        reserve_process_for_forking("the gunicorn master")
         start_query_engine_reaper()
         StandaloneApplication(app=app, options=gunicorn_options).run()  # Run gunicorn
 
@@ -1408,6 +1415,8 @@ def run_server(
 
         # DO NOT DELETE - enables global variables to work across files
         from litellm.proxy.proxy_server import app
+
+        os.environ["NUM_WORKERS"] = str(num_workers)
 
         # Auto-create PROMETHEUS_MULTIPROC_DIR for multi-worker setups
         prometheus_multiproc_dir: Final = ProxyInitializationHelpers._maybe_setup_prometheus_multiproc_dir(

@@ -19,7 +19,6 @@ vi.mock("@/components/networking", () => ({
   getAgentsList: vi.fn(),
   fetchMCPServers: vi.fn(),
   getUiSettings: vi.fn(),
-  getClaudeCodeMarketplace: vi.fn(),
   getClaudeCodePluginsList: vi.fn(() => Promise.resolve({ plugins: [] })),
 }));
 

@@ -16,9 +16,11 @@ requests itself imports.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Final, Generator, Generic, Iterator, Literal, NewType, Protocol, TypeVar, cast
+from typing import Final, Generic, Literal, NewType, Protocol, TypeVar, cast
 
 import pytest
 import requests
@@ -36,8 +38,8 @@ class Headers(BaseModel):
 
 class AuthHeaders(Headers):
     # litellm accepts either; set whichever the call needs, leave the other None.
-    authorization: str | None = None
-    x_litellm_api_key: str | None = Field(default=None, alias="x-litellm-api-key")
+    authorization: str | None = Field(default=None, repr=False)
+    x_litellm_api_key: str | None = Field(default=None, alias="x-litellm-api-key", repr=False)
 
 
 class AnthropicHeaders(AuthHeaders):
@@ -109,12 +111,7 @@ class UnknownApiError(BaseModel):
 
 
 type Result[R: BaseModel] = (
-    Success[R]
-    | NetworkError
-    | UnauthorizedError
-    | RateLimitedError
-    | ValidationError
-    | UnknownApiError
+    Success[R] | NetworkError | UnauthorizedError | RateLimitedError | ValidationError | UnknownApiError
 )
 
 
@@ -168,6 +165,7 @@ class StreamingResponse(BaseModel):
     # the consumed body is elided, so this is the only place they surface.
     stream_error: str | None = None
     stream_done: bool = False
+    stream_done_positions: tuple[int, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -255,21 +253,18 @@ def require_successful_call(result: StreamingResponse) -> None:
     if the proxy can't make a call it's expected to, the test must fail."""
     if result.ok:
         return
-    pytest.fail(
-        f"upstream call failed (status {result.status_code}); body={result.body[:300]}"
-    )
+    pytest.fail(f"upstream call failed (status {result.status_code}); body={result.body[:300]}")
 
 
 def assert_client_error(result: StreamingResponse, context: str) -> None:
-    assert 400 <= result.status_code < 500, (
-        f"{context}: expected 4xx, got {result.status_code}: {result.body[:300]}"
-    )
+    assert 400 <= result.status_code < 500, f"{context}: expected 4xx, got {result.status_code}: {result.body[:300]}"
 
 
 def assert_auth_denied(result: StreamingResponse, context: str) -> None:
     assert result.status_code in (401, 403), (
         f"{context}: expected 401/403, got {result.status_code}: {result.body[:300]}"
     )
+
 
 def wire_body(json: BaseModel) -> dict[str, object]:
     if isinstance(json, PartialBody):
@@ -292,6 +287,22 @@ def _params(params: BaseModel | None) -> dict[str, str]:
 
 TRANSIENT_STATUSES: frozenset[int] = frozenset({529})
 RETRY_ATTEMPTS: int = 3
+_QUALIFICATION: Final[ContextVar[bool]] = ContextVar("e2e_qualification", default=False)
+
+
+def retry_attempts(default: int) -> int:
+    return 1 if _QUALIFICATION.get() else default
+
+
+@contextmanager
+def without_retries() -> Generator[None]:
+    token: Final = _QUALIFICATION.set(True)
+    try:
+        yield
+    finally:
+        _QUALIFICATION.reset(token)
+
+
 RETRY_BACKOFF_SECONDS: float = 0.5
 
 
@@ -319,7 +330,7 @@ def request_with_retry[T: RetryableResponse](
     hang should surface as a hang instead of doubling the wall clock. Every
     retry prints, so flakiness stays visible in the run log instead of
     vanishing into green."""
-    for attempt in range(1, RETRY_ATTEMPTS):
+    for attempt in range(1, retry_attempts(RETRY_ATTEMPTS)):
         resp = issue()
         if resp.status_code not in TRANSIENT_STATUSES:
             return resp
@@ -414,6 +425,7 @@ def get_external[R: BaseModel](
     url: str,
     *,
     response_type: type[R],
+    headers: BaseModel | None = None,
     timeout: float = 30.0,
 ) -> Result[R]:
     """GET an absolute URL outside the proxy (e.g. a public /.well-known document).
@@ -422,7 +434,7 @@ def get_external[R: BaseModel](
     try:
         resp = requests.get(
             url,
-            headers={"Accept": "application/json"},
+            headers={"Accept": "application/json", **(_headers(headers) if headers is not None else {})},
             timeout=timeout,
         )
     except requests.RequestException as exc:
@@ -554,9 +566,7 @@ def put[R: BaseModel](
     return classify(resp, response_type)
 
 
-def probe(
-    url: URL, *, headers: BaseModel, params: BaseModel, timeout: float = 30.0
-) -> ProbeResult:
+def probe(url: URL, *, headers: BaseModel, params: BaseModel, timeout: float = 30.0) -> ProbeResult:
     try:
         resp = request_with_retry(
             lambda: requests.get(
@@ -628,6 +638,7 @@ def streaming_outcome(
         stream_events=[payload for payload, _ in events],
         stream_event_arrivals=[arrived for _, arrived in events],
         stream_done=any(payload == _SSE_DONE for payload, _ in payloads),
+        stream_done_positions=tuple(index for index, (payload, _) in enumerate(payloads) if payload == _SSE_DONE),
         stream_error=next(
             (line.decode(errors="replace")[:300] for line, _ in stamped if _is_stream_error_line(line)),
             None,
@@ -665,9 +676,7 @@ def send(
     return streaming_outcome(resp, stream, sent_at=sent_at)
 
 
-def stream(
-    url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0
-) -> StreamingResponse:
+def stream(url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0) -> StreamingResponse:
     """Streaming (SSE) call: consumes the stream counting events, and captures the
     x-litellm-call-id + content-type headers. Body is elided."""
     return send(url, headers=headers, json=json, stream=True, timeout=timeout)
@@ -756,9 +765,7 @@ def stream_binary(
         )
 
 
-def download(
-    url: URL, *, headers: BaseModel, timeout: float = 60.0
-) -> StreamingResponse:
+def download(url: URL, *, headers: BaseModel, timeout: float = 60.0) -> StreamingResponse:
     """Raw GET for file content (/v1/files/{id}/content): provider-native bytes, no
     schema. Returns the decoded body and the x-litellm-call-id header."""
     try:
@@ -795,9 +802,7 @@ def forward(
     mode. No retries, no redirects, no schema: the proxy owns retry policy and
     the recorded bundle must hold exactly what the provider returned."""
     try:
-        resp = requests.request(
-            method, url, headers=headers, data=body, timeout=timeout, allow_redirects=False
-        )
+        resp = requests.request(method, url, headers=headers, data=body, timeout=timeout, allow_redirects=False)
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
     return RawResponse(
@@ -848,6 +853,7 @@ def _stream_steps(resp: requests.Response) -> Generator[StreamStep, None, None]:
     the chunks already delivered are exactly what makes a mid-stream failure
     different from a request that never streamed at all."""
     try:
+        yield StreamChunk(b"")
         for piece in cast("Iterator[bytes]", resp.iter_content(chunk_size=None)):
             if piece:
                 yield StreamChunk(data=piece)
@@ -855,6 +861,58 @@ def _stream_steps(resp: requests.Response) -> Generator[StreamStep, None, None]:
         yield StreamTruncation(reason=str(exc))
     finally:
         resp.close()
+
+
+def primed_steps(steps: Generator[StreamStep, None, None]) -> Generator[StreamStep, None, None]:
+    first: Final = next(steps)
+    assert isinstance(first, StreamChunk) and first.data == b""
+    return steps
+
+
+@dataclass(frozen=True, slots=True, repr=False)
+class PreparedForward:
+    request: requests.PreparedRequest
+    url: str
+    headers: dict[str, str]
+
+
+def prepare_forward(
+    method: str, url: str, headers: dict[str, str], body: bytes | None,
+) -> PreparedForward | NetworkError:
+    try:
+        with requests.Session() as session:
+            request: Final = session.prepare_request(requests.Request(method, url, headers=headers, data=body))
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    assert request.url is not None
+    return PreparedForward(request, request.url, dict(request.headers))
+
+
+def forward_prepared_stream(prepared: PreparedForward, timeout: float) -> StreamHead | NetworkError:
+    try:
+        with requests.Session() as session:
+            settings: Final = session.merge_environment_settings(prepared.url, {}, True, None, None)
+            resp: Final = session.send(prepared.request, timeout=timeout, allow_redirects=False, **settings)
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return StreamHead(
+        resp.status_code, {name.lower(): value for name, value in resp.headers.items()},
+        primed_steps(_stream_steps(resp)),
+    )
+
+
+def open_stream(url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0) -> StreamHead | NetworkError:
+    """POST a streaming request and return the moment its response head arrives,
+    leaving the body unread behind ``StreamHead.steps``. For a test that must keep
+    one request in flight while it sends others: the head carries the routing
+    headers (x-litellm-model-id), and draining ``steps`` ends the request."""
+    return forward_stream(
+        "POST",
+        str(url),
+        headers={**_headers(headers), "Content-Type": "application/json"},
+        body=json.model_dump_json(by_alias=True, exclude_none=True).encode(),
+        timeout=timeout,
+    )
 
 
 def forward_stream(
@@ -888,5 +946,5 @@ def forward_stream(
     return StreamHead(
         status_code=resp.status_code,
         headers={name.lower(): value for name, value in resp.headers.items()},
-        steps=_stream_steps(resp),
+        steps=primed_steps(_stream_steps(resp)),
     )

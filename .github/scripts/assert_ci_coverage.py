@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 import operator
 import pathlib
 import re
@@ -498,6 +499,104 @@ def _check_shards() -> int:
     return 0
 
 
+def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozenset[str], tuple[Finding, ...]]:
+    manifest: Final = repo_root / "tests/integration/contracts.json"
+    if not manifest.exists():
+        return frozenset(), ()
+    entries: Final = json.loads(manifest.read_text())
+    paths: Final = frozenset(node.split("::", 1)[0] for node in entries["tests"])
+    browser_paths: Final = frozenset(node.split("::", 1)[0] for node in entries.get("browser", {}))
+    circle_path: Final = repo_root / ".circleci/config.yml"
+    circle: Final = yaml.safe_load(circle_path.read_text()) if circle_path.exists() else {}
+    steps: Final = circle.get("jobs", {}).get("integration_contracts", {}).get("steps", ())
+    invoked: Final = any(
+        ".circleci/scripts/run_integration.sh" in scalar.value
+        for scalar in _scalars(steps, "integration_contracts")
+        if scalar.key == "command"
+    )
+    scheduled: Final = frozenset(
+        suite
+        for job in circle.get("workflows", {}).get("integration", {}).get("jobs", ())
+        if isinstance(job, dict) and "integration_contracts" in job
+        for suite in job["integration_contracts"]
+        .get("matrix", {})
+        .get("parameters", {})
+        .get("suite", (job["integration_contracts"].get("suite"),))
+        if isinstance(suite, str)
+    )
+    required: Final = (frozenset({"browser"}) if browser_paths else frozenset()) | frozenset(
+        group
+        for group, folders in entries["groups"].items()
+        if any(any(path.startswith(f"tests/integration/{folder}/") for folder in folders) for path in paths)
+    )
+    ungrouped: Final = frozenset(
+        path
+        for path in paths
+        if sum(
+            any(path.startswith(f"tests/integration/{folder}/") for folder in folders)
+            for folders in entries["groups"].values()
+        )
+        != 1
+    )
+    gha_tokens: Final = _invoked_test_tokens(
+        scalar
+        for path in (repo_root / ".github/workflows").glob("*.y*ml")
+        for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
+    )
+    findings: Final = tuple(
+        Finding(path, "integration contract is also selected by GitHub Actions")
+        for path in paths
+        if any(_token_covers(token, path) for token in gha_tokens)
+    ) + tuple(
+        Finding(path, "canonical integration test file is missing")
+        for path in paths
+        if not (repo_root / path).is_file()
+    )
+    browser_commands: Final = tuple(
+        scalar.value
+        for path in (repo_root / ".github/workflows").glob("*.y*ml")
+        for scalar in _scalars(yaml.safe_load(path.read_text()), path.name)
+        if scalar.key in {"run", "command"}
+    )
+    browser_findings: Final = tuple(
+        Finding(path, "browser integration contract is explicitly selected by GitHub Actions")
+        for path in browser_paths
+        if any(
+            path in command
+            or pathlib.Path(path).name in command
+            or "integrationCritical" in command
+            or "integration.config.ts" in command
+            or ("run_integration.sh" in command and "browser" in command)
+            for command in browser_commands
+        )
+    ) + tuple(
+        Finding(path, "canonical browser integration file is missing")
+        for path in browser_paths
+        if not (repo_root / path).is_file()
+    )
+    default_browser: Final = repo_root / "tests/e2e/ui/playwright.config.ts"
+    exclusion_findings: Final = (
+        (
+            Finding(
+                str(default_browser.relative_to(repo_root)),
+                "default Playwright selection must exclude integrationCritical",
+            ),
+        )
+        if browser_paths
+        and (not default_browser.exists() or "**/integrationCritical/**" not in default_browser.read_text())
+        else ()
+    )
+    group_findings: Final = tuple(
+        Finding(group, "canonical integration group is not scheduled by CircleCI")
+        for group in sorted(required - scheduled)
+    ) + tuple(Finding(path, "canonical node must have exactly one integration group") for path in sorted(ungrouped))
+    if not paths or not invoked or not scheduled:
+        return frozenset(), findings + (
+            Finding(str(manifest.relative_to(repo_root)), "dedicated CircleCI runner is missing"),
+        )
+    return paths | browser_paths, findings + group_findings + browser_findings + exclusion_findings
+
+
 def main() -> int:
     if "--shards" in sys.argv[1:]:
         return _check_shards()
@@ -507,7 +606,8 @@ def main() -> int:
     allowlist = _load_allowlist()
     scalars = _all_scalars()
 
-    test_findings = _uncovered_tests(allowlist, _invoked_test_tokens(scalars))
+    integration_paths, ownership_findings = _integration_ownership()
+    test_findings = _uncovered_tests(allowlist, _invoked_test_tokens(scalars) | integration_paths) + ownership_findings
     dockerfile_findings = _uncovered_dockerfiles(allowlist, _built_dockerfile_tokens(scalars))
     stale_findings = _stale_allowlist_paths(allowlist, test_files=_test_files(), dockerfiles=_dockerfiles())
 

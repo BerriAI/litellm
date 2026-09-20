@@ -4287,3 +4287,36 @@ def test_system_string_after_a_developer_message_stays_in_input_in_client_order(
     assert instructions is None
     assert [item["role"] for item in input_items] == ["developer", "system", "user"]
     assert input_items[1] == _system_input_item("Be brief.")
+
+
+def test_map_optional_params_verbosity_merges_into_text():
+    """Chat verbosity must land on Responses text.verbosity alongside text.format regardless of key order."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+
+    responses_api_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        {"verbosity": "low", "response_format": {"type": "json_object"}},
+        responses_api_request,
+    )
+    assert responses_api_request["text"]["verbosity"] == "low"
+    assert responses_api_request["text"]["format"]["type"] == "json_object"
+
+    reversed_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        {"response_format": {"type": "json_object"}, "verbosity": "low"},
+        reversed_request,
+    )
+    assert reversed_request["text"]["verbosity"] == "low"
+    assert reversed_request["text"]["format"]["type"] == "json_object"
+
+    verbosity_only_request = ResponsesAPIOptionalRequestParams()
+    handler._map_optional_params_to_responses_api_request(
+        {"verbosity": "low"},
+        verbosity_only_request,
+    )
+    assert verbosity_only_request["text"] == {"verbosity": "low"}
