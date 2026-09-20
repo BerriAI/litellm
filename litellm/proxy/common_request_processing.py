@@ -1534,19 +1534,15 @@ async def _filter_fallback_models_by_key_access(
     llm_router: Router,
 ) -> Sequence[object]:
     """
-    Drop fallback targets the key/team is not allowed to call.
+    Drop fallback targets the key is not allowed to call.
 
-    The rate-limit pre-call fallback swaps the request model after auth already
-    ran for the original model. Without this filter, a key restricted to one
-    model group would be rerouted to any model group the config (or the key's
-    router_settings) lists as a fallback. Mirrors the client-side fallback
-    checks in _enforce_key_and_fallback_model_access.
+    The rate-limit pre-call fallback swaps the request model after auth
+    already ran for the original model. Without this filter, a key restricted
+    to one model group would be rerouted to any model group the config (or
+    the key's router_settings) lists as a fallback.
     """
     from litellm.proxy._types import ProxyException
-    from litellm.proxy.auth.auth_checks import (  # pyright: ignore[reportPrivateUsage]  # auth_checks exposes no public pair; budget blocks adding one
-        _can_object_call_model,
-        can_key_call_model,
-    )
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 
     allowed: list[object] = []  # mutable-ok: builds the filtered fallback list this function returns
     for fallback_model in fallback_models:
@@ -1556,21 +1552,12 @@ async def _filter_fallback_models_by_key_access(
             allowed.append(fallback_model)
             continue
         try:
-            await can_key_call_model(
+            await can_key_call_resolved_model(
                 model=fallback_model,
                 llm_model_list=None,
                 valid_token=user_api_key_dict,
                 llm_router=llm_router,
             )
-            if user_api_key_dict.team_models:
-                _can_object_call_model(
-                    model=fallback_model,
-                    llm_router=llm_router,
-                    models=user_api_key_dict.team_models,
-                    team_model_aliases=user_api_key_dict.team_model_aliases,
-                    team_id=user_api_key_dict.team_id,
-                    object_type="team",
-                )
         except ProxyException:
             continue
         allowed.append(fallback_model)
