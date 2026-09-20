@@ -1,8 +1,9 @@
 import base64
+import os
 from collections.abc import Mapping
-from io import BufferedReader, BytesIO
+from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import httpx
 from httpx._types import RequestFiles
@@ -35,16 +36,39 @@ PARAM_TRANSLATION: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
+@runtime_checkable
+class _Readable(Protocol):
+    def read(self) -> bytes: ...
+
+
+@runtime_checkable
+class _Tellable(Protocol):
+    def tell(self) -> int: ...
+
+
+@runtime_checkable
+class _Seekable(Protocol):
+    def seek(self, position: int) -> int: ...
+
+
 def _read_image_bytes(image: object) -> bytes:
     if isinstance(image, bytes):
         return image
-    if isinstance(image, (BytesIO, BufferedReader)):
-        position: Final = image.tell()
+    if isinstance(image, tuple) and len(image) >= 2:
+        return _read_image_bytes(image[1])
+    if isinstance(image, os.PathLike):
+        return Path(image).read_bytes()
+    if isinstance(image, str):
+        raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
+    if not hasattr(image, "read") or not isinstance(image, _Readable):
+        raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
+    position: Final = image.tell() if hasattr(image, "tell") and isinstance(image, _Tellable) else 0
+    if hasattr(image, "seek") and isinstance(image, _Seekable):
         image.seek(0)
-        data: Final = image.read()
+    data: Final = image.read()
+    if hasattr(image, "seek") and isinstance(image, _Seekable):
         image.seek(position)
-        return data
-    raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
+    return data
 
 
 def _to_data_url(image: object) -> str:

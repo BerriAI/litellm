@@ -4,6 +4,7 @@ from typing import Final
 
 from typing_extensions import ReadOnly, TypedDict
 
+import litellm
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 
@@ -23,8 +24,6 @@ SUPPORTED_OPENAI_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] 
     "size",
 )
 SUPPORTED_QUALITIES: Final[frozenset[str]] = frozenset({"auto", "low", "medium", "high"})
-GPT_IMAGE_25_QUALITIES: Final[frozenset[str]] = SUPPORTED_QUALITIES | frozenset(("xhigh", "max"))
-GPT_IMAGE_25_MARKER: Final[str] = "gpt-image-2.5"
 OPENAI_QUALITY_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"hd": "high", "standard": "medium"})
 
 
@@ -40,7 +39,15 @@ def map_gpt_image_size(size: object) -> object:
 
 
 def supported_gpt_image_qualities(model: str) -> frozenset[str]:
-    return GPT_IMAGE_25_QUALITIES if GPT_IMAGE_25_MARKER in model.lower() else SUPPORTED_QUALITIES
+    suffix: Final = f"/{model}"
+    keyed: Final = frozenset(
+        key.removeprefix("fal_ai/").split("/")[0]
+        for key in litellm.model_cost
+        if key.startswith("fal_ai/")
+        and key.endswith(suffix)
+        and key.removeprefix("fal_ai/").removesuffix(suffix).count("/") == 1
+    )
+    return keyed | frozenset(("auto",)) if keyed else SUPPORTED_QUALITIES
 
 
 def map_gpt_image_quality(quality: object, model: str) -> object:
