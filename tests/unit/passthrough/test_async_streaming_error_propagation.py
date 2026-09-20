@@ -21,9 +21,7 @@ def _make_mock_response(status_code: int, body: bytes, headers: dict = None):  #
 
     def _raise_for_status():
         if status_code >= 400:
-            request = httpx.Request(
-                "POST", "https://azure.example.com/openai/responses"
-            )
+            request = httpx.Request("POST", "https://azure.example.com/openai/responses")
             real_response = httpx.Response(
                 status_code=status_code,
                 content=body,
@@ -55,16 +53,15 @@ def _make_mock_logging_obj():
 async def test_async_streaming_429_raises():
     """429 from upstream should raise HTTPStatusError, not yield error bytes."""
     from litellm.passthrough.main import AsyncPassthroughStreamingResponse
-    
-    error_body = json.dumps(
-        {"error": {"code": "429", "message": "Rate limit exceeded."}}
-    ).encode()
+
+    error_body = json.dumps({"error": {"code": "429", "message": "Rate limit exceeded."}}).encode()
     mock_response = _make_mock_response(429, error_body)
-    
+
     async def response_coro():
         return mock_response
-    
+
     chunks = []
+
     async def _drain():
         async for chunk in AsyncPassthroughStreamingResponse(
             response=response_coro(),
@@ -84,15 +81,13 @@ async def test_async_streaming_429_raises():
 async def test_async_streaming_500_raises():
     """500 from upstream should also raise, not yield error bytes."""
     from litellm.passthrough.main import AsyncPassthroughStreamingResponse
-    
-    error_body = json.dumps(
-        {"error": {"code": "500", "message": "Internal server error"}}
-    ).encode()
+
+    error_body = json.dumps({"error": {"code": "500", "message": "Internal server error"}}).encode()
     mock_response = _make_mock_response(500, error_body)
-    
+
     async def response_coro():
         return mock_response
-    
+
     with pytest.raises(httpx.HTTPStatusError) as exc_info:
         async for _ in AsyncPassthroughStreamingResponse(
             response=response_coro(),
@@ -100,7 +95,7 @@ async def test_async_streaming_500_raises():
             provider_config=MagicMock(),
         ):
             pass
-    
+
     assert exc_info.value.response.status_code == 500
 
 

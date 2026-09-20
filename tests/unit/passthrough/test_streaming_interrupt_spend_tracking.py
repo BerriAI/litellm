@@ -68,9 +68,7 @@ async def test_asyncpassthroughstreamingresponse_flushes_on_normal_completion():
 
     chunks = [b"chunk-1", b"chunk-2", b"chunk-3"]
     mock_response = _make_streaming_response(chunks)
-    mock_response.headers = httpx.Headers(
-        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
-    )
+    mock_response.headers = httpx.Headers({"content-type": "application/octet-stream", "x-request-id": "req-123"})
 
     async def response_coro():
         return mock_response
@@ -88,7 +86,7 @@ async def test_asyncpassthroughstreamingresponse_flushes_on_normal_completion():
         received.append(chunk)
 
     assert received == chunks
-    
+
     assert received_response.headers["content-type"] == "application/octet-stream"
     assert received_response.headers["x-request-id"] == "req-123"
 
@@ -107,9 +105,7 @@ async def test_asyncpassthroughstreamingresponse_flushes_on_client_disconnect():
         b'{"chunk": 3, "outputTokens": 8}',
     ]
     mock_response = _make_streaming_response(chunks)
-    mock_response.headers = httpx.Headers(
-        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
-    )
+    mock_response.headers = httpx.Headers({"content-type": "application/octet-stream", "x-request-id": "req-123"})
 
     async def response_coro():
         return mock_response
@@ -138,17 +134,13 @@ async def test_asyncpassthroughstreamingresponse_does_not_flush_on_4xx():
 
     err_response = MagicMock(spec=httpx.Response)
     err_response.status_code = 429
-    err_response.headers = httpx.Headers(
-        {"content-type": "application/octet-stream"}
-    )
+    err_response.headers = httpx.Headers({"content-type": "application/octet-stream"})
 
     def _raise():
         raise httpx.HTTPStatusError(
             "429",
             request=httpx.Request("POST", "https://example.com"),
-            response=httpx.Response(
-                429, request=httpx.Request("POST", "https://example.com")
-            ),
+            response=httpx.Response(429, request=httpx.Request("POST", "https://example.com")),
         )
 
     err_response.raise_for_status = _raise
@@ -180,9 +172,7 @@ async def test_asyncpassthroughstreamingresponse_flushes_on_upstream_exception_w
     mock_response.status_code = 200
     mock_response.raise_for_status = MagicMock(return_value=None)
     mock_response.aclose = AsyncMock()
-    mock_response.headers = httpx.Headers(
-        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
-    )
+    mock_response.headers = httpx.Headers({"content-type": "application/octet-stream", "x-request-id": "req-123"})
 
     async def _aiter_bytes_then_raise():
         for c in partial_chunks:
@@ -197,6 +187,7 @@ async def test_asyncpassthroughstreamingresponse_flushes_on_upstream_exception_w
     mock_logging_obj = _make_logging_obj()
 
     received = []
+
     async def _drain():
         async for chunk in AsyncPassthroughStreamingResponse(
             response=response_coro(),
@@ -222,9 +213,7 @@ def test_passthroughstreamingresponse_flushes_on_normal_completion():
 
     mock_response = MagicMock(spec=httpx.Response)
     mock_response.status_code = 200
-    mock_response.headers = httpx.Headers(
-        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
-    )
+    mock_response.headers = httpx.Headers({"content-type": "application/octet-stream", "x-request-id": "req-123"})
 
     def _iter_bytes():
         yield from chunks
@@ -258,9 +247,7 @@ def test_passthroughstreamingresponse_flushes_on_early_close():
 
     mock_response = MagicMock(spec=httpx.Response)
     mock_response.status_code = 200
-    mock_response.headers = httpx.Headers(
-        {"content-type": "application/octet-stream", "x-request-id": "req-123"}
-    )
+    mock_response.headers = httpx.Headers({"content-type": "application/octet-stream", "x-request-id": "req-123"})
 
     def _iter_bytes():
         yield from chunks

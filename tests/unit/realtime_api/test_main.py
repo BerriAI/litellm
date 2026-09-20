@@ -12,6 +12,15 @@ from litellm.realtime_api import main as realtime_main
 from litellm.realtime_api.main import _with_resolved_session_model
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
 class FakeLogging:
     def update_from_kwargs(self, **kwargs):
         pass
@@ -502,8 +511,8 @@ async def test_arealtime_azure_env_beta_protocol_wins_over_a_ga_client(monkeypat
 
 
 async def _vertex_provider_config_for(monkeypatch, model: str, vertex_location: str | None):
-    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
     from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import VertexChirpRealtimeConfig
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
     captured: dict[str, object] = {}
 

@@ -1,21 +1,10 @@
 import asyncio
-from typing import Optional
+import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import json
-
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.llms.openai import (
-    IncompleteDetails,
-    ResponseAPIUsage,
-    ResponseCompletedEvent,
-    ResponsesAPIResponse,
-)
-from litellm.types.utils import StandardLoggingPayload
 
 
 @pytest.mark.asyncio
@@ -119,13 +108,10 @@ async def test_async_responses_api_routing_with_previous_response_id():
             input="Hello, how are you?",
             truncation="auto",
         )
-        print("RESPONSE", response)
 
         # Store the model_id from the response
         expected_model_id = response._hidden_params["model_id"]
         response_id = response.id
-
-        print("Response ID=", response_id, "came from model_id=", expected_model_id)
 
         # Make 10 other requests with previous_response_id, assert that they are sent to the same model_id
         for i in range(10):
@@ -137,7 +123,7 @@ async def test_async_responses_api_routing_with_previous_response_id():
 
             response = await router.aresponses(
                 model=MODEL,
-                input=f"Follow-up question {i+1}",
+                input=f"Follow-up question {i + 1}",
                 truncation="auto",
                 previous_response_id=response_id,
             )
@@ -163,9 +149,7 @@ async def test_async_routing_without_previous_response_id():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello there!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello there!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -266,9 +250,7 @@ async def test_async_routing_without_previous_response_id():
             used_model_ids.add(response._hidden_params["model_id"])
 
         # We should have used more than one model_id if load balancing is working
-        assert (
-            len(used_model_ids) > 1
-        ), "Load balancing isn't working, only one deployment was used"
+        assert len(used_model_ids) > 1, "Load balancing isn't working, only one deployment was used"
 
 
 @pytest.mark.asyncio
