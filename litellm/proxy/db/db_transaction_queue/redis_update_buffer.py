@@ -554,7 +554,7 @@ class RedisUpdateBuffer:
         try:
             buffer_size: Final = await self.redis_cache.async_rpush_and_trim(
                 key=REDIS_SPEND_LOGS_BUFFER_KEY,
-                values=[_encode_spend_log_row(row) for row in rows],
+                values=tuple(_encode_spend_log_row(row) for row in rows),
                 max_len=max_rows,
             )
             overflow: Final = buffer_size - max_rows
@@ -582,7 +582,7 @@ class RedisUpdateBuffer:
         )
         if popped is None:
             return ()
-        encoded_rows: Final = popped if isinstance(popped, list) else [popped]
+        encoded_rows: Final = tuple(popped) if isinstance(popped, list) else (popped,)
         decoded_rows: Final = (_decode_spend_log_row(encoded) for encoded in encoded_rows)
         return tuple(row for row in decoded_rows if row is not None)
 
