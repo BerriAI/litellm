@@ -237,6 +237,7 @@ class CustomStreamWrapper:
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
         self.received_finish_reason: str | None = None
+        self.stream_reported_finished: bool = False
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
@@ -1122,6 +1123,7 @@ class CustomStreamWrapper:
                     raise StopIteration
             if chunk.choices and chunk.choices[0].finish_reason:
                 self.received_finish_reason = chunk.choices[0].finish_reason
+                self.stream_reported_finished = True
                 if not _has_content:
                     return _ProviderChunkEarlyReturn(None)
                 # Strip finish_reason from the content chunk so it appears
@@ -1148,6 +1150,7 @@ class CustomStreamWrapper:
             completion_obj["content"] = anthropic_response_obj["text"]
             if anthropic_response_obj["is_finished"]:
                 self.received_finish_reason = anthropic_response_obj["finish_reason"]
+                self.stream_reported_finished = True
 
             if anthropic_response_obj["finish_reason"]:
                 self.intermittent_finish_reason = anthropic_response_obj["finish_reason"]
@@ -1175,11 +1178,13 @@ class CustomStreamWrapper:
             completion_obj["content"] = response_obj["text"]
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
         elif self.custom_llm_provider and self.custom_llm_provider == "predibase":
             response_obj = self.handle_predibase_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
         elif self.custom_llm_provider and self.custom_llm_provider == "vllm":
             completion_obj["content"] = chunk[0].outputs[0].text
         elif (
@@ -1189,12 +1194,14 @@ class CustomStreamWrapper:
             completion_obj["content"] = response_obj["text"]
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
         elif self.custom_llm_provider == "nlp_cloud":
             try:
                 response_obj = self.handle_nlp_cloud_chunk(chunk)
                 completion_obj["content"] = response_obj["text"]
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
             except Exception as e:
                 if self.received_finish_reason:
                     raise e
@@ -1279,12 +1286,14 @@ class CustomStreamWrapper:
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
         elif self.custom_llm_provider == "text-completion-openai":
             response_obj = self.handle_openai_text_completion_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
             if response_obj["usage"] is not None:
                 _text_completion_usage: Final[Usage] = response_obj["usage"]
                 setattr(
@@ -1307,6 +1316,7 @@ class CustomStreamWrapper:
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
             if "usage" in response_obj is not None:
                 _codestral_usage: Final[Usage] = response_obj["usage"]
                 setattr(
@@ -1324,6 +1334,7 @@ class CustomStreamWrapper:
             print_verbose(f"completion obj content: {completion_obj['content']}")
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
         elif self.custom_llm_provider == "cached_response":
             cached_chunk: Final = cast(ModelResponseStream, chunk)
             cached_choice: Final = cached_chunk.choices[0] if cached_chunk.choices else None
@@ -1347,6 +1358,7 @@ class CustomStreamWrapper:
                 self.system_fingerprint = cached_chunk.system_fingerprint
             if response_obj["is_finished"]:
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
         else:  # openai / azure chat model
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
@@ -1366,6 +1378,7 @@ class CustomStreamWrapper:
                         f"{self.custom_llm_provider} raised a streaming error - finish_reason: error, no content string given. Received Chunk={response_obj}"
                     )
                 self.received_finish_reason = response_obj["finish_reason"]
+                self.stream_reported_finished = True
             if response_obj.get("original_chunk", None) is not None:
                 if hasattr(response_obj["original_chunk"], "id"):
                     model_response = self.set_model_id(response_obj["original_chunk"].id, model_response)
@@ -1714,11 +1727,7 @@ class CustomStreamWrapper:
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason
-        elif self.strict_stream_completion:
-            # The provider never sent a terminal finish_reason or [DONE], so the
-            # stream was cut rather than finished. Synthesizing "stop" makes a
-            # truncated answer indistinguishable from a complete one, which is
-            # what stops a caller's retry from ever firing.
+        elif self.strict_stream_completion and not self.stream_reported_finished:
             raise litellm.exceptions.IncompleteStreamError(
                 message=(
                     "Stream ended before a terminal finish_reason or [DONE] delimiter was received. "
