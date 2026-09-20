@@ -1,11 +1,9 @@
 import asyncio
+import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-
-import json
 
 import litellm
 from litellm.caching.affinity_cache import claim_affinity_pin
@@ -46,9 +44,7 @@ async def test_async_session_id_affinity_routes_to_same_deployment():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello there!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello there!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -164,9 +160,7 @@ async def test_async_session_id_affinity_priority_over_user_key():
     )
 
     await callback.cache.async_set_cache(
-        DeploymentAffinityCheck.get_session_affinity_cache_key(
-            "model_group", "session1", user_key="user1"
-        ),
+        DeploymentAffinityCheck.get_session_affinity_cache_key("model_group", "session1", user_key="user1"),
         {"model_id": "deployment-2"},
     )
 
@@ -175,9 +169,7 @@ async def test_async_session_id_affinity_priority_over_user_key():
         model="model_group",
         healthy_deployments=healthy_deployments,
         messages=[],
-        request_kwargs={
-            "metadata": {"user_api_key_hash": "user1", "session_id": "session1"}
-        },
+        request_kwargs={"metadata": {"user_api_key_hash": "user1", "session_id": "session1"}},
     )
 
     assert len(filtered) == 1
@@ -575,16 +567,17 @@ async def test_claim_pin_falls_back_to_pod_local_when_redis_is_down():
         (None, {"model": "second"}),
     ],
 )
-async def test_eligible_affinity_claim_replaces_stale_pins_and_slides_ttl(
-    stored: object, expected: object
-) -> None:
+async def test_eligible_affinity_claim_replaces_stale_pins_and_slides_ttl(stored: object, expected: object) -> None:
     clock: Final = MagicMock(return_value=100.0)
     cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
     cache.in_memory_cache.set_cache("tier-pin", stored, ttl=10)
     clock.return_value = 105.0
 
     winner: Final = await claim_affinity_pin(
-        cache, "tier-pin", {"model": "second"}, 30,
+        cache,
+        "tier-pin",
+        {"model": "second"},
+        30,
         eligible_values=({"model": "first"}, {"model": "second"}),
     )
 
@@ -600,13 +593,18 @@ async def test_eligible_affinity_claim_replaces_stale_pins_and_slides_ttl(
 async def test_concurrent_eligible_claims_return_one_winner() -> None:
     cache: Final = DualCache()
     candidates: Final = ({"model": "first"}, {"model": "second"})
-    winners: Final = await asyncio.gather(*(
-        claim_affinity_pin(
-            cache, "tier-pin", candidates[index % 2], 30,
-            eligible_values=candidates,
+    winners: Final = await asyncio.gather(
+        *(
+            claim_affinity_pin(
+                cache,
+                "tier-pin",
+                candidates[index % 2],
+                30,
+                eligible_values=candidates,
+            )
+            for index in range(20)
         )
-        for index in range(20)
-    ))
+    )
 
     assert winners == [{"model": "first"}] * 20
     assert cache.in_memory_cache.get_cache("tier-pin") == {"model": "first"}
@@ -628,23 +626,19 @@ async def test_legacy_deployment_claim_retains_decoder_and_keepalive(
     clock: Final = MagicMock(return_value=100.0)
     cache: Final = DualCache(in_memory_cache=InMemoryCache(clock=clock))
     callback: Final = DeploymentAffinityCheck(
-        cache=cache, ttl_seconds=30,
-        enable_user_key_affinity=False, enable_responses_api_affinity=False,
+        cache=cache,
+        ttl_seconds=30,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
     )
     cache.in_memory_cache.set_cache("deployment-pin", stored, ttl=10)
     clock.return_value = 105.0
 
-    winner: Final = await callback._claim_pin(
-        "deployment-pin", {"model_id": "7"}, 30
-    )
+    winner: Final = await callback._claim_pin("deployment-pin", {"model_id": "7"}, 30)
 
     assert winner == expected
-    assert cache.in_memory_cache.ttl_dict["deployment-pin"] == (
-        135.0 if refresh else 110.0
-    )
-    assert cache.in_memory_cache.get_cache("deployment-pin") == (
-        {"model_id": "7"} if refresh else stored
-    )
+    assert cache.in_memory_cache.ttl_dict["deployment-pin"] == (135.0 if refresh else 110.0)
+    assert cache.in_memory_cache.get_cache("deployment-pin") == ({"model_id": "7"} if refresh else stored)
 
 
 @pytest.mark.asyncio
@@ -668,13 +662,13 @@ async def test_redis_deployment_claim_preserves_legacy_result_decoding(
     redis.async_register_script.return_value = AsyncMock(return_value=raw)
     cache: Final = DualCache(redis_cache=redis)
     callback: Final = DeploymentAffinityCheck(
-        cache=cache, ttl_seconds=30,
-        enable_user_key_affinity=False, enable_responses_api_affinity=False,
+        cache=cache,
+        ttl_seconds=30,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
     )
 
-    winner: Final = await callback._claim_pin(
-        "deployment-pin", {"model_id": "candidate"}, 30
-    )
+    winner: Final = await callback._claim_pin("deployment-pin", {"model_id": "candidate"}, 30)
 
     assert winner == expected
     assert cache.in_memory_cache.get_cache("deployment-pin") == stored

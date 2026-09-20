@@ -3,14 +3,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
-
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-
-
-
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.passthrough.main import allm_passthrough_route, llm_passthrough_route
 
 
@@ -37,10 +32,7 @@ def test_llm_passthrough_route():
             client=client,
         )
 
-        assert (
-            mock_post.call_args.kwargs["request"].url
-            == "http://localhost:8090/v1/chat/completions"
-        )
+        assert mock_post.call_args.kwargs["request"].url == "http://localhost:8090/v1/chat/completions"
 
         assert response.status_code == 200
         assert response.json == {"message": "Hello, world!"}
@@ -74,12 +66,9 @@ def test_bedrock_application_inference_profile_url_encoding():
             "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
             return_value=("test-model", "bedrock", "test-key", "test-base"),
         ),
-        patch.object(
-            client.client, "send", return_value=MagicMock(status_code=200)
-        ) as mock_send,
+        patch.object(client.client, "send", return_value=MagicMock(status_code=200)),
         patch.object(client.client, "build_request") as mock_build_request,
     ):
-
         # Mock logging object
         mock_logging_obj = MagicMock()
         mock_logging_obj.update_environment_variables = MagicMock()
@@ -132,12 +121,9 @@ def test_bedrock_non_application_inference_profile_no_encoding():
             "litellm.litellm_core_utils.get_llm_provider_logic.get_llm_provider",
             return_value=("test-model", "bedrock", "test-key", "test-base"),
         ),
-        patch.object(
-            client.client, "send", return_value=MagicMock(status_code=200)
-        ) as mock_send,
+        patch.object(client.client, "send", return_value=MagicMock(status_code=200)),
         patch.object(client.client, "build_request") as mock_build_request,
     ):
-
         # Mock logging object
         mock_logging_obj = MagicMock()
         mock_logging_obj.update_environment_variables = MagicMock()
@@ -202,7 +188,6 @@ def test_update_stream_param_based_on_request_body():
 @pytest.fixture
 def mock_request():
     """Create a mock request with headers"""
-    from typing import Optional
 
     class QueryParams:
         def __init__(self):
@@ -215,9 +200,7 @@ def mock_request():
             return self._dict.items()
 
     class MockRequest:
-        def __init__(
-            self, headers=None, method="POST", request_body: Optional[dict] = None
-        ):
+        def __init__(self, headers=None, method="POST", request_body: dict | None = None):
             self.headers = headers or {}
             self.query_params = QueryParams()
             self.method = method
@@ -245,9 +228,7 @@ def mock_user_api_key_dict():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_stream_param_override(
-    mock_request, mock_user_api_key_dict
-):
+async def test_pass_through_request_stream_param_override(mock_request, mock_user_api_key_dict):
     """
     Test that when stream=None is passed as parameter but stream=True
     is in request body, the request body value takes precedence and
@@ -346,9 +327,7 @@ async def test_pass_through_request_stream_param_override(
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_stream_param_no_override(
-    mock_request, mock_user_api_key_dict
-):
+async def test_pass_through_request_stream_param_no_override(mock_request, mock_user_api_key_dict):
     """
     Test that when stream=False is passed as parameter and no stream
     is in request body, the function parameter is used and
@@ -448,15 +427,11 @@ def test_azure_with_custom_api_base_and_key():
     # Mock the provider config and its methods
     mock_provider_config = MagicMock()
     mock_provider_config.get_complete_url.return_value = (
-        httpx.URL(
-            "https://my-custom-base/openai/deployments/gpt-4.1/chat/completions?api-version=2024-02-01"
-        ),
+        httpx.URL("https://my-custom-base/openai/deployments/gpt-4.1/chat/completions?api-version=2024-02-01"),
         "https://my-custom-base",
     )
     mock_provider_config.get_api_key.return_value = "my-custom-key"
-    mock_provider_config.validate_environment.return_value = {
-        "api-key": "my-custom-key"
-    }
+    mock_provider_config.validate_environment.return_value = {"api-key": "my-custom-key"}
     mock_provider_config.sign_request.return_value = (
         {"api-key": "my-custom-key"},
         None,
@@ -484,13 +459,10 @@ def test_azure_with_custom_api_base_and_key():
         patch.object(
             client.client,
             "send",
-            return_value=MagicMock(
-                status_code=200, json=lambda: {"id": "chatcmpl-123", "choices": []}
-            ),
-        ) as mock_send,
+            return_value=MagicMock(status_code=200, json=lambda: {"id": "chatcmpl-123", "choices": []}),
+        ),
         patch.object(client.client, "build_request") as mock_build_request,
     ):
-
         # Mock logging object
         mock_logging_obj = MagicMock()
         mock_logging_obj.update_environment_variables = MagicMock()
@@ -541,9 +513,7 @@ def test_content_param_forwarded_to_build_request():
 
     mock_provider_config = MagicMock()
     mock_provider_config.get_complete_url.return_value = (
-        httpx.URL(
-            "https://my-azure.openai.azure.com/openai/deployments/gpt-4/chat/completions"
-        ),
+        httpx.URL("https://my-azure.openai.azure.com/openai/deployments/gpt-4/chat/completions"),
         "https://my-azure.openai.azure.com",
     )
     mock_provider_config.get_api_key.return_value = "test-key"
@@ -575,7 +545,6 @@ def test_content_param_forwarded_to_build_request():
         patch.object(client.client, "send", return_value=MagicMock(status_code=200)),
         patch.object(client.client, "build_request") as mock_build_request,
     ):
-
         mock_logging_obj = MagicMock()
         mock_logging_obj.update_environment_variables = MagicMock()
 
@@ -656,15 +625,11 @@ async def test_allm_passthrough_route_429_streaming_raises():
     """
     mock_provider_config = MagicMock()
     mock_provider_config.get_complete_url.return_value = (
-        httpx.URL(
-            "https://my-azure.openai.azure.com/openai/deployments/gpt-4/responses"
-        ),
+        httpx.URL("https://my-azure.openai.azure.com/openai/deployments/gpt-4/responses"),
         "https://my-azure.openai.azure.com",
     )
     mock_provider_config.get_api_key.return_value = "fake-azure-key"
-    mock_provider_config.validate_environment.return_value = {
-        "api-key": "fake-azure-key"
-    }
+    mock_provider_config.validate_environment.return_value = {"api-key": "fake-azure-key"}
     mock_provider_config.sign_request.return_value = (
         {"api-key": "fake-azure-key"},
         None,
@@ -752,9 +717,7 @@ def test_llm_passthrough_route_sync_streaming_error_maps_upstream_status():
             headers={"content-type": "application/json"},
         )
 
-    sync_client = HTTPHandler(
-        client=httpx.Client(transport=httpx.MockTransport(_handler))
-    )
+    sync_client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_handler)))
 
     mock_provider_config = MagicMock()
     mock_provider_config.get_complete_url.return_value = (
@@ -762,18 +725,14 @@ def test_llm_passthrough_route_sync_streaming_error_maps_upstream_status():
         "https://gigachat.devices.sberbank.ru/api/v1",
     )
     mock_provider_config.get_api_key.return_value = "fake-key"
-    mock_provider_config.validate_environment.return_value = {
-        "Authorization": "Bearer fake-key"
-    }
+    mock_provider_config.validate_environment.return_value = {"Authorization": "Bearer fake-key"}
     mock_provider_config.sign_request.return_value = (
         {"Authorization": "Bearer fake-key"},
         None,
     )
     mock_provider_config.is_streaming_request.return_value = True
-    mock_provider_config.get_error_class.side_effect = (
-        lambda error_message, status_code, headers: BaseLLMException(
-            status_code=status_code, message=error_message, headers=headers
-        )
+    mock_provider_config.get_error_class.side_effect = lambda error_message, status_code, headers: BaseLLMException(
+        status_code=status_code, message=error_message, headers=headers
     )
 
     mock_logging_obj = MagicMock()

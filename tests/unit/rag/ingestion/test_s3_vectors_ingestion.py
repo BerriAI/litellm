@@ -21,10 +21,14 @@ class _RecordingRouter:
 
 def _ingestion(embedding=REQUEST_EMBEDDING, router=None, **vector_store):
     vector_store_options = {"custom_llm_provider": "s3_vectors", "aws_region_name": "us-west-2", **vector_store}
-    ingest_options = {"vector_store": vector_store_options} if embedding is None else {
-        "embedding": embedding,
-        "vector_store": vector_store_options,
-    }
+    ingest_options = (
+        {"vector_store": vector_store_options}
+        if embedding is None
+        else {
+            "embedding": embedding,
+            "vector_store": vector_store_options,
+        }
+    )
     return S3VectorsRAGIngestion(ingest_options=ingest_options, router=router)
 
 

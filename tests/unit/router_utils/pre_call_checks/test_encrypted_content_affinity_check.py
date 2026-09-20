@@ -25,6 +25,31 @@ from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
 
+
+@pytest.fixture(autouse=True)
+def isolate_litellm_router_state():
+    saved = {
+        name: getattr(litellm, name).copy()
+        if isinstance(getattr(litellm, name, None), list)
+        else getattr(litellm, name, None)
+        for name in (
+            "callbacks",
+            "input_callback",
+            "success_callback",
+            "failure_callback",
+            "_async_input_callback",
+            "_async_success_callback",
+            "_async_failure_callback",
+            "model_fallbacks",
+            "cache",
+        )
+        if hasattr(litellm, name)
+    }
+    yield
+    for name, value in saved.items():
+        setattr(litellm, name, value)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -1088,21 +1113,19 @@ def test_boundary_key_resolves_missing_values_from_named_credential():
         EncryptedContentAffinityCheck,
     )
 
-    with (
-        patch.object(  # test-quality-ok: credential registry is the direct dependency under test
-            litellm,
-            "credential_list",
-            [
-                CredentialItem(
-                    credential_name="account-a",
-                    credential_values={
-                        "api_base": "https://account-a.example.com",
-                        "api_key": "credential-key-a",
-                    },
-                    credential_info={},
-                )
-            ],
-        )
+    with patch.object(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="account-a",
+                credential_values={
+                    "api_base": "https://account-a.example.com",
+                    "api_key": "credential-key-a",
+                },
+                credential_info={},
+            )
+        ],
     ):
         boundary = EncryptedContentAffinityCheck._encryption_boundary_key({"litellm_credential_name": "account-a"})
 
@@ -1114,21 +1137,19 @@ def test_boundary_key_matches_named_credential_precedence():
         EncryptedContentAffinityCheck,
     )
 
-    with (
-        patch.object(  # test-quality-ok: credential registry is the direct dependency under test
-            litellm,
-            "credential_list",
-            [
-                CredentialItem(
-                    credential_name="account-a",
-                    credential_values={
-                        "api_base": "https://credential.example.com",
-                        "api_key": "credential-key-a",
-                    },
-                    credential_info={},
-                )
-            ],
-        )
+    with patch.object(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="account-a",
+                credential_values={
+                    "api_base": "https://credential.example.com",
+                    "api_key": "credential-key-a",
+                },
+                credential_info={},
+            )
+        ],
     ):
         boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
             {
@@ -1146,21 +1167,19 @@ def test_boundary_key_resolves_credential_when_explicit_values_are_empty():
         EncryptedContentAffinityCheck,
     )
 
-    with (
-        patch.object(  # test-quality-ok: credential registry is the direct dependency under test
-            litellm,
-            "credential_list",
-            [
-                CredentialItem(
-                    credential_name="account-a",
-                    credential_values={
-                        "api_base": "https://credential.example.com",
-                        "api_key": "credential-key-a",
-                    },
-                    credential_info={},
-                )
-            ],
-        )
+    with patch.object(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="account-a",
+                credential_values={
+                    "api_base": "https://credential.example.com",
+                    "api_key": "credential-key-a",
+                },
+                credential_info={},
+            )
+        ],
     ):
         boundary = EncryptedContentAffinityCheck._encryption_boundary_key(
             {
@@ -1178,37 +1197,35 @@ def test_boundary_fallback_matches_deployments_with_same_named_credential_values
         EncryptedContentAffinityCheck,
     )
 
-    with (
-        patch.object(  # test-quality-ok: credential registry is the direct dependency under test
-            litellm,
-            "credential_list",
-            [
-                CredentialItem(
-                    credential_name="account-a",
-                    credential_values={
-                        "api_base": "https://account-a.example.com",
-                        "api_key": "credential-key-a",
-                    },
-                    credential_info={},
-                ),
-                CredentialItem(
-                    credential_name="account-a-peer",
-                    credential_values={
-                        "api_base": "https://account-a.example.com",
-                        "api_key": "credential-key-a",
-                    },
-                    credential_info={},
-                ),
-                CredentialItem(
-                    credential_name="account-b",
-                    credential_values={
-                        "api_base": "https://account-b.example.com",
-                        "api_key": "credential-key-b",
-                    },
-                    credential_info={},
-                ),
-            ],
-        )
+    with patch.object(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="account-a",
+                credential_values={
+                    "api_base": "https://account-a.example.com",
+                    "api_key": "credential-key-a",
+                },
+                credential_info={},
+            ),
+            CredentialItem(
+                credential_name="account-a-peer",
+                credential_values={
+                    "api_base": "https://account-a.example.com",
+                    "api_key": "credential-key-a",
+                },
+                credential_info={},
+            ),
+            CredentialItem(
+                credential_name="account-b",
+                credential_values={
+                    "api_base": "https://account-b.example.com",
+                    "api_key": "credential-key-b",
+                },
+                credential_info={},
+            ),
+        ],
     ):
         router = litellm.Router(
             model_list=[
