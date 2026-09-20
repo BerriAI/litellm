@@ -87,9 +87,7 @@ class TestHostedVLLMEmbeddingTransformation:
             headers={},
         )
 
-        assert (
-            "encoding_format" not in result
-        ), "encoding_format should not be in request when not provided"
+        assert "encoding_format" not in result, "encoding_format should not be in request when not provided"
 
     def test_encoding_format_not_included_when_none(self):
         """
@@ -278,9 +276,7 @@ class TestHostedVLLMEmbeddingTransformation:
             sent_data = json.loads(call_kwargs["data"])
 
             # Assert that encoding_format is NOT in the sent data
-            assert (
-                "encoding_format" not in sent_data
-            ), "encoding_format should not be in request when not provided"
+            assert "encoding_format" not in sent_data, "encoding_format should not be in request when not provided"
             assert sent_data["model"] == "BAAI/bge-small-en-v1.5"
             assert sent_data["input"] == ["Hello world"]
 

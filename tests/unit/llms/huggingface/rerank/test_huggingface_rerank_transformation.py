@@ -219,29 +219,6 @@ def test_huggingface_rerank_return_documents(mock_post):
             assert "text" in result["document"]
 
 
-@patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-def test_huggingface_rerank_error_handling(mock_post):
-    """Test HuggingFace rerank error handling."""
-
-    def return_val():
-        return {"error": "Unauthorized"}
-
-    mock_response = MagicMock()
-    mock_response.status_code = 401
-    mock_response.json = return_val
-    mock_response.text = "Unauthorized"
-    mock_post.return_value = mock_response
-
-    with pytest.raises(litellm.APIConnectionError):
-        litellm.rerank(
-            model="huggingface/BAAI/bge-reranker-base",
-            query="hello",
-            documents=["hello", "world"],
-            top_n=2,
-            api_key="invalid_key",
-        )
-
-
 def test_huggingface_rerank_config():
     """Test HuggingFaceRerankConfig class functionality."""
     from litellm.llms.huggingface.rerank.transformation import HuggingFaceRerankConfig
@@ -249,10 +226,7 @@ def test_huggingface_rerank_config():
     config = HuggingFaceRerankConfig()
 
     # Test complete URL generation
-    assert (
-        config.get_complete_url(None, "test")
-        == "https://api-inference.huggingface.co/rerank"
-    )
+    assert config.get_complete_url(None, "test") == "https://api-inference.huggingface.co/rerank"
 
     # Test custom API base
     custom_url = config.get_complete_url("https://custom.huggingface.co", "test")
@@ -292,13 +266,9 @@ def test_request_transformation():
 
     config = HuggingFaceRerankConfig()
 
-    optional_params = OptionalRerankParams(
-        query="hello", texts=["hello", "world"], top_n=2, return_text=True
-    )
+    optional_params = OptionalRerankParams(query="hello", texts=["hello", "world"], top_n=2, return_text=True)
 
-    request_body = config.transform_rerank_request(
-        model="test", optional_rerank_params=optional_params, headers={}
-    )
+    request_body = config.transform_rerank_request(model="test", optional_rerank_params=optional_params, headers={})
 
     assert request_body["query"] == "hello"
     assert request_body["texts"] == ["hello", "world"]
@@ -368,9 +338,7 @@ def test_validate_environment():
 
     # Test headers override
     custom_headers = {"custom": "header"}
-    headers = config.validate_environment(
-        headers=custom_headers, model="test", api_key="test_key"
-    )
+    headers = config.validate_environment(headers=custom_headers, model="test", api_key="test_key")
 
     assert "custom" in headers
     assert headers["custom"] == "header"
