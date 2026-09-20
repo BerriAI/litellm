@@ -439,19 +439,59 @@ async def test_encrypted_empty_string_is_migrated_like_any_other_value():
     assert decrypt_if_encrypted_with(str(tables["LiteLLM_MCPUserCredentials"][0]["credential_b64"]), NEW_KEY) == ""
 
 
-@pytest.mark.asyncio
-async def test_database_error_during_the_migration_is_reported_instead_of_crashing_the_boot():
-    class _DatabaseIsDown(_FakeDatabase):
-        async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
-            raise ConnectionError("Can't reach database server")
+class _DatabaseIsDown(_FakeDatabase):
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        raise ConnectionError("Can't reach database server")
 
+
+@pytest.mark.asyncio
+async def test_database_error_during_the_migration_comes_back_as_a_value_and_is_logged():
     outcome, logged = await _run(_DatabaseIsDown(_seeded_tables()))
 
-    assert outcome == MigrationFailed(error="ConnectionError: Can't reach database server")
+    assert isinstance(outcome, MigrationFailed)
+    assert isinstance(outcome.error, ConnectionError)
     assert len(logged) == 1
     assert "ConnectionError: Can't reach database server" in logged[0]
     assert f"Keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} set" in logged[0]
     assert "ou may now delete" not in logged[0]
+
+
+def _raise(error: Exception) -> None:
+    raise error
+
+
+def _tolerate(error: Exception) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_boot_stops_on_a_failed_migration_when_the_outage_is_not_tolerated():
+    logged: list[str] = []
+
+    with pytest.raises(ConnectionError, match="Can't reach database server"):
+        await migrate_if_requested(
+            environ={MIGRATE_FROM_MASTER_KEY_ENV_VAR: PREVIOUS_KEY},
+            master_key=NEW_KEY,
+            connected_database=lambda: _DatabaseIsDown(_seeded_tables()),
+            log=logged.append,
+            raise_unless_tolerated=_raise,
+        )
+
+    assert len(logged) == 1
+    assert f"Keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} set" in logged[0]
+
+
+@pytest.mark.asyncio
+async def test_boot_continues_past_a_failed_migration_when_the_outage_is_tolerated():
+    outcome = await migrate_if_requested(
+        environ={MIGRATE_FROM_MASTER_KEY_ENV_VAR: PREVIOUS_KEY},
+        master_key=NEW_KEY,
+        connected_database=lambda: _DatabaseIsDown(_seeded_tables()),
+        log=lambda line: None,
+        raise_unless_tolerated=_tolerate,
+    )
+
+    assert isinstance(outcome, MigrationFailed)
 
 
 @pytest.mark.asyncio
@@ -476,6 +516,7 @@ async def test_boot_migrates_from_the_environment_variable_to_the_running_master
         master_key=NEW_KEY,
         connected_database=lambda: _FakeDatabase(tables),
         log=logged.append,
+        raise_unless_tolerated=_raise,
     )
 
     assert outcome == Migrated(migrated=1, remaining=0)
@@ -510,7 +551,11 @@ async def test_boot_leaves_the_database_alone_unless_a_migration_was_requested_a
         return _DatabaseThatMustNotBeTouched()
 
     result = await migrate_if_requested(
-        environ=environ, master_key=master_key, connected_database=connected_database, log=logged.append
+        environ=environ,
+        master_key=master_key,
+        connected_database=connected_database,
+        log=logged.append,
+        raise_unless_tolerated=_raise,
     )
 
     assert result is outcome
