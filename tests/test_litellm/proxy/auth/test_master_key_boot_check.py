@@ -254,10 +254,36 @@ def test_refusal_never_tells_a_user_with_an_exported_key_to_append_to_the_env_fi
     assert "wins over .env" in text
 
 
-def test_unset_key_refusal_says_nothing_supplied_one():
-    text = render_refusal(_refusal(reason=UnsafeMasterKeyReason.NOT_SET, source=EnvironmentSource()))
-
-    assert "Neither general_settings.master_key nor" in text
+@pytest.mark.parametrize(
+    ("reason", "source", "source_line"),
+    [
+        (
+            UnsafeMasterKeyReason.NOT_SET,
+            EnvironmentSource(),
+            f"Neither general_settings.master_key nor the {MASTER_KEY_ENV_VAR} environment variable is set.",
+        ),
+        (
+            UnsafeMasterKeyReason.PUBLICLY_KNOWN,
+            EnvironmentSource(),
+            f"It comes from the {MASTER_KEY_ENV_VAR} environment variable.",
+        ),
+        (
+            UnsafeMasterKeyReason.NOT_SET,
+            ConfigFileSource(config_file_path="/app/config.yaml"),
+            "general_settings.master_key in /app/config.yaml is blank, "
+            "or points at an environment variable that is not set.",
+        ),
+        (
+            UnsafeMasterKeyReason.EMPTY,
+            ConfigFileSource(config_file_path="/app/config.yaml"),
+            "It comes from general_settings.master_key in /app/config.yaml.",
+        ),
+    ],
+)
+def test_refusal_says_where_the_unsafe_key_came_from(
+    reason: UnsafeMasterKeyReason, source: ConfigFileSource | EnvironmentSource, source_line: str
+):
+    assert render_refusal(_refusal(reason=reason, source=source)).splitlines()[1] == source_line
 
 
 def test_migration_steps_appear_only_when_the_database_needs_them():

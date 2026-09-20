@@ -1741,6 +1741,36 @@ async def test_proxy_startup_says_a_lingering_migrate_from_variable_can_be_delet
     assert "you may now delete LITELLM_MIGRATE_FROM_MASTER_KEY" in notices[0]
 
 
+class _PrismaClientWhoseDatabaseRejectsQueries:
+    class _Database:
+        async def query_raw(self, query, *args):
+            raise RuntimeError("permission denied for table LiteLLM_CredentialsTable")
+
+    writer_db = _Database()
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatch, tmp_path, caplog):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "sk-1234")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        pytest.raises(RuntimeError, match="permission denied"),
+    ):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
+    assert len(notices) == 1
+    assert "Could not migrate stored values" in notices[0]
+
+
 @pytest.mark.asyncio
 async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monkeypatch, tmp_path):
     from fastapi import FastAPI

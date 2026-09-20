@@ -1267,6 +1267,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         master_key=master_key,
         connected_database=lambda: None if prisma_client is None else prisma_client.writer_db,
         log=verbose_proxy_logger.warning,
+        raise_unless_tolerated=PrismaDBExceptionHandler.handle_db_exception,
     )
 
     if prisma_client is not None:

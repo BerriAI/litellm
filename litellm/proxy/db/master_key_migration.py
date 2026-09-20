@@ -174,7 +174,7 @@ class Migrated:
 
 @dataclass(frozen=True, slots=True)
 class MigrationFailed:
-    error: str
+    error: Exception
 
 
 MigrationOutcome = NothingToMigrate | Migrated | MigrationFailed
@@ -186,17 +186,21 @@ async def migrate_if_requested(
     master_key: str | None,
     connected_database: Callable[[], SupportsRawQueries | None],
     log: Callable[[str], None],
+    raise_unless_tolerated: Callable[[Exception], None],
 ) -> MigrationOutcome | None:
     previous_master_key: Final = environ.get(MIGRATE_FROM_MASTER_KEY_ENV_VAR)
     if previous_master_key is None or master_key is None:
         return None
-    return await migrate_from_previous_master_key(
+    outcome: Final = await migrate_from_previous_master_key(
         previous_master_key=previous_master_key,
         master_key=master_key,
         salt_key_is_set=SALT_KEY_ENV_VAR in environ,
         database=connected_database(),
         log=log,
     )
+    if isinstance(outcome, MigrationFailed):
+        raise_unless_tolerated(outcome.error)
+    return outcome
 
 
 async def migrate_from_previous_master_key(
@@ -234,8 +238,8 @@ async def _migrate_or_failure(
             database=database,
             log=log,
         )
-    except Exception as error:  # noqa: BLE001  # the proxy tolerates a database outage at boot, so the migration must too
-        return MigrationFailed(error=f"{type(error).__name__}: {error}"[:300])
+    except Exception as error:  # noqa: BLE001  # a value, so the boot applies its own database outage rule to it
+        return MigrationFailed(error=error)
 
 
 async def _migrate(
@@ -293,8 +297,9 @@ def describe_outcome(outcome: MigrationOutcome) -> str:
                 "the proxy to migrate them."
             )
         case MigrationFailed(error=error):
+            cause: Final = f"{type(error).__name__}: {error}"[:300]
             return (
-                f"Could not migrate stored values from the {MIGRATE_FROM_MASTER_KEY_ENV_VAR} key ({error}). Values "
+                f"Could not migrate stored values from the {MIGRATE_FROM_MASTER_KEY_ENV_VAR} key ({cause}). Values "
                 "still encrypted with the previous key cannot be read until the migration succeeds. Keep "
                 f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} set and restart the proxy once the database is reachable."
             )
