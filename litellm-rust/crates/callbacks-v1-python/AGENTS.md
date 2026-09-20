@@ -1,0 +1,27 @@
+- Target invariants, not completion claims
+- Keep this crate the Python runtime adapter for `litellm-callbacks-v1` and nothing else: the subscriber snapshot and one `PythonLifecycle` that delivers the core contract
+  - Envelopes, sequencing, redaction, handler selection and wire patch validation belong to `litellm-callbacks-v1`
+  - `litellm/rust_bridge/callbacks_v1_python.py` is the only Python module behind it; `python_contract.json` pins its functions on both sides
+- Terms (contract terms are in `callbacks-v1/AGENTS.md`, lifecycle terms in `host-python/AGENTS.md`)
+  - Registry: the process-wide subscriber list; it lives in Python (`register`/`unregister`), never in Rust
+  - Snapshot: that list read once per call, with one observer and one interceptor handler already selected per subscriber for the call's mode (`subscribers.rs`)
+  - Projection: the public response turned into JSON by `project_response`; a failed projection becomes `response_error`, never a failed call
+  - Report: logging an observer's swallowed error through `report`
+  - Continuation: what a step returns to the driver once every observer of its envelope has run
+  - "Callback" in the Python module (`Callback` protocol) is the user's object; once registered it is a subscriber
+- No Python object of the call reaches a callback; a callback influences a call only through a patch Rust validates
+  - `begin` returns the dict it was given by identity; `after_success` and `delivered` stay the trait's pass-through defaults
+  - Every callback gets a freshly built envelope per event; never cache or share a converted one
+  - Contract values cross into Python only through a fresh conversion per callback
+- Schema v1 is owned by `litellm-callbacks-v1`; this crate only marshals it
+  - Everything rejectable is rejected at `register`, never during a call; the snapshot only parses and the lifecycle never re-validates a subscriber
+- Observers cannot affect a call: ordinary exceptions are reported and swallowed at every event, awaited or not; an interceptor failure fails the call
+  - A cancellation is returned at once, with no further dispatch and no report
+  - Exactly one terminal envelope, last; none after a cancellation
+- In a sync call no step suspends: handler selection happens once, at snapshot, from what registration recorded
+  - Every suspension is awaited inline in the caller's task; never `into_future`, never spawn
+- The subscriber snapshot is taken once per call before the driver starts; later registrations do not reach that call
+  - `V1PythonLifecycle::subscribed` is the only constructor callers get; it returns `None` for an empty snapshot, so an unobserved call builds no envelope and projects no response
+  - This lifecycle may run after another one in a `LifecycleChain`; it observes the arguments and the wire as that one left them and never assumes it is alone
+- `close` is idempotent; `traverse` visits every retained Python edge and calls no Python
+- This crate has none of `callbacks-legacy-python`'s obligations and must not grow them; shared behaviour belongs to `PythonLifecycle`, not to either adapter

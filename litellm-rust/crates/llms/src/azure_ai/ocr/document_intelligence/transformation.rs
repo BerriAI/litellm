@@ -8,6 +8,7 @@ use litellm_core_utils::{
     serde_compat::{FiniteF64, LaxI64},
     url_utils::ApiUrl,
 };
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
 use reqwest::Url;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
@@ -549,6 +550,17 @@ async fn poll_operation(
     }
 }
 
+/// Python parity: the Python provider builds this query with
+/// `urllib.parse.quote(value, safe=",")`, which escapes everything except RFC 3986 unreserved
+/// characters and `,`. The literal commas are also what the service documents for the
+/// `pages` and `features` lists; form encoding would send `%2C`.
+const PYTHON_QUOTE_KEEP_COMMAS: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~')
+    .remove(b',');
+
 impl AzureDocumentIntelligenceOcrConfig {
     fn build_ocr_url(
         &self,
@@ -561,16 +573,15 @@ impl AzureDocumentIntelligenceOcrConfig {
         ApiUrl::parse(endpoint)
             .and_then(|url| url.complete_path(&["documentintelligence", "documentModels", &model]))
             .map(|url| {
-                url.append_query_pairs(
-                    [("api-version", api_version)]
-                        .into_iter()
-                        .chain(params.pages.iter().map(|pages| ("pages", pages.as_str())))
-                        .chain(
-                            params
-                                .features
-                                .iter()
-                                .map(|features| ("features", features.as_str())),
-                        ),
+                url.append_query_pairs_escaped(
+                    [
+                        ("api-version", Some(api_version)),
+                        ("pages", params.pages.as_deref()),
+                        ("features", params.features.as_deref()),
+                    ]
+                    .into_iter()
+                    .filter_map(|(key, value)| Some((key, value?))),
+                    PYTHON_QUOTE_KEEP_COMMAS,
                 )
                 .into_string()
             })
@@ -648,6 +659,54 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    #[test]
+    fn query_escape_set_matches_python_quote() {
+        // Expected output from Python:
+        // quote("".join(map(chr, range(0x20, 0x7f))) + "é", safe=",")
+        let input = (0x20u8..0x7f)
+            .map(char::from)
+            .chain(['é'])
+            .collect::<String>();
+        assert_eq!(
+            percent_encoding::utf8_percent_encode(&input, PYTHON_QUOTE_KEEP_COMMAS).to_string(),
+            "%20%21%22%23%24%25%26%27%28%29%2A%2B,-.%2F0123456789%3A%3B%3C%3D%3E%3F%40\
+             ABCDEFGHIJKLMNOPQRSTUVWXYZ%5B%5C%5D%5E_%60abcdefghijklmnopqrstuvwxyz%7B%7C%7D~%C3%A9"
+        );
+    }
+
+    #[rstest]
+    #[case::no_lists(None, None, "")]
+    #[case::pages_only(Some("1,3-4"), None, "&pages=1,3-4")]
+    #[case::features_only(
+        None,
+        Some("keyValuePairs,languages"),
+        "&features=keyValuePairs,languages"
+    )]
+    #[case::both_lists(
+        Some("1,3-4"),
+        Some("keyValuePairs,languages"),
+        "&pages=1,3-4&features=keyValuePairs,languages"
+    )]
+    fn ocr_url_query_matches_python(
+        #[case] pages: Option<&str>,
+        #[case] features: Option<&str>,
+        #[case] expected_lists: &str,
+    ) {
+        let params = DocumentIntelligenceParams {
+            pages: pages.map(Into::into),
+            features: features.map(Into::into),
+        };
+        assert_eq!(
+            AzureDocumentIntelligenceOcrConfig
+                .build_ocr_url("https://di.test", "prebuilt-layout", &params, "2024-11-30")
+                .unwrap(),
+            format!(
+                "https://di.test/documentintelligence/documentModels/prebuilt-layout:analyze\
+                 ?api-version=2024-11-30{expected_lists}"
+            )
+        );
+    }
 
     fn map(value: Value) -> Result<DocumentIntelligenceParams, Error> {
         let arguments = serde_json::from_value(value).unwrap();

@@ -7,7 +7,6 @@ use std::sync::{Arc, LazyLock};
 
 use host::OcrRouteHost;
 use litellm_auth_gcp::VertexAuth;
-use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
 use litellm_core::ocr::route::ocr_machine;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_llms::base_llm::ocr::{
@@ -19,15 +18,20 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::{errors::RustBridgeDeclined, http, python_settings::PythonSettings};
+use crate::{
+    callbacks::{CallSurface, PublicCall, run_python_call},
+    errors::RustBridgeDeclined,
+    http,
+    python_settings::PythonSettings,
+};
 
-const SURFACE: LegacySurface = LegacySurface {
+const SURFACE: CallSurface = CallSurface {
     call_type: "ocr",
     input_description: "OCR document processing",
     stream: None,
 };
 
-const ASYNC_SURFACE: LegacySurface = LegacySurface {
+const ASYNC_SURFACE: CallSurface = CallSurface {
     call_type: "aocr",
     ..SURFACE
 };
@@ -52,7 +56,7 @@ fn run_ocr(
         secrets,
     )
     .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
-    run_legacy_call(
+    run_python_call(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
         PublicCall::capture(&request, &args, &kwargs)?,

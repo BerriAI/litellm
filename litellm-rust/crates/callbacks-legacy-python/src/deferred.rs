@@ -1,9 +1,10 @@
 //! The proxy's deferred success release: the async success handler is queued only once
 //! the proxy accepts the response, and at most once.
 
-use pyo3::{exceptions::PyException, prelude::*};
+use litellm_host_python::is_cancellation;
+use pyo3::prelude::*;
 
-use crate::{LegacyCallbacks, PythonLogger};
+use crate::PythonLogger;
 
 pub(crate) struct PendingSuccess {
     pub(crate) logger: PythonLogger,
@@ -37,7 +38,7 @@ impl PendingLogging {
             && success
         {
             match pending.asynchronous(py) {
-                Err(error) if error.is_instance_of::<PyException>(py) => {
+                Err(error) if !is_cancellation(py, &error) => {
                     error.write_unraisable(py, Some(pending.logger.object(py)));
                 }
                 result => return result,

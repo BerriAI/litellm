@@ -6,10 +6,10 @@ use litellm_host::event::{
     FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest, epoch_seconds,
 };
 use litellm_host_python::{
-    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, missing_state, to_py,
+    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, is_cancellation, missing_state, to_py,
 };
 use pyo3::{
-    exceptions::{PyBaseException, PyException},
+    exceptions::PyBaseException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDateTime, PyDict, PyList},
@@ -17,7 +17,8 @@ use pyo3::{
 use serde_json::Value;
 
 use crate::{
-    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
+    PublicCall, PythonLogger, after_deployment_failure, after_deployment_success,
+    before_deployment_call,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call, prepare,
     python::Streaming,
@@ -26,7 +27,7 @@ use crate::{
 
 /// What the legacy contract needs to know about the route it is logging.
 #[derive(Clone, Copy, Debug)]
-pub struct LegacySurface {
+pub struct LegacyPythonSurface {
     pub call_type: &'static str,
     /// What `Logging.pre_call` is told the input was.
     pub input_description: &'static str,
@@ -55,8 +56,8 @@ enum Pending {
     AsyncFailure,
 }
 
-pub struct LegacyLogging {
-    surface: LegacySurface,
+pub struct LegacyPythonLifecycle {
+    surface: LegacyPythonSurface,
     call: PublicCall,
     logger: Option<PythonLogger>,
     start: Py<PyAny>,
@@ -76,14 +77,10 @@ fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
     PyDateTime::from_timestamp(py, epoch_seconds, None).map(|value| value.into_any().unbind())
 }
 
-fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
-    !error.is_instance_of::<PyException>(py)
-}
-
-impl LegacyLogging {
+impl LegacyPythonLifecycle {
     pub fn new(
         py: Python<'_>,
-        surface: LegacySurface,
+        surface: LegacyPythonSurface,
         call: PublicCall,
         asynchronous: bool,
     ) -> Self {
@@ -118,6 +115,14 @@ impl LegacyLogging {
     }
 
     fn prepare(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
+        let model = self.call.lookup(py, "model")?;
+        let provider = self.call.lookup(py, "custom_llm_provider")?;
+        self.logger()?.initialize_failure_context(
+            py,
+            self.call.kwargs(),
+            model.and_then(|model| model.extract::<String>().ok()),
+            provider.and_then(|provider| provider.extract::<String>().ok()),
+        )?;
         let prepared = prepare(py, self.call.kwargs().bind(py), self.logger()?)?.unbind();
         self.call.set_kwargs(prepared);
         Ok(LifecycleStep::Arguments(self.call.kwargs().clone_ref(py)))
@@ -140,7 +145,7 @@ impl LegacyLogging {
 
     fn dispatch_success(&self, py: Python<'_>) -> PyResult<()> {
         match self.try_dispatch_success(py) {
-            Err(error) if error.is_instance_of::<PyException>(py) => {
+            Err(error) if !is_cancellation(py, &error) => {
                 error.write_unraisable(py, self.logger.as_ref().map(|logger| logger.object(py)));
                 Ok(())
             }
@@ -199,7 +204,7 @@ impl LegacyLogging {
             ),
         );
         match billed {
-            Err(error) if error.is_instance_of::<PyException>(py) => {
+            Err(error) if !is_cancellation(py, &error) => {
                 error.write_unraisable(py, Some(logger.object(py)));
                 Ok(())
             }
@@ -269,15 +274,15 @@ impl LegacyLogging {
     }
 }
 
-impl PythonLifecycle for LegacyLogging {
+impl PythonLifecycle for LegacyPythonLifecycle {
     fn begin(
         &mut self,
         py: Python<'_>,
         arguments: Py<PyDict>,
-        started_at: f64,
+        start_time: f64,
     ) -> PyResult<LifecycleStep> {
         self.call.set_kwargs(arguments);
-        self.start = datetime(py, started_at)?;
+        self.start = datetime(py, start_time)?;
         self.internal = is_internal_call(py)?;
         let result = setup(
             py,
@@ -291,7 +296,7 @@ impl PythonLifecycle for LegacyLogging {
         self.call.set_kwargs(result.kwargs()?);
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPreCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::before_call(
+            return Ok(LifecycleStep::Await(before_deployment_call(
                 py,
                 self.call.kwargs(),
                 self.surface.call_type,
@@ -354,7 +359,7 @@ impl PythonLifecycle for LegacyLogging {
         self.response = Some(response);
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPostCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::after_success(
+            return Ok(LifecycleStep::Await(after_deployment_success(
                 py,
                 self.call.kwargs(),
                 &self.response,
@@ -366,7 +371,6 @@ impl PythonLifecycle for LegacyLogging {
 
     fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
         match event {
-            LifecycleEvent::Started { .. } => Ok(LifecycleStep::Done),
             LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
                 let api_key = self
                     .context
@@ -407,7 +411,7 @@ impl PythonLifecycle for LegacyLogging {
                 {
                     let error = self.error.as_ref().ok_or_else(missing_state)?;
                     self.pending = Some(Pending::DeploymentFailure);
-                    return Ok(LifecycleStep::Await(DeploymentHooks::after_failure(
+                    return Ok(LifecycleStep::Await(after_deployment_failure(
                         py,
                         self.call.kwargs(),
                         error,
@@ -464,7 +468,11 @@ impl PythonLifecycle for LegacyLogging {
         {
             error.write_unraisable(py, None);
         }
+        self.pending = None;
+        self.response = None;
+        self.error = None;
         self.body = None;
+        self.headers = None;
         self.context = None;
         self.stream = None;
     }
@@ -482,7 +490,8 @@ impl PythonLifecycle for LegacyLogging {
             visit.call(&stream.chunks)?;
             visit.call(&stream.first_chunk)?;
         }
-        visit.call(&self.body)
+        visit.call(&self.body)?;
+        visit.call(&self.headers)
     }
 }
 

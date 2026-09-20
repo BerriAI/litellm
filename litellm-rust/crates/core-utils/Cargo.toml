@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 fancy-regex.workspace = true
 litellm-types.workspace = true
+percent-encoding.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error = "0.1"

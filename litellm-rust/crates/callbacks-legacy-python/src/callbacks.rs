@@ -9,78 +9,10 @@ use pyo3::{exceptions::PyBaseException, prelude::*, types::PyDict};
 use crate::logger::PythonLogger;
 use crate::python::{Logging, Wrapper};
 
-pub trait LegacyCallbacks {
+impl PythonLogger {
     /// `Logging.update_from_kwargs`: what the logger is told about the request it is
     /// about to see, with consumed credentials redacted.
-    fn update_from_kwargs(
-        &self,
-        py: Python<'_>,
-        kwargs: &Py<PyDict>,
-        wire: &WireRequest,
-        context: &RequestContext,
-    ) -> PyResult<()>;
-
-    /// `Logging.pre_call`.
-    fn pre_call(
-        &self,
-        py: Python<'_>,
-        input: &str,
-        api_key: Option<&str>,
-        body: &Bound<'_, PyDict>,
-        headers: &Bound<'_, PyDict>,
-        url: &str,
-    ) -> PyResult<()>;
-
-    /// `Logging.post_call`.
-    fn post_call(
-        &self,
-        py: Python<'_>,
-        original_response: &str,
-        api_key: Option<&str>,
-        body: Option<&Py<PyDict>>,
-        headers: Option<&Py<PyDict>>,
-    ) -> PyResult<()>;
-
-    fn defers_async_logging(&self, py: Python<'_>) -> bool;
-
-    fn defer_success(&self, py: Python<'_>, pending: &Bound<'_, PyAny>) -> PyResult<()>;
-
-    fn sync_success_for_async_call(
-        &self,
-        py: Python<'_>,
-        response: &Option<Py<PyAny>>,
-        start: &Py<PyAny>,
-        end: &Option<Py<PyAny>>,
-    ) -> PyResult<()>;
-
-    fn failure(
-        &self,
-        py: Python<'_>,
-        error: &Py<PyBaseException>,
-        start: &Py<PyAny>,
-        end: &Option<Py<PyAny>>,
-        asynchronous: bool,
-    ) -> PyResult<Option<Py<PyAny>>>;
-
-    fn submit_success(
-        &self,
-        py: Python<'_>,
-        response: &Option<Py<PyAny>>,
-        start: &Py<PyAny>,
-        end: &Option<Py<PyAny>>,
-    ) -> PyResult<()>;
-
-    fn enqueue_success(
-        &self,
-        py: Python<'_>,
-        response: &Option<Py<PyAny>>,
-        start: &Py<PyAny>,
-        end: &Option<Py<PyAny>>,
-    ) -> PyResult<()>;
-}
-
-impl LegacyCallbacks for PythonLogger {
-    fn update_from_kwargs(
+    pub(crate) fn update_from_kwargs(
         &self,
         py: Python<'_>,
         kwargs: &Py<PyDict>,
@@ -128,7 +60,8 @@ impl LegacyCallbacks for PythonLogger {
         Ok(())
     }
 
-    fn pre_call(
+    /// `Logging.pre_call`.
+    pub(crate) fn pre_call(
         &self,
         py: Python<'_>,
         input: &str,
@@ -145,7 +78,8 @@ impl LegacyCallbacks for PythonLogger {
         Ok(())
     }
 
-    fn post_call(
+    /// `Logging.post_call`.
+    pub(crate) fn post_call(
         &self,
         py: Python<'_>,
         original_response: &str,
@@ -163,19 +97,19 @@ impl LegacyCallbacks for PythonLogger {
         Ok(())
     }
 
-    fn defers_async_logging(&self, py: Python<'_>) -> bool {
+    pub(crate) fn defers_async_logging(&self, py: Python<'_>) -> bool {
         Logging::DefersAsync
             .call(py, (self.object(py),))
             .and_then(|value| value.extract())
             .unwrap_or(false)
     }
 
-    fn defer_success(&self, py: Python<'_>, pending: &Bound<'_, PyAny>) -> PyResult<()> {
+    pub(crate) fn defer_success(&self, py: Python<'_>, pending: &Bound<'_, PyAny>) -> PyResult<()> {
         Logging::DeferSuccess.call(py, (self.object(py), pending))?;
         Ok(())
     }
 
-    fn sync_success_for_async_call(
+    pub(crate) fn sync_success_for_async_call(
         &self,
         py: Python<'_>,
         response: &Option<Py<PyAny>>,
@@ -186,7 +120,7 @@ impl LegacyCallbacks for PythonLogger {
         Ok(())
     }
 
-    fn failure(
+    pub(crate) fn failure(
         &self,
         py: Python<'_>,
         error: &Py<PyBaseException>,
@@ -199,7 +133,7 @@ impl LegacyCallbacks for PythonLogger {
         Ok(asynchronous.then(|| value.unbind()))
     }
 
-    fn submit_success(
+    pub(crate) fn submit_success(
         &self,
         py: Python<'_>,
         response: &Option<Py<PyAny>>,
@@ -210,7 +144,7 @@ impl LegacyCallbacks for PythonLogger {
         Ok(())
     }
 
-    fn enqueue_success(
+    pub(crate) fn enqueue_success(
         &self,
         py: Python<'_>,
         response: &Option<Py<PyAny>>,
@@ -226,6 +160,55 @@ impl LegacyCallbacks for PythonLogger {
             error.write_unraisable(py, Some(&coroutine));
         }
         enqueue.map(|_| ())
+    }
+
+    pub(crate) fn initialize_failure_context(
+        &self,
+        py: Python<'_>,
+        kwargs: &Py<PyDict>,
+        model: Option<String>,
+        custom_llm_provider: Option<String>,
+    ) -> PyResult<()> {
+        let Some(model) = model else {
+            return Ok(());
+        };
+        let (provider, model) = match custom_llm_provider.filter(|provider| !provider.is_empty()) {
+            Some(provider) => {
+                let model = model
+                    .strip_prefix(provider.as_str())
+                    .and_then(|model| model.strip_prefix('/'))
+                    .unwrap_or(&model)
+                    .to_string();
+                (provider, model)
+            }
+            None => match model.split_once('/') {
+                Some((provider, model)) if !provider.is_empty() && !model.is_empty() => {
+                    (provider.to_string(), model.to_string())
+                }
+                _ => return Ok(()),
+            },
+        };
+        let kwargs = kwargs.bind(py);
+        let metadata = PyDict::new(py);
+        for name in ["metadata", "litellm_metadata"] {
+            if let Some(value) = kwargs.get_item(name)? {
+                metadata.set_item(name, value)?;
+            }
+        }
+        let params = PyDict::new(py);
+        params.set_item("litellm_call_id", kwargs.get_item("litellm_call_id")?)?;
+        Logging::Update.call(
+            py,
+            (
+                self.object(py),
+                metadata,
+                model,
+                PyDict::new(py),
+                params,
+                provider,
+            ),
+        )?;
+        Ok(())
     }
 }
 
@@ -254,6 +237,6 @@ fn redact(
 }
 
 /// Proxy-internal calls skip the legacy success fan-out.
-pub fn is_internal_call(py: Python<'_>) -> PyResult<bool> {
+pub(crate) fn is_internal_call(py: Python<'_>) -> PyResult<bool> {
     Wrapper::IsInternalCall.call(py, ())?.extract()
 }

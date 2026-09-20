@@ -83,21 +83,27 @@ enum ProjectedDocument {
 
 impl ProjectedDocument {
     fn project(document: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let kind: String = document
-            .get_item("type")
-            .and_then(|value| value.extract())
-            .map_err(|error| {
-                let py = document.py();
-                if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py)
-                    || error.is_instance_of::<pyo3::exceptions::PyTypeError>(py)
-                {
-                    ocr_error_to_pyerr(Error::RequestField {
-                        path: "document.type".into(),
-                    })
-                } else {
-                    error
-                }
-            })?;
+        let py = document.py();
+        if !document.is_instance_of::<PyDict>() && !document.hasattr("__getitem__")? {
+            return Err(ocr_error_to_pyerr(Error::DocumentNotObject));
+        }
+        let kind = match document.get_item("type") {
+            Ok(value) => value,
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => {
+                return Err(ocr_error_to_pyerr(Error::InvalidDocumentType(
+                    "None".into(),
+                )));
+            }
+            Err(error) if error.is_instance_of::<pyo3::exceptions::PyTypeError>(py) => {
+                return Err(ocr_error_to_pyerr(Error::DocumentNotObject));
+            }
+            Err(error) => return Err(error),
+        };
+        let Ok(kind) = kind.extract::<String>() else {
+            return Err(ocr_error_to_pyerr(Error::InvalidDocumentType(
+                kind.str()?.to_string(),
+            )));
+        };
         if kind != "file" {
             return Ok(Self::Other(from_py(document)?));
         }
@@ -471,21 +477,25 @@ document = Document()
     }
 
     #[rstest::rstest]
-    #[case::missing(c"{}")]
-    #[case::non_string(c"{'type': 1}")]
-    #[case::list(c"[]")]
-    fn malformed_document_discriminators_are_bad_requests_naming_the_field(
+    #[case::missing(
+        c"{}",
+        "Invalid document type: None. Must be 'document_url', 'image_url', or 'file'"
+    )]
+    #[case::non_string(
+        c"{'type': 1}",
+        "Invalid document type: 1. Must be 'document_url', 'image_url', or 'file'"
+    )]
+    #[case::list(c"[]", "document must be a dict with 'type' and URL/file field")]
+    fn malformed_document_discriminators_are_bad_requests_with_the_python_message(
         #[case] document: &std::ffi::CStr,
+        #[case] expected: &str,
     ) {
         Python::initialize();
         Python::attach(|py| {
             let error = project_document(&py.eval(document, None, None).unwrap()).unwrap_err();
             let value = error.value(py);
             assert!(error.is_instance_of::<PyValueError>(py));
-            assert_eq!(
-                value.to_string(),
-                "invalid OCR request field: document.type"
-            );
+            assert_eq!(value.to_string(), expected);
             assert_eq!(
                 value
                     .getattr("status_code")

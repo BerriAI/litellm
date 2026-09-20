@@ -2044,6 +2044,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-v1"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth",
+ "litellm-host",
+ "proptest",
+ "rstest",
+ "serde",
+ "serde_json",
+ "strum",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-callbacks-v1-python"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth",
+ "litellm-callbacks-v1",
+ "litellm-host",
+ "litellm-host-python",
+ "pyo3",
+ "serde_json",
+ "strum",
+]
+
+[[package]]
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
@@ -2085,6 +2112,7 @@ version = "0.1.0"
 dependencies = [
  "fancy-regex",
  "litellm-types",
+ "percent-encoding",
  "rstest",
  "serde",
  "serde_json",
@@ -2170,6 +2198,7 @@ dependencies = [
  "litellm-host",
  "litellm-http",
  "litellm-types",
+ "percent-encoding",
  "reqwest 0.12.28",
  "rstest",
  "serde",
@@ -2193,8 +2222,10 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-gcp",
  "litellm-callbacks-legacy-python",
+ "litellm-callbacks-v1-python",
  "litellm-core",
  "litellm-core-utils",
+ "litellm-host",
  "litellm-host-python",
  "litellm-http",
  "litellm-llms",
