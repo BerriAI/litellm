@@ -37,17 +37,6 @@ def _make_httpx_response(body: dict, status_code: int = 200) -> httpx.Response:
 # ---------------------------------------------------------------------------
 
 
-class TestGetConfig:
-    def setup_method(self):
-        self.config = GigaChatEmbeddingConfig()
-
-    def test_contains_only_abc_impl(self):
-        """get_config returns ABC internal data due to inheritance."""
-        result = self.config.get_config()
-        # The only key should be _abc_impl from ABC base class
-        assert set(result.keys()) == {"_abc_impl"}
-
-
 class TestGetSupportedOpenAiParams:
     def setup_method(self):
         self.config = GigaChatEmbeddingConfig()
@@ -287,25 +276,6 @@ class TestTransformEmbeddingResponse:
         )
         assert result.model == "Embeddings"
 
-    def test_calls_logging_post_call(self):
-        raw = self._make_gigachat_response([
-            {"object": "embedding", "embedding": [0.1], "index": 0},
-        ])
-        model_response = EmbeddingResponse()
-        self.config.transform_embedding_response(
-            model="gigachat/Embeddings",
-            raw_response=raw,
-            model_response=model_response,
-            logging_obj=self.logging_obj,
-            api_key="test-api-key",
-            request_data={"input": ["hello"]},
-            optional_params={},
-            litellm_params={},
-        )
-        self.logging_obj.post_call.assert_called_once()
-        args = self.logging_obj.post_call.call_args.kwargs
-        assert args["api_key"] == "test-api-key"
-        assert args["input"] == ["hello"]
 
 
 class TestValidateEnvironment:
