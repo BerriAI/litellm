@@ -11767,7 +11767,7 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
 
 
 @pytest.mark.asyncio
-async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch):
+async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch: pytest.MonkeyPatch):
     """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with
     datadog_params.turn_off_message_logging: true must build the DataDogLogger redacted, the
     same as the identical block in YAML. Regression for the redaction keys being absent from
@@ -11800,6 +11800,30 @@ async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(mon
     assert len(datadog_loggers) == 1
     assert datadog_loggers[0].turn_off_message_logging is True
     assert litellm.turn_off_message_logging is True
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "datadog_params",
+        "datadog_llm_observability_params",
+        "newrelic_params",
+        "pointfive_params",
+        "aws_sqs_callback_params",
+    ],
+)
+def test_db_stored_callback_params_propagate_to_litellm_module(monkeypatch: pytest.MonkeyPatch, field_name: str):
+    """Every callback init params block stored in the DB litellm_settings row must land on the
+    litellm module before the matching logger is built, so the DB row behaves like YAML."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, field_name, None)
+    db_value = {"turn_off_message_logging": True}
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(pc._prepared_db_settings_values("litellm_settings", {field_name: db_value}))
+
+    assert getattr(litellm, field_name) == db_value
 
 
 def test_get_config_list_marks_untouched_prompt_caching_flag_as_not_set(monkeypatch):
