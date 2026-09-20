@@ -23444,6 +23444,1332 @@
         ],
         "supports_vision": true
     },
+    "fal_ai/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "notes": "OpenAI gpt-image-2.5 (flare) served through fal.ai. fal publishes deterministic per-image prices per size and quality, mirrored as keyed entries fal_ai/{quality}/{width}-x-{height}/openai/gpt-image-2.5/flare/text-to-image that the fal_ai cost calculator picks from the request params. This flat entry is the fallback for the default request (quality=high, image_size=landscape_4_3 at 1024x768). quality=auto is priced as high"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03612,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00402,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1024/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00588,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00474,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1920-x-1080/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00441,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/2560-x-1440/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00615,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/3840-x-2160/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01113,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-768/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00903,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1024/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01317,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01029,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1920-x-1080/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01029,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/2560-x-1440/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01434,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/3840-x-2160/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02595,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-768/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03612,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1024/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05268,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04116,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1920-x-1080/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0396,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/2560-x-1440/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05529,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/3840-x-2160/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.10008,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-768/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0642,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-1024/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09366,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07377,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1920-x-1080/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07041,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/2560-x-1440/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09828,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/3840-x-2160/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1779,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-768/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.14445,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-1024/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.21072,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.16464,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1920-x-1080/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1584,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/2560-x-1440/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2211,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/3840-x-2160/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.40026,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "notes": "Editing endpoint of gpt-image-2.5 (flare) on fal.ai, reachable through /v1/images/edits or the image generation path with fal's image_urls param. Prices include one input image and live in keyed entries fal_ai/{quality}/{width}-x-{height}/openai/gpt-image-2.5/flare/edit. This flat entry is the fallback for the default edit request (quality=high, image_size=auto, inferred from the input image, priced as 1024x768 high)"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03612,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00402,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1024/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00588,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00474,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1920-x-1080/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00441,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/2560-x-1440/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00615,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/3840-x-2160/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01113,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-768/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00903,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1024/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01317,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1536/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01029,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1920-x-1080/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01029,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/2560-x-1440/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01434,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/3840-x-2160/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02595,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-768/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03612,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1024/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05268,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1536/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04116,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1920-x-1080/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0396,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/2560-x-1440/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05529,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/3840-x-2160/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.10008,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-768/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0642,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-1024/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09366,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-1536/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07377,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1920-x-1080/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07041,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/2560-x-1440/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09828,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/3840-x-2160/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1779,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-768/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.14445,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-1024/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.21072,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-1536/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.16464,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1920-x-1080/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1584,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/2560-x-1440/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2211,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/3840-x-2160/openai/gpt-image-2.5/flare/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.40026,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "notes": "OpenAI gpt-image-2.5 (sunburst) served through fal.ai. fal publishes deterministic per-image prices per size and quality, mirrored as keyed entries fal_ai/{quality}/{width}-x-{height}/openai/gpt-image-2.5/sunburst/text-to-image that the fal_ai cost calculator picks from the request params. This flat entry is the fallback for the default request (quality=high, image_size=landscape_4_3 at 1024x768). quality=auto is priced as high"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03612,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-768/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00402,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1024/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00588,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1536/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00474,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1920-x-1080/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00441,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/2560-x-1440/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00615,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/3840-x-2160/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01113,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-768/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00903,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1024/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01317,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1536/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01029,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1920-x-1080/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01029,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/2560-x-1440/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01434,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/3840-x-2160/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02595,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-768/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03612,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1024/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05268,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1536/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04116,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1920-x-1080/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0396,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/2560-x-1440/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05529,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/3840-x-2160/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.10008,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-768/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0642,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-1024/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09366,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-1536/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07377,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1920-x-1080/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07041,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/2560-x-1440/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09828,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/3840-x-2160/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1779,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-768/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.14445,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-1024/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.21072,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-1536/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.16464,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1920-x-1080/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1584,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/2560-x-1440/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2211,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/3840-x-2160/openai/gpt-image-2.5/sunburst/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.40026,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "notes": "Editing endpoint of gpt-image-2.5 (sunburst) on fal.ai, reachable through /v1/images/edits or the image generation path with fal's image_urls param. Prices include one input image and live in keyed entries fal_ai/{quality}/{width}-x-{height}/openai/gpt-image-2.5/sunburst/edit. This flat entry is the fallback for the default edit request (quality=high, image_size=auto, inferred from the input image, priced as 1024x768 high)"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03612,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-768/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00402,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1024/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00588,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1024-x-1536/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00474,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/1920-x-1080/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00441,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/2560-x-1440/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00615,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/low/3840-x-2160/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01113,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-768/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.00903,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1024/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01317,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1024-x-1536/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01029,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/1920-x-1080/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01029,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/2560-x-1440/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.01434,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/medium/3840-x-2160/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02595,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-768/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.03612,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1024/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05268,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1024-x-1536/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04116,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/1920-x-1080/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0396,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/2560-x-1440/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05529,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/high/3840-x-2160/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.10008,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-768/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0642,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-1024/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09366,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1024-x-1536/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07377,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/1920-x-1080/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.07041,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/2560-x-1440/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.09828,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/xhigh/3840-x-2160/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1779,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-768/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.14445,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-1024/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.21072,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1024-x-1536/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.16464,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/1920-x-1080/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.1584,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/2560-x-1440/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.2211,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/max/3840-x-2160/openai/gpt-image-2.5/sunburst/edit": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.40026,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/sunburst/edit",
+        "supported_endpoints": [
+            "/v1/images/edits",
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
+    "fal_ai/fal-ai/flux/dev": {
+        "litellm_provider": "fal_ai",
+        "metadata": {
+            "notes": "fal bills FLUX.1 [dev] at $0.025 per megapixel, rounding each image up to the nearest megapixel. Every named fal image_size (including the landscape_4_3 default) rounds up to 1 megapixel, so this flat per-image price is exact for them"
+        },
+        "mode": "image_generation",
+        "output_cost_per_image": 0.025,
+        "source": "https://fal.ai/models/fal-ai/flux/dev",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "featherless_ai/featherless-ai/Qwerky-72B": {
         "litellm_provider": "featherless_ai",
         "max_input_tokens": 32768,
