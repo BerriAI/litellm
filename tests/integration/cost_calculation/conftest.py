@@ -123,22 +123,33 @@ def poll_cost_row(key: str) -> CostRow:
     return result
 
 
-def poll_rows(key: str, count: int) -> tuple[CostRow, ...]:
+def read_rows_now(key: str) -> tuple[CostRow, ...]:
     digest: Final = sha256(key.encode()).hexdigest()
+    rows: Final = read_rows(
+        'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id '
+        'FROM "LiteLLM_SpendLogs" WHERE api_key=%s ORDER BY "startTime"',
+        (digest,),
+    )
+    return tuple(parsed for row in rows if (parsed := _row(row)) is not None)
 
-    def read() -> tuple[CostRow, ...]:
-        rows: Final = read_rows(
-            'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id '
-            'FROM "LiteLLM_SpendLogs" WHERE api_key=%s ORDER BY "startTime"',
-            (digest,),
-        )
-        return tuple(parsed for row in rows if (parsed := _row(row)) is not None)
 
-    result: Final = eventually(read, lambda rows: len(rows) >= count, seconds=60)
+def poll_rows(key: str, count: int) -> tuple[CostRow, ...]:
+    result: Final = eventually(
+        lambda: read_rows_now(key),
+        lambda rows: len(rows) >= count,
+        seconds=60,
+    )
     return result
 
 
-def poll_rollups(key: str, team_id: str, user_id: str, end_user_id: str, requests: int, spend: float) -> Rollups:
+def poll_rollups(
+    key: str,
+    team_id: str,
+    user_id: str,
+    end_user_id: str,
+    target_spend: float,
+    target_requests: int,
+) -> Rollups:
     digest: Final = sha256(key.encode()).hexdigest()
 
     def read() -> Rollups | None:
@@ -178,21 +189,28 @@ def poll_rollups(key: str, team_id: str, user_id: str, end_user_id: str, request
             daily_user=DailySpend.model_validate(daily_user_rows[0]),
             daily_team=DailySpend.model_validate(daily_team_rows[0]),
         )
-        if rollups.daily_user.api_requests < requests or rollups.daily_team.api_requests < requests:
-            return None
-        if not all(
-            approx_equal(actual, spend)
-            for actual in (
-                rollups.key_spend,
-                rollups.team_spend,
-                rollups.user_spend,
-                rollups.end_user_spend,
-            )
-        ):
-            return None
         return rollups
 
-    result: Final = eventually(read, lambda value: value is not None, seconds=60)
+    def settled(value: Rollups | None) -> bool:
+        return value is not None and all(
+            (
+                approx_equal(value.key_spend, target_spend),
+                approx_equal(value.team_spend, target_spend),
+                approx_equal(value.user_spend, target_spend),
+                approx_equal(value.end_user_spend, target_spend),
+                approx_equal(value.daily_user.spend, target_spend),
+                approx_equal(value.daily_team.spend, target_spend),
+                value.daily_user.api_requests == target_requests,
+                value.daily_team.api_requests == target_requests,
+            )
+        )
+
+    result: Final = eventually(
+        read,
+        settled,
+        seconds=20,
+        return_last_on_timeout=True,
+    )
     assert result is not None
     return result
 
