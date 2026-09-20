@@ -5,6 +5,7 @@ Source: litellm/llms/chatgpt/responses/transformation.py
 """
 
 import json
+from collections.abc import Generator
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -17,6 +18,15 @@ from litellm.main import responses_api_bridge_check
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
 
 
 class TestChatGPTResponsesAPITransformation:

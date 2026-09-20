@@ -1,3 +1,4 @@
+from collections.abc import Generator
 from datetime import datetime, timezone
 from typing import Final
 
@@ -6,6 +7,16 @@ import pytest
 import litellm
 from litellm._internal_context import pinned_billing_time
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
 
 PEAK_MOMENTS: Final = (
     pytest.param(datetime(2026, 9, 22, 8, 0, tzinfo=timezone.utc), id="tuesday-08:00"),
