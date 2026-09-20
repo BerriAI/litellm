@@ -19,6 +19,7 @@ from typing import (
     overload,
     runtime_checkable,
 )
+from urllib.parse import urlparse
 
 import anyio
 import httpx
@@ -45,6 +46,11 @@ from litellm.constants import (
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.bug_report import (
+    bug_report_enabled,
+    bug_report_notice,
+    build_bug_report,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
@@ -3658,6 +3664,25 @@ class ProxyBaseLLMRequestProcessing:
             _code = _exc_status_code
         else:
             _code = status.HTTP_500_INTERNAL_SERVER_ERROR
+            if bug_report_enabled():
+                proxy_server_request: Final = self.data.get("proxy_server_request")
+                request_url: Final = (
+                    proxy_server_request.get("url")
+                    if isinstance(proxy_server_request, Mapping)
+                    else None
+                )
+                request_path: Final = urlparse(str(request_url)).path if request_url is not None else None
+                verbose_proxy_logger.error(
+                    bug_report_notice(
+                        build_bug_report(
+                            e,
+                            surface="proxy",
+                            call_type=request_path or None,
+                            model=self.data.get("model"),
+                            custom_llm_provider=self.data.get("custom_llm_provider"),
+                        )
+                    )
+                )
         raise ProxyException(
             message=redact_internal_details_from_client_message(getattr(e, "message", error_msg)),
             type=openai_error_type(e, _code),

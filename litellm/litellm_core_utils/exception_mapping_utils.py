@@ -10,6 +10,11 @@ import httpx
 
 import litellm
 from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string, verbose_logger
+from litellm.litellm_core_utils.bug_report import (
+    bug_report_enabled,
+    bug_report_notice,
+    build_bug_report,
+)
 from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.types.utils import LlmProviders
 
@@ -510,8 +515,24 @@ def _map_openai_exception(
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
         # exception_mapping_worked = True
+        bug_report_message: Final = (
+            f"{exception_provider} - {message}"
+            + (
+                "\n"
+                + bug_report_notice(
+                    build_bug_report(
+                        original_exception,
+                        surface="sdk",
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+                )
+                if not hasattr(original_exception, "request") and bug_report_enabled()
+                else ""
+            )
+        )
         raise APIConnectionError(
-            message=f"APIConnectionError: {exception_provider} - {message}",
+            message=f"APIConnectionError: {bug_report_message}",
             llm_provider=custom_llm_provider,
             model=model,
             litellm_debug_info=extra_information,
@@ -2673,7 +2694,22 @@ def exception_type(
                 )
             else:
                 raise APIConnectionError(
-                    message=f"{original_exception}\n{_redact_string(traceback.format_exc())}",
+                    message=(
+                        f"{original_exception}\n{_redact_string(traceback.format_exc())}"
+                        + (
+                            "\n"
+                            + bug_report_notice(
+                                build_bug_report(
+                                    original_exception,
+                                    surface="sdk",
+                                    model=model,
+                                    custom_llm_provider=custom_llm_provider,
+                                )
+                            )
+                            if bug_report_enabled()
+                            else ""
+                        )
+                    ),
                     llm_provider=custom_llm_provider,
                     model=model,
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
