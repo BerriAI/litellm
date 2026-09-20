@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from json import JSONDecodeError
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -888,14 +888,23 @@ def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, obje
         return MappingProxyType({})
 
 
-def _loaded_catalog_entry(incoming_model_info: Mapping[str, object]) -> Mapping[str, object]:
+LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
+
+
+def _loaded_catalog_entry(
+    incoming_model_info: Mapping[str, object], loaded_catalog: LoadedCatalog
+) -> Mapping[str, object]:
     catalog_key: Final = incoming_model_info.get(COST_MAP_LOOKUP_KEY)
     if not isinstance(catalog_key, str):
         return MappingProxyType({})
-    return GetModelCostMap.loaded_model_cost_map().get(catalog_key, MappingProxyType({}))
+    return loaded_catalog().get(catalog_key, MappingProxyType({}))
 
 
-def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
+def update_db_model(
+    db_model: Deployment,
+    updated_patch: updateDeployment,
+    loaded_catalog: LoadedCatalog = GetModelCostMap.loaded_model_cost_map,
+) -> PrismaCompatibleUpdateDBModel:
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
@@ -921,7 +930,7 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
         echoed_fields: Final = echoed_cost_map_fields(
             incoming_model_info,
             _cost_map_entry(db_model, incoming_model_info),
-            _loaded_catalog_entry(incoming_model_info),
+            _loaded_catalog_entry(incoming_model_info, loaded_catalog),
         )
         merged_model_info.update(
             MappingProxyType(

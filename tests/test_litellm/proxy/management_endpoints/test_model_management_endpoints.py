@@ -4119,15 +4119,12 @@ class TestModelInfoCostMapEchoFilter:
 
         import litellm
 
-        from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
         from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
         from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
         bundled = litellm.get_model_info("openai/gpt-5.6")
         remote = {**bundled, "max_input_tokens": bundled["max_input_tokens"] + 1}
-        monkeypatch.setattr(
-            GetModelCostMap, "_loaded_catalog", MappingProxyType({remote["key"]: MappingProxyType(remote)})
-        )
+        remote_catalog = MappingProxyType({remote["key"]: MappingProxyType(remote)})
         monkeypatch.setattr(litellm, "get_model_info", lambda model, **_: {**remote, "max_input_tokens": 2048})
         db_model = Deployment(
             model_name="gpt-5.6",
@@ -4138,6 +4135,7 @@ class TestModelInfoCostMapEchoFilter:
         result = update_db_model(
             db_model=db_model,
             updated_patch=updateDeployment(model_info=ModelInfo(**{**remote, "id": "dep-echo-9", "db_model": True})),
+            loaded_catalog=lambda: remote_catalog,
         )
 
         info = json.loads(result["model_info"])
