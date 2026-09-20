@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["huggingface", "tiktoken"]
+default = ["fast", "huggingface", "tiktoken"]
 fast = ["dep:litellm-token-counter-fast"]
 huggingface = ["dep:litellm-token-counter-huggingface"]
 tiktoken = ["dep:litellm-token-counter-tiktoken"]
@@ -25,6 +25,7 @@ thiserror.workspace = true
 criterion.workspace = true
 rand.workspace = true
 rstest.workspace = true
+tokenizers.workspace = true
 
 [[bench]]
 name = "token_counter"
