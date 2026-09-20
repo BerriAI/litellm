@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+import litellm
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -11,6 +12,25 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
     ContextCachingEndpoints,
 )
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled in-repo cost map so capability and pricing assertions do not
+    depend on the network-fetched ``main`` copy, which lags this branch until merge.
+
+    ``get_model_info`` is lru_cached, so swapping ``model_cost`` is not enough on its
+    own; clear on the way in and out so entries warmed against either map never leak
+    across tests."""
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
 
 
 class TestContextCachingEndpoints:
