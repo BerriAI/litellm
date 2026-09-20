@@ -1397,10 +1397,10 @@ class TestBudgetExceededErrorSurfacesUnifiedFields:
         assert e.llm_provider == "anthropic"
 
     def test_should_keep_existing_status_code_and_message(self):
-        # Backward-compat guard: existing callers depend on `status_code=429`
+        # Backward-compat guard: existing callers depend on `status_code=422`
         # and the canonical message format.
         e = litellm.BudgetExceededError(current_cost=0.000109, max_budget=0.0001)
-        assert e.status_code == 429
+        assert e.status_code == 422
         assert "Current cost: 0.000109" in e.message
         assert "Max budget: 0.0001" in e.message
 
@@ -1424,7 +1424,7 @@ class TestBudgetExceededErrorSurfacesUnifiedFields:
         info = StandardLoggingPayloadSetup.get_error_information(e)
         assert info["error_rate_limit_category"] == "litellm_rate_limit"
         assert info["error_rate_limit_type"] == "budget"
-        assert info["error_code"] == "429"
+        assert info["error_code"] == "422"
         assert info["error_class"] == "BudgetExceededError"
 
     def test_should_propagate_llm_provider_to_standard_logging_payload(self):

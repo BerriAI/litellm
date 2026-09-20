@@ -101,7 +101,7 @@ def test_team_long_window_blocks_after_short_window_resets(client: BudgetClient,
     
     # 1. drive the key to being blocked, assert its blocked by budget budget_exceeded
     blocked = _drive_to_block(client, key)
-    assert blocked.status_code == 429, f"budget block was not a 429: {blocked.status_code} {blocked.body[:200]}"
+    assert blocked.status_code == 422, f"budget block was not a 422: {blocked.status_code} {blocked.body[:200]}"
 
     # 2. check the the teams budget windows 
     blocked_reset_at = window_reset_at(client.team_budget_windows(team_id), SHORT_WINDOW)

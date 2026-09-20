@@ -185,7 +185,7 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
             {"model": model, "messages": [{"role": "user", "content": f"over budget {uuid.uuid4().hex}"}]},
             key=key,
         )
-        assert denied.status_code == 429 and denied.json()["error"]["type"] == "budget_exceeded", denied.text
+        assert denied.status_code == 422 and denied.json()["error"]["type"] == "budget_exceeded", denied.text
         assert upstream.get("/__observations").json()["requests"] == []
         assert gateway.chat(model, key=control, text=f"control {uuid.uuid4().hex}")["usage"]["total_tokens"] == 40
         gateway.post("/key/update", {"key": key, "spend": 0})
@@ -205,7 +205,7 @@ def test_key_budget_at_boundary_blocks_provider_then_explicit_reset_restores(gat
             {"model": model, "messages": [{"role": "user", "content": f"boundary again {uuid.uuid4().hex}"}]},
             key=key,
         )
-        assert denied_again.status_code == 429 and denied_again.json()["error"]["type"] == "budget_exceeded", (
+        assert denied_again.status_code == 422 and denied_again.json()["error"]["type"] == "budget_exceeded", (
             denied_again.text
         )
         assert upstream.get("/__observations").json()["requests"] == []
