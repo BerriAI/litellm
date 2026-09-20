@@ -2,13 +2,14 @@ import asyncio
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Final
+from typing import Final, NoReturn
 from unittest.mock import create_autospec
 
 import httpx
 import pytest
 
 import litellm
+from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -38,6 +39,66 @@ class _UsageRecorder(CustomLogger):
         if str(kwargs.get("model", "")).removeprefix("typesafe/") != "jev-accounting":
             return
         self.calls = (*self.calls, kwargs)
+
+
+class _UncopyableAuth:
+    budget_reservation: Final = "parent-reservation"
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def model_copy(self, *, update: Mapping[str, object]) -> NoReturn:
+        raise self.error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metadata", "error_name"),
+    [
+        ({1: "private-metadata"}, "ValidationError"),
+        ({"user_api_key_auth": _UncopyableAuth(RuntimeError("private-metadata"))}, "RuntimeError"),
+        ({"user_api_key_auth": _UncopyableAuth(TimeoutError("private-metadata"))}, "TimeoutError"),
+    ],
+)
+async def test_jev_logging_failure_preserves_verdict_and_keeps_circuit_closed(
+    caplog: pytest.LogCaptureFixture, metadata: Mapping[object, object], error_name: str
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "answers": {"tier": _answer().model_dump()},
+                "usage": {"input_tokens": 3, "output_tokens": 2},
+            },
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    router: Final = ComplexityRouter(
+        "jev-logging-failure",
+        litellm.Router(model_list=[]),
+        {"classifier_type": "jev", "jev_classifier_config": {}, "tiers": {"SIMPLE": "cheap"}},
+        jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
+        derive_savings_baseline=False,
+    )
+    with caplog.at_level("WARNING", logger=verbose_router_logger.name):
+        outcomes: Final = tuple(
+            [await router.aclassify("choose a tier", request_kwargs={"metadata": metadata}) for _ in range(2)]
+        )
+    await handler.client.aclose()
+
+    assert tuple(
+        (outcome.cause, outcome.jev_verdict.label if outcome.jev_verdict else None) for outcome in outcomes
+    ) == (
+        ("jev_classifier", "SIMPLE"),
+        ("jev_classifier", "SIMPLE"),
+    )
+    assert len(requests) == 2
+    assert caplog.messages == [f"JEV response logging failed ({error_name})"] * 2
+    assert "private-metadata" not in caplog.text
 
 
 @pytest.mark.asyncio

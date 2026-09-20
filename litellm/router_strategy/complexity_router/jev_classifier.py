@@ -8,6 +8,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
+from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.internal_call_metadata import (
     effective_turn_off_message_logging,
@@ -101,7 +102,10 @@ class HttpJevClassifierClient:
             timeout=timeout_s,
         )
         response.raise_for_status()
-        self._log_response(request, response, request_kwargs, start_time)
+        try:
+            self._log_response(request, response, request_kwargs, start_time)
+        except Exception as exc:  # noqa: BLE001  # logging integrations must not discard a provider verdict
+            verbose_router_logger.warning("JEV response logging failed (%s)", type(exc).__name__)
         return TypeAdapter(JevSystemOneResponse).validate_python(response.json())
 
     @staticmethod
@@ -163,16 +167,19 @@ class HttpJevClassifierClient:
             request_body=MappingProxyType({"model": request.model}),
             litellm_params=params,
         )
-        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-            logging_obj.dispatch_success_handlers(
-                result=normalized["result"],
-                start_time=start_time,
-                end_time=end_time,
-                cache_hit=False,
-                prefer_async_handlers=True,
-                **TypeAdapter(dict[str, object]).validate_python(normalized["kwargs"]),
-            )
+        success_handlers: Final = logging_obj.dispatch_success_handlers(
+            result=normalized["result"],
+            start_time=start_time,
+            end_time=end_time,
+            cache_hit=False,
+            prefer_async_handlers=True,
+            **TypeAdapter(dict[str, object]).validate_python(normalized["kwargs"]),
         )
+        try:
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(success_handlers)
+        except BaseException:
+            success_handlers.close()
+            raise
 
 
 class JevVerdict(NamedTuple):
