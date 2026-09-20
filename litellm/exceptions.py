@@ -1002,7 +1002,7 @@ class BudgetExceededError(Exception):
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
-        self.status_code = 429
+        self.status_code = 422
         self.llm_provider = llm_provider or ""
         self.entity_type = entity_type
         self.entity_id = entity_id
