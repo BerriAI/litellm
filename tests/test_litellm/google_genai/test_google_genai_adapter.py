@@ -1422,6 +1422,8 @@ def test_response_schema_drops_gemini_property_ordering_at_every_level():
         },
         "required": ["park_name", "highlights"],
     }
+    assert sdk_pydantic_schema["propertyOrdering"] == ["park_name", "highlights"]
+    assert sdk_pydantic_schema["properties"]["highlights"]["items"]["property_ordering"] == ["title", "detail"]
 
 
 def test_response_schema_without_mime_type_still_maps_to_json_schema():
