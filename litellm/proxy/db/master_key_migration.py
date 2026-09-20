@@ -7,6 +7,7 @@ from typing import Final
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import assert_never
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy.auth.master_key_boot_check import MIGRATE_FROM_MASTER_KEY_ENV_VAR, SALT_KEY_ENV_VAR
 from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
@@ -50,17 +51,19 @@ _PRIMARY_KEY: Final = TypeAdapter(str)
 ReplaceCiphertext = Callable[[str], str | None]
 
 
-def replace_ciphertexts(value: JsonValue, replacement_for: ReplaceCiphertext) -> tuple[JsonValue, int]:
+def replace_ciphertexts(value: JsonValue, replacement_for: ReplaceCiphertext, depth: int = 0) -> tuple[JsonValue, int]:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return value, 0
     match value:
         case str():
             marker: Final = CALLBACK_VAR_ENCRYPTED_PREFIX if value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX) else ""
             replacement: Final = replacement_for(value.removeprefix(marker))
             return (value, 0) if replacement is None else (marker + replacement, 1)
         case list():
-            items: Final = tuple(replace_ciphertexts(item, replacement_for) for item in value)
+            items: Final = tuple(replace_ciphertexts(item, replacement_for, depth + 1) for item in value)
             return [item for item, _ in items], sum(count for _, count in items)
         case dict():
-            fields: Final = {key: replace_ciphertexts(item, replacement_for) for key, item in value.items()}
+            fields: Final = {key: replace_ciphertexts(item, replacement_for, depth + 1) for key, item in value.items()}
             return {key: item for key, (item, _) in fields.items()}, sum(count for _, count in fields.values())
         case _:
             return value, 0
@@ -109,7 +112,8 @@ async def _secret_columns_in(database: SupportsRawQueries) -> tuple[_SecretColum
     existing: Final = frozenset(
         (row["table_name"], row["column_name"])
         for row in await database.query_raw(
-            "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()"
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = ANY (current_schemas(false))"
         )
     )
     return tuple(
@@ -168,7 +172,31 @@ class Migrated:
     remaining: int
 
 
-MigrationOutcome = NothingToMigrate | Migrated
+@dataclass(frozen=True, slots=True)
+class MigrationFailed:
+    error: str
+
+
+MigrationOutcome = NothingToMigrate | Migrated | MigrationFailed
+
+
+async def migrate_if_requested(
+    *,
+    environ: Mapping[str, str],
+    master_key: str | None,
+    connected_database: Callable[[], SupportsRawQueries | None],
+    log: Callable[[str], None],
+) -> MigrationOutcome | None:
+    previous_master_key: Final = environ.get(MIGRATE_FROM_MASTER_KEY_ENV_VAR)
+    if previous_master_key is None or master_key is None:
+        return None
+    return await migrate_from_previous_master_key(
+        previous_master_key=previous_master_key,
+        master_key=master_key,
+        salt_key_is_set=SALT_KEY_ENV_VAR in environ,
+        database=connected_database(),
+        log=log,
+    )
 
 
 async def migrate_from_previous_master_key(
@@ -179,7 +207,7 @@ async def migrate_from_previous_master_key(
     database: SupportsRawQueries | None,
     log: Callable[[str], None],
 ) -> MigrationOutcome:
-    outcome: Final = await _migrate(
+    outcome: Final = await _migrate_or_failure(
         previous_master_key=previous_master_key,
         master_key=master_key,
         salt_key_is_set=salt_key_is_set,
@@ -188,6 +216,26 @@ async def migrate_from_previous_master_key(
     )
     log(describe_outcome(outcome))
     return outcome
+
+
+async def _migrate_or_failure(
+    *,
+    previous_master_key: str,
+    master_key: str,
+    salt_key_is_set: bool,
+    database: SupportsRawQueries | None,
+    log: Callable[[str], None],
+) -> MigrationOutcome:
+    try:
+        return await _migrate(
+            previous_master_key=previous_master_key,
+            master_key=master_key,
+            salt_key_is_set=salt_key_is_set,
+            database=database,
+            log=log,
+        )
+    except Exception as error:  # noqa: BLE001  # the proxy tolerates a database outage at boot, so the migration must too
+        return MigrationFailed(error=f"{type(error).__name__}: {error}"[:300])
 
 
 async def _migrate(
@@ -243,6 +291,12 @@ def describe_outcome(outcome: MigrationOutcome) -> str:
                 f"Re-encrypted {migrated} stored value(s), but {remaining} are still encrypted with the previous key "
                 f"because they changed during the migration. Keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} set and restart "
                 "the proxy to migrate them."
+            )
+        case MigrationFailed(error=error):
+            return (
+                f"Could not migrate stored values from the {MIGRATE_FROM_MASTER_KEY_ENV_VAR} key ({error}). Values "
+                "still encrypted with the previous key cannot be read until the migration succeeds. Keep "
+                f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR} set and restart the proxy once the database is reachable."
             )
         case _:
             assert_never(outcome)

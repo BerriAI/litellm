@@ -1,19 +1,24 @@
 import json
 import re
 from collections.abc import Mapping, Sequence
+from functools import reduce
 
 import pytest
+from pydantic import JsonValue
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy import proxy_server
 from litellm.proxy.auth.master_key_boot_check import MIGRATE_FROM_MASTER_KEY_ENV_VAR, SALT_KEY_ENV_VAR
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
 from litellm.proxy.db.master_key_migration import (
     _SECRET_COLUMNS,
     Migrated,
+    MigrationFailed,
     NothingToMigrate,
     count_values_encrypted_with,
     describe_outcome,
     migrate_from_previous_master_key,
+    migrate_if_requested,
     reencrypt_stored_values,
     replace_ciphertexts,
 )
@@ -43,7 +48,7 @@ class _FakeDatabase:
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
         if "information_schema.columns" in query:
-            assert "table_schema = current_schema()" in query
+            assert "table_schema = ANY (current_schemas(false))" in query
             return [
                 {"table_name": secret_column.table, "column_name": secret_column.column}
                 for secret_column in _SECRET_COLUMNS
@@ -202,6 +207,26 @@ async def test_only_rows_holding_values_under_the_previous_key_are_written():
 
 
 @pytest.mark.asyncio
+async def test_plaintext_that_base64_decodes_to_nothing_is_neither_counted_nor_rewritten():
+    settings = {"allowed_routes": ["*"], "ui_name": "-", "separator": "...", "blank": " ", "shape": "{}"}
+    tables: Tables = {
+        "LiteLLM_Config": [{"param_name": "general_settings", "param_value": dict(settings)}],
+        "LiteLLM_VerificationToken": [
+            {"token": "hashed", "metadata": {"notes": "...", "secret": "litellm_enc::" + _encrypted("callback-secret")}}
+        ],
+    }
+    database = _FakeDatabase(tables)
+
+    found = await count_values_encrypted_with(database, PREVIOUS_KEY)
+    migrated = await reencrypt_stored_values(database, from_key=PREVIOUS_KEY, to_key=NEW_KEY)
+
+    assert found == migrated == 1
+    assert tables["LiteLLM_Config"][0]["param_value"] == settings
+    assert tables["LiteLLM_VerificationToken"][0]["metadata"]["notes"] == "..."
+    assert database.writes == [("LiteLLM_VerificationToken", "metadata", "hashed")]
+
+
+@pytest.mark.asyncio
 async def test_schema_without_some_of_the_tables_is_migrated_for_the_tables_it_has():
     missing = frozenset({"LiteLLM_MCPUserCredentials", "LiteLLM_SSOIdentityAssertion"})
     tables = _seeded_tables()
@@ -242,6 +267,22 @@ def test_replacing_ciphertexts_keeps_structure_markers_and_non_strings():
     assert replaced == {"keep": [1, True, None, "plain"], "swap": ["new", {"nested": "litellm_enc::new"}]}
     assert count == 2
     assert value["swap"] == ["old", {"nested": "litellm_enc::old"}]
+
+
+def _nested(levels: int, leaf: str) -> JsonValue:
+    return reduce(lambda inner, _: [inner], range(levels), leaf)
+
+
+@pytest.mark.parametrize("levels_past_the_cap, replaced_count", [(0, 1), (1, 0), (50, 0)])
+def test_walk_stops_at_the_recursion_cap_and_leaves_deeper_values_as_they_were(
+    levels_past_the_cap: int, replaced_count: int
+):
+    value = _nested(DEFAULT_MAX_RECURSE_DEPTH + levels_past_the_cap, "old")
+
+    replaced, count = replace_ciphertexts(value, lambda text: "new")
+
+    assert count == replaced_count
+    assert replaced == _nested(DEFAULT_MAX_RECURSE_DEPTH + levels_past_the_cap, "new" if replaced_count else "old")
 
 
 async def _run(
@@ -396,3 +437,82 @@ async def test_encrypted_empty_string_is_migrated_like_any_other_value():
 
     assert migrated == 1
     assert decrypt_if_encrypted_with(str(tables["LiteLLM_MCPUserCredentials"][0]["credential_b64"]), NEW_KEY) == ""
+
+
+@pytest.mark.asyncio
+async def test_database_error_during_the_migration_is_reported_instead_of_crashing_the_boot():
+    class _DatabaseIsDown(_FakeDatabase):
+        async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+            raise ConnectionError("Can't reach database server")
+
+    outcome, logged = await _run(_DatabaseIsDown(_seeded_tables()))
+
+    assert outcome == MigrationFailed(error="ConnectionError: Can't reach database server")
+    assert len(logged) == 1
+    assert "ConnectionError: Can't reach database server" in logged[0]
+    assert f"Keep {MIGRATE_FROM_MASTER_KEY_ENV_VAR} set" in logged[0]
+    assert "ou may now delete" not in logged[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_master_key", [PREVIOUS_KEY, ""])
+async def test_boot_migrates_from_the_environment_variable_to_the_running_master_key(previous_master_key: str):
+    tables: Tables = {
+        "LiteLLM_CredentialsTable": [
+            {
+                "credential_id": "cred-1",
+                "credential_values": {
+                    "api_key": _encrypted("sk-provider", previous_master_key)
+                    if previous_master_key
+                    else _encrypted_with_empty_key("sk-provider")
+                },
+            }
+        ]
+    }
+    logged: list[str] = []
+
+    outcome = await migrate_if_requested(
+        environ={MIGRATE_FROM_MASTER_KEY_ENV_VAR: previous_master_key},
+        master_key=NEW_KEY,
+        connected_database=lambda: _FakeDatabase(tables),
+        log=logged.append,
+    )
+
+    assert outcome == Migrated(migrated=1, remaining=0)
+    stored = tables["LiteLLM_CredentialsTable"][0]["credential_values"]
+    assert isinstance(stored, dict)
+    assert decrypt_if_encrypted_with(stored["api_key"], NEW_KEY) == "sk-provider"
+    assert "Done re-encrypting 1 stored value(s)" in logged[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "environ, master_key, outcome",
+    [
+        ({}, NEW_KEY, None),
+        ({MIGRATE_FROM_MASTER_KEY_ENV_VAR: PREVIOUS_KEY}, None, None),
+        (
+            {MIGRATE_FROM_MASTER_KEY_ENV_VAR: PREVIOUS_KEY, SALT_KEY_ENV_VAR: "a-salt-key"},
+            NEW_KEY,
+            NothingToMigrate.SALT_KEY_ENCRYPTS_STORED_VALUES,
+        ),
+    ],
+    ids=["variable-not-set", "no-master-key", "salt-key-set"],
+)
+async def test_boot_leaves_the_database_alone_unless_a_migration_was_requested_and_can_apply(
+    environ: dict[str, str], master_key: str | None, outcome: NothingToMigrate | None
+):
+    logged: list[str] = []
+    database_handles_taken: list[str] = []
+
+    def connected_database() -> _DatabaseThatMustNotBeTouched:
+        database_handles_taken.append("taken")
+        return _DatabaseThatMustNotBeTouched()
+
+    result = await migrate_if_requested(
+        environ=environ, master_key=master_key, connected_database=connected_database, log=logged.append
+    )
+
+    assert result is outcome
+    assert len(database_handles_taken) == (0 if outcome is None else 1)
+    assert len(logged) == (0 if outcome is None else 1)
