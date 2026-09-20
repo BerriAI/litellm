@@ -1,12 +1,16 @@
 from asyncio import Future
-from collections.abc import Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import Never, final
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.rust_bridge.ocr.entrypoints import LiteLLMOcrRequest
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
+class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
+class ProcessReservedForForking(RuntimeError): ...
 
 def ocr(
     request: LiteLLMOcrRequest,
@@ -39,23 +43,15 @@ def atranscription(
     timeout_seconds: float | None = None,
 ) -> Future[dict[str, object]]: ...
 def messages(
-    model: str,
-    body: Mapping[str, object],
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> dict[str, object]: ...
+    request: LiteLLMMessagesRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> AnthropicMessagesResponse | Iterator[bytes]: ...
 def amessages(
-    model: str,
-    body: Mapping[str, object],
-    api_key: str | None = None,
-    api_base: str | None = None,
-    custom_llm_provider: str | None = None,
-    extra_headers: Mapping[str, object] | None = None,
-    timeout_seconds: float | None = None,
-) -> Future[dict[str, object]]: ...
+    request: LiteLLMMessagesRequest,
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
+) -> Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
 def chat_completions_decline(
     model: str,
     messages: Sequence[object],
@@ -107,8 +103,12 @@ class TokenCounter:
     def acount_request(self, body: bytes) -> Future[dict[str, object]]: ...
 
 def gil_stats() -> dict[str, int]: ...
+def process_state_started() -> bool: ...
+def reserve_process_for_forking() -> None: ...
 
 __all__ = [
+    "ForkedAfterNativeRuntimeStarted",
+    "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
     "RustUpstreamError",
@@ -122,5 +122,7 @@ __all__ = [
     "gil_stats",
     "messages",
     "ocr",
+    "process_state_started",
+    "reserve_process_for_forking",
     "transcription",
 ]

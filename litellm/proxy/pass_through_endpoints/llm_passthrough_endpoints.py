@@ -12,6 +12,7 @@ import hmac
 import inspect
 import json
 import os
+import posixpath
 import re
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -30,12 +31,27 @@ from litellm import get_llm_provider
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
+    AZURE_SPEECH_BATCH_PATH_PREFIX,
+    AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN,
+    AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+    AZURE_SPEECH_FAST_TRANSCRIPTION_PATH,
+    AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
+    AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX,
+    AZURE_SPEECH_STT_DOMAIN,
+    AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
 )
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.azure.passthrough.transformation import foreign_azure_deployment
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.deepgram.common_utils import (
+    deepgram_listen_callback_params,
+    deepgram_listen_is_priced,
+    deepgram_listen_registry_key,
+    deepgram_listen_requested_model,
+    deepgram_listen_websocket_target,
+)
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -48,6 +64,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     is_no_auth_dev_mode,
     user_api_key_auth,
     user_api_key_auth_websocket,
+    user_api_key_auth_websocket_for_model,
 )
 from litellm.proxy.common_request_processing import open_sse_before_first_byte
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -58,6 +75,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_request_body,
     is_json_content_type,
 )
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
@@ -1356,6 +1374,145 @@ async def comprehend_medical_sdk_proxy_route(
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
     )
+
+
+AZURE_SPEECH_FORWARDED_REQUEST_HEADERS: Final = ("content-type", "accept")
+AZURE_SPEECH_ENDPOINT_FAMILY_DOMAINS: Final = MappingProxyType(
+    {
+        AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX: AZURE_SPEECH_STT_DOMAIN,
+        AZURE_SPEECH_BATCH_PATH_PREFIX: AZURE_SPEECH_COGNITIVE_SERVICES_DOMAIN,
+    }
+)
+
+
+def resolve_azure_speech_base_url(endpoint_path: str, api_base: str | None, region: str | None) -> httpx.URL | None:
+    """
+    Azure AI Speech serves the two REST families from different regional hosts: short-audio
+    recognition under ``{region}.stt.speech.microsoft.com`` and batch transcription under
+    ``{region}.api.cognitive.microsoft.com``. An operator-configured ``api_base`` (custom
+    domain or private endpoint) serves both and wins over the region. Returns ``None`` when
+    the path is outside both families so the operator key is never sent for an unknown API.
+    """
+    domain: Final = next(
+        (
+            family_domain
+            for family_prefix, family_domain in AZURE_SPEECH_ENDPOINT_FAMILY_DOMAINS.items()
+            if endpoint_path.startswith(family_prefix)
+        ),
+        None,
+    )
+    if domain is None:
+        return None
+    if api_base:
+        return httpx.URL(api_base)
+    if not region:
+        return None
+    return httpx.URL(f"https://{region}.{domain}")
+
+
+def azure_speech_path_manages_shared_resources(endpoint_path: str) -> bool:
+    return (
+        endpoint_path.startswith(AZURE_SPEECH_BATCH_PATH_PREFIX)
+        and endpoint_path != AZURE_SPEECH_FAST_TRANSCRIPTION_PATH
+    )
+
+
+def canonical_azure_speech_endpoint_path(endpoint: str) -> str:
+    """
+    The path Azure will actually serve, with ``.`` and ``..`` segments resolved, so the
+    endpoint family and the admin guard are decided on the same path the upstream request uses.
+    """
+    raw_path: Final = httpx.URL(endpoint).path
+    resolved_path: Final = posixpath.normpath(f"/{raw_path.lstrip('/')}")
+    if raw_path.endswith("/") and resolved_path != "/":
+        return f"{resolved_path}/"
+    return resolved_path
+
+
+@router.api_route(
+    f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/{{endpoint:path}}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: fastapi route methods must be a list
+    tags=["Azure AI Speech Pass-through", "pass-through"],  # mutable-ok: fastapi route tags must be a list
+)
+async def azure_speech_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+    `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+    with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+
+    The body is forwarded byte for byte and the proxy injects its own
+    `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+    and is never forwarded.
+
+    [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+    """
+    normalized_endpoint_path: Final = canonical_azure_speech_endpoint_path(endpoint)
+    base_url: Final = resolve_azure_speech_base_url(
+        endpoint_path=normalized_endpoint_path,
+        api_base=get_secret_str(secret_name="AZURE_SPEECH_API_BASE"),
+        region=get_secret_str(secret_name="AZURE_SPEECH_REGION"),
+    )
+    if base_url is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unsupported Azure Speech path: {normalized_endpoint_path}. Supported prefixes are "
+                f"{AZURE_SPEECH_SHORT_AUDIO_PATH_PREFIX} and {AZURE_SPEECH_BATCH_PATH_PREFIX}; set "
+                "AZURE_SPEECH_REGION or AZURE_SPEECH_API_BASE in the proxy environment."
+            ),
+        )
+    if azure_speech_path_manages_shared_resources(normalized_endpoint_path) and not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"{request.method} {normalized_endpoint_path} manages batch transcription resources that belong to "
+                "the proxy's Azure Speech subscription and whose cost is unknown at request time, so it is limited "
+                f"to proxy admin keys. Use {AZURE_SPEECH_FAST_TRANSCRIPTION_PATH} for transcription that is priced "
+                "per request."
+            ),
+        )
+    azure_speech_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+        region_name=None,
+    )
+    if azure_speech_api_key is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Azure Speech credentials not found. Set AZURE_SPEECH_API_KEY in the proxy environment.",
+        )
+
+    target_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint_path)
+    )
+    request_headers: Final = _safe_get_request_headers(request)
+    upstream_headers: Final = MappingProxyType(
+        {
+            header_name: header_value
+            for header_name, header_value in (
+                *(
+                    (header_name, request_headers[header_name])
+                    for header_name in AZURE_SPEECH_FORWARDED_REQUEST_HEADERS
+                    if header_name in request_headers
+                ),
+                (AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER, azure_speech_api_key),
+            )
+        }
+    )
+    raw_body: Final = await request.body()
+
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(target_url),
+        custom_headers=upstream_headers,
+        custom_llm_provider=AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+    )
+    setattr(request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_body)
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
 
 
 @router.post(
@@ -2776,7 +2933,7 @@ async def _openai_websocket_refusal(
     return None
 
 
-class _OpenAIWebsocketRelay(Protocol):
+class _WebsocketRelay(Protocol):
     async def __call__(
         self,
         *,
@@ -2790,7 +2947,7 @@ class _OpenAIWebsocketRelay(Protocol):
     ) -> None: ...
 
 
-def _openai_websocket_relay() -> _OpenAIWebsocketRelay:
+def _websocket_relay() -> _WebsocketRelay:
     return websocket_passthrough_request
 
 
@@ -2808,6 +2965,15 @@ def _proxy_model_allowlists() -> _OpenAIWebsocketModelAllowlists:
     return resolve
 
 
+def _negotiated_websocket_subprotocol(websocket: WebSocket) -> str | None:
+    requested_subprotocols: Final = tuple(
+        protocol.strip()
+        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if protocol.strip()
+    )
+    return requested_subprotocols[0] if requested_subprotocols else None
+
+
 @router.websocket("/openai_passthrough/{endpoint:path}")
 @router.websocket("/openai/{endpoint:path}")
 async def openai_websocket_proxy_route(
@@ -2815,16 +2981,11 @@ async def openai_websocket_proxy_route(
     endpoint: str,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth_websocket)],
     general_settings: Annotated[Mapping[str, object], Depends(_proxy_general_settings)],
-    relay: Annotated[_OpenAIWebsocketRelay, Depends(_openai_websocket_relay)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
     model_allowlists: Annotated[_OpenAIWebsocketModelAllowlists, Depends(_proxy_model_allowlists)],
 ) -> None:
     """WebSocket passthrough for OpenAI prefixes (realtime / responses.connect)."""
-    requested_subprotocols: Final = tuple(
-        protocol.strip()
-        for protocol in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
-        if protocol.strip()
-    )
-    negotiated_subprotocol: Final = requested_subprotocols[0] if requested_subprotocols else None
+    negotiated_subprotocol: Final = _negotiated_websocket_subprotocol(websocket)
 
     refusal: Final = await _openai_websocket_refusal(user_api_key_dict, general_settings, model_allowlists)
     if refusal is not None:
@@ -2876,6 +3037,69 @@ async def openai_websocket_proxy_route(
         websocket=websocket,
         target=wss_target,
         custom_headers=custom_headers,
+        user_api_key_dict=user_api_key_dict,
+        forward_headers=False,
+        endpoint=websocket.url.path,
+        accept_websocket=False,
+    )
+
+
+_DEEPGRAM_WS_MISSING_KEY_REASON: Final = (
+    "Required 'DEEPGRAM_API_KEY' in environment to make pass-through calls to Deepgram."
+)
+_DEEPGRAM_WS_CALLBACK_REASON: Final = "Deepgram callback delivery is not supported through the proxy: remove {params}"
+_DEEPGRAM_WS_UNPRICED_REASON: Final = (
+    "No streaming price for '{registry_key}': add it to the model cost map to enable it"
+)
+
+
+async def deepgram_listen_user_api_key_auth(websocket: WebSocket) -> UserAPIKeyAuth:
+    return await user_api_key_auth_websocket_for_model(
+        websocket, model=deepgram_listen_requested_model(websocket.url.query)
+    )
+
+
+@router.websocket("/deepgram/v1/listen")
+@router.websocket("/deepgram/listen")
+async def deepgram_listen_websocket_route(
+    websocket: WebSocket,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(deepgram_listen_user_api_key_auth)],
+    relay: Annotated[_WebsocketRelay, Depends(_websocket_relay)],
+) -> None:
+    deepgram_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider=litellm.LlmProviders.DEEPGRAM.value,
+        region_name=None,
+    )
+    if deepgram_api_key is None:
+        await websocket.close(code=1011, reason=_DEEPGRAM_WS_MISSING_KEY_REASON)
+        return
+
+    await websocket.accept(subprotocol=_negotiated_websocket_subprotocol(websocket))
+    callback_params: Final = deepgram_listen_callback_params(websocket.url.query)
+    if callback_params:
+        await websocket.close(
+            code=1008,
+            reason=_DEEPGRAM_WS_CALLBACK_REASON.format(params=", ".join(callback_params)),
+        )
+        return
+
+    target: Final = deepgram_listen_websocket_target(
+        api_base=get_secret_str("DEEPGRAM_API_BASE"),
+        query_string=websocket.url.query,
+    )
+    if not deepgram_listen_is_priced(target):
+        await websocket.close(
+            code=1008,
+            reason=_DEEPGRAM_WS_UNPRICED_REASON.format(registry_key=deepgram_listen_registry_key(target)),
+        )
+        return
+
+    await relay(
+        websocket=websocket,
+        target=target,
+        custom_headers={  # mutable-ok: websocket_passthrough_request requires a plain dict of upstream headers
+            "Authorization": f"Token {deepgram_api_key}"
+        },
         user_api_key_dict=user_api_key_dict,
         forward_headers=False,
         endpoint=websocket.url.path,

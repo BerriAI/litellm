@@ -240,7 +240,6 @@ email: Optional[str] = (
 token: Optional[str] = (
     None  # Not used anymore, will be removed in next MAJOR release - https://github.com/BerriAI/litellm/discussions/648
 )
-telemetry = True
 max_tokens: int = DEFAULT_MAX_TOKENS  # OpenAI Defaults
 drop_params = drop_params_env_flag(os.environ, verbose_logger)
 modify_params = bool(os.getenv("LITELLM_MODIFY_PARAMS", False))
@@ -701,6 +700,7 @@ github_copilot_models: Set = set()
 chatgpt_models: Set = set()
 minimax_models: Set = set()
 aws_polly_models: Set = set()
+transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 reducto_models: Set = set()
@@ -980,6 +980,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             minimax_models.add(key)
         elif value.get("litellm_provider") == "aws_polly":
             aws_polly_models.add(key)
+        elif value.get("litellm_provider") == "transcribe":
+            transcribe_models.add(key)
         elif value.get("litellm_provider") == "gigachat":
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
@@ -1227,6 +1229,7 @@ def _build_models_by_provider() -> dict:
         "chatgpt": chatgpt_models,
         "minimax": minimax_models,
         "aws_polly": aws_polly_models,
+        "transcribe": transcribe_models,
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
         "reducto": reducto_models,
@@ -1699,6 +1702,9 @@ if TYPE_CHECKING:
     )
     from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
         VertexAIAi21Config as VertexAIAi21Config,
+    )
+    from .llms.vertex_ai.vertex_ai_partner_models.mistral.transformation import (
+        VertexAIMistralConfig as VertexAIMistralConfig,
     )
     from .llms.bedrock.chat.invoke_handler import (
         AmazonCohereChatConfig as AmazonCohereChatConfig,

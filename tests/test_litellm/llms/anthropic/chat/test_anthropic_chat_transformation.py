@@ -124,22 +124,32 @@ def test_calculate_usage_prefers_served_speed_from_response_usage():
     assert no_response_speed.speed == "fast"
 
 
-def test_streaming_iterator_persists_served_speed_across_usage_chunks():
+@pytest.mark.parametrize("input_update, expected_fresh", [({}, 1000), ({"input_tokens": 0}, 0), ({"input_tokens": 2000}, 2000)])
+def test_streaming_iterator_persists_cumulative_usage_across_partial_chunks(input_update, expected_fresh):
     """
-    Only ``message_start`` usage carries the served speed; the final
-    ``message_delta`` usage does not. The iterator must remember the served
-    value so the last usage chunk, which wins in the stream chunk builder, does
-    not fall back to the requested speed.
+    Omitted input/cache/pricing fields retain their last cumulative values;
+    explicit input updates, including zero, replace them.
     """
     from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
     iterator = ModelResponseIterator(None, sync_stream=True, speed="fast")
 
-    start_usage = iterator._handle_usage({"input_tokens": 12, "output_tokens": 1, "speed": "standard"})
-    delta_usage = iterator._handle_usage({"output_tokens": 5})
+    start_usage = iterator._handle_usage({
+        "input_tokens": 1000, "output_tokens": 1, "speed": "standard", "inference_geo": "us",
+        "cache_creation_input_tokens": 3000, "cache_read_input_tokens": 2000,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 3000},
+    })
+    delta_usage = iterator._handle_usage({"output_tokens": 5, **input_update})
 
     assert start_usage.speed == "standard"
     assert delta_usage.speed == "standard"
+    assert delta_usage.inference_geo == "us"
+    assert delta_usage.prompt_tokens == expected_fresh + 5000
+    assert delta_usage.completion_tokens == 5
+    details = delta_usage.prompt_tokens_details
+    assert (details.text_tokens, details.cached_tokens, details.cache_creation_tokens) == (expected_fresh, 2000, 3000)
+    assert details.cache_creation_token_details.ephemeral_1h_input_tokens == 3000
+    assert start_usage.prompt_tokens_details.text_tokens == 1000
 
 
 def test_calculate_usage_aggregates_cache_creation_split_across_iterations():
@@ -6370,3 +6380,74 @@ def test_response_format_tool_path_skips_forced_tool_choice_when_unsupported(loc
 
     assert "tools" in result
     assert "tool_choice" not in result
+
+
+def _eager_chat_function(**extra: object) -> dict[str, object]:
+    return {
+        "name": "write_file",
+        "description": "Write a file",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        **extra,
+    }
+
+
+def _eager_chat_tool(**extra: object) -> dict[str, object]:
+    return {"type": "function", "function": _eager_chat_function(), **extra}
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_eager_input_streaming_passed_through_from_tool_top_level(flag):
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming=flag))
+
+    assert mapped_tool == {
+        "name": "write_file",
+        "description": "Write a file",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
+        "type": "custom",
+        "eager_input_streaming": flag,
+    }
+
+
+def test_eager_input_streaming_passed_through_from_function():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(
+        {"type": "function", "function": _eager_chat_function(eager_input_streaming=True)}
+    )
+
+    assert mapped_tool["eager_input_streaming"] is True
+    assert "eager_input_streaming" not in mapped_tool["input_schema"]
+
+
+def test_eager_input_streaming_absent_stays_absent():
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(_eager_chat_tool())
+
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_rejects_non_boolean():
+    with pytest.raises(litellm.BadRequestError, match="eager_input_streaming must be a boolean"):
+        AnthropicConfig()._map_tool_helper(_eager_chat_tool(eager_input_streaming="true"))
+
+
+def test_eager_input_streaming_not_set_on_computer_use_tool():
+    computer_tool = {
+        "type": "computer_20250124",
+        "function": {"name": "computer", "parameters": {"display_width_px": 1024, "display_height_px": 768}},
+        "eager_input_streaming": True,
+    }
+
+    mapped_tool, _ = AnthropicConfig()._map_tool_helper(computer_tool)
+
+    assert mapped_tool["type"] == "computer_20250124"
+    assert "eager_input_streaming" not in mapped_tool
+
+
+def test_eager_input_streaming_reaches_anthropic_request_tools():
+    result = AnthropicConfig().map_openai_params(
+        non_default_params={"tools": [_eager_chat_tool(eager_input_streaming=True)], "stream": True},
+        optional_params={},
+        model="claude-sonnet-5",
+        drop_params=False,
+    )
+
+    assert result["tools"][0]["eager_input_streaming"] is True
+    assert result["tools"][0]["name"] == "write_file"

@@ -8,6 +8,10 @@ use pyo3::prelude::*;
 pub enum ExecutionStep {
     Return(Py<PyAny>),
     Await(Py<PyAny>),
+    /// The call streams: the caller gets a stream over this execution, which stays
+    /// suspended until the stream asks for a chunk.
+    Open,
+    Yield(Py<PyAny>),
 }
 
 pub trait ExecutionBody: Send + Sync {
@@ -31,6 +35,13 @@ impl Execution {
     pub fn new(body: impl ExecutionBody + 'static) -> Self {
         Self {
             state: ExecutionState::Created(Box::new(body)),
+        }
+    }
+
+    /// An execution already started elsewhere and now waiting for its next input.
+    pub fn suspended(body: impl ExecutionBody + 'static) -> Self {
+        Self {
+            state: ExecutionState::Suspended(Box::new(body)),
         }
     }
 
@@ -64,6 +75,8 @@ impl Execution {
             let step = body.resume(result)?;
             let (tag, value, suspended) = match step {
                 ExecutionStep::Await(value) => ("Await", value, true),
+                ExecutionStep::Open => ("Open", py.None(), true),
+                ExecutionStep::Yield(value) => ("Yield", value, true),
                 ExecutionStep::Return(value) => ("Complete", value, false),
             };
             let step = py

@@ -359,6 +359,17 @@ class SpendClient:
     def probe(self, path: str, *, params: DateRangeParams) -> ProbeResult:
         return self.proxy.transport.probe(path, params=params)
 
+    def probe_until_healthy(self, path: str, *, params: DateRangeParams) -> ProbeResult:
+        outcome: Final = await_converged(
+            lambda: self.probe(path, params=params),
+            converged=lambda result: result.healthy,
+            timeout=self.proxy.poll_timeout,
+            interval=self.proxy.poll_interval,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        return outcome.result if isinstance(outcome, Converged) else outcome.last_result
+
     def create_user(self, *, email: str, role: UserRole, user_id: str) -> str:
         return unwrap(
             self.proxy.transport.post(

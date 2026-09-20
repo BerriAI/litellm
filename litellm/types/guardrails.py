@@ -819,7 +819,7 @@ class JavelinGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Javelin guardrail"""
 
     guard_name: str | None = Field(default=None, description="Name of the Javelin guard to use")
-    api_version: str | None = Field(default="v1", description="API version for Javelin service")
+    api_version: str | None = Field(default=None, description="API version for Javelin service")
     metadata: dict | None = Field(default=None, description="Additional metadata to send with requests")
     application: str | None = Field(default=None, description="Application name for Javelin service")
     config: dict | None = Field(default=None, description="Additional configuration for the guardrail")

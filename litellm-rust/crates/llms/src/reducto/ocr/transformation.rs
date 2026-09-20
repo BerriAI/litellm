@@ -5,21 +5,18 @@ use litellm_core_utils::{
     params::OpaqueParams,
     url_utils::ApiUrl,
 };
+use litellm_http::outbound::OutboundRequest;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
-use crate::{
-    base_llm::ocr::{
-        document::InlineDocument,
-        error::Error,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
-            OcrPage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-            credential_env, decode_and_normalize_response,
-        },
-    },
-    custom_httpx::llm_http_handler::{
-        CallHooks, OcrClient, build_http_request, guardrail_document,
+use crate::base_llm::ocr::{
+    document::InlineDocument,
+    error::Error,
+    handler::{CallHooks, OcrClient, build_http_request, guardrail_document},
+    transformation::{
+        BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
+        OcrPage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        decode_and_normalize_response,
     },
 };
 
@@ -114,7 +111,9 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         _client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        resolve_headers(&request.connection, &credential_env)
+        resolve_headers(&request.connection, &|name: &str| {
+            request.connection.secret(name)
+        })
     }
 
     fn get_complete_url(
@@ -168,7 +167,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<OutboundRequest, Error> {
         prepare_upload_request(self, request, client, hooks).await
     }
 }
@@ -253,7 +252,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<OutboundRequest, Error> {
         prepare_upload_request(self, request, client, hooks).await
     }
 }
@@ -266,7 +265,7 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
     request: &PreparedOcrRequest,
     client: &OcrClient,
     hooks: &dyn CallHooks<Error>,
-) -> Result<reqwest::Request, Error> {
+) -> Result<OutboundRequest, Error> {
     let params = config.map_ocr_params(&request.optional_params, &request.model)?;
     let headers = config.validate_environment(request, client).await?;
     let url = config.get_complete_url(request, &params, &headers)?;
@@ -288,7 +287,7 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
         &body,
         config.get_supported_ocr_params(&request.model),
     )?;
-    build_http_request(client, request, &url, &headers, &body)
+    build_http_request(request, url, headers, &body)
 }
 
 fn uploaded_file_id(document: OcrDocument) -> Result<ReductoFileId, Error> {
@@ -437,13 +436,13 @@ fn resolve_headers(
     connection: &OcrConnection,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Vec<(String, String)>, Error> {
-    if crate::custom_httpx::http_handler::has_header(&connection.extra_headers, "authorization") {
+    if litellm_http::request::has_header(&connection.extra_headers, "authorization") {
         return Ok(connection.extra_headers.clone());
     }
     let api_key = connection
         .api_key
-        .as_deref()
-        .map(str::trim)
+        .as_ref()
+        .map(|key| key.expose().trim())
         .filter(|key| !key.is_empty())
         .map(str::to_string)
         .or_else(|| {
@@ -515,25 +514,21 @@ async fn upload_bytes_async(
         )?)
         .multipart(reqwest::multipart::Form::new().part("file", part))
         .timeout(connection.timeout);
-    let builder = crate::custom_httpx::http_handler::with_headers(
+    let builder = litellm_http::request::with_headers(
         builder,
         headers,
-        crate::custom_httpx::http_handler::HeaderPolicy::Except(&[
-            "content-type",
-            "content-length",
-        ]),
+        litellm_http::request::HeaderPolicy::Except(&["content-type", "content-length"]),
     );
-    let response = crate::custom_httpx::http_handler::http_request(builder)
+    let response = litellm_http::request::http_request(builder)
         .await
-        .map_err(crate::custom_httpx::transport::Error::from)?;
-    let uploaded =
-        crate::custom_httpx::llm_http_handler::read_json_response::<ReductoUploadResponse>(
-            response,
-            false,
-            connection.max_response_bytes,
-        )
-        .await?
-        .data;
+        .map_err(litellm_http::transport::Error::from)?;
+    let uploaded = crate::base_llm::ocr::handler::read_json_response::<ReductoUploadResponse>(
+        response,
+        false,
+        connection.max_response_bytes,
+    )
+    .await?
+    .data;
     let file_id = uploaded
         .file_id
         .as_deref()
@@ -629,7 +624,7 @@ mod tests {
     #[test]
     fn explicit_key_precedes_environment_key() {
         let connection = OcrConnection {
-            api_key: Some("passed-key".into()),
+            api_key: Some(litellm_auth::SecretValue::new("passed-key")),
             ..Default::default()
         };
         let headers = resolve_headers(&connection, &|_| Some("env-key".into())).unwrap();
@@ -639,7 +634,7 @@ mod tests {
     #[test]
     fn blank_explicit_key_uses_environment_key() {
         let connection = OcrConnection {
-            api_key: Some(" ".into()),
+            api_key: Some(litellm_auth::SecretValue::new(" ")),
             ..Default::default()
         };
         let headers = resolve_headers(&connection, &|_| Some(" env-key ".into())).unwrap();
