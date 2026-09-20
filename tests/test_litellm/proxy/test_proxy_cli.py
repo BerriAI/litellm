@@ -617,7 +617,6 @@ class TestProxyInitializationHelpers:
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
 
-            # --- legacy --telemetry flag is accepted, ignored and hidden ---
             result = runner.invoke(
                 run_server, ["--local", "--skip_server_startup", "--telemetry", "False"]
             )
