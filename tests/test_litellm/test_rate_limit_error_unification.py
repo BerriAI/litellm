@@ -1404,6 +1404,11 @@ class TestBudgetExceededErrorSurfacesUnifiedFields:
         assert "Current cost: 0.000109" in e.message
         assert "Max budget: 0.0001" in e.message
 
+    def test_should_honor_budget_exceeded_status_code_override(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "budget_exceeded_status_code", 429)
+        e = litellm.BudgetExceededError(current_cost=0.5, max_budget=0.1)
+        assert e.status_code == 429
+
     def test_should_still_be_catchable_as_exception_not_rate_limit_error(self):
         # Critical: we deliberately did NOT make BudgetExceededError a
         # RateLimitError subclass. Existing `except BudgetExceededError:`
