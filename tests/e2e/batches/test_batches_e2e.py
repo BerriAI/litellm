@@ -1160,61 +1160,150 @@ def _vllm_params(api_base: str, api_key: str | None, model_id: str) -> LiteLLMPa
     )
 
 
-class TestHostedVllmBatch:
-    """hosted_vllm file upload + batch create (OpenAI-compatible path, LIT-3266).
+HOSTED_VLLM_DEFAULT_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
+HOSTED_VLLM_BAD_LINE_CUSTOM_ID = "req-bad"
 
-    hosted_vllm is in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, so /v1/files
-    and /v1/batches route through the OpenAI handler against the deployment's
-    api_base. Skipped for now: it needs a live vLLM (or OpenAI-compatible) server
-    exposing the files/batches APIs (HOSTED_VLLM_API_BASE), which the e2e
-    environment does not currently provision.
+
+def _hosted_vllm_deployment(client: BatchClient, resources: ResourceManager) -> str:
+    api_base = os.environ.get("HOSTED_VLLM_API_BASE")
+    if api_base is None:
+        pytest.skip("set HOSTED_VLLM_API_BASE (the live vLLM server this deployment targets)")
+    api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
+    model_id = (os.environ.get("HOSTED_VLLM_MODEL") or HOSTED_VLLM_DEFAULT_MODEL).strip()
+    proxy_name = batch_model_name("hosted-vllm-batch")
+    model_row_id = client.create_model(proxy_name, _vllm_params(api_base, api_key, model_id))
+    resources.defer(lambda: client.delete_model(model_row_id))
+    return proxy_name
+
+
+def _upload_hosted_vllm_input(
+    client: BatchClient, content: bytes, *, proxy_name: str, key: str, upload_route: str
+) -> Result[FileObject]:
+    if upload_route == "model_query":
+        return client.upload_file(content=content, form=FileUploadForm(purpose="batch"), model=proxy_name, key=key)
+    return client.upload_file(
+        content=content, form=FileUploadForm(purpose="batch", target_model_names=proxy_name), key=key
+    )
+
+
+def _jsonl_with_a_failing_line(model: str) -> bytes:
+    bad_line = {
+        "custom_id": HOSTED_VLLM_BAD_LINE_CUSTOM_ID,
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": -1},
+    }
+    return render_jsonl(model) + (json.dumps(bad_line) + "\n").encode()
+
+
+def _download_managed_file(client: BatchClient, file_id: str, *, key: str) -> list[str]:
+    downloaded = client.proxy.transport.download(
+        f"/v1/files/{file_id}/content", headers=client.proxy.transport.bearer(key)
+    )
+    assert downloaded.status_code == 200, (
+        f"file content must be 200, got {downloaded.status_code}: {downloaded.body[:300]}"
+    )
+    return downloaded.body.strip().splitlines()
+
+
+class TestHostedVllmBatch:
+    """hosted_vllm file upload + batch execution (LIT-5739).
+
+    vLLM implements neither /v1/files nor /v1/batches, so LiteLLM keeps the batch
+    input in its own database, runs every line through the deployment's
+    /v1/chat/completions itself, and serves the batch plus its output and error
+    files from that database under the creating key. Needs a live vLLM server
+    (HOSTED_VLLM_API_BASE), which the default e2e stack does not provision, so
+    the cases skip without it.
     """
 
-    @pytest.mark.skip(
-        reason="hosted_vllm batch/files needs a live vLLM server (HOSTED_VLLM_API_BASE) "
-        "not provisioned in the e2e environment; re-enable when available (LIT-3266)"
-    )
+    @pytest.mark.parametrize("upload_route", ["target_model_names", "model_query"])
     @pytest.mark.covers(
         "llm.batches.hosted_vllm.basic.nonstream.works",
         "llm.files.hosted_vllm.upload.nonstream.works",
         exercised_on=["batches", "files"],
     )
-    def test_unified_file_and_batch_create(
-        self, client: BatchClient, resources: ResourceManager
+    def test_batch_runs_to_completion_with_a_downloadable_output(
+        self, client: BatchClient, resources: ResourceManager, upload_route: str
     ) -> None:
-        api_base = os.environ["HOSTED_VLLM_API_BASE"]
-        api_key = (os.environ.get("HOSTED_VLLM_API_KEY") or "").strip() or None
-        model_id = (
-            os.environ.get("HOSTED_VLLM_MODEL") or "meta-llama/Llama-3.2-3B-Instruct"
-        ).strip()
-        proxy_name = batch_model_name("hosted-vllm-batch")
-
-        model_row_id = client.create_model(
-            proxy_name, _vllm_params(api_base, api_key, model_id)
-        )
-        resources.defer(lambda: client.delete_model(model_row_id))
+        proxy_name = _hosted_vllm_deployment(client, resources)
         key = resources.key()
 
         file = unwrap(
-            client.upload_file(
-                content=render_jsonl(model_id),
-                form=FileUploadForm(purpose="batch", target_model_names=proxy_name),
-                key=key,
+            _upload_hosted_vllm_input(
+                client, render_jsonl(proxy_name), proxy_name=proxy_name, key=key, upload_route=upload_route
             )
         )
         resources.defer(lambda: cleanup_file(client, file.id, key=key))
         assert_file_object(file, provider="hosted_vllm")
+        assert is_managed_id(file.id), f"hosted_vllm batch input must stay in LiteLLM, got file id {file.id!r}"
 
         created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
         require_successful_call(created)
         batch = BatchObject.model_validate_json(created.body)
-        resources.defer(lambda: cleanup_batch(client, batch.id, key=key))
-
-        assert batch.id, f"hosted_vllm create returned no batch id: {created.body[:200]}"
-        assert batch.status in CREATED_BATCH_STATUSES, (
-            f"hosted_vllm batch has non-transitional status {batch.status!r}"
-        )
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key, delete_output_files=True))
+        assert is_managed_id(batch.id), f"hosted_vllm batch must be LiteLLM-managed, got {batch.id!r}"
+        assert batch.status in CREATED_BATCH_STATUSES, f"hosted_vllm batch has non-transitional status {batch.status!r}"
         assert_batch_object(batch)
+
+        finished = _poll_until_terminal(client, batch.id, key)
+        assert finished.status == "completed", f"hosted_vllm batch ended {finished.status!r}: {finished.errors!r}"
+        assert finished.output_file_id, "completed hosted_vllm batch has no output_file_id"
+        assert finished.error_file_id is None, f"all lines succeeded but error_file_id={finished.error_file_id!r}"
+
+        output_lines = _download_managed_file(client, finished.output_file_id, key=key)
+        assert len(output_lines) == 1, f"one input line must yield one output line, got {output_lines!r}"
+        first_line = BatchOutputLine.model_validate_json(output_lines[0])
+        assert first_line.custom_id == "req-1", f"output line lost its custom_id: {output_lines[0][:300]}"
+        assert first_line.response.status_code == 200, f"batch output line reports failure: {output_lines[0][:400]}"
+        assert first_line.response.body is not None and first_line.response.body.choices, (
+            "batch output line has no choices"
+        )
+
+        rows = client.proxy.poll_logs_for_key(
+            key, predicate=lambda found: any(row.call_type == "acompletion" for row in found)
+        )
+        line_rows = [row for row in rows if row.call_type == "acompletion"]
+        assert line_rows, f"the batch line's chat call was not logged under the creating key: {rows!r}"
+        assert all(row.custom_llm_provider == "hosted_vllm" for row in line_rows), (
+            f"batch line rows must be attributed to hosted_vllm: {line_rows!r}"
+        )
+
+    @pytest.mark.covers("llm.batches.hosted_vllm.basic.nonstream.works", exercised_on=["batches", "files"])
+    def test_failing_line_lands_in_the_error_file_not_the_batch_status(
+        self, client: BatchClient, resources: ResourceManager
+    ) -> None:
+        proxy_name = _hosted_vllm_deployment(client, resources)
+        key = resources.key()
+
+        file = unwrap(
+            _upload_hosted_vllm_input(
+                client,
+                _jsonl_with_a_failing_line(proxy_name),
+                proxy_name=proxy_name,
+                key=key,
+                upload_route="target_model_names",
+            )
+        )
+        resources.defer(lambda: cleanup_file(client, file.id, key=key))
+
+        created = client.create_batch(body=BatchCreateBody(input_file_id=file.id), key=key)
+        require_successful_call(created)
+        batch = BatchObject.model_validate_json(created.body)
+        resources.defer(lambda: cleanup_batch(client, batch.id, key=key, delete_output_files=True))
+
+        finished = _poll_until_terminal(client, batch.id, key)
+        assert finished.status == "completed", f"a failing line must not fail the batch, got {finished.status!r}"
+        assert finished.output_file_id, "the good line must still produce an output file"
+        assert finished.error_file_id, "the failing line must produce an error file"
+
+        output_lines = _download_managed_file(client, finished.output_file_id, key=key)
+        error_lines = _download_managed_file(client, finished.error_file_id, key=key)
+        assert [BatchOutputLine.model_validate_json(line).custom_id for line in output_lines] == ["req-1"]
+        assert len(error_lines) == 1, f"one failing line must yield one error line, got {error_lines!r}"
+        error_line = BatchOutputLine.model_validate_json(error_lines[0])
+        assert error_line.custom_id == HOSTED_VLLM_BAD_LINE_CUSTOM_ID
+        assert error_line.response.status_code == 400, f"error line must carry the provider's 4xx: {error_lines[0][:400]}"
 
 
 BATCH_TERMINAL_STATUSES = frozenset({"completed", "failed", "expired", "cancelled"})
@@ -1443,6 +1532,7 @@ class BatchOutputResponse(BaseModel):
 
 
 class BatchOutputLine(BaseModel):
+    custom_id: str | None = None
     response: BatchOutputResponse
 
 

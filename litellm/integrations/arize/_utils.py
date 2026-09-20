@@ -1139,7 +1139,10 @@ def _set_mcp_tool_output(span: "Span", coerced_response_obj: object) -> None:
         safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.TEXT.value)
         return
 
-    structured: Final[object] = coerced_response_obj.get("structuredContent")
+    structured: Final[object] = coerced_response_obj.get(
+        "structured_content",
+        coerced_response_obj.get("structuredContent"),  # pyright: ignore[reportUnknownMemberType]  # tolerant dual-spelling lookup on untyped payloads
+    )
     payload: Final[object] = content if content else structured if structured is not None else content
     if payload is None:
         return

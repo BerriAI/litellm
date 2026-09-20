@@ -152,6 +152,7 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
+    is_batch_retrieve_call_type,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
@@ -179,6 +180,7 @@ from litellm.router_utils.cooldown_handlers import (
     _get_cooldown_deployments,
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
+    is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -6199,6 +6201,8 @@ class Router:
         """
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            requested_model_group: Final = model
+            metadata_variable_name: Final = _get_router_metadata_variable_name(function_name="aretrieve_batch")
             if model is not None:
                 filtered_model_list: (
                     list[DeploymentTypedDict] | list[dict] | dict | None
@@ -6235,6 +6239,9 @@ class Router:
                         kwargs=new_kwargs,
                         function_name="aretrieve_batch",
                     )
+                    model_group: Final = requested_model_group or model_name["model_name"]
+                    if not new_kwargs[metadata_variable_name].get("model_group"):
+                        new_kwargs[metadata_variable_name]["model_group"] = model_group
                     new_kwargs.pop("custom_llm_provider", None)
                     data.pop("custom_llm_provider", None)
                     return await litellm.aretrieve_batch(
@@ -7943,6 +7950,8 @@ class Router:
             # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
             if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
                 return
+            if is_batch_retrieve_call_type(kwargs.get("call_type")):
+                return
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object is None")
@@ -8089,6 +8098,8 @@ class Router:
         - key: str - The key used to increment the cache
         - None: if no key is found
         """
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return None
         id = None
         if kwargs["litellm_params"].get("metadata") is None:
             pass
@@ -8137,11 +8148,18 @@ class Router:
                 )
                 return False
 
-            exception_status: Final = getattr(exception, "status_code", "")
-
             # Cache litellm_params to avoid repeated dict lookups
             litellm_params: Final = kwargs.get("litellm_params", {})
             _model_info: Final = litellm_params.get("model_info", {})
+
+            if is_background_response_cost_poll_not_found(exception, litellm_params):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Provider 404 came from the background response cost poll, not the deployment's health."
+                )
+                return False
+
+            exception_status: Final = getattr(exception, "status_code", "")
 
             if is_caller_timeout_408(kwargs, exception_status):
                 verbose_router_logger.debug(
@@ -8210,6 +8228,8 @@ class Router:
         """
         Update RPM usage for a deployment
         """
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         deployment_name: Final = kwargs["litellm_params"]["metadata"].get(
             "deployment", None
         )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
@@ -10313,6 +10333,55 @@ class Router:
             return display_name
         return None
 
+    def get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:
+        """
+        The deployment a passthrough endpoint (files, batches, etc.) resolves for a
+        model id or model name: by deployment id first, then by model_name, then by
+        the team's exact public model name, then by wildcard pattern (team wildcards
+        before global ones, so a global "openai/*" never shadows the team's own
+        entry). Name and wildcard lookups never resolve another team's deployment.
+
+        Returns None when nothing matches or the match is paused via
+        `LiteLLM_ProxyModelTable.blocked`, so callers cannot bypass an admin pause
+        by resolving the deployment directly.
+        """
+        deployment: Final = (
+            self.get_deployment(model_id=model_id)
+            or self._get_model_group_deployment_usable_by_team(model_group_name=model_id, team_id=team_id)
+            or self._get_team_public_name_deployment(model_id=model_id, team_id=team_id)
+            or self._get_wildcard_deployment_usable_by_team(model_id=model_id, team_id=team_id)
+        )
+        if deployment is None or self._is_deployment_blocked(deployment):
+            return None
+        return deployment
+
+    def _get_team_public_name_deployment(self, model_id: str, team_id: str | None) -> Deployment | None:
+        if team_id is None:
+            return None
+        team_indices: Final = self.team_model_to_deployment_indices.get((team_id, model_id))
+        if not team_indices:
+            return None
+        team_model: Final = self.model_list[team_indices[0]]
+        return Deployment(**team_model) if isinstance(team_model, dict) else team_model
+
+    def _get_wildcard_deployment_usable_by_team(self, model_id: str, team_id: str | None) -> Deployment | None:
+        team_pattern_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
+        team_wildcard_models: Final = team_pattern_router.route(model_id) if team_pattern_router else None
+        global_wildcard_models: Final = tuple(
+            wildcard_model
+            for wildcard_model in (self.pattern_router.route(model_id) or ())
+            if self._deployment_usable_by_team(wildcard_model, team_id)
+        )
+        potential_wildcard_models: Final = team_wildcard_models or global_wildcard_models
+        if not potential_wildcard_models:
+            return None
+        wildcard_deployment: Final = potential_wildcard_models[0]
+        if isinstance(wildcard_deployment, dict):
+            return Deployment(**wildcard_deployment)
+        if isinstance(wildcard_deployment, Deployment):
+            return wildcard_deployment
+        return None
+
     def get_deployment_credentials_with_provider(
         self, model_id: str, team_id: str | None = None
     ) -> dict[str, Any] | None:
@@ -10320,8 +10389,8 @@ class Router:
         Get API credentials and provider info from a model name in model_list.
         Useful for passthrough endpoints (files, batches, etc.) that need credentials.
 
-        This method tries to find a deployment by model_id first, and if not found,
-        it tries to find by model_group_name (model_name).
+        Resolves the deployment with `get_credential_deployment` (by deployment id,
+        then model_name, team public model name, and wildcard pattern).
 
         Args:
             model_id: Model ID or model name from model_list (e.g., "gpt-4o-litellm")
@@ -10342,43 +10411,8 @@ class Router:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
             # Returns: {"api_key": "sk-...", "custom_llm_provider": "openai", "model": "gpt-4o", ...}
         """
-        # Try to get deployment by model_id first
-        deployment = self.get_deployment(model_id=model_id)
-
-        # If not found, try by model_group_name
+        deployment: Final = self.get_credential_deployment(model_id=model_id, team_id=team_id)
         if deployment is None:
-            deployment = self._get_model_group_deployment_usable_by_team(model_group_name=model_id, team_id=team_id)
-
-        # If not found, check team-scoped deployments whose team public model
-        # name exactly matches model_id (wildcard team names are matched via
-        # team_pattern_routers below).
-        if deployment is None and team_id is not None:
-            team_indices: Final = self.team_model_to_deployment_indices.get((team_id, model_id), [])
-            if team_indices:
-                team_model: Final = self.model_list[team_indices[0]]
-                deployment = Deployment(**team_model) if isinstance(team_model, dict) else team_model
-
-        # If still not found, check for wildcard pattern matches. Team wildcard
-        # matches take priority so a global pattern (e.g. "openai/*") doesn't
-        # shadow the team's own entry.
-        if deployment is None:
-            team_pattern_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
-            team_wildcard_models: Final = (team_pattern_router.route(model_id) or []) if team_pattern_router else []
-            global_wildcard_models: Final = [
-                wildcard_model
-                for wildcard_model in (self.pattern_router.route(model_id) or [])
-                if self._deployment_usable_by_team(wildcard_model, team_id)
-            ]
-            potential_wildcard_models: Final = team_wildcard_models or global_wildcard_models
-            if potential_wildcard_models:
-                # Use the first matching wildcard deployment
-                deployment_dict: Final = potential_wildcard_models[0]
-                if isinstance(deployment_dict, dict):
-                    deployment = Deployment(**deployment_dict)
-                elif isinstance(deployment_dict, Deployment):
-                    deployment = deployment_dict
-
-        if deployment is None or self._is_deployment_blocked(deployment):
             return None
 
         # Get basic credentials
@@ -13709,6 +13743,20 @@ class Router:
         to the deployment that actually served the request. Every attempt therefore
         writes or clears, never just writes.
         """
+        from litellm.types.router import BaselineRouteStamp
+
+        baseline_model: Final = routing_decision.get("savings_baseline_model") if routing_decision else None
+        baseline_id: Final = routing_decision.get("savings_baseline_deployment_id") if routing_decision else None
+        router_name: Final = routing_decision.get("router_model_name") if routing_decision else None
+        Router._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key="_autorouter_baseline_route",
+            value=(
+                BaselineRouteStamp(router_name, baseline_model, baseline_id)
+                if router_name and baseline_model and baseline_id
+                else None
+            ),
+        )
         Router._stamp_or_clear_metadata_key(
             request_kwargs=request_kwargs,
             key="routing_decision",

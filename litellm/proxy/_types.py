@@ -13,6 +13,7 @@ from pydantic import (
     ConfigDict,
     Field,
     Json,
+    JsonValue,
     PositiveInt,
     field_validator,
     model_validator,
@@ -23,6 +24,7 @@ from litellm._uuid import uuid
 from litellm.constants import DEFAULT_STAGGER_WINDOW_SECONDS, MCP_STDIO_ALLOWED_COMMANDS
 from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_environment_value,
+    validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
 )
 from litellm.types.integrations.compression_interception import (
@@ -123,6 +125,7 @@ class SupportedDBObjectType(str, enum.Enum):
     MODEL_COST_MAP = "model_cost_map"
     TOOLS = "tools"
     CONFIG_OVERRIDES = "config_overrides"
+    WEBSEARCH_INTERCEPTION_SETTINGS = "websearch_interception_settings"
 
     def __str__(self):
         return str(self.value)
@@ -534,6 +537,7 @@ class LiteLLMRoutes(enum.Enum):
         "/mcp-rest/tools/call",
         "/v1/mcp/tools",
         "/introspect",
+        "/token",
     ]
 
     # MCP server CRUD routes — control-plane. Gated by DISABLE_ADMIN_ENDPOINTS.
@@ -2219,6 +2223,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
             validate_no_callback_env_reference(key, callback_vars[key], source="key/team callback metadata")
             if key == "langfuse_environment":
                 validate_langfuse_environment_value(callback_vars[key])
+            if key == "langfuse_span_scope":
+                validate_langfuse_span_scope_value(callback_vars[key])
         return values
 
 
@@ -2589,6 +2595,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_google_kms: bool | None = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: bool | None = Field(None, description="load keys from azure key vault")
     master_key: str | None = Field(None, description="require a key for all calls to proxy")
+    dangerously_permit_weak_or_unset_master_key: bool | None = Field(
+        None,
+        description="local development only: start even when master_key is unset, empty, or a publicly known default",
+    )
     coordination_redis: CoordinationRedisParams | None = Field(
         None,
         description=(
@@ -3939,6 +3949,7 @@ class SpendLogsRouterMetadata(TypedDict):
 
 
 class SpendLogsMetadata(TypedDict):
+    autorouter_baseline_observation: ReadOnly[str | None]
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
     """
@@ -3979,7 +3990,8 @@ class SpendLogsMetadata(TypedDict):
     original_model_group: ReadOnly[str | None]  # Model group requested before any fallbacks
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
     compression_savings: CompressionSavingsMetadata | None
-    autorouter_savings: ReadOnly[float | None]  # stamped by the logging payload; None = not auto-routed
+    autorouter_savings: ReadOnly[float | None]
+    autorouter_savings_estimate: ReadOnly[Mapping[str, JsonValue] | None]
     litellm_gateway_injected_cache: ReadOnly[str | None]
     router_metadata: ReadOnly[SpendLogsRouterMetadata | None]  # None = deployment not flagged internal_router_model
     azure_spillover: ReadOnly[AzureSpillover | None]  # None = Azure did not report spillover

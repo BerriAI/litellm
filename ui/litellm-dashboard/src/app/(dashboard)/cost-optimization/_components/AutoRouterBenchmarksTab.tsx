@@ -73,26 +73,37 @@ const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?
 
 const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const stats = view.stats;
-  const cheaper = stats.saved_spend >= 0;
+  const cheaper = stats.saved_spend != null && stats.saved_spend >= 0;
+  const completeCoverage = stats.savings_estimated_turns === stats.turns;
   return (
     <Card className="overflow-hidden py-0">
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="flex flex-col items-center justify-center gap-2 p-6">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Total estimated savings
+            {completeCoverage ? "Total estimated savings" : "Estimated savings on covered turns"}
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <p className="min-w-0 break-all text-center text-4xl font-semibold tracking-tight text-foreground xl:text-6xl">
-              {usd(stats.saved_spend)}
+              {stats.saved_spend == null ? "Unavailable" : usd(stats.saved_spend)}
             </p>
-            <Badge
-              variant="secondary"
-              className={`h-6 px-2.5 text-sm ${cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
-            >
-              {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
-              {Math.abs(stats.saved_pct).toFixed(0)}%
-            </Badge>
+            {stats.saved_pct != null && (
+              <Badge
+                variant="secondary"
+                className={`h-6 px-2.5 text-sm ${cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
+              >
+                {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
+                {Math.abs(stats.saved_pct).toFixed(0)}%
+              </Badge>
+            )}
           </div>
+          <p className="text-center text-xs text-muted-foreground">
+            {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()} turns estimated
+          </p>
+          {!completeCoverage && (
+            <p className="text-center text-xs text-muted-foreground">
+              Turns without a current estimate are excluded, including older estimates.
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col justify-center border-t p-6 md:border-t-0 md:border-l">
@@ -120,7 +131,15 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
             </p>
           )}
           <Separator />
-          <SpendRow label="Estimated spend at highest-tier model" value={usd(stats.baseline_spend)} />
+          {!completeCoverage && (
+            <SpendRow label="Actual spend on covered turns" value={usd(stats.savings_estimated_actual_spend)} />
+          )}
+          <SpendRow
+            label={
+              completeCoverage ? "Estimated spend at highest-tier model" : "Estimated baseline spend on covered turns"
+            }
+            value={stats.baseline_spend == null ? "Unavailable" : usd(stats.baseline_spend)}
+          />
         </div>
       </div>
     </Card>
@@ -279,7 +298,7 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Metric
           label="Avg saved per session"
-          value={usd(stats.saved_per_session)}
+          value={stats.saved_per_session == null ? "Unavailable" : usd(stats.saved_per_session)}
           hint={`· ${stats.sessions.toLocaleString()} sessions`}
         />
         <Metric label="Avg turns per session" value={stats.avg_turns_per_session.toFixed(1)} />
@@ -288,12 +307,13 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Compares your actual routed spend with the estimated cost of using only the most expensive model configured in
-        the auto-router. It accounts for both the cache savings from staying on one model and the added cache costs from
-        switching models. Savings are net of recorded LLM classification cost, which is included in actual spend.
-        Classification cost per 1K turns is averaged over all auto-router turns, including those that skip
-        classification. The range counts whole sessions that overlap it, so totals can differ slightly from the Overall
-        tab, which buckets savings by UTC day.
+        Compares covered turns with the estimated cost of using the router&apos;s highest-tier baseline model. Estimates
+        use registered requests since tracking began, matching cache prefixes and expiry, and the actual response
+        length. Total actual spend includes every turn; savings and baseline spend include only turns with a current
+        estimate, including turns with zero savings. Savings are net of recorded LLM classification cost. Classification
+        cost per 1K turns is averaged over all auto-router turns, including those that skip classification. The range
+        counts whole sessions that overlap it, so totals can differ slightly from the Overall tab, which buckets savings
+        by UTC day.
       </p>
 
       <div className="space-y-4">
