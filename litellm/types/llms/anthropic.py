@@ -411,6 +411,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     output_config: AnthropicOutputConfig | None  # Configuration for Claude's output behavior
     cache_control: dict[str, Any] | None  # Automatic prompt caching
     reasoning_effort: str | None
+    safeguards: ReadOnly[dict[str, object] | None]
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
