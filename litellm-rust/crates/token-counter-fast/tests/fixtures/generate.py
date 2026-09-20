@@ -2,8 +2,8 @@
 
 Run from the repository root with the project environment, once per encoding:
 
-    uv run --no-sync python litellm-rust/crates/token-counter/tests/fixtures/generate.py cl100k_base
-    uv run --no-sync python litellm-rust/crates/token-counter/tests/fixtures/generate.py o200k_base
+    uv run --no-sync python litellm-rust/crates/token-counter-fast/tests/fixtures/generate.py cl100k_base
+    uv run --no-sync python litellm-rust/crates/token-counter-fast/tests/fixtures/generate.py o200k_base
 
 `<encoding>/texts.jsonl` holds `{"text", "tokens", "pieces"}` lines: `tokens`
 counted with `tiktoken.get_encoding(name).encode(text, disallowed_special=())`,
