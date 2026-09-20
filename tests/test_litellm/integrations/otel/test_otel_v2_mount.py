@@ -9,26 +9,29 @@ from datetime import datetime, timezone
 
 import pytest
 
-
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.instrumentation.fastapi")
 fastapi = pytest.importorskip("fastapi")
 
+from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from opentelemetry import trace  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
-from opentelemetry import trace  # noqa: E402
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF  # noqa: E402
 from opentelemetry.trace import SpanKind  # noqa: E402
 
+from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import (  # noqa: E402
     OpenTelemetryV2Config,
     is_otel_v2_enabled,
 )
-from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.mount import (  # noqa: E402
+    LITELLM_TRACE_ID_HEADER,
     PASSTHROUGH_PREFIXES,
     _passthrough_span_name_hook,
     instrument_fastapi_app,
@@ -114,6 +117,86 @@ def test_instrumented_app_emits_server_span():
     assert server_spans, "FastAPI instrumentor should emit a SERVER span per request"
     attrs = server_spans[0].attributes or {}
     assert any("route" in k or "method" in k for k in attrs)
+
+
+def test_proxy_response_exposes_its_server_trace_and_call_id(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    app = fastapi.FastAPI()
+
+    @app.get("/success")
+    async def success():
+        return fastapi.Response(headers={"x-litellm-call-id": "call-success"})
+
+    @app.get("/failure")
+    async def failure():
+        raise fastapi.HTTPException(status_code=400, headers={"x-litellm-call-id": "call-failure"})
+
+    async def chunks():
+        yield b"data: first\n\n"
+
+    @app.get("/stream")
+    async def stream():
+        return StreamingResponse(chunks(), headers={"x-litellm-call-id": "call-stream"})
+
+    logger = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    exporter = InMemorySpanExporter()
+    logger._tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", logger._tracer_provider)
+    instrument_fastapi_app(app)
+
+    client = TestClient(app)
+    responses = (
+        (client.get("/success"), "call-success"),
+        (client.get("/failure"), "call-failure"),
+        (client.get("/stream"), "call-stream"),
+    )
+    server_spans = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER]
+    trace_ids_by_call_id = {
+        span.attributes["litellm.call_id"]: f"{span.context.trace_id:032x}" for span in server_spans
+    }
+
+    assert len(server_spans) == len(responses)
+    for response, call_id in responses:
+        assert response.headers[LITELLM_TRACE_ID_HEADER] == trace_ids_by_call_id[call_id]
+
+
+def test_proxy_response_keeps_the_incoming_trace_id(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    app = fastapi.FastAPI()
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    logger = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", logger._tracer_provider)
+    instrument_fastapi_app(app)
+
+    response = TestClient(app).get(
+        "/ping",
+        headers={"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"},
+    )
+
+    assert response.headers[LITELLM_TRACE_ID_HEADER] == "11111111111111111111111111111111"
+
+
+def test_proxy_response_omits_trace_id_without_a_recording_span(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    app = fastapi.FastAPI()
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", TracerProvider(sampler=ALWAYS_OFF))
+    instrument_fastapi_app(app)
+
+    response = TestClient(app).get("/ping")
+
+    assert LITELLM_TRACE_ID_HEADER not in response.headers
 
 
 def test_logger_and_instrumentor_share_provider():
