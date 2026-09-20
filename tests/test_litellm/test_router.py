@@ -17044,3 +17044,35 @@ def test_router_fallback_with_dict_target_custom_messages_preserves_custom_messa
     fallback_call_messages: Final = calls[1]["messages"]
     assert fallback_call_messages == [{"role": "user", "content": "custom fallback message"}]
 
+
+def test_router_dispatch_prompt_completion_direct(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def mock_direct_acompletion(*args, **kwargs):
+        return litellm.ModelResponse(
+            choices=[litellm.utils.Choices(message=litellm.utils.Message(content="dispatched reply", role="assistant"))]
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", mock_direct_acompletion)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "direct-model",
+                "litellm_params": {"model": "openai/gpt-4o"},
+            }
+        ]
+    )
+
+    response: Final = asyncio.run(
+        router._dispatch_prompt_completion(
+            model="direct-model",
+            original_model_name="direct-model",
+            unrendered_messages=[{"role": "user", "content": "hi"}],
+            original_prompt_params={},
+            original_function=router._acompletion,
+            prompt_management_params={"prompt_id", "prompt_version"},
+            kwargs={"model": "direct-model", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    )
+    assert response.choices[0].message.content == "dispatched reply"
+
+
