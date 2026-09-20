@@ -1636,9 +1636,6 @@ class _ShutdownAwarePrisma(MockPrisma):
 
 @pytest.mark.asyncio
 async def test_proxy_shutdown_stops_the_view_setup_task(monkeypatch, tmp_path):
-    """The view setup task keeps polling for the spend-log table while migrations
-    run, so a shutdown inside that window has to cancel it rather than leave it
-    to die with the event loop."""
     import yaml
     from fastapi import FastAPI
 
@@ -13415,10 +13412,6 @@ async def test_setup_prisma_client_arms_health_watchdog_before_startup_health_ch
 
 @pytest.mark.asyncio
 async def test_setup_prisma_client_hands_view_creation_to_the_held_task(monkeypatch):
-    """View creation used to be two fire-and-forget ``asyncio.create_task`` calls
-    that raised and vanished when the migrations Job had not created
-    ``LiteLLM_SpendLogs`` yet (LIT-5211). Startup must hand the work to the client's
-    held task, which waits for the table, and must not call the two coroutines directly."""
     monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "True")
 
     mock_client = _mock_startup_prisma_client()
