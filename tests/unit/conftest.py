@@ -1,12 +1,15 @@
+import os
 from collections.abc import Iterator
 from typing import Final
 
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
-import litellm
-import litellm.router as litellm_router_module
-import litellm.utils as litellm_utils_module
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
+import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
+import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
+import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 
 LOOPBACK_HOSTS: Final = ["127.0.0.1", "::1"]
 
@@ -15,11 +18,7 @@ def _allow_loopback_only() -> None:
     socket_allow_hosts(LOOPBACK_HOSTS, allow_unix_socket=True)
 
 
-@pytest.fixture(autouse=True, scope="session")
-def block_external_sockets() -> Iterator[None]:
-    _allow_loopback_only()
-    yield
-    enable_socket()
+_allow_loopback_only()
 
 
 @pytest.hookimpl(trylast=True)
@@ -52,3 +51,7 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+def pytest_sessionfinish() -> None:
+    enable_socket()
