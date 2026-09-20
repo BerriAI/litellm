@@ -7,6 +7,7 @@ from itertools import islice
 import json
 from hashlib import sha256
 import struct
+import time
 from typing import Final, cast
 import uuid
 import wave
@@ -27,6 +28,7 @@ from integration.cost_calculation.conftest import (
     poll_failure_row,
     poll_rollups,
     poll_rows,
+    read_rows_now,
     register_scenario_deployment,
 )
 from integration.cost_calculation.cost_tracking_case import (
@@ -388,9 +390,11 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         assert isinstance(expected, ExactExpected)
         if fallback_deployment is not None:
             assert deployment is not None
-            assert len(rows) == 1
-            assert rows[0].status == "success"
-            assert rows[0].model_id == deployment.identity
+            time.sleep(3)
+            settled_rows: Final = read_rows_now(key)
+            assert len(settled_rows) == 1
+            assert settled_rows[0].status == "success"
+            assert settled_rows[0].model_id == deployment.identity
         if isinstance(case.response, BinaryResponse):
             header: Final = response.headers.get("x-litellm-response-cost")
             if header is not None:
@@ -413,7 +417,15 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert deployment is not None and team_id is not None and user_id is not None
             assert end_user_id is not None
             target_spend: Final = expected.spend * 3
-            rollups: Final = poll_rollups(key, team_id, user_id, end_user_id, requests=3, spend=target_spend)
+            target_requests: Final = 3
+            rollups: Final = poll_rollups(
+                key,
+                team_id,
+                user_id,
+                end_user_id,
+                target_spend,
+                target_requests,
+            )
             assert approx_equal(rollups.key_spend, target_spend)
             assert approx_equal(rollups.team_spend, target_spend)
             assert approx_equal(rollups.user_spend, target_spend)
