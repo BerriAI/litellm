@@ -33,28 +33,47 @@ pub(crate) struct TokenCounter {
 impl TokenCounter {
     #[new]
     fn new(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
-        #[cfg(feature = "huggingface")]
+        #[cfg(feature = "fast")]
+        {
+            Self::load(py, || CoreTokenCounter::from_json_fast(tokenizer_json))
+        }
+        #[cfg(all(not(feature = "fast"), feature = "huggingface"))]
         {
             Self::load(py, || CoreTokenCounter::from_json(tokenizer_json))
         }
-        #[cfg(not(feature = "huggingface"))]
+        #[cfg(not(any(feature = "fast", feature = "huggingface")))]
         {
             let _ = (py, tokenizer_json);
             Err(RustBridgeDeclined::new_err(
-                "tokenizer backend requires the huggingface feature",
+                "tokenizer backend requires the fast or huggingface feature",
             ))
         }
     }
 
     #[staticmethod]
-    fn from_json_fast(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
+    fn from_cl100k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
         #[cfg(feature = "fast")]
         {
-            Self::load(py, || CoreTokenCounter::from_json_fast(tokenizer_json))
+            Self::load(py, || CoreTokenCounter::from_cl100k_ranks(rank_file))
         }
         #[cfg(not(feature = "fast"))]
         {
-            let _ = (py, tokenizer_json);
+            let _ = (py, rank_file);
+            Err(RustBridgeDeclined::new_err(
+                "tokenizer backend requires the fast feature",
+            ))
+        }
+    }
+
+    #[staticmethod]
+    fn from_o200k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
+        #[cfg(feature = "fast")]
+        {
+            Self::load(py, || CoreTokenCounter::from_o200k_ranks(rank_file))
+        }
+        #[cfg(not(feature = "fast"))]
+        {
+            let _ = (py, rank_file);
             Err(RustBridgeDeclined::new_err(
                 "tokenizer backend requires the fast feature",
             ))
