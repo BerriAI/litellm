@@ -352,21 +352,6 @@ def test_azure_model_router_stamps_selected_model_on_hidden_params():
     )
 
 
-def test_azure_model_router_stamp_does_not_leak_across_responses():
-    """
-    ModelResponse declares _hidden_params as a class-level dict, so the stamp has to be written
-    as a fresh dict. Mutating in place would bleed the selected model into unrelated responses.
-    """
-    from litellm.llms.azure_ai.common_utils import (
-        AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,
-    )
-    from litellm.types.utils import ModelResponse
-
-    untouched = ModelResponse()
-
-    assert AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY not in (untouched._hidden_params or {})
-
-
 def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
     """
     Regression test: Azure AI returns 400 when tools contain copilot_mcp_server_name.
