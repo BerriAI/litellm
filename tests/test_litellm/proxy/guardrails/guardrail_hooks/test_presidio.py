@@ -3115,14 +3115,11 @@ async def test_output_parse_pii_numbered_tokens_across_chunks():
 
 
 def test_finalize_presidio_anonymize_numbered_tokens_overlapping_spans():
-    """
-    When analyzer results contain overlapping spans (e.g. PHONE_NUMBER and UK_NHS
-    covering overlapping digit ranges), ensure _finalize_presidio_anonymize_numbered_tokens
-    resolves conflicts rather than splicing placeholders or eating trailing text.
-    """
-    from litellm.proxy.guardrails.guardrail_hooks.presidio import _PresidioPII
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+        _OPTIONAL_PresidioPIIMasking,
+    )
 
-    guardrail = _PresidioPII()
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
     text = "My name is John Smith, phone +1 415 555 2671, please check the order."
     analyze_results = [
         {"entity_type": "PERSON", "start": 11, "end": 21, "score": 0.9},
