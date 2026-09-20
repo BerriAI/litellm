@@ -479,14 +479,6 @@ async def preview_auto_router_routing(
         llm_router=llm_router,
     )
 
-    complexity_router: Final = ComplexityRouter(
-        model_name=data.router_name,
-        litellm_router_instance=llm_router,
-        complexity_router_config=data.complexity_router_config.model_dump(exclude_none=True),
-        default_model=data.default_model,
-        derive_savings_baseline=False,
-    )
-
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=request_data,
         user_api_key_dict=actor,
@@ -495,6 +487,13 @@ async def preview_auto_router_routing(
     refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
+        complexity_router: Final = ComplexityRouter(
+            model_name=data.router_name,
+            litellm_router_instance=llm_router,
+            complexity_router_config=data.complexity_router_config.model_dump(exclude_none=True),
+            default_model=data.default_model,
+            derive_savings_baseline=False,
+        )
         hook_response: Final = await complexity_router.async_pre_routing_hook(
             model=data.router_name,
             request_kwargs=request_kwargs,
