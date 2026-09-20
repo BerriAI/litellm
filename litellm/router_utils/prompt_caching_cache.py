@@ -15,10 +15,8 @@ from typing_extensions import TypedDict
 
 from litellm.caching.caching import DualCache
 from litellm.constants import PROMPT_CACHE_LOOKBACK_POSITIONS
-from litellm.litellm_core_utils.logging_utils import (
-    truncate_base64_in_messages,
-    truncate_base64_in_messages_async,
-)
+from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 if TYPE_CHECKING:
@@ -88,7 +86,9 @@ def _seed(tools: Sequence[ChatCompletionToolParam] | None) -> bytes:
     if tools is None:
         return hashlib.sha256(b"").digest()
     return hashlib.sha256(
-        _canonical_bytes(_TOOLS_ADAPTER.validate_python(to_jsonable_python(tools, serialize_unknown=True)))
+        _canonical_bytes(
+            _TOOLS_ADAPTER.validate_python(to_jsonable_python(tools, serialize_unknown=True, bytes_mode="base64"))
+        )
     ).digest()
 
 
@@ -131,23 +131,6 @@ def _first_pin(values: tuple[JsonValue, ...] | None) -> PromptCachingCacheValue 
 class PromptCachingCache:
     def __init__(self, cache: DualCache):
         self.cache = cache
-
-    @staticmethod
-    def serialize_object(obj: Any) -> object:
-        """Helper function to serialize Pydantic objects, dictionaries, or fallback to string."""
-        if hasattr(obj, "dict"):
-            # If the object is a Pydantic model, use its `dict()` method
-            return obj.dict()
-        elif isinstance(obj, dict):
-            # If the object is a dictionary, serialize it with sorted keys
-            return json.dumps(obj, sort_keys=True, separators=(",", ":"))  # Standardize serialization
-
-        elif isinstance(obj, list):
-            # Serialize lists by ensuring each element is handled properly
-            return [PromptCachingCache.serialize_object(item) for item in obj]
-        elif isinstance(obj, (int, float, bool)):
-            return obj  # Keep primitive types as-is
-        return str(obj)
 
     @staticmethod
     def extract_cacheable_prefix(
@@ -263,6 +246,7 @@ class PromptCachingCache:
                 to_jsonable_python(
                     truncate_base64_in_messages(PromptCachingCache.extract_cacheable_prefix(messages)),
                     serialize_unknown=True,
+                    bytes_mode="base64",
                 )
             ),
             tools,
@@ -275,15 +259,7 @@ class PromptCachingCache:
     ) -> tuple[PrefixPosition, ...]:
         if not messages:
             return ()
-        return _positions_of(
-            _PREFIX_ADAPTER.validate_python(
-                to_jsonable_python(
-                    await truncate_base64_in_messages_async(PromptCachingCache.extract_cacheable_prefix(messages)),
-                    serialize_unknown=True,
-                )
-            ),
-            tools,
-        )
+        return await offload_token_count(PromptCachingCache.prefix_positions)(messages, tools)
 
     @staticmethod
     def get_prompt_caching_cache_key(

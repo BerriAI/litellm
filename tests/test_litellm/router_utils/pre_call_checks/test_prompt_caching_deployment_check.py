@@ -708,7 +708,10 @@ async def test_a_run_of_tool_blocks_counts_as_one_lookback_position():
 
 @pytest.mark.asyncio
 async def test_an_edited_earlier_block_does_not_inherit_the_pin():
-    """Walking back must still bind every block's content, or an edited conversation pins to a stale cache."""
+    """
+    Every key must bind the whole prefix before its block, not the block alone, or a conversation
+    that repeats a pinned block after an edit walks back onto a cache the provider no longer holds.
+    """
     prompt_cache = PromptCachingCache(cache=DualCache())
     await prompt_cache.async_add_model_id(
         model_id="dep-1", messages=_turn({"role": "user", "content": [_marked("original")]}), tools=None
@@ -716,10 +719,39 @@ async def test_an_edited_earlier_block_does_not_inherit_the_pin():
     edited = _turn(
         {"role": "user", "content": [_text("edited")]},
         {"role": "assistant", "content": "ok"},
-        {"role": "user", "content": [_marked("next")]},
+        {"role": "user", "content": [_marked("original")]},
     )
 
     assert await prompt_cache.async_get_model_id(messages=edited, tools=None) is None
+
+
+@pytest.mark.asyncio
+async def test_swapped_roles_do_not_inherit_the_pin():
+    """The message envelope is part of what the provider caches, so the same blocks under other roles key apart."""
+    prompt_cache = PromptCachingCache(cache=DualCache())
+    pinned = _turn(
+        {"role": "user", "content": [_text("question")]},
+        {"role": "assistant", "content": [_marked("answer")]},
+    )
+    swapped = _turn(
+        {"role": "assistant", "content": [_text("question")]},
+        {"role": "user", "content": [_marked("answer")]},
+    )
+    await prompt_cache.async_add_model_id(model_id="dep-1", messages=pinned, tools=None)
+
+    assert await prompt_cache.async_get_model_id(messages=pinned, tools=None) == {"model_id": "dep-1"}
+    assert await prompt_cache.async_get_model_id(messages=swapped, tools=None) is None
+
+
+@pytest.mark.asyncio
+async def test_raw_bytes_in_a_block_hash_instead_of_failing_the_request():
+    """A block carrying raw bytes must key like any other block rather than raising out of the router filter."""
+    prompt_cache = PromptCachingCache(cache=DualCache())
+    binary_block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b"\xff\xfe"}}
+    turn = _turn({"role": "user", "content": [binary_block, _marked("describe")]})
+    await prompt_cache.async_add_model_id(model_id="dep-1", messages=turn, tools=None)
+
+    assert await prompt_cache.async_get_model_id(messages=turn, tools=None) == {"model_id": "dep-1"}
 
 
 class _BrokenBatchReadCache(DualCache):
@@ -786,11 +818,11 @@ async def test_claude_code_style_session_stays_on_one_deployment_across_turns(lo
                 "litellm_params": {"model": AUTO_CACHING_MODEL, "api_key": "sk-fake"},
                 "model_info": {"id": model_id},
             }
-            for model_id in ("dep-1", "dep-2", "dep-3")
+            for model_id in (f"dep-{number}" for number in range(1, 7))
         ],
         optional_pre_call_checks=["prompt_caching"],
     )
-    user_turns = [LONG_PROMPT, *(f"follow-up {number}" for number in range(1, 6))]
+    user_turns = [LONG_PROMPT, *(f"follow-up {number}" for number in range(1, 9))]
     history: List[AllMessageValues] = []
     served: List[str] = []
     for text in user_turns:
