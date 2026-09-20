@@ -780,6 +780,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionSystemMessage,
     ChatCompletionToolParam,
+    ErrorEvent,
     HttpxBinaryResponseContent,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
@@ -8875,7 +8876,7 @@ def _serialize_streaming_chunk(chunk: BaseModel) -> str | bytes:
             return serialized_chunk
 
     event_type: Final = getattr(chunk, "type", None)
-    if isinstance(event_type, str) and event_type.startswith("response."):
+    if isinstance(chunk, ErrorEvent) or isinstance(event_type, str) and event_type.startswith("response."):
         return chunk.model_dump_json(exclude_unset=True)
 
     return chunk.model_dump_json(exclude_none=True, exclude_unset=True)

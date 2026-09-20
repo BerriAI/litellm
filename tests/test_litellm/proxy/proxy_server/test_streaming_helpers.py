@@ -48,6 +48,7 @@ from litellm.proxy.proxy_server import (
     select_data_generator,
 )
 from litellm.types.llms.openai import (
+    ErrorEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseFailedEvent,
@@ -590,7 +591,7 @@ def test_serialize_streaming_chunk_preserves_responses_explicit_nulls() -> None:
     assert "store" not in payload["response"]
 
 
-@pytest.mark.parametrize("event_type", ["message_start", None, 1])
+@pytest.mark.parametrize("event_type", ["message_start", "error", None, 1])
 def test_serialize_streaming_chunk_other_event_types_omit_nulls(event_type: str | int | None) -> None:
     class Event(BaseModel):
         type: str | int | None
@@ -620,6 +621,70 @@ def test_serialize_streaming_chunk_chat_fallback_omits_nulls() -> None:
     payload: Final = json.loads(serialized)
     assert payload["choices"] == [{"index": 0, "delta": {"role": "assistant"}}]
     assert payload["usage"]["total_tokens"] == 2
+
+
+def _responses_error_event(explicit_null: bool) -> ErrorEvent:
+    return ErrorEvent.model_validate(
+        {
+            "type": "error",
+            "sequence_number": 1,
+            "error": {
+                "type": "invalid_request_error",
+                "code": "context_length_exceeded",
+                "message": "Input exceeds the context window",
+                **({"param": None} if explicit_null else {}),
+            },
+        }
+    )
+
+
+@pytest.mark.parametrize("explicit_null", [True, False])
+def test_serialize_streaming_chunk_preserves_responses_error_nulls(explicit_null: bool) -> None:
+    payload: Final = json.loads(_serialize_streaming_chunk(_responses_error_event(explicit_null)))
+    assert payload == {
+        "type": "error",
+        "sequence_number": 1,
+        "error": {
+            "type": "invalid_request_error",
+            "code": "context_length_exceeded",
+            "message": "Input exceeds the context window",
+            **({"param": None} if explicit_null else {}),
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("explicit_null", [True, False])
+async def test_async_data_generator_preserves_responses_error_nulls(explicit_null: bool) -> None:
+    async def upstream() -> AsyncIterator[BaseModel]:
+        yield _responses_error_event(explicit_null)
+
+    frames: Final = [
+        frame
+        async for frame in select_data_generator(
+            response=upstream(),
+            user_api_key_dict=_user_auth(),
+            request_data={},
+            responses_stream_errors=True,
+        )
+    ]
+    decoded: Final = tuple(frame.decode() if isinstance(frame, bytes) else frame for frame in frames)
+    payloads: Final = tuple(
+        json.loads(line[6:])
+        for frame in decoded
+        for line in frame.splitlines()
+        if line.startswith("data: ") and line != "data: [DONE]"
+    )
+    assert payloads[0] == {
+        "type": "error",
+        "sequence_number": 1,
+        "error": {
+            "type": "invalid_request_error",
+            "code": "context_length_exceeded",
+            "message": "Input exceeds the context window",
+            **({"param": None} if explicit_null else {}),
+        },
+    }
 
 
 @pytest.mark.asyncio
