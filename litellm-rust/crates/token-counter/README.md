@@ -2,7 +2,7 @@
 
 `Tokenizer` is the text-counting interface. `TokenCounter` applies LiteLLM request, message, and tool accounting using any implementation of that interface
 
-The `fast` feature provides `fast::FastTokenizer` from `litellm-token-counter-fast`. `TokenCounter::from_json_fast`, `TokenCounter::from_cl100k_ranks`, and `TokenCounter::from_o200k_ranks` use this implementation
+The `fast` feature provides `fast::FastTokenizer` from `litellm-token-counter-fast`. `TokenCounter::from_json_fast` uses this implementation
 
 The `huggingface` feature provides `huggingface::HuggingFaceTokenizer` through the upstream `tokenizers` library. `TokenCounter::from_json` uses this implementation
 
