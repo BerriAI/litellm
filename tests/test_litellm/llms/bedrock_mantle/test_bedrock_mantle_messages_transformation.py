@@ -387,6 +387,25 @@ class TestBetaHeadersOnTheWire:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_betas_a_proxy_client_sends_reach_mantle_filtered(self):
+        from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+        proxy_request_data: dict = {}
+        add_provider_specific_headers_to_request(
+            data=proxy_request_data,
+            headers={
+                "anthropic-beta": "claude-code-20250219,fast-mode-2026-02-01,interleaved-thinking-2025-05-14",
+                "anthropic-version": "2023-06-01",
+                "user-agent": "claude-cli/2.1.239",
+            },
+        )
+
+        route = await self._send(**proxy_request_data)
+
+        assert _sent_betas(route) == ["claude-code-20250219", "interleaved-thinking-2025-05-14"]
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_betas_mantle_rejects_are_dropped_before_the_request(self):
         route = await self._send(
             extra_headers={"anthropic-beta": "code-execution-2025-08-25,context-1m-2025-08-07,files-api-2025-04-14"}
