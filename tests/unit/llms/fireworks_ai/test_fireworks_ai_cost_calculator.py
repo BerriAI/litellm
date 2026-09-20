@@ -1,4 +1,5 @@
 import math
+from collections.abc import Generator
 from datetime import datetime, timezone
 from typing import Final
 
@@ -22,6 +23,15 @@ MODEL = "accounts/fireworks/models/glm-5p2"
 INPUT_COST = 1.4e-06
 CACHE_READ_COST = litellm.get_model_info(model=MODEL, custom_llm_provider="fireworks_ai")["cache_read_input_token_cost"]
 OUTPUT_COST = 4.4e-06
+
+
+@pytest.fixture(autouse=True)
+def restore_model_cost() -> Generator[None, None, None]:
+    original: Final = litellm.model_cost
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.model_cost = original
+    litellm.get_model_info.cache_clear()
 
 
 def _usage(prompt_tokens: int, cached_tokens: int, completion_tokens: int) -> Usage:
@@ -57,7 +67,7 @@ def _register_off_peak_model(
     cache_read_cost: float | None = STANDARD_CACHE_READ_COST,
     model: str = OFF_PEAK_MODEL,
 ) -> None:
-    litellm.model_cost = {  # test-quality-ok: conftest restores litellm.model_cost after each test
+    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test
         **litellm.model_cost,
         f"fireworks_ai/{model}": {
             "litellm_provider": "fireworks_ai",
@@ -151,7 +161,7 @@ def test_an_entry_without_a_cache_read_rate_bills_cached_tokens_at_the_documente
     """Fireworks documents a default 50% cached-token discount for serverless models:
     https://docs.fireworks.ai/guides/prompt-caching, accessed 2026-09-19."""
     model = "accounts/fireworks/models/default-cache-read-test"
-    litellm.model_cost = {  # test-quality-ok: conftest restores litellm.model_cost after each test
+    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test
         **litellm.model_cost,
         f"fireworks_ai/{model}": {
             "litellm_provider": "fireworks_ai",
@@ -171,7 +181,7 @@ def test_an_entry_without_a_cache_read_rate_bills_cached_tokens_at_the_documente
 
 def test_fireworks_cache_read_rates_match_breakdown_and_caching_savings():
     model = "accounts/fireworks/models/breakdown-cache-read-test"
-    litellm.model_cost = {  # test-quality-ok: the save/restore conftest returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
+    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
         **litellm.model_cost,
         f"fireworks_ai/{model}": {
             "litellm_provider": "fireworks_ai",
@@ -204,7 +214,7 @@ def test_fireworks_cache_read_rates_match_breakdown_and_caching_savings():
 
 def test_generic_cost_per_token_applies_fireworks_cache_read_default_with_or_without_model_info():
     model = "accounts/fireworks/models/generic-cache-read-test"
-    litellm.model_cost = {  # test-quality-ok: conftest restores litellm.model_cost after each test
+    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test
         **litellm.model_cost,
         f"fireworks_ai/{model}": {
             "litellm_provider": "fireworks_ai",
@@ -257,7 +267,7 @@ COMPONENT_AUDIO_OUT_COST = 6e-06
 
 
 def test_cache_write_reasoning_and_audio_tokens_are_billed_at_their_component_rates():
-    litellm.model_cost = {  # test-quality-ok: the save/restore conftest returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
+    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
         **litellm.model_cost,
         f"fireworks_ai/{COMPONENT_MODEL}": {
             "litellm_provider": "fireworks_ai",
@@ -302,7 +312,7 @@ def test_cache_write_reasoning_and_audio_tokens_are_billed_at_their_component_ra
 
 
 def test_an_entry_without_an_input_rate_gets_no_cache_read_fallback():
-    litellm.model_cost = {  # test-quality-ok: the save/restore conftest returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
+    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
         **litellm.model_cost,  # pyright: ignore[reportUnknownMemberType]  # the SDK types model_cost as dict[Unknown, Unknown]
         "fireworks_ai/accounts/fireworks/models/no-input-rate-test": {
             "litellm_provider": "fireworks_ai",

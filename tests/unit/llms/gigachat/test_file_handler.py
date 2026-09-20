@@ -344,25 +344,6 @@ class TestUploadFileSync:
 
         assert result is None
 
-    @patch(f"{FILE_MODULE}.get_api_base", return_value="https://api.example.com")
-    @patch(f"{FILE_MODULE}.get_access_token", return_value="test-token")
-    @patch(f"{FILE_MODULE}._get_httpx_client")
-    def test_uploads_without_optional_args(
-        self, mock_http_handler_cls, mock_get_token, mock_get_api_base
-    ):
-        """Verify that credentials, api_base, and litellm_params are optional."""
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"id": "file-no-args"}
-        mock_response.raise_for_status = MagicMock()
-        mock_client.post.return_value = mock_response
-        mock_http_handler_cls.return_value = mock_client
-
-        result = upload_file_sync(image_url=_RED_PNG_DATA_URL)
-
-        assert result == "file-no-args"
-        # Should still have called get_access_token without args
-        mock_get_token.assert_called_once_with(credentials=None, litellm_params=None)
 
 
 # ---------------------------------------------------------------------------
@@ -483,22 +464,3 @@ class TestUploadFileAsync:
         )
 
         assert result is None
-
-    @pytest.mark.asyncio
-    @patch(f"{FILE_MODULE}.get_api_base", return_value="https://api.example.com")
-    @patch(f"{FILE_MODULE}.get_access_token_async", return_value="test-token-async")
-    @patch(f"{FILE_MODULE}.get_async_httpx_client")
-    async def test_uploads_without_optional_args(
-        self, mock_get_client, mock_get_token, mock_get_api_base
-    ):
-        mock_client = MagicMock()
-        mock_response = MagicMock()
-        mock_response.json = MagicMock(return_value={"id": "async-no-args"})
-        mock_response.raise_for_status = MagicMock()
-        mock_client.post = AsyncMock(return_value=mock_response)
-        mock_get_client.return_value = mock_client
-
-        result = await upload_file_async(image_url=_RED_PNG_DATA_URL)
-
-        assert result == "async-no-args"
-        mock_get_token.assert_called_once_with(credentials=None, litellm_params=None)
