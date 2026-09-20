@@ -81,6 +81,7 @@ class TraceCorrelationMiddleware:
 
         await self.app(scope, receive, send_with_trace_correlation)
 
+
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
 # default OTel server-span name "{method} {route}" collapses every upstream
 # endpoint into "POST /openai/{endpoint:path}". The hook below renames those spans
