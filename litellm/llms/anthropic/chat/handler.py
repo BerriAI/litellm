@@ -596,7 +596,7 @@ class ModelResponseIterator:
         self.reasoning_content_chunks: list[str] = []
 
         # Track server tool use inputs and results for code_interpreter_results
-        self._server_tool_inputs: dict[str, Any] = {}
+        self._server_tool_inputs: dict[str, object] = {}
         self.tool_results: list[dict[str, Any]] = []
         self._current_server_tool_id: str | None = None
         self._container_id: str | None = None

@@ -335,10 +335,10 @@ class BytezChatConfig(BaseConfig):
 
 
 class BytezCustomStreamWrapper(CustomStreamWrapper):
-    def chunk_creator(self, chunk: Any):
+    def chunk_creator(self, chunk: object):
         try:
             model_response: Final = self.model_response_creator()
-            response_obj: dict[str, Any] = {}
+            response_obj: dict[str, object] = {}
 
             response_obj = {
                 "text": chunk,
@@ -346,7 +346,7 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
                 "finish_reason": "",
             }
 
-            completion_obj: Final[dict[str, Any]] = {"content": chunk}
+            completion_obj: Final[dict[str, object]] = {"content": chunk}
 
             return self.return_processed_chunk_logic(
                 completion_obj=completion_obj,

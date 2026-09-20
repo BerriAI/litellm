@@ -1,0 +1,990 @@
+import asyncio
+import base64
+import json
+import uuid
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import patch
+
+import httpx
+import pytest
+
+# Ensure the project root is on the import path so `litellm` can be imported when
+# tests are executed from any working directory.
+
+import litellm
+from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeConfig,
+)
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+
+ONE_PIXEL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.fixture
+def async_only_image_fetch(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates import factory, image_handling
+    from litellm.llms.gemini.chat import transformation as gemini_chat_transformation
+
+    fetch = SimpleNamespace(
+        fetched=[],
+        base64_png=base64.b64encode(ONE_PIXEL_PNG).decode(),
+        data_url="data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode(),
+    )
+
+    def forbid_sync_fetch(client, url, **kwargs):
+        raise litellm.ImageFetchError(f"sync image fetch ran on the event loop: {url}")
+
+    async def serve_png(client, url, **kwargs):
+        fetch.fetched.append(url)
+        return httpx.Response(
+            200,
+            content=ONE_PIXEL_PNG,
+            headers={"content-type": "image/png"},
+            request=httpx.Request("GET", url),
+        )
+
+    def forbid_sync_convert(url, *args, **kwargs):
+        if url.startswith(("http://", "https://")):
+            raise litellm.ImageFetchError(f"sync convert_url_to_base64 ran on the request path: {url}")
+        return url
+
+    monkeypatch.setattr(image_handling, "safe_get", forbid_sync_fetch)
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_png)
+    for module in (image_handling, factory, gemini_chat_transformation):
+        monkeypatch.setattr(module, "convert_url_to_base64", forbid_sync_convert)
+    return fetch
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled in-repo cost map so capability and pricing assertions do not
+    depend on the network-fetched ``main`` copy, which lags this branch until merge.
+
+    ``get_model_info`` is lru_cached, so swapping ``model_cost`` is not enough on its
+    own; clear on the way in and out so entries warmed against either map never leak
+    across tests."""
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def local_beta_headers_config(monkeypatch):
+    """Pin the bundled ``anthropic_beta_headers_config.json`` so beta header assertions
+    do not depend on the network-fetched copy or on what earlier tests left cached."""
+    from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    yield
+    reload_beta_headers_config()
+
+
+def test_get_supported_params_thinking():
+    config = AmazonAnthropicClaudeConfig()
+    params = config.get_supported_openai_params(
+        model="anthropic.claude-sonnet-4-20250514-v1:0"
+    )
+    assert "thinking" in params
+
+
+def test_aws_params_filtered_from_request_body():
+    """
+    Test that AWS authentication parameters are filtered out from the request body.
+
+    This is a security test to ensure AWS credentials are not leaked in the request
+    body sent to Bedrock. AWS params should only be used for request signing.
+
+    Regression test for: AWS params (aws_role_name, aws_session_name, etc.)
+    being included in the Bedrock InvokeModel request body.
+    """
+    config = AmazonAnthropicClaudeConfig()
+
+    # Test messages
+    messages = [{"role": "user", "content": "Hello, how are you?"}]
+
+    # Optional params with AWS authentication parameters that should be filtered out
+    optional_params = {
+        # Regular Anthropic params - these SHOULD be in the request
+        "max_tokens": 100,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        # AWS authentication params - these should NOT be in the request body
+        "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+        "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "aws_session_token": "FwoGZXIvYXdzEBYaDH...",
+        "aws_region_name": "us-west-2",
+        "aws_role_name": "arn:aws:iam::123456789012:role/test-role",
+        "aws_session_name": "test-session",
+        "aws_profile_name": "default",
+        "aws_web_identity_token": "token123",
+        "aws_sts_endpoint": "https://sts.amazonaws.com",
+        "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.us-west-2.amazonaws.com",
+        "aws_external_id": "external-id-123",
+        "aws_session_tags": [{"Key": "team", "Value": "genai"}],
+    }
+
+    # Transform the request
+    result = config.transform_request(
+        model="anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=messages,
+        optional_params=optional_params.copy(),  # Copy to avoid mutation
+        litellm_params={},
+        headers={},
+    )
+
+    # Convert result to JSON string to check what would be sent in the request
+    result_json = json.dumps(result)
+
+    # Verify AWS authentication params are NOT in the request body
+    assert (
+        "aws_access_key_id" not in result_json
+    ), "AWS access key should not be in request body"
+    assert (
+        "aws_secret_access_key" not in result_json
+    ), "AWS secret key should not be in request body"
+    assert (
+        "aws_session_token" not in result_json
+    ), "AWS session token should not be in request body"
+    assert (
+        "aws_region_name" not in result_json
+    ), "AWS region should not be in request body"
+    assert (
+        "aws_role_name" not in result_json
+    ), "AWS role name should not be in request body"
+    assert (
+        "aws_session_name" not in result_json
+    ), "AWS session name should not be in request body"
+    assert (
+        "aws_profile_name" not in result_json
+    ), "AWS profile name should not be in request body"
+    assert (
+        "aws_web_identity_token" not in result_json
+    ), "AWS web identity token should not be in request body"
+    assert (
+        "aws_sts_endpoint" not in result_json
+    ), "AWS STS endpoint should not be in request body"
+    assert (
+        "aws_bedrock_runtime_endpoint" not in result_json
+    ), "AWS bedrock endpoint should not be in request body"
+    assert (
+        "aws_external_id" not in result_json
+    ), "AWS external ID should not be in request body"
+    assert (
+        "aws_session_tags" not in result_json
+    ), "AWS session tags should not be in request body"
+
+    # Also check that the sensitive values themselves are not in the response
+    assert (
+        "AKIAIOSFODNN7EXAMPLE" not in result_json
+    ), "AWS access key value leaked in request body"
+    assert (
+        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in result_json
+    ), "AWS secret key value leaked in request body"
+    assert (
+        "arn:aws:iam::123456789012:role/test-role" not in result_json
+    ), "AWS role ARN leaked in request body"
+    assert "test-session" not in result_json, "AWS session name leaked in request body"
+
+    # Verify normal params ARE still in the request body
+    assert result["max_tokens"] == 100, "max_tokens should be in request body"
+    assert result["temperature"] == 0.7, "temperature should be in request body"
+    assert result["top_p"] == 0.9, "top_p should be in request body"
+
+    # Verify Bedrock-specific params are added
+    assert (
+        result["anthropic_version"] == "bedrock-2023-05-31"
+    ), "anthropic_version should be set"
+    assert "model" not in result, "model should be removed for Bedrock Invoke API"
+    assert "stream" not in result, "stream should be removed for Bedrock Invoke API"
+
+    # Verify messages are present
+    assert "messages" in result, "messages should be in request body"
+    assert len(result["messages"]) == 1, "should have 1 message"
+
+
+def test_output_format_conversion_to_inline_schema():
+    """
+    Test that output_format is converted to inline schema in message content for Bedrock Invoke.
+
+    Bedrock Invoke doesn't support the output_format parameter, so LiteLLM converts it by
+    embedding the schema directly into the user message content.
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    config = AmazonAnthropicClaudeMessagesConfig()
+
+    # Test messages
+    messages = [
+        {
+            "role": "user",
+            "content": "Extract the key information from this email: John Smith (john@example.com) is interested in our Enterprise plan.",
+        }
+    ]
+
+    # Output format with schema
+    output_format_schema = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "email": {"type": "string"},
+            "plan_interest": {"type": "string"},
+        },
+        "required": ["name", "email", "plan_interest"],
+        "additionalProperties": False,
+    }
+
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 1024,
+        "output_format": {"type": "json_schema", "schema": output_format_schema},
+    }
+
+    # Transform the request
+    result = config.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # Verify output_format was removed from the request
+    assert (
+        "output_format" not in result
+    ), "output_format should be removed from request body"
+
+    # Verify the schema was added to the last user message content
+    assert "messages" in result
+    last_user_message = result["messages"][0]
+    assert last_user_message["role"] == "user"
+
+    content = last_user_message["content"]
+    assert isinstance(content, list), "content should be a list"
+    assert len(content) == 2, "content should have 2 items (original text + schema)"
+
+    # Check original text is preserved
+    assert content[0]["type"] == "text"
+    assert "John Smith" in content[0]["text"]
+
+    # Check schema was added as JSON string
+    assert content[1]["type"] == "text"
+    schema_text = content[1]["text"]
+
+    # Parse the schema JSON
+    parsed_schema = json.loads(schema_text)
+    assert parsed_schema["type"] == "object"
+    assert "name" in parsed_schema["properties"]
+    assert "email" in parsed_schema["properties"]
+    assert "plan_interest" in parsed_schema["properties"]
+    assert parsed_schema["required"] == ["name", "email", "plan_interest"]
+
+    # Verify other params are preserved
+    assert result["max_tokens"] == 1024
+    assert result["anthropic_version"] == "bedrock-2023-05-31"
+
+
+def test_output_format_conversion_with_string_content():
+    """
+    Test that output_format conversion works when message content is a string (not a list).
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    config = AmazonAnthropicClaudeMessagesConfig()
+
+    # Test messages with string content
+    messages = [{"role": "user", "content": "What is 2+2?"}]
+
+    output_format_schema = {
+        "type": "object",
+        "properties": {"result": {"type": "integer"}},
+    }
+
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 100,
+        "output_format": {"type": "json_schema", "schema": output_format_schema},
+    }
+
+    # Transform the request
+    result = config.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # Verify the content was converted to list format
+    last_user_message = result["messages"][0]
+    content = last_user_message["content"]
+    assert isinstance(content, list), "content should be converted to list"
+    assert len(content) == 2, "content should have 2 items"
+
+    # Check original text
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == "What is 2+2?"
+
+    # Check schema was added
+    assert content[1]["type"] == "text"
+    parsed_schema = json.loads(content[1]["text"])
+    assert "result" in parsed_schema["properties"]
+
+
+def test_output_format_with_no_schema():
+    """
+    Test that if output_format has no schema, the conversion is skipped gracefully.
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    config = AmazonAnthropicClaudeMessagesConfig()
+
+    messages = [{"role": "user", "content": "Hello"}]
+
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 100,
+        "output_format": {
+            "type": "json_schema"
+            # No schema field
+        },
+    }
+
+    # Transform the request
+    result = config.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-20250514-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # Verify output_format was removed but no schema was added
+    assert "output_format" not in result
+    last_user_message = result["messages"][0]
+
+    # Content should remain as string (not converted to list)
+    assert isinstance(last_user_message["content"], str)
+    assert last_user_message["content"] == "Hello"
+
+
+def test_opus_4_5_model_detection():
+    """
+    Test that the _is_claude_opus_4_5 method correctly identifies Opus 4.5 models
+    with various naming conventions.
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+
+    config = AmazonAnthropicClaudeMessagesConfig()
+
+    # Test various Opus 4.5 naming patterns
+    opus_4_5_models = [
+        "anthropic.claude-opus-4-5-20250514-v1:0",
+        "anthropic.claude-opus-4.5-20250514-v1:0",
+        "anthropic.claude-opus_4_5-20250514-v1:0",
+        "anthropic.claude-opus_4.5-20250514-v1:0",
+        "us.anthropic.claude-opus-4-5-20250514-v1:0",
+        "ANTHROPIC.CLAUDE-OPUS-4-5-20250514-V1:0",  # Case insensitive
+    ]
+
+    for model in opus_4_5_models:
+        assert config._is_claude_opus_4_5(model), f"Should detect {model} as Opus 4.5"
+
+    # Test non-Opus 4.5 models
+    non_opus_4_5_models = [
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-opus-4-20250514-v1:0",  # Opus 4, not 4.5
+        "anthropic.claude-opus-4-1-20250514-v1:0",  # Opus 4.1, not 4.5
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+    ]
+
+    for model in non_opus_4_5_models:
+        assert not config._is_claude_opus_4_5(
+            model
+        ), f"Should not detect {model} as Opus 4.5"
+
+
+# def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
+#     """
+#     Test that unsupported beta headers are filtered out for Bedrock Invoke API.
+
+#     Bedrock Invoke API only supports a specific whitelist of beta flags and returns
+#     "invalid beta flag" error for others (e.g., structured-outputs, mcp-servers).
+#     This test ensures unsupported headers are filtered while keeping supported ones.
+
+#     Fixes: https://github.com/BerriAI/litellm/issues/16726
+#     """
+#     config = AmazonAnthropicClaudeConfig()
+
+#     messages = [{"role": "user", "content": "test"}]
+
+#     # Test 1: structured-outputs beta header (unsupported)
+#     headers = {"anthropic-beta": "structured-outputs-2025-11-13"}
+
+#     result = config.transform_request(
+#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+#         messages=messages,
+#         optional_params={},
+#         litellm_params={},
+#         headers=headers,
+#     )
+
+#     # Verify structured-outputs beta is filtered out
+#     anthropic_beta = result.get("anthropic_beta", [])
+#     assert not any("structured-outputs" in beta for beta in anthropic_beta), \
+#         f"structured-outputs beta should be filtered, got: {anthropic_beta}"
+
+#     # Test 2: mcp-servers beta header (unsupported - the main issue from #16726)
+#     headers = {"anthropic-beta": "mcp-servers-2025-12-04"}
+
+#     result = config.transform_request(
+#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+#         messages=messages,
+#         optional_params={},
+#         litellm_params={},
+#         headers=headers,
+#     )
+
+#     # Verify mcp-servers beta is filtered out
+#     anthropic_beta = result.get("anthropic_beta", [])
+#     assert not any("mcp-servers" in beta for beta in anthropic_beta), \
+#         f"mcp-servers beta should be filtered, got: {anthropic_beta}"
+
+#     # Test 3: Mix of supported and unsupported beta headers
+#     headers = {"anthropic-beta": "computer-use-2024-10-22,mcp-servers-2025-12-04,structured-outputs-2025-11-13"}
+
+#     result = config.transform_request(
+#         model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+#         messages=messages,
+#         optional_params={},
+#         litellm_params={},
+#         headers=headers,
+#     )
+
+#     # Verify only supported betas are kept
+#     anthropic_beta = result.get("anthropic_beta", [])
+#     assert not any("structured-outputs" in beta for beta in anthropic_beta), \
+#         f"structured-outputs beta should be filtered, got: {anthropic_beta}"
+#     assert not any("mcp-servers" in beta for beta in anthropic_beta), \
+#         f"mcp-servers beta should be filtered, got: {anthropic_beta}"
+#     assert any("computer-use" in beta for beta in anthropic_beta), \
+#         f"computer-use beta should be kept, got: {anthropic_beta}"
+
+
+def test_output_config_forwarded_for_bedrock_chat_invoke_request():
+    """Bedrock Invoke chat path forwards ``output_config`` for adaptive Claude models."""
+    config = AmazonAnthropicClaudeConfig()
+
+    messages = [{"role": "user", "content": "test"}]
+
+    optional_params = {
+        "max_tokens": 100,
+        "output_config": {"effort": "high"},
+    }
+
+    result = config.transform_request(
+        model="anthropic.claude-opus-4-7",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "high"}
+    assert result["max_tokens"] == 100
+
+
+def test_output_config_format_converted_for_bedrock_chat_invoke_request():
+    """Bedrock Invoke chat path inlines ``output_config.format`` for models
+    without native structured-output support and keeps the effort key."""
+    config = AmazonAnthropicClaudeConfig()
+    schema = {
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+    }
+
+    with patch(  # test-quality-ok: pin non-native path
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
+        side_effect=lambda _model, key: key == "supports_output_config",
+    ):
+        result = config.transform_request(
+            model="anthropic.claude-opus-4-7",
+            messages=[{"role": "user", "content": "test"}],
+            optional_params={
+                "max_tokens": 100,
+                "output_config": {
+                    "effort": "xhigh",
+                    "format": {"type": "json_schema", "schema": schema},
+                },
+            },
+            litellm_params={},
+            headers={},
+        )
+
+    assert result.get("output_config") == {"effort": "xhigh"}
+    last_content = result["messages"][0]["content"]
+    assert json.loads(last_content[-1]["text"]) == schema
+
+
+def test_output_config_format_forwarded_for_bedrock_chat_invoke_request():
+    """Bedrock Invoke chat path forwards ``output_config.format`` alongside effort
+    for models with native structured-output support (Claude Opus 4.7)."""
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+    }
+
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model="anthropic.claude-opus-4-7",
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={
+            "max_tokens": 100,
+            "output_config": {"effort": "xhigh", "format": schema_format},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": "xhigh", "format": schema_format}
+    assert "answer" not in json.dumps(result["messages"])
+
+
+@pytest.mark.parametrize(
+    "model,expected_effort",
+    [
+        ("anthropic.claude-opus-4-5-20251101-v1:0", "high"),
+        ("anthropic.claude-opus-4-6-v1", "max"),
+        ("anthropic.claude-opus-4-7", "xhigh"),
+    ],
+)
+def test_output_config_effort_normalized_for_bedrock_chat_invoke_request(
+    model, expected_effort
+):
+    """Bedrock Invoke chat path accepts ``xhigh`` and forwards the provider-safe effort."""
+    config = AmazonAnthropicClaudeConfig()
+
+    result = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "test"}],
+        optional_params={
+            "max_tokens": 100,
+            "output_config": {"effort": "xhigh"},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"effort": expected_effort}
+
+
+def test_bedrock_chat_invoke_checks_output_config_support_with_bedrock_provider():
+    config = AmazonAnthropicClaudeConfig()
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {"max_tokens": 100, "output_config": {"effort": "high"}}
+
+    with patch(
+        "litellm.llms.bedrock.common_utils._bedrock_model_supports",
+        return_value=True,
+    ) as mock_supports_factory:
+        result = config.transform_request(
+            model="us.anthropic.claude-opus-4-7",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+    mock_supports_factory.assert_called_once_with("us.anthropic.claude-opus-4-7", "supports_output_config")
+    assert result["output_config"] == {"effort": "high"}
+
+
+def test_output_format_removed_from_bedrock_invoke_request():
+    """
+    Test that output_format parameter is removed from Bedrock Invoke requests.
+
+    Bedrock Invoke API doesn't support the output_format parameter (only supported
+    in Anthropic Messages API). This test ensures it's removed to prevent errors.
+    """
+    config = AmazonAnthropicClaudeConfig()
+
+    messages = [{"role": "user", "content": "test"}]
+
+    # Create a request with output_format via map_openai_params
+    non_default_params = {"response_format": {"type": "json_object"}}
+    optional_params = {}
+
+    # This should trigger tool-based structured outputs
+    optional_params = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+        drop_params=False,
+    )
+
+    result = config.transform_request(
+        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    # Verify output_format is not in the request
+    assert (
+        "output_format" not in result
+    ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+
+
+def test_bedrock_chat_invoke_forwards_output_config_format_natively(local_model_cost_map):
+    """Regression: ``output_config.format`` is forwarded verbatim on models Bedrock
+    enforces structured outputs for, instead of being inlined as prompt text."""
+    import json
+
+    config = AmazonAnthropicClaudeConfig()
+    schema_format = {
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {"zebra_count": {"type": "integer"}},
+            "required": ["zebra_count"],
+            "additionalProperties": False,
+        },
+    }
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "say hello"}],
+        optional_params={
+            "max_tokens": 100,
+            "output_config": {"format": schema_format},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+    assert "zebra_count" not in json.dumps(result["messages"])
+
+
+def test_bedrock_chat_invoke_drop_params_keeps_native_output_config_format(local_model_cost_map, monkeypatch):
+    """``drop_params=True`` must not eat ``output_config.format`` before the
+    native-forwarding router runs (Sonnet 4.5 has no effort flags)."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    schema_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"zebra_count": {"type": "integer"}}},
+    }
+
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "say hello"}],
+        optional_params={"max_tokens": 100, "output_config": {"format": schema_format}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("output_config") == {"format": schema_format}
+
+
+def test_bedrock_chat_invoke_drop_params_still_inlines_for_non_native(local_model_cost_map, monkeypatch):
+    """``drop_params=True`` on a model without native structured-output support
+    still reaches the inline-schema fallback instead of losing the schema."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+    schema = {"type": "object", "properties": {"zebra_count": {"type": "integer"}}}
+
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model="anthropic.claude-3-haiku-20240307-v1:0",
+        messages=[{"role": "user", "content": "say hello"}],
+        optional_params={
+            "max_tokens": 100,
+            "output_config": {"format": {"type": "json_schema", "schema": schema}},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert "output_config" not in result
+    last_content = result["messages"][-1]["content"]
+    assert json.loads(last_content[-1]["text"]) == schema
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["us.anthropic.claude-fable-5-1", "anthropic.claude-fable-5-1"],
+)
+def test_bedrock_chat_invoke_fable_5_1_response_format_avoids_forced_tool_choice(local_model_cost_map, model):
+    """Regression: Bedrock rejects both native ``output_config.format`` and forced
+    tool_choice for Fable 5.1, so invoke must use the tool-based path without a
+    forced ``tool_choice``."""
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "output_format" not in result
+    assert "tools" in result
+    assert "tool_choice" not in result
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5", "us.anthropic.claude-fable-5-1"])
+def test_bedrock_chat_invoke_tool_based_response_format_still_upgrades_legacy_thinking(local_model_cost_map, model):
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            },
+            "thinking": {"type": "enabled", "budget_tokens": 4096},
+            "max_tokens": 8192,
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert "tools" in result
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "high"}
+
+
+def test_bedrock_chat_invoke_response_format_stub_still_upgrades_legacy_thinking(local_model_cost_map):
+    """Regression: the tool-based ``response_format`` path swaps in a Claude 3 stub
+    model before the shared Anthropic mapping, which hid the adaptive-only model
+    from the legacy ``thinking`` upgrade and left ``type=enabled`` on the wire."""
+    result = AmazonAnthropicClaudeConfig().map_openai_params(
+        non_default_params={
+            "response_format": {"type": "json_object"},
+            "thinking": {"type": "enabled", "budget_tokens": 4096},
+            "max_tokens": 8192,
+        },
+        optional_params={},
+        model="us.anthropic.claude-fable-5-1",
+        drop_params=False,
+    )
+
+    assert result["thinking"] == {"type": "adaptive"}
+    assert result["output_config"] == {"effort": "high"}
+
+
+async def test_bedrock_invoke_claude_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"http://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = request.content.decode()
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "Green"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert image_url not in captured["body"]
+    assert async_only_image_fetch.base64_png in captured["body"]
+
+
+async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sources_off_the_event_loop(async_only_image_fetch):
+    pdf_url = f"http://docs.example/{uuid.uuid4()}.pdf"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "A lease"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this document?"},
+                    {"type": "document", "source": {"type": "url", "url": pdf_url}},
+                ],
+            }
+        ],
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "A lease"
+    assert async_only_image_fetch.fetched == [pdf_url]
+    assert {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": async_only_image_fetch.base64_png},
+    } in captured["body"]["messages"][0]["content"]
+
+
+@pytest.mark.parametrize(
+    "model, expected_betas",
+    [
+        pytest.param("us.anthropic.claude-opus-4-8", ["tool-search-tool-2025-10-19"], id="opus_4_8"),
+        pytest.param("us.anthropic.claude-opus-5", ["tool-search-tool-2025-10-19"], id="opus_5"),
+        pytest.param("us.anthropic.claude-sonnet-5", ["tool-search-tool-2025-10-19"], id="sonnet_5"),
+        pytest.param("us.anthropic.claude-haiku-4-5-20251001-v1:0", ["tool-search-tool-2025-10-19"], id="haiku_4_5"),
+        pytest.param("us.anthropic.claude-opus-4-1-20250805-v1:0", None, id="opus_4_1_unsupported"),
+    ],
+)
+def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
+    local_model_cost_map, local_beta_headers_config, model, expected_betas
+):
+    """LIT-5851: the chat Invoke path used to add the ``tool-search-tool-2025-10-19``
+    beta whenever the id contained ``opus-4``, so Opus 5 and Sonnet 5 lost it, Haiku
+    4.5 never had it, and Opus 4.1 got it without support. The gate now follows the
+    model map's ``supports_tool_search`` flag, shared with the messages path."""
+    result = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Add 2 and 3"}],
+        optional_params={
+            "max_tokens": 64,
+            "tools": [
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add_numbers",
+                        "description": "Add two integers",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                            "required": ["a", "b"],
+                        },
+                    },
+                },
+            ],
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("anthropic_beta") == expected_betas
+
+
+FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
+EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
+
+
+def _chat_invoke_request_with_tools(
+    tools: list[dict[str, object]], headers: dict[str, str] | None = None
+) -> dict[str, object]:
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 64, "stream": True, "tools": tools},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    return config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "write a big file"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers=headers or {},
+    )
+
+
+def _eager_openai_tool(name: str, **extra: object) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": EAGER_TOOL_SCHEMA}, **extra}
+
+
+def test_bedrock_chat_invoke_eager_input_streaming_tool_adds_beta_and_strips_key():
+    result = _chat_invoke_request_with_tools(
+        [_eager_openai_tool("write_file", eager_input_streaming=True), _eager_openai_tool("read_file")]
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
+    assert [tool["name"] for tool in result["tools"]] == ["write_file", "read_file"]
+    assert all("eager_input_streaming" not in tool for tool in result["tools"])
+    assert result["tools"][0]["input_schema"] == EAGER_TOOL_SCHEMA
+
+
+def test_bedrock_chat_invoke_eager_input_streaming_false_strips_key_without_beta():
+    result = _chat_invoke_request_with_tools([_eager_openai_tool("write_file", eager_input_streaming=False)])
+
+    assert "anthropic_beta" not in result
+    assert "eager_input_streaming" not in result["tools"][0]
+
+
+def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_client_header():
+    result = _chat_invoke_request_with_tools(
+        [_eager_openai_tool("write_file", eager_input_streaming=True)],
+        headers={"anthropic-beta": FINE_GRAINED_TOOL_STREAMING_BETA},
+    )
+
+    assert result["anthropic_beta"] == [FINE_GRAINED_TOOL_STREAMING_BETA]
