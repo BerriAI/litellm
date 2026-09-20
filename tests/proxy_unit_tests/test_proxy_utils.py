@@ -2004,7 +2004,7 @@ def test_provider_specific_header():
     )
     # Verify multi-provider support: anthropic headers work across multiple providers
     assert data["provider_specific_header"] == {
-        "custom_llm_provider": "anthropic,bedrock,vertex_ai",
+        "custom_llm_provider": "anthropic,bedrock,bedrock_mantle,vertex_ai",
         "extra_headers": {
             "anthropic-beta": "prompt-caching-2024-07-31",
         },
@@ -2076,7 +2076,7 @@ def test_provider_specific_header_multi_provider():
     assert "provider_specific_header" in data
     assert (
         data["provider_specific_header"]["custom_llm_provider"]
-        == "anthropic,bedrock,vertex_ai"
+        == "anthropic,bedrock,bedrock_mantle,vertex_ai"
     )
     assert data["provider_specific_header"]["extra_headers"] == {
         "anthropic-beta": "context-1m-2025-08-07",
