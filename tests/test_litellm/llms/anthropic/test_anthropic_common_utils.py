@@ -14,6 +14,7 @@ import json
 import os
 import sys
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -2293,15 +2294,15 @@ class TestMalformedContentListItems:
             pytest.param([["nested"]], id="list_item"),
         ],
     )
-    def test_beta_headers_resolve_for_non_dict_content_items(self, content):
+    def test_beta_headers_resolve_for_non_dict_content_items(self, content: list[object]) -> None:
         """The header path completes instead of raising, so the caller gets the
         provider's own validation error rather than an internal failure."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        config = AnthropicModelInfo()
-        messages = [{"role": "user", "content": content}]
+        config: Final = AnthropicModelInfo()
+        messages: Final = [{"role": "user", "content": content}]
 
-        headers = config.validate_environment(
+        headers: Final = config.validate_environment(
             headers={},
             model="claude-sonnet-4-5",
             messages=messages,
@@ -2312,12 +2313,12 @@ class TestMalformedContentListItems:
 
         assert headers["x-api-key"] == FAKE_REGULAR_KEY
 
-    def test_real_content_parts_still_set_their_beta_headers(self):
+    def test_real_content_parts_still_set_their_beta_headers(self) -> None:
         """The guard skips malformed items only; a genuine media part must still be
         detected, otherwise the pdf beta header would silently stop being sent."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        config = AnthropicModelInfo()
+        config: Final = AnthropicModelInfo()
 
         assert config.is_pdf_used([{"role": "user", "content": [{"type": "image", "source": {}}]}]) is True
         assert config.is_pdf_used([{"role": "user", "content": [{"type": "text", "text": "hi"}]}]) is False
@@ -2328,11 +2329,11 @@ class TestMalformedContentListItems:
             is True
         )
 
-    def test_mixed_list_keeps_detecting_the_valid_part(self):
+    def test_mixed_list_keeps_detecting_the_valid_part(self) -> None:
         """A malformed item earlier in the list must not mask a real media part after it."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        config = AnthropicModelInfo()
-        messages = [{"role": "user", "content": ["what type of file is this?", {"type": "image", "source": {}}]}]
+        config: Final = AnthropicModelInfo()
+        messages: Final = [{"role": "user", "content": ["what type of file is this?", {"type": "image", "source": {}}]}]
 
         assert config.is_pdf_used(messages) is True
