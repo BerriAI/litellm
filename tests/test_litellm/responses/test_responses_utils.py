@@ -1,5 +1,6 @@
 from importlib import import_module
 import base64
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,6 +14,33 @@ from litellm.types.utils import Usage
 
 
 class TestResponsesAPIRequestUtils:
+    def test_selective_reasoning_removal_preserves_other_origins_and_compaction(self) -> None:
+        foreign: Final = {
+            "type": "reasoning",
+            "id": ResponsesAPIRequestUtils._build_encrypted_item_id("sol", "rs_sol"),
+            "encrypted_content": "opaque-sol",
+            "summary": [{"type": "summary_text", "text": "Investigated the failing test"}],
+        }
+        native: Final = {
+            "type": "reasoning",
+            "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("opaque-luna", "luna"),
+            "summary": [],
+        }
+        compaction: Final = {
+            "type": "compaction",
+            "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("opaque-state", "sol"),
+        }
+        untagged: Final = {"type": "reasoning", "encrypted_content": "opaque-unknown", "summary": []}
+        history: Final = [foreign, native, compaction, untagged]
+
+        ResponsesAPIRequestUtils.strip_encrypted_reasoning_from_input(history, originating_model_ids=frozenset({"sol"}))
+
+        assert history == [{"type": "reasoning", "summary": foreign["summary"]}, native, compaction, untagged]
+        assert foreign["encrypted_content"] == "opaque-sol"
+        assert history[1] is native
+        assert history[2] is compaction
+        assert history[3] is untagged
+
     def test_get_optional_params_responses_api(self):
         """Test that optional parameters are correctly processed for responses API"""
         # Setup
