@@ -610,7 +610,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
     async def _claim_batch_charge(self, spend_key: str, batch_id: str, ttl_seconds: int) -> bool:
         marker_key: Final = batch_charged_once_marker_key(spend_key=spend_key, batch_id=batch_id)
-        if await self.dual_cache.async_get_cache(key=marker_key) is not None:
-            return False
-        await self.dual_cache.async_set_cache(key=marker_key, value=1, ttl=ttl_seconds)
-        return True
+        polls: Final = await self.dual_cache.async_increment_cache(
+            key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
+        )
+        return polls == 1
