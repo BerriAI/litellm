@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import click
 import httpx
+from click.core import ParameterSource
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict
 
@@ -181,12 +182,21 @@ def append_query_params(url: str | None, params: dict) -> str:
     return modified_url
 
 
-def resolve_v2_migration_resolver(*, use_legacy_flag: bool) -> bool:
+def resolve_v2_migration_resolver(*, use_legacy_flag: bool, env_value: str | None) -> bool:
     from litellm_proxy_extras.utils import str_to_bool
 
     if use_legacy_flag:
         return False
-    return bool(str_to_bool(os.getenv("USE_V2_MIGRATION_RESOLVER", "true")))
+    if env_value is None:
+        return True
+    return bool(str_to_bool(env_value))
+
+
+def deprecated_v2_flag_passed_on_cli() -> bool:
+    ctx: Final = click.get_current_context(silent=True)
+    if ctx is None:
+        return False
+    return ctx.get_parameter_source("use_v2_migration_resolver") is ParameterSource.COMMANDLINE
 
 
 class ProxyInitializationHelpers:
@@ -1368,14 +1378,15 @@ def run_server(
                     check_prisma_schema_diff(db_url=None)
                 else:
                     use_v2_resolver: Final = resolve_v2_migration_resolver(
-                        use_legacy_flag=use_legacy_migration_resolver
+                        use_legacy_flag=use_legacy_migration_resolver,
+                        env_value=os.getenv("USE_V2_MIGRATION_RESOLVER"),
                     )
-                    if use_v2_migration_resolver and use_v2_resolver:
+                    if deprecated_v2_flag_passed_on_cli() and use_v2_resolver:
                         print(
                             "\033[1;33mLiteLLM Proxy: --use_v2_migration_resolver is "
-                            "deprecated and has no effect \u2014 the v2 migration resolver "
-                            "is now the default. You can safely remove it. To opt back "
-                            "into the legacy v1 resolver, pass "
+                            "deprecated and has no effect, because the v2 migration "
+                            "resolver is now the default. You can safely remove it. To "
+                            "opt back into the legacy v1 resolver, pass "
                             "--use_legacy_migration_resolver.\033[0m"
                         )
                     if not use_v2_resolver:
