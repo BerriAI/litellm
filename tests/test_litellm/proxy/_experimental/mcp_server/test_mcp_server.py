@@ -2557,6 +2557,64 @@ async def test_mcp_routing_batch_body_is_not_stashed_for_auth():
 
 
 @pytest.mark.asyncio
+async def test_mcp_routing_truncated_json_body_is_not_stashed_for_auth():
+    """A peek truncated mid-JSON (oversized body) must fail closed for auth: the
+    scope callable yields ``b"{}"`` so the request stays budget-enforced."""
+    try:
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCP_PEEKED_BODY_SCOPE_KEY,
+            _admission_request,
+        )
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateless,
+        )
+        from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    truncated_body: Final = b'{"jsonrpc":"2.0","id":1,"method":"tools'
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/mcp",
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", b"Bearer test-key"),
+        ],
+    }
+    receive = AsyncMock(side_effect=[{"type": "http.request", "body": truncated_body, "more_body": False}])
+    send = AsyncMock()
+
+    with (
+        patch(  # test-quality-ok: the ASGI handler reads auth from a module-level helper; the suite's only seam
+            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+            new_callable=AsyncMock,
+            return_value=(MagicMock(), None, None, None, None, None),
+        ),
+        patch(  # test-quality-ok: registry is empty in unit tests; key owns one server
+            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            new_callable=AsyncMock,
+            return_value=[MagicMock()],
+        ),
+        patch(  # test-quality-ok: init flag is a module global; no injection seam
+            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+            True,
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "handle_request", new=AsyncMock()
+        ),
+        patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
+            session_manager_stateless, "_server_instances", {}
+        ),
+    ):
+        await handle_streamable_http_mcp(scope, receive, send)
+
+    assert await scope[MCP_PEEKED_BODY_SCOPE_KEY]() == b"{}"
+    assert await _read_request_body(_admission_request(scope)) == {}
+
+
+@pytest.mark.asyncio
 async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
     """
     A no-session-id POST with a very large chunked body should not force
