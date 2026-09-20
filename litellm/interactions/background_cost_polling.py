@@ -332,7 +332,9 @@ async def poll_and_log_background_interaction_cost(
     context: BackgroundInteractionPollContext,
     fetch_interaction: FetchInteraction = fetch_background_interaction,
 ) -> SettlementOutcome | None:
-    last_seen_status: str | None = None  # rebind-ok: the give-up log names the status the poll last saw
+    last_response: InteractionsAPIResponse | None = (
+        None  # rebind-ok: the give-up path settles from, or names, what the poll last saw
+    )
     for interval in _poll_intervals(
         initial=context.initial_interval_seconds,
         maximum=context.max_interval_seconds,
@@ -350,7 +352,7 @@ async def poll_and_log_background_interaction_cost(
                 e,
             )
             continue
-        last_seen_status = response.status
+        last_response = response
         if response.status not in _TERMINAL_STATUSES:
             continue
         if (claimed := await _claim(context)) is None:
@@ -360,14 +362,16 @@ async def poll_and_log_background_interaction_cost(
         return await _record(context, await _settle_terminal(logging_obj=context.logging_obj, response=response))
     if not await _claim(context):
         return None
-    if last_seen_status is not None and last_seen_status not in _POLLABLE_STATUSES:
+    if last_response is not None and last_response.status in _TERMINAL_STATUSES:
+        return await _record(context, await _settle_terminal(logging_obj=context.logging_obj, response=last_response))
+    if last_response is not None and last_response.status not in _POLLABLE_STATUSES:
         verbose_logger.error(
             "Gave up cost polling for background interaction %s after %ss: its last status %r is in neither "
             "the pollable nor the terminal set, so this proxy never learned how to settle it and its usage "
             "will not be tracked",
             context.interaction_id,
             context.timeout_seconds,
-            last_seen_status,
+            last_response.status,
         )
     else:
         verbose_logger.warning(

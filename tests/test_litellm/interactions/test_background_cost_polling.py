@@ -724,6 +724,53 @@ async def test_restart_resumes_only_the_rows_no_replica_claimed():
     assert await store.is_claimed("interactions/bg-orphaned")
 
 
+class _ClaimAnswersOnlyAfterTheLastFetch:
+    def __init__(self):
+        self.store = InMemoryBackgroundSettlementStore()
+        self.fetches = 0
+        self.fetches_at_last_claim = -1
+
+    async def fetch(self, context):
+        self.fetches += 1
+        return _response("completed", with_usage=True)
+
+    async def register(self, pending):
+        await self.store.register(pending)
+
+    async def pending(self, interaction_id):
+        return await self.store.pending(interaction_id)
+
+    async def is_claimed(self, interaction_id):
+        return await self.store.is_claimed(interaction_id)
+
+    async def claim(self, interaction_id):
+        if self.fetches != self.fetches_at_last_claim:
+            self.fetches_at_last_claim = self.fetches
+            raise RuntimeError("database unavailable")
+        return await self.store.claim(interaction_id)
+
+    async def record_outcome(self, interaction_id, outcome):
+        return None
+
+    async def unclaimed(self):
+        return await self.store.unclaimed()
+
+
+@pytest.mark.asyncio
+async def test_poller_bills_the_completed_response_it_saw_when_the_claim_only_answers_at_the_deadline():
+    logging_obj = _logging_obj()
+    store = _ClaimAnswersOnlyAfterTheLastFetch()
+
+    outcome = await poll_and_log_background_interaction_cost(
+        _context(logging_obj, timeout_seconds=0.01, store=store),
+        fetch_interaction=store.fetch,
+    )
+
+    assert store.fetches >= 2
+    assert outcome == "billed"
+    assert logging_obj.model_call_details["response_cost"] > 0
+
+
 class _DownStore:
     async def register(self, pending):
         raise RuntimeError("database unavailable")
