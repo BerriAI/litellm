@@ -3534,6 +3534,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cost_optimization/prompt_caching/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Prompt Caching Requests */
+        get: operations["get_prompt_caching_requests_cost_optimization_prompt_caching_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials": {
         parameters: {
             query?: never;
@@ -35814,6 +35831,48 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /** PromptCachingRequest */
+        PromptCachingRequest: {
+            /** Cache Creation Tokens */
+            cache_creation_tokens: number;
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Gateway Injected */
+            gateway_injected: boolean;
+            /** Model */
+            model: string;
+            /** Net Savings */
+            net_savings: number | null;
+            /** Request Id */
+            request_id: string;
+            /** Spend */
+            spend: number;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+        };
+        /** PromptCachingRequestCursor */
+        PromptCachingRequestCursor: {
+            /** Request Id */
+            request_id: string;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+        };
+        /** PromptCachingRequestsResponse */
+        PromptCachingRequestsResponse: {
+            /** Has More */
+            has_more: boolean;
+            next_cursor: components["schemas"]["PromptCachingRequestCursor"] | null;
+            /** Page Size */
+            page_size: number;
+            /** Requests */
+            requests: components["schemas"]["PromptCachingRequest"][];
+        };
         /** PromptInfo */
         PromptInfo: {
             /**
@@ -47225,6 +47284,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CachePredictionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_prompt_caching_requests_cost_optimization_prompt_caching_requests_get: {
+        parameters: {
+            query: {
+                start_date: string;
+                end_date: string;
+                page_size?: number;
+                filter?: "all" | "injected" | "hits";
+                cursor_start_time?: string | null;
+                cursor_request_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptCachingRequestsResponse"];
                 };
             };
             /** @description Validation Error */
