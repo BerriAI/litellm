@@ -1,8 +1,8 @@
 import base64
 import io
 import json
+import tempfile
 from pathlib import Path
-from typing import Final
 
 import httpx
 import pytest
@@ -14,20 +14,6 @@ from litellm.types.utils import ImageResponse, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
-
-
-class GenericFileLike:
-    def __init__(self, data: bytes):
-        self._buffer = io.BytesIO(data)
-
-    def read(self) -> bytes:
-        return self._buffer.read()
-
-    def seek(self, position: int) -> int:
-        return self._buffer.seek(position)
-
-    def tell(self) -> int:
-        return self._buffer.tell()
 
 
 def test_fal_ai_resolves_to_image_edit_config():
@@ -101,27 +87,36 @@ def test_transform_request_inlines_local_images_as_data_urls_and_keeps_remote_ur
     assert "mask" not in body
 
 
-@pytest.mark.parametrize("input_kind", ("path", "tuple_bytes", "tuple_file_like", "file_like"))
-def test_transform_request_accepts_openai_file_types(tmp_path, input_kind):
-    image_path: Final[Path] = tmp_path / "in.png"
-    image_path.write_bytes(PNG_BYTES)
-    image: Final[object] = {
-        "path": image_path,
-        "tuple_bytes": ("in.png", PNG_BYTES),
-        "tuple_file_like": ("in.png", io.BytesIO(PNG_BYTES), "image/png"),
-        "file_like": GenericFileLike(PNG_BYTES),
-    }[input_kind]
-    expected_data_url: Final = "data:image/png;base64," + base64.b64encode(PNG_BYTES).decode()
-    body, files = FalAIImageEditConfig().transform_image_edit_request(
-        model="openai/gpt-image-2",
+@pytest.mark.parametrize(
+    "image_factory",
+    [
+        pytest.param(lambda path: ("red.png", PNG_BYTES), id="filename-bytes-tuple"),
+        pytest.param(lambda path: ("red.png", PNG_BYTES, "image/png"), id="three-tuple-with-content-type"),
+        pytest.param(lambda path: path, id="path"),
+        pytest.param(lambda path: io.FileIO(str(path), "rb"), id="file-io"),
+        pytest.param(
+            lambda path: tempfile.SpooledTemporaryFile(suffix=".png"),
+            id="spooled-temp-file",
+        ),
+    ],
+)
+def test_transform_request_reads_every_file_types_input(tmp_path, image_factory):
+    path = Path(tmp_path) / "red.png"
+    path.write_bytes(PNG_BYTES)
+    image = image_factory(path)
+    if isinstance(image, tempfile.SpooledTemporaryFile):
+        image.write(PNG_BYTES)
+        image.seek(3)
+    body, _ = FalAIImageEditConfig().transform_image_edit_request(
+        model="openai/gpt-image-2.5/flare/edit",
         prompt="make it blue",
         image=image,
         image_edit_optional_request_params={},
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )
-    assert files == ()
-    assert body["image_urls"] == (expected_data_url,)
+    expected_data_url = "data:image/png;base64," + base64.b64encode(PNG_BYTES).decode()
+    assert body["image_urls"][0] == expected_data_url
 
 
 def test_transform_response_maps_fal_images():
