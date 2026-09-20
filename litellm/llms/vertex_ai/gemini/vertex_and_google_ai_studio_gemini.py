@@ -84,7 +84,7 @@ from litellm.utils import (
     supports_reasoning,
 )
 
-from ....utils import _remove_additional_properties, _remove_strict_from_schema
+from ....utils import _remove_additional_properties, _remove_strict_from_schema, _schema_contains_key
 from ..common_utils import (
     VertexAIError,
     _build_json_schema,
@@ -612,6 +612,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
         value = _remove_additional_properties(value)
+        if _schema_contains_key(value, "strict"):
+            verbose_logger.warning(
+                "Gemini function declarations do not support 'strict'. "
+                "Dropping 'strict' from tools; the constraint will not be enforced upstream. "
+                "See https://github.com/BerriAI/litellm/issues/41913"
+            )
         # remove 'strict' from tools
         value = _remove_strict_from_schema(value)
 
@@ -682,6 +688,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # Empty config - Gemini will use defaults
                     computerUse = {}
             elif openai_function_object is not None:
+                if openai_function_object.pop("allowed_callers", None) is not None:
+                    verbose_logger.warning(
+                        f"Gemini function declarations do not support 'allowed_callers'. "
+                        f"Dropping 'allowed_callers' from tool '{openai_function_object.get('name')}'; "
+                        f"the restriction will not be enforced upstream. "
+                        f"See https://github.com/BerriAI/litellm/issues/41913"
+                    )
                 gtool_func_declaration = FunctionDeclaration(
                     name=openai_function_object["name"],
                 )
@@ -1172,7 +1185,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # Gemini does not support parallel_tool_calls=False with multiple
                 # tools. Drop the param instead of failing — Responses API clients
                 # often send parallel_tool_calls=false by default.
-                if not (value is False and num_tools > 1):
+                if value is False and num_tools > 1:
+                    verbose_logger.warning(
+                        "Gemini does not support parallel_tool_calls=False with multiple tools. "
+                        "Dropping the param; parallel tool calls will not be restricted upstream. "
+                        "See https://github.com/BerriAI/litellm/issues/41913"
+                    )
+                else:
                     optional_params["parallel_tool_calls"] = value
             elif param == "seed":
                 optional_params["seed"] = value

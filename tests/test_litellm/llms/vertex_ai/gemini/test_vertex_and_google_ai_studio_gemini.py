@@ -6292,3 +6292,89 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+def _strict_function_tool():
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_a",
+                "description": "Controlled tool.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"value": {"type": "string"}},
+                    "required": ["value"],
+                },
+                "strict": True,
+            },
+        }
+    ]
+
+
+def test_map_function_drops_strict_with_warning(caplog):
+    """Regression test for BerriAI/litellm#41913: Gemini has no `strict` support,
+    so it is dropped from the declaration and the drop is logged, not silent."""
+    config = VertexGeminiConfig()
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        mapped = config._map_function(value=_strict_function_tool(), optional_params={})
+
+    declaration = mapped[0]["function_declarations"][0]
+    assert "strict" not in declaration
+    assert any("'strict'" in record.message for record in caplog.records)
+
+
+def test_map_function_drops_allowed_callers_with_warning(caplog):
+    """Regression test for BerriAI/litellm#41913: Gemini has no `allowed_callers`
+    support, so it is dropped from the declaration and the drop is logged."""
+    config = VertexGeminiConfig()
+    tools = _strict_function_tool()
+    tools[0]["function"]["allowed_callers"] = ["direct"]
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        mapped = config._map_function(value=tools, optional_params={})
+
+    declaration = mapped[0]["function_declarations"][0]
+    assert "allowed_callers" not in declaration
+    assert any("allowed_callers" in record.message for record in caplog.records)
+
+
+def test_map_openai_params_drops_parallel_tool_calls_false_with_warning(caplog):
+    """Regression test for BerriAI/litellm#41913: `parallel_tool_calls=False` with
+    multiple tools is unsupported by Gemini, so it is dropped and the drop is logged."""
+    config = VertexGeminiConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_a",
+                "description": "a",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "tool_b",
+                "description": "b",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+    ]
+
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        optional_params = config.map_openai_params(
+            model="gemini/gemini-flash-latest",
+            non_default_params={
+                "tools": tools,
+                "tool_choice": {"type": "function", "function": {"name": "tool_b"}},
+                "parallel_tool_calls": False,
+                "max_tokens": 1,
+            },
+            optional_params={},
+            drop_params=False,
+        )
+
+    assert "parallel_tool_calls" not in optional_params
+    assert any("parallel_tool_calls" in record.message for record in caplog.records)
