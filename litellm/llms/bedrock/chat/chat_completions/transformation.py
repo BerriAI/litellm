@@ -24,7 +24,7 @@ from typing_extensions import assert_never
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import BedrockError, strip_bedrock_routing_prefix
+from litellm.llms.bedrock.common_utils import BedrockError, split_bedrock_region_path
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -196,7 +196,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         if api_base is not None and "chat/completions" in api_base:
             return api_base.rstrip("/")
         aws_region_name: Final = self._aws_signer._get_aws_region_name(  # pyright: ignore[reportPrivateUsage]  # BaseAWSLLM has no public region resolver
-            optional_params=optional_params, model=model
+            optional_params=self._params_with_region_from_path(optional_params, model), model=model
         )
         endpoint_url, _ = self._aws_signer.get_runtime_endpoint(
             api_base=api_base,
@@ -209,6 +209,14 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         if base.endswith("/openai/v1"):
             return f"{base}/chat/completions"
         return f"{base}/openai/v1/chat/completions"
+
+    def _params_with_region_from_path(
+        self, optional_params: dict, model: str | None
+    ) -> dict:  # mutable-ok: BaseAWSLLM's region resolver and signer take a plain dict
+        region_from_path, _ = split_bedrock_region_path(model or "")
+        if region_from_path is None or optional_params.get("aws_region_name") is not None:
+            return optional_params
+        return {**optional_params, "aws_region_name": region_from_path}  # mutable-ok: BaseAWSLLM takes a plain dict
 
     def sign_request(
         self,
@@ -224,7 +232,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         return self._aws_signer._sign_request(  # pyright: ignore[reportPrivateUsage]  # BaseAWSLLM has no public signer
             service_name="bedrock",
             headers=headers,
-            optional_params=optional_params,
+            optional_params=self._params_with_region_from_path(optional_params, model),
             request_data=request_data,
             api_base=api_base,
             api_key=api_key,
@@ -268,7 +276,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         headers: dict,  # mutable-ok: BaseConfig signature
     ) -> dict:  # mutable-ok: BaseConfig signature
         return super().transform_request(
-            model=strip_bedrock_routing_prefix(model),
+            model=split_bedrock_region_path(model)[1],
             messages=messages,
             optional_params=self._inference_params(optional_params),
             litellm_params=litellm_params,
@@ -284,7 +292,7 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         headers: dict,  # mutable-ok: BaseConfig signature
     ) -> dict:  # mutable-ok: BaseConfig signature
         return await super().async_transform_request(
-            model=strip_bedrock_routing_prefix(model),
+            model=split_bedrock_region_path(model)[1],
             messages=messages,
             optional_params=self._inference_params(optional_params),
             litellm_params=litellm_params,

@@ -795,8 +795,24 @@ def strip_bedrock_routing_prefix(model: str) -> str:
     return model
 
 
+def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
+    """Split a ``<region>/<model-id>`` routing path into the region and the id AWS receives.
+
+    ``bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0`` -> ``("us-gov-west-1", "openai.gpt-oss-20b-1:0")``;
+    a model without a region path comes back as ``(None, <routing-prefix-stripped id>)``.
+    """
+    stripped: Final = strip_bedrock_routing_prefix(model)
+    region, separator, model_id = stripped.partition("/")
+    if separator and region in _get_all_bedrock_regions():
+        return region, model_id
+    return None, stripped
+
+
 def _bedrock_price_map_flag(model: str, flag: str) -> bool:
-    entries: Final = (litellm.model_cost.get(key) for key in (model, strip_bedrock_routing_prefix(model)))
+    entries: Final = (
+        litellm.model_cost.get(key)
+        for key in (model, strip_bedrock_routing_prefix(model), split_bedrock_region_path(model)[1])
+    )
     return any(entry is not None and entry.get(flag) is True for entry in entries)
 
 

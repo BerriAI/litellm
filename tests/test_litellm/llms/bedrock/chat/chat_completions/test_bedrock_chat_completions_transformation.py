@@ -163,6 +163,33 @@ def test_completion_posts_runtime_chat_completions(local_cost_map, fake_aws_env)
     assert "inferenceConfig" not in body
 
 
+def test_region_path_sends_the_bare_model_id_to_the_path_region(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
+    litellm.completion(
+        model="bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        client=client,
+    )
+
+    assert str(requests[0].url) == "https://bedrock-runtime.us-gov-west-1.amazonaws.com/openai/v1/chat/completions"
+    assert json.loads(requests[0].content)["model"] == "openai.gpt-oss-20b-1:0"
+    assert "/us-gov-west-1/bedrock/aws4_request" in requests[0].headers["Authorization"]
+
+
+def test_explicit_aws_region_name_wins_over_the_region_path(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=_chat_completion_json("ok", "openai.gpt-oss-20b-1:0"))
+    litellm.completion(
+        model="bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        aws_region_name="us-gov-east-1",
+        client=client,
+    )
+
+    assert str(requests[0].url) == "https://bedrock-runtime.us-gov-east-1.amazonaws.com/openai/v1/chat/completions"
+    assert json.loads(requests[0].content)["model"] == "openai.gpt-oss-20b-1:0"
+    assert "/us-gov-east-1/bedrock/aws4_request" in requests[0].headers["Authorization"]
+
+
 OPENAI_RUNTIME_MODELS = (
     "openai.gpt-oss-20b-1:0",
     "openai.gpt-oss-120b-1:0",
@@ -182,7 +209,16 @@ GET_WEATHER_TOOL = {
 }
 
 
-@pytest.mark.parametrize("model", [*OPENAI_RUNTIME_MODELS, "bedrock/openai.gpt-oss-20b-1:0"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        *OPENAI_RUNTIME_MODELS,
+        "bedrock/openai.gpt-oss-20b-1:0",
+        "us-gov.openai.gpt-oss-20b-1:0",
+        "bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
+        "us-gov-east-1/openai.gpt-oss-120b-1:0",
+    ],
+)
 def test_openai_runtime_models_use_chat_completions_route(local_cost_map, model):
     assert uses_bedrock_runtime_chat_completions(model) is True
     assert BedrockModelInfo.get_bedrock_route(model) == "chat_completions"
