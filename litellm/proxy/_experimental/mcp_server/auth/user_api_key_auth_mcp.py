@@ -1,5 +1,5 @@
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -72,13 +72,16 @@ _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
 
 
 def _admission_request(scope: Scope) -> Request:
-    """Request whose ``body()`` serves the routing layer's peeked JSON-RPC bytes
-    (``b"{}"`` when nothing was peeked) instead of the ASGI receive channel."""
+    """Request whose ``body()`` serves the routing layer's lazily peeked JSON-RPC
+    bytes (``b"{}"`` when no peek callable was stashed) instead of the ASGI
+    receive channel."""
     request: Final = Request(scope=scope)
-    peeked_body: Final[bytes] = scope.get(MCP_PEEKED_BODY_SCOPE_KEY, b"{}")
+    peeked_body: Final[Callable[[], Awaitable[bytes]] | None] = scope.get(MCP_PEEKED_BODY_SCOPE_KEY)
 
     async def mock_body() -> bytes:
-        return peeked_body
+        if peeked_body is None:
+            return b"{}"
+        return await peeked_body()
 
     request.body = mock_body
     return request

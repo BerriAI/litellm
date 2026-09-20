@@ -3957,7 +3957,7 @@ if MCP_AVAILABLE:
         Stops reading from the wire as soon as either (a) we have peeked
         ``_MCP_ROUTING_PEEK_MAX_BYTES`` of body, or (b) the body is complete.
         The remainder of an oversized body is streamed lazily through
-        ``wrapped_receive`` in the caller — so an authenticated client cannot
+        ``_LazyPeekedBody.receive`` in the caller — so an authenticated client cannot
         force the proxy to buffer an arbitrarily large payload just to make a
         routing decision.
         """
@@ -3994,6 +3994,29 @@ if MCP_AVAILABLE:
                 break
 
         return consumed_messages, b"".join(body_chunks)
+
+    class _LazyPeekedBody:
+        """Reads the POST body for routing and auth only when first asked, so an
+        allowlist rejection never touches the receive channel. Whatever it
+        consumed is replayed to the downstream handler through ``receive``,
+        which falls through to the wire once the replay buffer is drained."""
+
+        __slots__ = ("_consumed_messages", "_peeked_body", "_receive")
+
+        def __init__(self, receive: Receive) -> None:
+            self._receive = receive
+            self._consumed_messages: list[Message] | None = None
+            self._peeked_body: bytes = b""
+
+        async def body(self) -> bytes:
+            if self._consumed_messages is None:
+                self._consumed_messages, self._peeked_body = await _read_request_body_for_routing(self._receive)
+            return self._peeked_body
+
+        async def receive(self) -> Message:
+            if self._consumed_messages:
+                return self._consumed_messages.pop(0)
+            return await self._receive()
 
     async def _handle_stale_mcp_session(
         scope: Scope,
@@ -4550,23 +4573,14 @@ if MCP_AVAILABLE:
                 )(scope, receive, send)
                 return
             path: Final[str] = scope.get("path", "")
-            consumed_messages: list[Message] = []  # mutable-ok: replay buffer for peeked ASGI messages
-            body = b""
-            if scope.get("method") == "POST":
-                consumed_messages, body = await _read_request_body_for_routing(receive)
-                if consumed_messages:
-                    original_receive: Final = receive
+            peek: Final = _LazyPeekedBody(receive) if scope.get("method") == "POST" else None
+            if peek is not None:
+                receive = peek.receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
 
-                    async def wrapped_receive() -> Message:
-                        if consumed_messages:
-                            return consumed_messages.pop(0)
-                        return await original_receive()
+                async def peeked_json_object_body() -> bytes:
+                    return _peeked_json_object_body(await peek.body()) or b"{}"
 
-                    receive = wrapped_receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
-                peeked_object_body: Final = _peeked_json_object_body(body)
-                if peeked_object_body is not None:
-                    scope[MCP_PEEKED_BODY_SCOPE_KEY] = peeked_object_body
-            is_initialize: Final = _is_initialize_request(body)
+                scope[MCP_PEEKED_BODY_SCOPE_KEY] = peeked_json_object_body
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -4576,6 +4590,8 @@ if MCP_AVAILABLE:
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
             reject_disallowed_mcp_client(StarletteRequest(scope).headers, user_api_key_auth)
+            body: Final = await peek.body() if peek is not None else b""
+            is_initialize: Final = _is_initialize_request(body)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
 
             # Extract client IP for MCP access control
