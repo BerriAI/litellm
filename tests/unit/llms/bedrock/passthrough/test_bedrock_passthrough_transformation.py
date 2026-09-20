@@ -367,8 +367,6 @@ def test_bedrock_passthrough_region_extraction_from_inference_profile_arn():
         assert (
             "us-west-2" in api_base
         ), f"Expected region 'us-west-2' from ARN in base URL, but got: {api_base}"
-
-
 def test_bedrock_passthrough_model_id_arn_encoding():
     """
     Test that model_id ARNs are properly URL-encoded when used in endpoints.
@@ -421,7 +419,9 @@ def test_bedrock_passthrough_model_id_arn_encoding():
         ), f"ARN slash should be encoded, but found unencoded version in: {url_str}"
 
         # Verify the complete expected URL structure
-        expected_encoded_model_id = "arn:aws:bedrock:us-east-1:590183661440:application-inference-profile%2Fb943q2qbl3m7"
+        expected_encoded_model_id = (
+            "arn:aws:bedrock:us-east-1:590183661440:application-inference-profile%2Fb943q2qbl3m7"
+        )
         expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{expected_encoded_model_id}/converse"
         assert url_str == expected_url, f"Expected {expected_url}, but got: {url_str}"
 
@@ -517,7 +517,10 @@ def test_bedrock_passthrough_model_id_without_arn():
 def _event_frame(event_type: str, payload: dict) -> bytes:
     def header(name: str, value: str) -> bytes:
         name_b, value_b = name.encode(), value.encode()
-        return struct.pack("!B", len(name_b)) + name_b + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
+        return (
+            struct.pack("!B", len(name_b)) + name_b
+            + struct.pack("!B", 7) + struct.pack("!H", len(value_b)) + value_b
+        )
 
     payload_b = json.dumps(payload, separators=(",", ":")).encode()
     headers_b = (
@@ -591,7 +594,9 @@ def _feed(collector: PassthroughStreamCollector, stream: bytes, chunk_size: int 
 
 def test_converse_stream_collector_keeps_usage_without_retaining_the_stream():
     texts = [f"tok{i} " for i in range(4000)]
-    stream = _event_frame("messageStart", {"role": "assistant"}) + _text_block(0, texts) + _stream_tail("end_turn", 4000)
+    stream = (
+        _event_frame("messageStart", {"role": "assistant"}) + _text_block(0, texts) + _stream_tail("end_turn", 4000)
+    )
     _feed(_converse_stream_collector(), stream)
 
     tracemalloc.start()

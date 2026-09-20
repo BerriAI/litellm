@@ -46,7 +46,8 @@ def test_transform_search_request_encodes_vector_store_id():
 
     assert (
         url
-        == "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/..%2F..%2Fknowledgebases%2Fother%3Fx%3D1%23frag/retrieve"
+        == "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/..%2F..%2Fknowledgebases%2Fother"
+        "%3Fx%3D1%23frag/retrieve"
     )
     assert body["retrievalQuery"].get("text") == "hello"
 
