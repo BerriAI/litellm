@@ -7249,7 +7249,7 @@ CROSS_ACCOUNT_AUTHORIZATION = "Bearer deliberately-configured-pass-through-token
 
 SIGV4_PREFIX = "AWS4-HMAC-SHA256"
 AUTHORIZATION_HEADER_CASINGS = ["authorization", "Authorization", "AUTHORIZATION"]
-LEAK_TARGET_PROVIDERS = ["bedrock", "bedrock_converse", "vertex_ai"]
+LEAK_TARGET_PROVIDERS = ["bedrock", "bedrock_converse", "bedrock_mantle", "vertex_ai"]
 
 BEDROCK_ENDPOINT = (
     "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke"
@@ -7340,6 +7340,28 @@ def test_oauth_credential_entry_is_scoped_to_anthropic_alone():
 
     credential_entries = [entry for entry in scoped_headers if OAUTH_TOKEN in entry["extra_headers"].values()]
     assert [entry["custom_llm_provider"] for entry in credential_entries] == ["anthropic"]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+def test_client_anthropic_api_headers_reach_every_anthropic_messages_provider(custom_llm_provider):
+    client_headers = {
+        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
+        "anthropic-version": "2023-06-01",
+        "user-agent": "claude-cli/2.1.239",
+    }
+
+    forwarded = _headers_forwarded_to(client_headers, custom_llm_provider)
+
+    assert forwarded == {
+        "anthropic-beta": "claude-code-20250219,interleaved-thinking-2025-05-14",
+        "anthropic-version": "2023-06-01",
+    }
+
+
+def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():
+    forwarded = _headers_forwarded_to({"anthropic-beta": "claude-code-20250219"}, "openai")
+
+    assert forwarded == {}
 
 
 def test_no_provider_specific_header_when_client_sends_nothing_anthropic():
