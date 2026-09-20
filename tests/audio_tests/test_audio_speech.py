@@ -754,6 +754,7 @@ def test_openrouter_speech_custom_api_base_and_key():
 
 @pytest.mark.asyncio
 async def test_openrouter_aspeech_routing(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setenv("OR_API_KEY", "sk-or-alt-key")
     with patch(
         "litellm.main.openai_chat_completions.audio_speech"
@@ -781,4 +782,30 @@ async def test_openrouter_aspeech_routing(monkeypatch: pytest.MonkeyPatch):
         assert kwargs["api_base"] == "https://openrouter.ai/api/v1"
         assert kwargs["api_key"] == "sk-or-alt-key"
         assert kwargs["aspeech"] is True
+
+
+def test_openrouter_speech_custom_api_base_without_key_does_not_leak_server_key(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-secret-server-key")
+    with patch(
+        "litellm.main.openai_chat_completions.audio_speech"
+    ) as mock_audio_speech:
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+        mock_audio_speech.return_value = MagicMock(spec=HttpxBinaryResponseContent)
+
+        litellm.speech(
+            model="google/gemini-3.1-flash-tts-preview",
+            custom_llm_provider="openrouter",
+            voice="alloy",
+            input="custom config speech without key",
+            api_base="https://untrusted-external-proxy.com/v1",
+        )
+
+        mock_audio_speech.assert_called_once()
+        _, kwargs = mock_audio_speech.call_args
+        assert kwargs["model"] == "google/gemini-3.1-flash-tts-preview"
+        assert kwargs["api_base"] == "https://untrusted-external-proxy.com/v1"
+        assert kwargs["api_key"] is None
 

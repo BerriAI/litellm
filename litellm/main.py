@@ -8133,17 +8133,15 @@ def speech(
                 model=model,
                 llm_provider=custom_llm_provider,
             )
-        if custom_llm_provider == "openrouter":
-            api_base = (  # rebind-ok: resolve openrouter speech api_base
-                api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
-            )
-            api_key = (  # rebind-ok: resolve openrouter speech api_key
-                api_key
-                or dynamic_api_key
-                or litellm.api_key
-                or litellm.openrouter_key
-                or get_secret_str("OPENROUTER_API_KEY")
-                or get_secret_str("OR_API_KEY")
+        from litellm.llms.openrouter.text_to_speech.transformation import OpenrouterTextToSpeechConfig
+
+        if isinstance(text_to_speech_provider_config, OpenrouterTextToSpeechConfig):
+            api_base, api_key = (
+                text_to_speech_provider_config.resolve_api_base_and_key(  # rebind-ok: resolve openrouter speech credentials via provider config
+                    api_base=api_base,
+                    api_key=api_key,
+                    dynamic_api_key=dynamic_api_key,
+                )
             )
         else:
             api_base = (
