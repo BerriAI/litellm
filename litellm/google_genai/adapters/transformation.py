@@ -7,11 +7,11 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.json_validation_rule import normalize_json_schema_types, normalize_tool_schema
+from litellm.litellm_core_utils.prompt_templates.common_utils import filter_value_from_dict
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -121,20 +121,6 @@ def _validated(adapter: TypeAdapter[_Validated], value: object) -> _Validated | 
         return None
 
 
-def _strip_gemini_only_schema_keys(schema: JsonValue, depth: int = 0) -> JsonValue:
-    if depth >= DEFAULT_MAX_RECURSE_DEPTH:
-        return schema
-    if isinstance(schema, list):
-        return [_strip_gemini_only_schema_keys(item, depth + 1) for item in schema]
-    if not isinstance(schema, dict):
-        return schema
-    return {
-        key: _strip_gemini_only_schema_keys(value, depth + 1)
-        for key, value in schema.items()
-        if key not in _GEMINI_ONLY_SCHEMA_KEYS
-    }
-
-
 def _translate_response_format(config: object) -> Mapping[str, object] | None:
     fields: Final = _validated(_CONFIG_FIELDS, config)
     if fields is None or _first_present(fields, _RESPONSE_MIME_TYPE_KEYS) not in (None, _JSON_MIME_TYPE):
@@ -144,10 +130,9 @@ def _translate_response_format(config: object) -> Mapping[str, object] | None:
     )
     if schema is None or schema.get("type") != "object":
         return None
-    return {
-        "type": "json_schema",
-        "json_schema": {"name": "response", "schema": _strip_gemini_only_schema_keys(schema)},
-    }
+    for key in _GEMINI_ONLY_SCHEMA_KEYS:
+        filter_value_from_dict(schema, key)
+    return {"type": "json_schema", "json_schema": {"name": "response", "schema": schema}}
 
 
 def _deployment_supports_response_format(model: str, custom_llm_provider: str | None) -> bool:
