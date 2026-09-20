@@ -10,6 +10,12 @@ import respx
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.azure.azure import AzureChatCompletion
+from litellm.llms.azure.common_utils import (
+    _cached_azure_ad_token_refresh_provider,
+    _cached_entra_id_token_provider,
+    get_azure_request_auth_headers,
+    redact_azure_auth_headers,
+)
 from litellm.llms.azure.image_generation.http_utils import (
     azure_deployment_image_generation_json_body,
 )
@@ -587,3 +593,293 @@ def test_azure_image_generation_v1_route_base_model_vs_deployment_name(respx_moc
     sent_body = json.loads(request.content)
     assert sent_body["model"] == model
     assert sent_body["prompt"] == prompt
+
+
+@pytest.fixture
+def fake_entra_id(monkeypatch: pytest.MonkeyPatch):
+    built_credentials = []
+
+    class FakeClientSecretCredential:
+        def __init__(self, tenant_id: str, client_id: str, client_secret: str) -> None:
+            built_credentials.append((tenant_id, client_id, client_secret))
+
+    monkeypatch.setattr("azure.identity.ClientSecretCredential", FakeClientSecretCredential)
+    monkeypatch.setattr("azure.identity.get_bearer_token_provider", lambda credential, scope: lambda: "entra-id-token")
+    _cached_entra_id_token_provider.cache_clear()
+    yield built_credentials
+    _cached_entra_id_token_provider.cache_clear()
+
+
+def _mock_image_generation_route(respx_mock: respx.MockRouter, api_base: str, model: str) -> respx.Route:
+    return respx_mock.post(f"{api_base}/openai/deployments/{model}/images/generations").mock(
+        return_value=httpx.Response(200, json={"created": 1234567890, "data": [{"b64_json": "aaaa"}]})
+    )
+
+
+@pytest.mark.parametrize("credentials_in_litellm_params", [False, True])
+def test_azure_image_generation_keyless_entra_id_sends_bearer_token(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_entra_id: list,
+    credentials_in_litellm_params: bool,
+):
+    for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    api_base = "https://my-resource.openai.azure.com"
+    api_version = "2025-04-01-preview"
+    litellm_params = {"api_base": api_base, "api_version": api_version}
+    if credentials_in_litellm_params:
+        litellm_params.update(
+            tenant_id="tenant-from-params", client_id="client-from-params", client_secret="secret-from-params"
+        )
+        expected_credential = ("tenant-from-params", "client-from-params", "secret-from-params")
+    else:
+        monkeypatch.setenv("AZURE_TENANT_ID", "tenant-from-env")
+        monkeypatch.setenv("AZURE_CLIENT_ID", "client-from-env")
+        monkeypatch.setenv("AZURE_CLIENT_SECRET", "secret-from-env")
+        expected_credential = ("tenant-from-env", "client-from-env", "secret-from-env")
+    route = _mock_image_generation_route(respx_mock, api_base, "gpt-image-1")
+    logging_obj = MagicMock()
+
+    response = AzureChatCompletion().image_generation(
+        prompt="a cat",
+        timeout=60.0,
+        optional_params={"n": 1, "size": "1024x1024"},
+        logging_obj=logging_obj,
+        headers={"Content-Type": "application/json"},
+        model="gpt-image-1",
+        api_key=None,
+        api_base=api_base,
+        api_version=api_version,
+        litellm_params=litellm_params,
+    )
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-id-token"
+    assert "api-key" not in request.headers
+    assert fake_entra_id == [expected_credential]
+    assert response.data[0].b64_json == "aaaa"
+    logged_headers = logging_obj.pre_call.call_args.kwargs["additional_args"]["headers"]
+    assert logged_headers == {"Content-Type": "application/json", "Authorization": "***REDACTED***"}
+    assert "entra-id-token" not in str(logging_obj.pre_call.call_args)
+
+
+@pytest.mark.asyncio
+async def test_azure_aimage_generation_keyless_entra_id_sends_bearer_token(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, fake_entra_id: list
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    api_base = "https://my-resource.openai.azure.com"
+    api_version = "2025-04-01-preview"
+    route = _mock_image_generation_route(respx_mock, api_base, "gpt-image-1")
+    logging_obj = MagicMock()
+
+    response = await AzureChatCompletion().image_generation(
+        prompt="a cat",
+        timeout=60.0,
+        optional_params={"n": 1, "size": "1024x1024"},
+        logging_obj=logging_obj,
+        headers={"Content-Type": "application/json"},
+        model="gpt-image-1",
+        api_key=None,
+        api_base=api_base,
+        api_version=api_version,
+        aimg_generation=True,
+        litellm_params={
+            "api_base": api_base,
+            "api_version": api_version,
+            "tenant_id": "tenant-from-params",
+            "client_id": "client-from-params",
+            "client_secret": "secret-from-params",
+        },
+    )
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer entra-id-token"
+    assert "api-key" not in request.headers
+    assert fake_entra_id == [("tenant-from-params", "client-from-params", "secret-from-params")]
+    assert response.data[0].b64_json == "aaaa"
+    logged_headers = logging_obj.pre_call.call_args.kwargs["additional_args"]["headers"]
+    assert logged_headers == {"Content-Type": "application/json", "Authorization": "***REDACTED***"}
+    assert "entra-id-token" not in str(logging_obj.pre_call.call_args)
+
+
+@pytest.mark.parametrize(
+    "credential_kwargs, expected_authorization",
+    [
+        ({"azure_ad_token": "static-ad-token"}, "Bearer static-ad-token"),
+        ({"azure_ad_token_provider": lambda: "provider-token"}, "Bearer provider-token"),
+    ],
+)
+def test_azure_image_generation_explicit_azure_ad_credential_sends_bearer_token(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    credential_kwargs: dict,
+    expected_authorization: str,
+):
+    for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+    api_base = "https://my-resource.openai.azure.com"
+    api_version = "2025-04-01-preview"
+    route = _mock_image_generation_route(respx_mock, api_base, "gpt-image-1")
+
+    response = AzureChatCompletion().image_generation(
+        prompt="a cat",
+        timeout=60.0,
+        optional_params={"n": 1, "size": "1024x1024"},
+        logging_obj=MagicMock(),
+        headers={"Content-Type": "application/json"},
+        model="gpt-image-1",
+        api_key=None,
+        api_base=api_base,
+        api_version=api_version,
+        litellm_params={"api_base": api_base, "api_version": api_version},
+        **credential_kwargs,
+    )
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == expected_authorization
+    assert "api-key" not in request.headers
+    assert response.data[0].b64_json == "aaaa"
+
+
+def test_azure_image_generation_with_api_key_keeps_api_key_header(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, fake_entra_id: list
+):
+    monkeypatch.setenv("AZURE_TENANT_ID", "tenant-from-env")
+    monkeypatch.setenv("AZURE_CLIENT_ID", "client-from-env")
+    monkeypatch.setenv("AZURE_CLIENT_SECRET", "secret-from-env")
+    api_base = "https://my-resource.openai.azure.com"
+    api_version = "2025-04-01-preview"
+    route = _mock_image_generation_route(respx_mock, api_base, "gpt-image-1")
+    logging_obj = MagicMock()
+
+    response = AzureChatCompletion().image_generation(
+        prompt="a cat",
+        timeout=60.0,
+        optional_params={"n": 1, "size": "1024x1024"},
+        logging_obj=logging_obj,
+        headers={"Content-Type": "application/json", "api-key": "sk-test"},
+        model="gpt-image-1",
+        api_key="sk-test",
+        api_base=api_base,
+        api_version=api_version,
+        litellm_params={"api_base": api_base, "api_version": api_version},
+    )
+
+    request = route.calls.last.request
+    assert request.headers["api-key"] == "sk-test"
+    assert "Authorization" not in request.headers
+    assert fake_entra_id == []
+    assert response.data[0].b64_json == "aaaa"
+    assert logging_obj.pre_call.call_args.kwargs["additional_args"]["headers"]["api-key"] == "***REDACTED***"
+
+
+@pytest.fixture
+def fake_default_azure_credential(monkeypatch: pytest.MonkeyPatch):
+    built_credentials = []
+
+    class FakeDefaultAzureCredential:
+        def __init__(self) -> None:
+            built_credentials.append(self)
+
+    for name in ("AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET", "AZURE_CREDENTIAL", "AZURE_AD_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr("azure.identity.DefaultAzureCredential", FakeDefaultAzureCredential)
+    monkeypatch.setattr(
+        "azure.identity.get_bearer_token_provider", lambda credential, scope: lambda: "default-credential-token"
+    )
+    monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", True)
+    _cached_azure_ad_token_refresh_provider.cache_clear()
+    yield built_credentials
+    _cached_azure_ad_token_refresh_provider.cache_clear()
+
+
+def test_azure_image_generation_token_refresh_reuses_credential_across_requests(
+    respx_mock: respx.MockRouter, fake_default_azure_credential: list
+):
+    api_base = "https://my-resource.openai.azure.com"
+    api_version = "2025-04-01-preview"
+    route = _mock_image_generation_route(respx_mock, api_base, "gpt-image-1")
+
+    for _ in range(3):
+        AzureChatCompletion().image_generation(
+            prompt="a cat",
+            timeout=60.0,
+            optional_params={"n": 1, "size": "1024x1024"},
+            logging_obj=MagicMock(),
+            headers={"Content-Type": "application/json"},
+            model="gpt-image-1",
+            api_key=None,
+            api_base=api_base,
+            api_version=api_version,
+            litellm_params={"api_base": api_base, "api_version": api_version},
+        )
+
+    assert route.call_count == 3
+    assert all(call.request.headers["Authorization"] == "Bearer default-credential-token" for call in route.calls)
+    assert len(fake_default_azure_credential) == 1
+
+
+@pytest.mark.parametrize(
+    "caller_auth_header",
+    [{"api-key": "caller-key"}, {"Authorization": "Bearer caller-token"}, {"authorization": "Bearer caller-token"}],
+)
+def test_get_azure_request_auth_headers_keeps_caller_auth_header(caller_auth_header: dict):
+    headers = {"Content-Type": "application/json", **caller_auth_header}
+    azure_client_params = {
+        "api_key": "sk-resolved",
+        "azure_ad_token": "resolved-token",
+        "azure_ad_token_provider": lambda: "provider-token",
+    }
+    assert get_azure_request_auth_headers(headers=headers, azure_client_params=azure_client_params) is headers
+
+
+def test_get_azure_request_auth_headers_prefers_azure_ad_token_over_provider_and_api_key():
+    headers = {"Content-Type": "application/json"}
+    azure_client_params = {
+        "api_key": "sk-resolved",
+        "azure_ad_token": "static-token",
+        "azure_ad_token_provider": lambda: "provider-token",
+    }
+    out = get_azure_request_auth_headers(headers=headers, azure_client_params=azure_client_params)
+    assert dict(out) == {"Content-Type": "application/json", "Authorization": "Bearer static-token"}
+    assert headers == {"Content-Type": "application/json"}
+
+
+def test_get_azure_request_auth_headers_uses_token_provider_over_api_key():
+    azure_client_params = {"api_key": "sk-resolved", "azure_ad_token": None, "azure_ad_token_provider": lambda: "pt"}
+    out = get_azure_request_auth_headers(headers={}, azure_client_params=azure_client_params)
+    assert dict(out) == {"Authorization": "Bearer pt"}
+
+
+def test_get_azure_request_auth_headers_falls_back_to_api_key():
+    azure_client_params = {"api_key": "sk-resolved", "azure_ad_token": None, "azure_ad_token_provider": None}
+    out = get_azure_request_auth_headers(headers={"Content-Type": "application/json"}, azure_client_params=azure_client_params)
+    assert dict(out) == {"Content-Type": "application/json", "api-key": "sk-resolved"}
+
+
+@pytest.mark.parametrize(
+    "azure_client_params",
+    [
+        {},
+        {"api_key": "", "azure_ad_token": "", "azure_ad_token_provider": None},
+        {"azure_ad_token_provider": lambda: None},
+        {"azure_ad_token_provider": lambda: ""},
+    ],
+)
+def test_get_azure_request_auth_headers_without_credential_leaves_headers_unchanged(azure_client_params: dict):
+    headers = {"Content-Type": "application/json"}
+    assert get_azure_request_auth_headers(headers=headers, azure_client_params=azure_client_params) is headers
+
+
+def test_redact_azure_auth_headers_masks_only_credential_values():
+    headers = {"Content-Type": "application/json", "api-key": "sk-secret", "authorization": "Bearer secret"}
+    assert redact_azure_auth_headers(headers) == {
+        "Content-Type": "application/json",
+        "api-key": "***REDACTED***",
+        "authorization": "***REDACTED***",
+    }
+    assert headers["api-key"] == "sk-secret"
+    assert headers["authorization"] == "Bearer secret"

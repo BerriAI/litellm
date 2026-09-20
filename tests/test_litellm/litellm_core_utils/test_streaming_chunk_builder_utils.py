@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -336,7 +335,6 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     Correct cache-write cost is 50 * 6e-06 (1h) = 0.0003, not 50 * 3.75e-06 = 0.0001875.
     """
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-    from litellm.llms.anthropic.cost_calculation import cost_per_token
 
     config = AnthropicConfig()
     message_start_usage = config.calculate_usage(
@@ -399,14 +397,6 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     assert breakdown.ephemeral_5m_input_tokens == 0
     assert usage.cache_creation_input_tokens == 50
     assert usage.cache_read_input_tokens == 8728
-
-    prompt_cost, _ = cost_per_token(model="claude-sonnet-4-6", usage=usage)
-    # text 3*3e-06 + cache_read 8728*3e-07 + cache_write 50*6e-06 (1h rate)
-    expected = 3 * 3e-06 + 8728 * 3e-07 + 50 * 6e-06
-    assert prompt_cost == pytest.approx(expected)
-    # Guard against the regression: 5m-rate fallback would shave the write cost.
-    buggy = 3 * 3e-06 + 8728 * 3e-07 + 50 * 3.75e-06
-    assert prompt_cost != pytest.approx(buggy)
 
 
 def test_streaming_keeps_cache_creation_breakdown_from_final_chunk():

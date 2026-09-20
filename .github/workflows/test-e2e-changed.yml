@@ -183,7 +183,7 @@ jobs:
             log="${RUNNER_TEMP}/e2e-pass-${pass}.log"
             echo "::group::pass ${pass} of 3"
             set +e
-            uv run --no-sync pytest "${test_files[@]}" --rootdir=. -v -p no:cacheprovider \
+            uv run --no-sync pytest "${test_files[@]}" --rootdir=. -v --reruns 0 -p no:cacheprovider \
               -o junit_family=xunit1 --junitxml="${report}" > "${log}" 2>&1
             status=$?
             uv run --no-sync python .github/e2e-stack/assert_tests_ran.py "${report}" "${test_files[@]}"

@@ -1,6 +1,7 @@
 import base64
 import re
 from collections.abc import Iterable, Mapping, Sequence
+from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
@@ -8,6 +9,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire pay
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -27,6 +29,11 @@ from litellm.types.utils import (
     Usage,
     text_tokens_without_nested_reasoning,
 )
+
+
+def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: list[str] | None) -> dict[str, object]:
+    nested_paths: Final = tuple(path for path in additional_drop_params or () if is_nested_path(path))
+    return reduce(lambda acc, path: delete_nested_value(acc, path), nested_paths, params)
 
 
 def _output_token_detail(details: object, field: str) -> int | None:
@@ -265,20 +272,24 @@ class ResponsesAPIRequestUtils:
         special_params: Final[dict[str, object]] = params.pop("kwargs", {})
 
         additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
-        non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
-            passed_params=params,
-            special_params=special_params,
-            custom_llm_provider=custom_llm_provider,
-            additional_drop_params=additional_drop_params,
-            default_param_values={k: None for k in valid_keys},
-            additional_endpoint_specific_params=["input"],
+        non_default_params: Final = _apply_nested_drop_params(
+            PreProcessNonDefaultParams.base_pre_process_non_default_params(
+                passed_params=params,
+                special_params=special_params,
+                custom_llm_provider=custom_llm_provider,
+                additional_drop_params=additional_drop_params,
+                default_param_values={k: None for k in valid_keys},
+                additional_endpoint_specific_params=["input"],
+            ),
+            additional_drop_params,
         )
 
         # decode previous_response_id if it's a litellm encoded id
-        if "previous_response_id" in non_default_params:
+        previous_response_id: Final = non_default_params.get("previous_response_id")
+        if isinstance(previous_response_id, str):
             decoded_previous_response_id: Final = (
                 ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-                    non_default_params["previous_response_id"]
+                    previous_response_id
                 )
             )
             non_default_params["previous_response_id"] = decoded_previous_response_id
@@ -286,7 +297,8 @@ class ResponsesAPIRequestUtils:
         if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            converted_metadata: Final = add_openai_metadata(non_default_params["metadata"])
+            raw_metadata: Final = non_default_params["metadata"]
+            converted_metadata: Final = add_openai_metadata(raw_metadata if _is_object_dict(raw_metadata) else None)
             if converted_metadata is not None:
                 non_default_params["metadata"] = converted_metadata
             else:
@@ -1179,7 +1191,15 @@ class ResponseAPILoggingUtils:
                     audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
                     text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
                     image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
+                    cached_tokens_details=getattr(
+                        response_api_usage.input_tokens_details, "cached_tokens_details", None
+                    ),
+                    video_tokens=getattr(response_api_usage.input_tokens_details, "video_tokens", None),
                     cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
+                    web_search_requests=getattr(response_api_usage.input_tokens_details, "web_search_requests", None),
+                    google_maps_grounding_requests=getattr(
+                        response_api_usage.input_tokens_details, "google_maps_grounding_requests", None
+                    ),
                 )
         completion_tokens_details: CompletionTokensDetailsWrapper | None = None
         output_tokens_details: Final[OutputTokensDetails | None] = getattr(

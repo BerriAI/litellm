@@ -636,11 +636,13 @@ def test_aws_credential_redaction_catches_quoted_values():
         {"blob": {"authorization": f"Bearer {SECRET}"}},
         {"blob": [f"Bearer {SECRET}"]},
         {"blob": ({"nested": {"deep": SECRET}},)},
+        {"master_key": "opaque-value-with-no-pattern"},
     ),
-    ids=("set", "dict", "list", "nested"),
+    ids=("set", "dict", "list", "nested", "key_name"),
 )
 def test_json_formatter_redacts_non_string_extra_values(extra):
-    """SecretRedactionFilter only scrubs str attrs, so containers must be caught on render."""
+    """Container extras and key-named str extras must come out scrubbed, whichever of the
+    filter and the formatter does the work."""
     buf = StringIO()
     handler = logging.StreamHandler(buf)
     handler.setFormatter(JsonFormatter())

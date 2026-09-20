@@ -15,6 +15,7 @@ from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
+from litellm._lazy_imports import _get_default_encoding
 from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
@@ -29,7 +30,6 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
@@ -454,7 +454,7 @@ def token_counter(
         params: Final = _MessageCountParams(model, custom_tokenizer)
         num_tokens = _count_messages(params, new_messages, use_default_image_token_count, default_token_count)
         if count_response_tokens is False:
-            includes_system_message: Final = any([message.get("role", None) == "system" for message in new_messages])
+            includes_system_message: Final = any(message.get("role", None) == "system" for message in new_messages)
             num_tokens += _count_extra(params.count_function, tools, tool_choice, includes_system_message)
 
     else:
@@ -638,7 +638,7 @@ def _get_exact_count_function(
     else:
 
         def encode_length(text: str) -> int:
-            return len(default_encoding.encode(text, disallowed_special=()))
+            return len(_get_default_encoding().encode(text, disallowed_special=()))
 
         return _get_tiktoken_count_function(encode_length)
 
