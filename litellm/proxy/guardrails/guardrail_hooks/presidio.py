@@ -696,7 +696,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     @staticmethod
     def _resolve_overlapping_spans(
         analyze_results: Sequence[PresidioAnalyzeResponseItem],
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401  # presidio return schema is dynamic
         if not analyze_results:
             return ()
 
