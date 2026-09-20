@@ -1810,6 +1810,37 @@ async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monke
     assert announced == []
 
 
+class _ShutdownAwarePrisma(MockPrisma):
+    def __init__(self):
+        super().__init__()
+        self.stop_view_setup_task = AsyncMock()
+
+
+@pytest.mark.asyncio
+async def test_proxy_shutdown_stops_the_view_setup_task(monkeypatch, tmp_path):
+    import yaml
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    fake_prisma = _ShutdownAwarePrisma()
+    config_path = tmp_path / "config.yaml"
+    with open(config_path, "w") as f:
+        yaml.dump({"general_settings": {"master_key": "sk-12345"}}, f)
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", False)
+
+    async with proxy_startup_event(FastAPI()):
+        stopped_while_serving = fake_prisma.stop_view_setup_task.await_count
+
+    actual = {
+        "stopped_while_serving": stopped_while_serving,
+        "stopped_after_shutdown": fake_prisma.stop_view_setup_task.await_count,
+    }
+    assert actual == {"stopped_while_serving": 0, "stopped_after_shutdown": 1}
+
+
 def test_team_info_masking():
     """
     Test that sensitive team information is properly masked
@@ -13608,6 +13639,7 @@ def _mock_startup_prisma_client(health_check_error=None, connect_error=None):
     client.db.start_token_refresh_task = AsyncMock()
     client.check_view_exists = AsyncMock()
     client._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    client.start_view_setup_task = MagicMock()
     client.start_db_health_watchdog_task = AsyncMock()
     client.health_check = AsyncMock(side_effect=health_check_error)
     return client
@@ -13669,13 +13701,35 @@ async def test_setup_prisma_client_arms_health_watchdog_before_startup_health_ch
 
     mock_client = _mock_startup_prisma_client(health_check_error=httpx.ReadTimeout("startup health check timed out"))
     call_order = MagicMock()
+    call_order.attach_mock(mock_client.start_view_setup_task, "view_setup")
     call_order.attach_mock(mock_client.start_db_health_watchdog_task, "watchdog")
     call_order.attach_mock(mock_client.health_check, "health_check")
 
     await _run_setup_prisma_client(mock_client)
 
     assert mock_client.start_db_health_watchdog_task.await_count == 1
-    assert [call[0] for call in call_order.mock_calls] == ["watchdog", "health_check"]
+    assert [call[0] for call in call_order.mock_calls] == ["view_setup", "watchdog", "health_check"]
+
+
+@pytest.mark.asyncio
+async def test_setup_prisma_client_hands_view_creation_to_the_held_task(monkeypatch):
+    monkeypatch.setenv("DISABLE_PRISMA_HEALTH_CHECK_ON_STARTUP", "True")
+
+    mock_client = _mock_startup_prisma_client()
+    result = await _run_setup_prisma_client(mock_client)
+
+    actual = {
+        "result": result,
+        "view_setup_started": mock_client.start_view_setup_task.call_count,
+        "direct_view_creation": mock_client.check_view_exists.await_count,
+        "direct_row_count": mock_client._set_spend_logs_row_count_in_proxy_state.await_count,
+    }
+    assert actual == {
+        "result": mock_client,
+        "view_setup_started": 1,
+        "direct_view_creation": 0,
+        "direct_row_count": 0,
+    }
 
 
 @pytest.mark.asyncio
