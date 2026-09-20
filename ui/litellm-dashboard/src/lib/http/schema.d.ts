@@ -16215,6 +16215,7 @@ export interface paths {
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
+         *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -26834,6 +26835,11 @@ export interface components {
              * @description override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth
              */
             custom_auth?: string | null;
+            /**
+             * Dangerously Permit Weak Or Unset Master Key
+             * @description local development only: start even when master_key is unset, empty, or a publicly known default
+             */
+            dangerously_permit_weak_or_unset_master_key?: boolean | null;
             /** @description custom args for instantiating dynamodb client - e.g. billing provision */
             database_args?: components["schemas"]["DynamoDBArgs"] | null;
             /**
@@ -36913,6 +36919,8 @@ export interface components {
             DefaultRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
+            /** Notfounderrorretries */
+            NotFoundErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
             /** Serviceunavailableerrorretries */
@@ -41348,6 +41356,12 @@ export interface components {
          * @description Response model for web search interception settings
          */
         WebSearchInterceptionSettingsResponse: {
+            /**
+             * Active On This Pod
+             * @description Whether the process answering this request has the interception callback registered. Read-only: it reports what is running here, while values.enabled is the cluster-wide setting, and the two disagree while a pod is still applying a change or failed to apply it.
+             * @default false
+             */
+            active_on_this_pod: boolean;
             /** Field Schema */
             field_schema: {
                 [key: string]: unknown;
