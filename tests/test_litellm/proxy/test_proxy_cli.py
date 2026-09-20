@@ -2203,6 +2203,7 @@ class TestRunServerDbSetup:
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
+        capsys,
     ):
         """USE_V2_MIGRATION_RESOLVER=true must select the v2 resolver.
 
@@ -2248,44 +2249,58 @@ class TestRunServerDbSetup:
         mock_setup_database.assert_called_once_with(
             use_migrate=True, use_v2_resolver=True
         )
+        assert "--use_v2_migration_resolver is deprecated" not in capsys.readouterr().out
 
     @pytest.mark.parametrize(
-        "argv_extra, env_extra, expected_v2",
+        "use_legacy_flag, env_value, expected",
         [
-            ([], {}, True),
-            ([], {"USE_V2_MIGRATION_RESOLVER": "false"}, False),
-            (["--use_legacy_migration_resolver"], {}, False),
-            (
-                ["--use_legacy_migration_resolver"],
-                {"USE_V2_MIGRATION_RESOLVER": "true"},
-                False,
-            ),
-            (["--use_v2_migration_resolver"], {}, True),
+            (False, None, True),
+            (False, "true", True),
+            (False, "false", False),
+            (True, None, False),
+            (True, "true", False),
         ],
         ids=[
-            "default-is-v2",
-            "env-false-opts-out",
-            "legacy-flag-opts-out",
+            "unset-env-defaults-to-v2",
+            "env-true-selects-v2",
+            "env-false-selects-v1",
+            "legacy-flag-selects-v1",
             "legacy-flag-beats-env-true",
-            "deprecated-v2-flag-still-accepted",
         ],
     )
+    def test_resolve_v2_migration_resolver(self, use_legacy_flag, env_value, expected):
+        from litellm.proxy.proxy_cli import resolve_v2_migration_resolver
+
+        assert (
+            resolve_v2_migration_resolver(
+                use_legacy_flag=use_legacy_flag, env_value=env_value
+            )
+            is expected
+        )
+
+    def test_deprecated_v2_flag_not_reported_outside_a_cli_invocation(self):
+        from litellm.proxy.proxy_cli import deprecated_v2_flag_passed_on_cli
+
+        assert deprecated_v2_flag_passed_on_cli() is False
+
     @patch("subprocess.run")
     @patch("atexit.register")
     @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
     @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
     @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
-    def test_migration_resolver_selection(
+    def test_legacy_resolver_flag_reaches_database_setup(
         self,
         mock_should_update_schema,
         mock_check_schema_diff,
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
-        argv_extra,
-        env_extra,
-        expected_v2,
     ):
+        """--use_legacy_migration_resolver must reach the database setup call.
+
+        The resolver decision itself is covered mock-free above; this is the
+        one wiring check that the flag is threaded through run_server.
+        """
         from litellm.proxy.proxy_cli import run_server
 
         mock_subprocess_run.return_value = MagicMock(returncode=0)
@@ -2302,11 +2317,9 @@ class TestRunServerDbSetup:
         clean_env = {
             k: v
             for k, v in os.environ.items()
-            if k
-            not in ("DATABASE_URL", "DIRECT_URL", "USE_V2_MIGRATION_RESOLVER")
+            if k not in ("DATABASE_URL", "DIRECT_URL", "USE_V2_MIGRATION_RESOLVER")
         }
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
-        clean_env.update(env_extra)
 
         with (
             patch.dict(os.environ, clean_env, clear=True),
@@ -2319,12 +2332,16 @@ class TestRunServerDbSetup:
             ),
         ):
             run_server.main(
-                ["--local", "--skip_server_startup", *argv_extra],
+                [
+                    "--local",
+                    "--skip_server_startup",
+                    "--use_legacy_migration_resolver",
+                ],
                 standalone_mode=False,
             )
 
         mock_setup_database.assert_called_once_with(
-            use_migrate=True, use_v2_resolver=expected_v2
+            use_migrate=True, use_v2_resolver=False
         )
 
 
