@@ -6348,7 +6348,7 @@ _GROUNDING_URIS: Final = [
 ]
 
 
-def _gemini_stream_iterator():
+def _gemini_stream_iterator() -> "ModelResponseIterator":
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import ModelResponseIterator
 
     logging_obj = MagicMock()
@@ -6356,8 +6356,8 @@ def _gemini_stream_iterator():
     return ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
 
-def _delta_annotations(model_response):
-    found: list = []
+def _delta_annotations(model_response: object) -> List[dict]:
+    found: List[dict] = []
     for choice in model_response.choices:
         annotations = getattr(getattr(choice, "delta", None), "annotations", None)
         if annotations:
@@ -6365,12 +6365,11 @@ def _delta_annotations(model_response):
     return found
 
 
-def _citation_urls(annotations):
+def _citation_urls(annotations: List[dict]) -> List[str]:
     return [annotation["url_citation"]["url"] for annotation in annotations]
 
 
-def test_streaming_grounding_on_the_final_chunk_produces_annotations():
-    """Gemini often sends groundingMetadata on a candidate with finishReason and no parts"""
+def test_streaming_grounding_on_the_final_chunk_produces_annotations() -> None:
     iterator = _gemini_stream_iterator()
     iterator.chunk_parser({"candidates": [{"index": 0, "content": {"role": "model", "parts": [{"text": _GROUNDED_TEXT}]}}]})
 
@@ -6381,8 +6380,7 @@ def test_streaming_grounding_on_the_final_chunk_produces_annotations():
     assert _citation_urls(_delta_annotations(final)) == _GROUNDING_URIS
 
 
-def test_streaming_grounding_alongside_text_produces_annotations():
-    """The shape that already worked keeps working"""
+def test_streaming_grounding_alongside_text_produces_annotations() -> None:
     iterator = _gemini_stream_iterator()
 
     chunk = iterator.chunk_parser(
@@ -6404,7 +6402,7 @@ def test_streaming_grounding_alongside_text_produces_annotations():
     assert annotations[0]["url_citation"]["start_index"] == 0
 
 
-def test_streaming_without_grounding_carries_no_annotations():
+def test_streaming_without_grounding_carries_no_annotations() -> None:
     iterator = _gemini_stream_iterator()
 
     chunk = iterator.chunk_parser(
@@ -6414,8 +6412,7 @@ def test_streaming_without_grounding_carries_no_annotations():
     assert _delta_annotations(chunk) == []
 
 
-def test_streaming_grounding_without_web_chunks_carries_no_annotations():
-    """Maps grounding has no web URI to cite, so it must not invent one"""
+def test_streaming_grounding_without_web_chunks_carries_no_annotations() -> None:
     iterator = _gemini_stream_iterator()
 
     chunk = iterator.chunk_parser(
@@ -6438,7 +6435,7 @@ def test_streaming_grounding_without_web_chunks_carries_no_annotations():
     assert _delta_annotations(chunk) == []
 
 
-def test_non_streaming_grounding_annotations_are_unchanged():
+def test_non_streaming_grounding_annotations_are_unchanged() -> None:
     model_response = ModelResponse()
     VertexGeminiConfig._process_candidates(
         [
@@ -6457,8 +6454,7 @@ def test_non_streaming_grounding_annotations_are_unchanged():
     assert _citation_urls(annotations or []) == _GROUNDING_URIS
 
 
-def test_streamed_grounding_survives_reassembly():
-    """A client rebuilding the stream ends up with the citations a non-streaming call returns"""
+def test_streamed_grounding_survives_reassembly() -> None:
     iterator = _gemini_stream_iterator()
     chunks = [
         iterator.chunk_parser(

@@ -2290,14 +2290,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     is_function_call=is_function_call(standard_optional_params),
                 )
 
-            # Outside the "content"/"parts" branch on purpose. Gemini does not
-            # promise to put groundingMetadata on a chunk that also carries text:
-            # streaming commonly delivers it on the final candidate, which has a
-            # finishReason and no parts at all. Converting only when parts were
-            # present dropped the citations for exactly those responses, which is
-            # why the same prompt produced annotations on some runs and not
-            # others while non-streaming -- one candidate, always with parts --
-            # produced them every time.
             if candidate_grounding_metadata:
                 annotations = VertexGeminiConfig._convert_grounding_metadata_to_annotations(
                     grounding_metadata=candidate_grounding_metadata,
