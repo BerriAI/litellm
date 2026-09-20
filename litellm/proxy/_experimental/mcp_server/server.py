@@ -2888,6 +2888,40 @@ if MCP_AVAILABLE:
                 headers={"WWW-Authenticate": get_byok_www_authenticate()},
             )
 
+    async def _list_tools_before_first_call(
+        server: MCPServer | None,
+        tool_name: str,
+        allowed_mcp_servers: list[MCPServer],
+        user_api_key_auth: UserAPIKeyAuth | None,
+        mcp_auth_header: str | None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        oauth2_headers: dict[str, str] | None,
+        raw_headers: dict[str, str] | None,
+    ) -> None:
+        """List ``server`` with the caller's own credentials when it does not yet expose ``tool_name`` here.
+
+        The startup fill skips a server whose upstream wants the caller's token, and mcp 2 no
+        longer lists before an uncached tools/call, so a worker that has not served tools/list
+        for this caller would otherwise answer 404 for a tool the caller can see. Gating on the
+        requested tool, not on any prior listing, keeps callers with different upstream catalogs
+        from masking each other.
+        """
+        if server is None or global_mcp_server_manager.server_exposes_tool(server, tool_name):
+            return
+        if all(allowed.server_id != server.server_id for allowed in allowed_mcp_servers):
+            return
+        try:
+            await _get_tools_from_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_servers=[server.server_id],
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers,
+            )
+        except Exception as e:  # noqa: BLE001  # best effort: resolution below answers as it did before
+            verbose_logger.debug("MCP tools/call: listing %s before its first call failed: %s", server.name, e)
+
     async def execute_mcp_tool(
         name: str,
         arguments: dict[str, object],
@@ -2947,6 +2981,27 @@ if MCP_AVAILABLE:
                 for known_prefix in iter_known_server_prefixes(registry_server):
                     all_registry_prefixes.add(normalize_server_name(known_prefix))
             name_is_prefixed = is_tool_name_prefixed(name, known_server_prefixes=all_registry_prefixes)
+
+        first_call_target: Final = (
+            requested_server
+            if requested_server is not None and not name_is_prefixed
+            else global_mcp_server_manager.server_owning_tool_name_prefix(name)
+        )
+        first_call_tool_name: Final = (
+            name
+            if first_call_target is None or (requested_server is not None and not name_is_prefixed)
+            else strip_known_server_prefix(name, first_call_target)
+        )
+        await _list_tools_before_first_call(
+            server=first_call_target,
+            tool_name=first_call_tool_name,
+            allowed_mcp_servers=allowed_mcp_servers,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+        )
 
         if requested_server is not None and not name_is_prefixed:
             # REST callers may pass server_id with the upstream tool name (no
