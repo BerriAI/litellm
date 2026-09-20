@@ -1392,7 +1392,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
                 inputs: GenericGuardrailAPIInputs,
                 request_data: dict,
                 input_type: Literal["request", "response"],
-                logging_obj: Optional[Any] = None,
+                logging_obj: object = None,
             ) -> GenericGuardrailAPIInputs:
                 self.seen_inputs.append(inputs)
                 return inputs
