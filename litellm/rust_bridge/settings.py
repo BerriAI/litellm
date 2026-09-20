@@ -24,10 +24,40 @@ class UrlPolicy:
     user_url_allowed_hosts: Sequence[str]
 
 
+@dataclass(frozen=True, slots=True)
+class ProviderDefaults:
+    vertex_project: str | None
+    vertex_location: str | None
+    enable_azure_ad_token_refresh: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class SecretManager:
+    readable: bool
+
+
 def warn(message: str) -> None:
     from litellm._logging import verbose_logger
 
     verbose_logger.warning("%s", message)
+
+
+def secret_manager() -> SecretManager:
+    from litellm.secret_managers.main import (
+        _should_read_secret_from_secret_manager,  # pyright: ignore[reportPrivateUsage]  # canonical resolver is private
+    )
+
+    return SecretManager(readable=_should_read_secret_from_secret_manager())
+
+
+def provider_defaults() -> ProviderDefaults:
+    import litellm
+
+    return ProviderDefaults(
+        vertex_project=litellm.vertex_project,
+        vertex_location=litellm.vertex_location,
+        enable_azure_ad_token_refresh=litellm.enable_azure_ad_token_refresh,
+    )
 
 
 def url_policy() -> UrlPolicy:

@@ -1,6 +1,5 @@
-use litellm_llms::{
-    base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse},
-    custom_httpx::llm_http_handler::OcrClient,
+use litellm_llms::base_llm::ocr::{
+    error::Error, handler::OcrClient, transformation::LiteLLMOcrResponse,
 };
 
 use crate::ocr::{

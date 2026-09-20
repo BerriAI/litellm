@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
+from prisma.errors import DataError as PrismaDataError
 from prisma.errors import RawQueryError
 from redis.exceptions import DataError
 
@@ -24,6 +25,8 @@ from litellm.proxy.db.db_spend_update_writer import (
     _TEAM_ADVISORY_LOCK_SQL,
     _TEAM_MEMBER_SPEND_SQL,
     DBSpendUpdateWriter,
+    _SpendTableName,
+    _spend_tables_left_to_send,
 )
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -2758,7 +2761,18 @@ async def test_daily_transaction_carries_compression_saved_tokens():
 
 
 @pytest.mark.asyncio
-async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
+@pytest.mark.parametrize("estimate, recorded_savings, expected", [
+    pytest.param(None, None, -0.005, id="plain-classifier-cost"),
+    pytest.param({"version": 1, "status": "unknown"}, None, 0.0, id="unknown"),
+    pytest.param({"version": 2, "status": "unknown"}, None, 0.0, id="unknown-v2"),
+    pytest.param({"version": 1, "status": "unknown"}, -0.003, 0.0, id="unknown-stale-value"),
+    pytest.param({"version": 0, "status": "estimated"}, -0.003, 0.0, id="unsupported-version"),
+    pytest.param({"version": 1, "status": "estimated"}, -0.003, -0.003, id="estimated"),
+    pytest.param(None, -0.003, -0.003, id="legacy"),
+])
+async def test_daily_transaction_compression_saved_tokens_zero_when_absent(
+    estimate: dict[str, object] | None, recorded_savings: float | None, expected: float,
+) -> None:
     """Requests without any compression metadata produce a zero count."""
     writer = DBSpendUpdateWriter()
     mock_prisma = MagicMock()
@@ -2776,7 +2790,12 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
         "prompt_tokens": 100,
         "completion_tokens": 10,
         "spend": 0.01,
-        "metadata": json.dumps({"usage_object": {}}),
+        "metadata": json.dumps({
+            "usage_object": {"prompt_tokens": 100, "completion_tokens": 10},
+            "routing_decision": {"savings_baseline_model": "anthropic/claude-sonnet-5", "classifier_cost": 0.005},
+            "autorouter_savings": recorded_savings,
+            "autorouter_savings_estimate": estimate,
+        }),
     }
 
     transaction = await writer._common_add_spend_log_transaction_to_daily_transaction(
@@ -2789,6 +2808,8 @@ async def test_daily_transaction_compression_saved_tokens_zero_when_absent():
     assert transaction["compression_saved_tokens"] == 0
     assert transaction["compression_savings_spend"] == 0
     assert transaction["prompt_caching_savings_spend"] == 0
+    assert transaction["spend"] == 0.01
+    assert transaction["autorouter_savings_spend"] == expected
 
 
 # ---------------------------------------------------------------------------
@@ -3007,6 +3028,29 @@ def _postgres_rejection(sqlstate: str) -> RawQueryError:
     )
 
 
+def _batched_postgres_rejection(sqlstate: str) -> PrismaDataError:
+    return PrismaDataError(
+        data={
+            "user_facing_error": {
+                "is_panic": False,
+                "message": "Error occurred during query execution:\nConnectorError(ConnectorError { "
+                f'user_facing_error: None, kind: QueryError(PostgresError {{ code: "{sqlstate}", '
+                'message: "db error", severity: "ERROR" }) })',
+                "batch_request_idx": 0,
+            }
+        }
+    )
+
+
+_REQUEUE_SAFETY_CASES: Final = [
+    pytest.param(httpx.ReadTimeout("no reply"), False, id="reply lost after the statement was sent"),
+    pytest.param(httpx.ConnectError("refused"), True, id="statement never reached the database"),
+    pytest.param(_postgres_rejection("23514"), False, id="postgres refused a constraint violation"),
+    pytest.param(_batched_postgres_rejection("23514"), False, id="postgres refused a batched constraint violation"),
+    pytest.param(_postgres_rejection("42P01"), True, id="table missing"),
+]
+
+
 @pytest.mark.parametrize(
     ("failure", "lands_on_the_next_tick"),
     [
@@ -3175,6 +3219,169 @@ async def test_failed_window_spend_commit_from_redis_is_restored_to_redis():
     db_writer.pod_lock_manager.release_lock.assert_awaited_once()
 
 
+@pytest.mark.parametrize(("failure", "safe_to_resend"), _REQUEUE_SAFETY_CASES)
+@pytest.mark.asyncio
+async def test_failed_per_entity_increment_from_redis_restores_only_what_may_still_be_sent(
+    failure: Exception, safe_to_resend: bool
+):
+    db_writer = DBSpendUpdateWriter()
+    db_spend_transactions = _empty_spend_transactions(
+        user_list_transactions={"user-1": 1.5},
+        key_list_transactions={"key-1": 1.5},
+        team_list_transactions={"team-1": 1.5},
+    )
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(db_spend_transactions, None, None, None, None, None, None)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+
+    mock_batcher = MagicMock()
+    for table_name in (
+        "litellm_usertable",
+        "litellm_verificationtoken",
+        "litellm_teamtable",
+        "litellm_teammembership",
+        "litellm_organizationtable",
+        "litellm_organizationmembership",
+        "litellm_projecttable",
+        "litellm_tagtable",
+        "litellm_modelaccessgroupbudgettable",
+        "litellm_agentstable",
+    ):
+        setattr(mock_batcher, table_name, MagicMock())
+    mock_batcher.litellm_verificationtoken.update_many.side_effect = failure
+
+    class _BatchContext:
+        async def __aenter__(self):
+            return mock_batcher
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            return False
+
+    class _Transaction:
+        def batch_(self):
+            return _BatchContext()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc_value, traceback):
+            return False
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_Transaction())
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    with patch(  # test-quality-ok: retry sleeps are disabled to exercise ConnectError without waiting
+        "litellm.proxy.db.db_spend_update_writer.asyncio.sleep",
+        new_callable=AsyncMock,
+    ):
+        await db_writer._commit_spend_updates_to_db_with_redis(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
+    restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs[
+        "db_spend_update_transactions"
+    ]
+    assert restored["user_list_transactions"] is None
+    assert restored["team_list_transactions"] == {"team-1": 1.5}
+    assert restored["key_list_transactions"] == ({"key-1": 1.5} if safe_to_resend else None)
+    mock_batcher.litellm_usertable.update_many.assert_called_once()
+
+
+@pytest.mark.parametrize(("failure", "safe_to_resend"), _REQUEUE_SAFETY_CASES)
+@pytest.mark.asyncio
+async def test_failed_window_spend_commit_from_redis_is_restored_only_when_safe_to_resend(
+    failure: Exception, safe_to_resend: bool
+):
+    db_writer = DBSpendUpdateWriter()
+    window_transactions = (
+        build_window_spend_transaction(
+            entity_type="team",
+            entity_id="team-1",
+            window_duration="7d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=2.0,
+        ),
+    )
+    mock_redis_update_buffer = AsyncMock()
+    mock_redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline = AsyncMock(
+        return_value=(None, None, None, None, None, None, window_transactions)
+    )
+    mock_redis_update_buffer.restore_transactions_to_redis = AsyncMock()
+    db_writer.redis_update_buffer = mock_redis_update_buffer
+    db_writer.pod_lock_manager = AsyncMock()
+    db_writer.pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    db = _WindowSpendFakeDB()
+    db.query_raw = AsyncMock(side_effect=failure)
+
+    await db_writer._commit_spend_updates_to_db_with_redis(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert _window_spend_upserts(db) == []
+    if safe_to_resend:
+        mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once_with(
+            window_spend_update_transactions=window_transactions
+        )
+    else:
+        mock_redis_update_buffer.restore_transactions_to_redis.assert_not_awaited()
+    db_writer.pod_lock_manager.release_lock.assert_awaited_once()
+
+
+@pytest.mark.parametrize(("failure", "safe_to_resend"), _REQUEUE_SAFETY_CASES)
+@pytest.mark.asyncio
+async def test_failed_window_spend_commit_is_requeued_only_when_the_rows_are_provably_uncommitted(
+    failure: Exception, safe_to_resend: bool
+):
+    class _WindowSpendFailureDB(_WindowSpendFakeDB):
+        def __init__(self, failure: Exception | None) -> None:
+            super().__init__()
+            self.failure = failure
+
+        async def query_raw(self, query, *args):
+            if self.failure is not None:
+                raise self.failure
+            return await super().query_raw(query, *args)
+
+    db_writer = DBSpendUpdateWriter()
+    transaction = build_window_spend_transaction(
+        entity_type="key",
+        entity_id="hashed-token",
+        window_duration="30d",
+        window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        spend=0.5,
+    )
+    await db_writer.window_spend_update_queue.add_update(transaction)
+    db = _WindowSpendFailureDB(failure)
+    db_writer._flush_tool_discovery_queue = AsyncMock()
+
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+    db.failure = None
+    await db_writer._commit_spend_updates_to_db_without_redis_buffer(
+        prisma_client=_WindowSpendFakePrisma(db),
+        n_retry_times=0,
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert len(_window_spend_upserts(db)) == (1 if safe_to_resend else 0)
+    assert db_writer.window_spend_update_queue.update_queue.empty()
+
+
 @pytest.mark.asyncio
 async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at():
     """Spend flushes must leave settings_updated_at alone, or it decays into
@@ -3237,6 +3444,84 @@ async def test_commit_spend_updates_to_db_does_not_stamp_key_settings_updated_at
     assert call_kwargs["where"] == {"token": token}
     assert set(call_kwargs["data"]) == {"spend", "total_spend", "last_active"}
     assert call_kwargs["data"]["spend"] == {"increment": response_cost}
+
+
+@pytest.mark.asyncio
+async def test_commit_spend_updates_to_db_reports_each_completed_table():
+    db_writer = DBSpendUpdateWriter()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(MagicMock()))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.call_details = {}
+    on_table_committed = MagicMock()
+
+    await db_writer._commit_spend_updates_to_db(
+        prisma_client=mock_prisma_client,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+        db_spend_update_transactions=_empty_spend_transactions(
+            org_member_list_transactions={},
+            project_list_transactions={},
+            model_access_group_list_transactions={},
+        ),
+        on_table_committed=on_table_committed,
+    )
+
+    assert on_table_committed.call_args_list == [
+        call("user_list_transactions"),
+        call("end_user_list_transactions"),
+        call("key_list_transactions"),
+        call("team_list_transactions"),
+        call("team_member_list_transactions"),
+        call("org_list_transactions"),
+        call("org_member_list_transactions"),
+        call("project_list_transactions"),
+        call("tag_list_transactions"),
+        call("model_access_group_list_transactions"),
+        call("agent_list_transactions"),
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transactions, table",
+    [
+        pytest.param(
+            {"team_member_list_transactions": {"team_id::t1::user_id::u1": 0.5}},
+            "team_member_list_transactions",
+            id="team membership spend landed before its cache invalidation failed",
+        ),
+        pytest.param(
+            {"project_list_transactions": {"p1": 0.5}},
+            "project_list_transactions",
+            id="project spend landed before its cache invalidation failed",
+        ),
+    ],
+)
+async def test_commit_spend_updates_to_db_reports_table_committed_before_cache_invalidation(
+    transactions: dict[str, dict[str, float]], table: _SpendTableName
+):
+    db_writer = DBSpendUpdateWriter()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.tx = MagicMock(return_value=_good_tx(MagicMock()))
+    user_api_key_cache = MagicMock()
+    user_api_key_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis down"))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.call_details = {"user_api_key_cache": user_api_key_cache}
+    committed = []
+
+    with pytest.raises(ConnectionError):
+        await db_writer._commit_spend_updates_to_db(
+            prisma_client=mock_prisma_client,
+            n_retry_times=0,
+            proxy_logging_obj=proxy_logging_obj,
+            db_spend_update_transactions=_empty_spend_transactions(**transactions),
+            on_table_committed=committed.append,
+        )
+
+    user_api_key_cache.async_delete_cache.assert_awaited_once()
+    assert committed[-1] == table
+    assert _spend_tables_left_to_send(_empty_spend_transactions(**transactions), committed, ConnectionError()) is None
 
 
 @pytest.mark.asyncio

@@ -124,22 +124,32 @@ def test_calculate_usage_prefers_served_speed_from_response_usage():
     assert no_response_speed.speed == "fast"
 
 
-def test_streaming_iterator_persists_served_speed_across_usage_chunks():
+@pytest.mark.parametrize("input_update, expected_fresh", [({}, 1000), ({"input_tokens": 0}, 0), ({"input_tokens": 2000}, 2000)])
+def test_streaming_iterator_persists_cumulative_usage_across_partial_chunks(input_update, expected_fresh):
     """
-    Only ``message_start`` usage carries the served speed; the final
-    ``message_delta`` usage does not. The iterator must remember the served
-    value so the last usage chunk, which wins in the stream chunk builder, does
-    not fall back to the requested speed.
+    Omitted input/cache/pricing fields retain their last cumulative values;
+    explicit input updates, including zero, replace them.
     """
     from litellm.llms.anthropic.chat.handler import ModelResponseIterator
 
     iterator = ModelResponseIterator(None, sync_stream=True, speed="fast")
 
-    start_usage = iterator._handle_usage({"input_tokens": 12, "output_tokens": 1, "speed": "standard"})
-    delta_usage = iterator._handle_usage({"output_tokens": 5})
+    start_usage = iterator._handle_usage({
+        "input_tokens": 1000, "output_tokens": 1, "speed": "standard", "inference_geo": "us",
+        "cache_creation_input_tokens": 3000, "cache_read_input_tokens": 2000,
+        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 3000},
+    })
+    delta_usage = iterator._handle_usage({"output_tokens": 5, **input_update})
 
     assert start_usage.speed == "standard"
     assert delta_usage.speed == "standard"
+    assert delta_usage.inference_geo == "us"
+    assert delta_usage.prompt_tokens == expected_fresh + 5000
+    assert delta_usage.completion_tokens == 5
+    details = delta_usage.prompt_tokens_details
+    assert (details.text_tokens, details.cached_tokens, details.cache_creation_tokens) == (expected_fresh, 2000, 3000)
+    assert details.cache_creation_token_details.ephemeral_1h_input_tokens == 3000
+    assert start_usage.prompt_tokens_details.text_tokens == 1000
 
 
 def test_calculate_usage_aggregates_cache_creation_split_across_iterations():

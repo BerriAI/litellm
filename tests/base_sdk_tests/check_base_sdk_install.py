@@ -11,7 +11,7 @@ import sys
 import traceback
 from collections.abc import Callable
 
-EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring")
+EXTRAS_ONLY_MODULES = ("fastapi", "uvicorn", "keyring", "mcp", "mcp_types", "httpx2", "httpcore2")
 
 
 def _require(condition: bool, message: str) -> None:

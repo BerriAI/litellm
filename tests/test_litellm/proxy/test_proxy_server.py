@@ -1628,6 +1628,188 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_resolved_key
 
 
+def _boot_with_general_settings(monkeypatch, tmp_path, general_settings):
+    import yaml
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"general_settings": general_settings}))
+    for name in (
+        "LITELLM_MASTER_KEY",
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY",
+        "LITELLM_MIGRATE_FROM_MASTER_KEY",
+        "LITELLM_SALT_KEY",
+        "WORKER_CONFIG",
+        "DATABASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    scheduler_left_on_a_closed_event_loop_by_an_earlier_test = "litellm.proxy.proxy_server.scheduler"
+    monkeypatch.setattr(scheduler_left_on_a_closed_event_loop_by_an_earlier_test, None)
+    announced = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.announce_on_stderr_at_exit", announced.append)
+    return config_path, announced
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings",
+    [{"master_key": "sk-1234"}, {"master_key": ""}, {"master_key": None}, {}],
+    ids=["publicly-known", "empty", "yaml-null", "no-general-settings"],
+)
+async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database_is_unreachable(
+    monkeypatch, tmp_path, general_settings
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    async def unreachable():
+        raise ConnectionError("database is down")
+
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
+    monkeypatch.setattr("litellm.proxy.proxy_server._connect_to_count_stored_values", unreachable)
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert len(announced) == 1
+    assert "sk-$(openssl rand -hex 32)" in announced[0]
+    key_can_have_encrypted_the_database = general_settings.get("master_key") is not None
+    assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
+
+
+class _DatabaseWithOneStoredCredential:
+    def __init__(self, ciphertext):
+        self._ciphertext = ciphertext
+
+    async def query_raw(self, query, *args):
+        if "information_schema.columns" in query:
+            return [{"table_name": "LiteLLM_CredentialsTable", "column_name": "credential_values"}]
+        return [{"credential_id": "cred-1", "credential_values": {"api_key": self._ciphertext}}]
+
+    async def execute_raw(self, query, *args):
+        raise AssertionError("a refused boot must not write to the database")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encrypted_with, asks_to_migrate", [("sk-1234", True), ("sk-some-other-key", False)])
+async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values_under_the_unsafe_key(
+    monkeypatch, tmp_path, encrypted_with, asks_to_migrate
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    database = _DatabaseWithOneStoredCredential(encrypt_value_helper("sk-provider", new_encryption_key=encrypted_with))
+
+    async def connected():
+        return database
+
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-1234"})
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
+    monkeypatch.setattr("litellm.proxy.proxy_server._connect_to_count_stored_values", connected)
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert ("LITELLM_MIGRATE_FROM_MASTER_KEY=sk-1234" in announced[0]) == asks_to_migrate
+    assert ("holds 1 value(s) encrypted with this master key" in announced[0]) == asks_to_migrate
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_says_a_lingering_migrate_from_variable_can_be_deleted(monkeypatch, tmp_path, caplog):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
+    assert len(notices) == 1
+    assert "you may now delete LITELLM_MIGRATE_FROM_MASTER_KEY" in notices[0]
+
+
+class _PrismaClientWhoseDatabaseRejectsQueries:
+    class _Database:
+        async def query_raw(self, query, *args):
+            raise RuntimeError("permission denied for table LiteLLM_CredentialsTable")
+
+    writer_db = _Database()
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatch, tmp_path, caplog):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "sk-1234")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        pytest.raises(RuntimeError, match="permission denied"),
+    ):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
+    assert len(notices) == 1
+    assert "Could not migrate stored values" in notices[0]
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-1234"})
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert str(config_path) in announced[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override", ["yaml", "env"])
+async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monkeypatch, tmp_path, override):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    general_settings = {
+        "master_key": "sk-1234",
+        **({"dangerously_permit_weak_or_unset_master_key": True} if override == "yaml" else {}),
+    }
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
+    if override == "env":
+        monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
+
+    async with proxy_startup_event(FastAPI()):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == "sk-1234"
+
+    assert announced == []
+
+
 class _ShutdownAwarePrisma(MockPrisma):
     def __init__(self):
         super().__init__()
@@ -3371,6 +3553,94 @@ async def test_load_config_rejects_malformed_role_permissions(tmp_path):
 
     with pytest.raises(ValidationError):
         await ProxyConfig().load_config(router=MagicMock(), config_file_path=str(config_file))
+
+
+def test_os_environ_resolution_leaves_the_config_layer_holding_the_reference(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("PROOF_NESTED_SECRET", "sk-nested-value")
+    proxy_config: Final = ProxyConfig()
+    config: Final = {
+        "general_settings": {
+            "master_key": "os.environ/PROOF_NESTED_SECRET",
+            "coordination_redis": {"password": "os.environ/PROOF_NESTED_SECRET"},
+        }
+    }
+
+    proxy_config._load_yaml_settings_stores(config)
+    resolved: Final = proxy_config._check_for_os_environ_vars(
+        config=proxy_config._config_with_resolved_settings(config)
+    )
+
+    assert resolved["general_settings"]["coordination_redis"]["password"] == "sk-nested-value"
+    assert resolved["general_settings"]["master_key"] == "sk-nested-value"
+    assert proxy_config.settings.config_value("master_key") == "os.environ/PROOF_NESTED_SECRET"
+    assert proxy_config.settings.config_value("coordination_redis") == {
+        "password": "os.environ/PROOF_NESTED_SECRET"
+    }
+
+
+def test_os_environ_resolution_reaches_dicts_nested_in_a_list(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("PROOF_LIST_SECRET", "sk-list-value")
+    config: Final = {"model_list": [{"litellm_params": {"api_key": "os.environ/PROOF_LIST_SECRET"}}]}
+
+    resolved: Final = ProxyConfig()._check_for_os_environ_vars(config=config)
+
+    assert resolved["model_list"][0]["litellm_params"]["api_key"] == "sk-list-value"
+
+
+@pytest.mark.parametrize("config_cache_size", ("not-a-number", "7"))
+@pytest.mark.asyncio
+async def test_db_reload_finishes_when_the_config_owns_a_setting_the_db_also_sets(monkeypatch, config_cache_size):
+    import litellm
+    from litellm.proxy import proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [], raising=False)
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", MagicMock(), raising=False)
+    proxy_config: Final = ProxyConfig()
+    proxy_config.settings.load_yaml(
+        {
+            "store_prompts_in_spend_logs": "os.environ/PROOF_FLAG",
+            "store_model_in_db": "os.environ/PROOF_FLAG",
+            "user_api_key_cache_max_size": config_cache_size,
+        }
+    )
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings, raising=False)
+
+    await proxy_config._update_general_settings(
+        {
+            "store_prompts_in_spend_logs": False,
+            "store_model_in_db": False,
+            "user_api_key_cache_max_size": 5,
+            "user_url_allowed_hosts": ["proof.example.com"],
+        }
+    )
+
+    assert litellm.user_url_allowed_hosts == ["proof.example.com"]
+    assert proxy_config.settings["store_prompts_in_spend_logs"] == "os.environ/PROOF_FLAG"
+    assert proxy_config.settings["store_model_in_db"] == "os.environ/PROOF_FLAG"
+    assert proxy_config.settings["user_api_key_cache_max_size"] == config_cache_size
+
+
+@pytest.mark.asyncio
+async def test_db_reload_keeps_the_resolved_value_of_a_config_owned_env_reference(monkeypatch):
+    from litellm.proxy import proxy_server as proxy_server_module
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setattr(proxy_server_module, "user_api_key_cache", MagicMock(), raising=False)
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True, raising=False)
+    proxy_config: Final = ProxyConfig()
+    proxy_config.settings.load_yaml({"store_model_in_db": "os.environ/PROOF_STORE_FLAG"})
+    proxy_config.settings.apply_runtime_values({"store_model_in_db": True})
+    monkeypatch.setattr(proxy_server_module, "general_settings", proxy_config.settings, raising=False)
+
+    await proxy_config._update_general_settings({"store_model_in_db": True})
+
+    assert proxy_config.settings["store_model_in_db"] is True
+    assert proxy_server_module.store_model_in_db is True
 
 
 def test_max_ui_session_budget_default_is_one_dollar():
@@ -5457,6 +5727,37 @@ async def test_router_settings_reload_keeps_db_values_writable(tmp_path, monkeyp
     assert proxy_config.router_settings.source("num_retries") == "db"
     assert proxy_config.router_settings.rejected_writes({"num_retries": 3}) == ()
     assert proxy_config.router_settings.rejected_writes({"disable_cooldowns": False}) == ("disable_cooldowns",)
+
+
+@pytest.mark.asyncio
+async def test_boot_warns_that_a_shadowed_database_value_will_never_apply(tmp_path, monkeypatch, caplog):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"model_list": [], "general_settings": {"allowed_ips": ["1.2.3.4"], "max_file_size_mb": 5}})
+    )
+    db_row: Final = types.SimpleNamespace(param_value={"allowed_ips": ["1.2.3.4", "5.6.7.8"], "max_parallel_requests": 7})
+
+    async def read_config_row(_prisma_client, param_name):
+        return db_row if param_name == "general_settings" else None
+
+    monkeypatch.setattr(proxy_server_module, "get_config_param", read_config_row)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server_module, "store_model_in_db", True)
+    monkeypatch.setattr(proxy_server_module, "user_config_file_path", None)
+    proxy_config: Final = ProxyConfig()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await proxy_config.get_config(config_file_path=str(config_path))
+
+    warnings: Final = " ".join(record.getMessage() for record in caplog.records)
+    assert "allowed_ips" in warnings
+    assert "ignored" in warnings
+    assert "max_parallel_requests" not in warnings
+    assert "max_file_size_mb" not in warnings
+    assert proxy_config.settings["allowed_ips"] == ["1.2.3.4"]
+    assert proxy_config.settings["max_parallel_requests"] == 7
 
 
 @pytest.mark.asyncio
@@ -14672,3 +14973,99 @@ async def test_auth_cache_invalidation_subscriber_evicts_byok_credentials_cached
         byok_credential_cache.flush_cache()
 
     assert evicted, "the subscriber does not evict the BYOK credential cache on a peer worker's broadcast"
+
+
+@pytest.mark.asyncio
+async def test_delete_config_general_settings_refuses_a_key_the_config_file_owns(monkeypatch):
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {"max_request_size_mb": 42}})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", _fake_prisma_with_config({"max_request_size_mb": 99}))
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as refused:
+        await delete_config_general_settings(
+            data=ConfigFieldDelete(field_name="max_request_size_mb", config_type="general_settings"),
+            user_api_key_dict=admin,
+        )
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail["keys"] == ["max_request_size_mb"]
+    assert "config file" in refused.value.detail["error"]
+    assert pc.settings["max_request_size_mb"] == 42
+
+
+@pytest.mark.asyncio
+async def test_delete_config_general_settings_still_removes_a_key_the_database_owns(monkeypatch):
+    from litellm.proxy._types import ConfigFieldDelete
+    from litellm.proxy.proxy_server import ProxyConfig, delete_config_general_settings
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    pc.settings.apply_db_row("general_settings", {"max_request_size_mb": 42})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", _fake_prisma_with_config({"max_request_size_mb": 42}))
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await delete_config_general_settings(
+        data=ConfigFieldDelete(field_name="max_request_size_mb", config_type="general_settings"),
+        user_api_key_dict=admin,
+    )
+
+    assert "max_request_size_mb" not in pc.settings
+
+
+@pytest.mark.asyncio
+async def test_config_field_info_reports_the_declared_value_of_a_config_owned_secret(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig, get_config_general_settings
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {"master_key": "os.environ/PROXY_MASTER_KEY"}})
+    pc.settings.apply_runtime_values({"master_key": "sk-resolved-secret"})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", _fake_prisma_with_config({}))
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    info = await get_config_general_settings(field_name="master_key", user_api_key_dict=admin)
+
+    assert info.field_value == "os.environ/PROXY_MASTER_KEY"
+    assert info.source == "config"
+    assert info.editable is False
+
+
+@pytest.mark.asyncio
+async def test_config_field_info_still_reports_a_database_owned_value(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyConfig, get_config_general_settings
+
+    pc = ProxyConfig()
+    pc._load_yaml_settings_stores({"general_settings": {}})
+    pc.settings.apply_db_row("general_settings", {"max_request_size_mb": 42})
+    monkeypatch.setattr(proxy_server_module, "proxy_config", pc)
+    monkeypatch.setattr(proxy_server_module, "prisma_client", _fake_prisma_with_config({"max_request_size_mb": 42}))
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    info = await get_config_general_settings(field_name="max_request_size_mb", user_api_key_dict=admin)
+
+    assert info.field_value == 42
+    assert info.source == "db"
+
+
+@pytest.mark.asyncio
+async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolved(monkeypatch):
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    declared = {"public_key_ttl": "600", "team_id_jwt_field": "os.environ/JWT_TEAM_FIELD"}
+    general_settings = {"litellm_jwtauth": declared}
+    monkeypatch.setattr(proxy_server_module, "get_secret", lambda value: "resolved-team-field")
+
+    ProxyStartupEvent._initialize_jwt_auth(
+        general_settings=general_settings,
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+    )
+
+    assert declared["team_id_jwt_field"] == "os.environ/JWT_TEAM_FIELD"
+    assert proxy_server_module.jwt_handler.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"

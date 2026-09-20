@@ -9,7 +9,7 @@ import httpx
 from integration._support.asgi import asgi_server
 from integration._support.client import Gateway, Scenario
 from integration._support.database import read_rows
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp_tests.mcp_e2e_upstream_server import add, multiply
 from starlette.requests import Request
@@ -27,12 +27,7 @@ class McpPeer:
 
 @contextmanager
 def mcp_peer() -> Iterator[McpPeer]:
-    service: Final = FastMCP(
-        "integration-math",
-        stateless_http=True,
-        json_response=True,
-        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-    )
+    service: Final = MCPServer("integration-math")
     service.add_tool(add)
     service.add_tool(multiply)
 
@@ -40,7 +35,11 @@ def mcp_peer() -> Iterator[McpPeer]:
     def fail() -> str:
         raise ValueError("synthetic tool failure")
 
-    app: Final = service.streamable_http_app()
+    app: Final = service.streamable_http_app(
+        stateless_http=True,
+        json_response=True,
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
     observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
 
     async def capture(scope: Scope, receive: Receive, send: Send) -> None:
@@ -94,9 +93,7 @@ def tool_names(gateway: Gateway, key: str, identity: str) -> dict[str, str]:
     }
 
 
-def call_tool(
-    gateway: Gateway, key: str, identity: str, name: str, arguments: dict[str, object]
-) -> httpx.Response:
+def call_tool(gateway: Gateway, key: str, identity: str, name: str, arguments: dict[str, object]) -> httpx.Response:
     return gateway.client.post(
         "/mcp-rest/tools/call",
         headers={"x-litellm-api-key": key},

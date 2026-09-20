@@ -121,6 +121,137 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         assert "error" in events[-1]
 
 
+@pytest.mark.asyncio
+async def test_responses_api_background_polling_rejects_missing_input():
+    from fastapi import Response as FastAPIResponse
+    from starlette.requests import Request
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import responses_api
+
+    processor = MagicMock()
+
+    async def return_exception(*, e: Exception, **kwargs: object) -> Exception:
+        return e
+
+    processor._handle_llm_api_exception = AsyncMock(side_effect=return_exception)
+    processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o"}, MagicMock()))
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b'{"model":"gpt-4o","background":true}',
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch(  # test-quality-ok: polling decision is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
+            return_value=True,
+        ),
+        patch(  # test-quality-ok: background task is imported inside the endpoint
+            "litellm.proxy.response_polling.background_streaming.background_streaming_task",
+            new_callable=AsyncMock,
+        ) as mock_background_streaming_task,
+        patch(  # test-quality-ok: polling handler is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.ResponsePollingHandler.create_initial_state",
+            new_callable=AsyncMock,
+        ) as mock_create_initial_state,
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await responses_api(
+                request=request,
+                fastapi_response=FastAPIResponse(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "input"
+    processor.common_processing_pre_call_logic.assert_awaited_once()
+    mock_background_streaming_task.assert_not_called()
+    mock_create_initial_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_responses_api_background_polling_accepts_input_from_prompt_template():
+    from fastapi import Response as FastAPIResponse
+    from starlette.requests import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import responses_api
+
+    processor = MagicMock()
+    processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"model": "gpt-4o", "input": "hello from prompt"}, MagicMock())
+    )
+    initial_state = MagicMock()
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b'{"model":"gpt-4o","prompt_id":"greeting","background":true}',
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch(  # test-quality-ok: polling decision is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
+            return_value=True,
+        ),
+        patch(  # test-quality-ok: background task is imported inside the endpoint
+            "litellm.proxy.response_polling.background_streaming.background_streaming_task",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: avoid scheduling a background task in this unit test
+            "litellm.proxy.response_api_endpoints.endpoints.asyncio.create_task",
+        ),
+        patch(  # test-quality-ok: polling handler is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.ResponsePollingHandler.create_initial_state",
+            new_callable=AsyncMock,
+        ) as mock_create_initial_state,
+    ):
+        mock_create_initial_state.return_value = initial_state
+        result = await responses_api(
+            request=request,
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert result is initial_state
+    processor.common_processing_pre_call_logic.assert_awaited_once()
+    mock_create_initial_state.assert_awaited_once()
+    request_data = mock_create_initial_state.await_args.kwargs["request_data"]
+    assert request_data["input"] == "hello from prompt"
+
+
 class TestResponsesAPIEndpoints(unittest.TestCase):
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
