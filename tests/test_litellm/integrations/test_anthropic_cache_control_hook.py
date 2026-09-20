@@ -4,10 +4,11 @@ import os
 import subprocess
 import sys
 import textwrap
-from typing import List, Optional, Tuple
+from typing import Final, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import (
@@ -1334,7 +1335,7 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point(mo
                 client=client,
             )
 
-            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            request_body = _ConverseBody.model_validate_json(mock_post.call_args.kwargs["data"])
             cache_points = _count_converse_cache_points(request_body)
 
             assert cache_points <= 4, (
@@ -1343,23 +1344,33 @@ async def test_cache_control_hook_bedrock_payload_caps_with_tool_config_point(mo
             )
 
 
-def _count_converse_cache_points(request_body: dict) -> int:
-    system_points = sum(
-        1 for block in request_body.get("system", []) if isinstance(block, dict) and "cachePoint" in block
+class _ConverseMessage(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    content: tuple[dict[str, object], ...] = ()
+
+
+class _ConverseToolConfig(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tools: tuple[dict[str, object], ...] = ()
+
+
+class _ConverseBody(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    system: tuple[dict[str, object], ...] = ()
+    messages: tuple[_ConverseMessage, ...] = ()
+    toolConfig: _ConverseToolConfig = _ConverseToolConfig()
+
+
+def _count_converse_cache_points(request_body: _ConverseBody) -> int:
+    blocks: Final = (
+        *request_body.system,
+        *(block for message in request_body.messages for block in message.content),
+        *request_body.toolConfig.tools,
     )
-    message_points = sum(
-        1
-        for msg in request_body.get("messages", [])
-        if isinstance(msg.get("content"), list)
-        for block in msg["content"]
-        if isinstance(block, dict) and "cachePoint" in block
-    )
-    tool_points = sum(
-        1
-        for tool in request_body.get("toolConfig", {}).get("tools", [])
-        if isinstance(tool, dict) and "cachePoint" in tool
-    )
-    return system_points + message_points + tool_points
+    return sum(1 for block in blocks if "cachePoint" in block)
 
 
 @pytest.mark.asyncio
@@ -1418,10 +1429,10 @@ async def test_cache_control_hook_bedrock_tool_config_point_stands_down_when_cli
                 client=client,
             )
 
-            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            request_body = _ConverseBody.model_validate_json(mock_post.call_args.kwargs["data"])
 
             assert _count_converse_cache_points(request_body) == 4
-            assert not any("cachePoint" in tool for tool in request_body["toolConfig"]["tools"])
+            assert not any("cachePoint" in tool for tool in request_body.toolConfig.tools)
 
 
 class TestApplyToAnthropicMessagesRequest:
@@ -2371,7 +2382,7 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
     }
 
     @staticmethod
-    def _marked_user_turns(count):
+    def _marked_user_turns(count: int) -> List[AllMessageValues]:
         return [
             {"role": "user", "content": [{"type": "text", "text": f"turn {i}", "cache_control": {"type": "ephemeral"}}]}
             for i in range(count)
@@ -2386,7 +2397,7 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
             tools=tools,
         )
 
-    def _chat(self, params, messages):
+    def _chat(self, params: dict[str, object], messages: List[AllMessageValues]) -> List[AllMessageValues]:
         _, processed, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
             model="claude-sonnet-4-5",
             messages=messages,
