@@ -48,6 +48,40 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
+  it.each([false, true])("omits masked JEV credentials from dashboard saves, edited: %s", (edited) => {
+    const stored = {
+      classifier_type: "jev" as const,
+      tiers: FORM_VALUE.tiers,
+      jev_classifier_config: {
+        model: "jev-configured",
+        timeout_ms: 6100,
+        instructions: "Existing instructions",
+        api_key: "sk-s****************cret",
+        api_base: "https://jev.example.com",
+      },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(hydrated.jev_classifier_config).not.toHaveProperty("api_key");
+    expect(hydrated.jev_classifier_config).not.toHaveProperty("api_base");
+    const value = edited
+      ? {
+          ...hydrated,
+          jev_classifier_config: { model: "jev-updated", timeout_ms: 8100, instructions: "" },
+        }
+      : hydrated;
+    const saved = buildUpdatedComplexityRouterConfig(stored, value);
+    expect(saved.jev_classifier_config).toEqual({
+      ...(edited
+        ? { model: "jev-updated", timeout_ms: 8100 }
+        : { model: "jev-configured", timeout_ms: 6100, instructions: "Existing instructions" }),
+    });
+    for (const classifierType of ["llm", "heuristic"] as const) {
+      expect(
+        buildUpdatedComplexityRouterConfig(saved, transitionClassifierType(value, classifierType)),
+      ).not.toHaveProperty("jev_classifier_config");
+    }
+  });
+
   it("hydrates nullable JEV instructions without resetting the server configuration", () => {
     const stored = {
       classifier_type: "jev" as const,
