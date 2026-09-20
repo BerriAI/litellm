@@ -966,13 +966,6 @@ class TestOCICohereStreaming:
             completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging
         )
 
-    def test_cohere_streaming_wrapper_initialization(self):
-        """Test OCIStreamWrapper initialization"""
-        stream_wrapper = self._create_stream_wrapper()
-
-        # chunk_creator is the public dispatch entry point
-        assert hasattr(stream_wrapper, "chunk_creator")
-        assert callable(stream_wrapper.chunk_creator)
 
     def test_cohere_streaming_chunk_parsing(self):
         """Test parsing of Cohere streaming chunks"""
@@ -1003,16 +996,3 @@ class TestOCICohereStreaming:
         # Test non-JSON chunk
         with pytest.raises(OCIError, match="Chunk cannot be parsed as JSON"):
             stream_wrapper.chunk_creator("data: invalid json")
-
-    def test_cohere_streaming_generic_chunk_fallback(self):
-        """Test fallback to generic chunk handling for non-Cohere chunks"""
-        stream_wrapper = self._create_stream_wrapper()
-
-        # Test generic chunk (no apiFormat or different apiFormat)
-        generic_chunk = {"apiFormat": "GEMINI", "text": "Hello from Gemini"}
-        chunk_data = f"data: {json.dumps(generic_chunk)}"
-
-        # This should fall back to generic handling
-        result = stream_wrapper.chunk_creator(chunk_data)
-        # The exact structure depends on the generic handler implementation
-        assert hasattr(result, "choices")

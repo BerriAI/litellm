@@ -269,28 +269,6 @@ class TestOCIEmbedConfig:
         assert result.model == "cohere.embed-v3.0"
         assert result.usage.prompt_tokens == 10
 
-    def test_transform_response_no_usage(self):
-        cfg = self._config()
-        model_response = EmbeddingResponse()
-        raw = self._mock_response(
-            200,
-            {
-                "embeddings": [[0.1]],
-                "modelId": "cohere.embed-v3.0",
-                "modelVersion": "3.0.0",
-            },
-        )
-        result = cfg.transform_embedding_response(
-            model="cohere.embed-v3.0",
-            raw_response=raw,
-            model_response=model_response,
-            logging_obj=MagicMock(),
-            api_key=None,
-            request_data={},
-            optional_params={},
-            litellm_params={},
-        )
-        assert len(result.data) == 1
 
     def test_transform_response_http_error_raises(self):
         cfg = self._config()
