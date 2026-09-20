@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 from collections.abc import Mapping, Sequence
@@ -474,6 +475,14 @@ def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     return getattr(kwargs.get("original_function"), "__name__", None) in PROVIDER_SCOPED_CREATION_FUNCTION_NAMES
 
 
+def _restore_fallback_prompt_state(kwargs: dict[str, object]) -> None:
+    if "_unrendered_messages" in kwargs:
+        kwargs["messages"] = copy.deepcopy(kwargs["_unrendered_messages"])
+    if "_original_prompt_params" in kwargs and isinstance(kwargs["_original_prompt_params"], dict):
+        kwargs.update(kwargs["_original_prompt_params"])
+    kwargs.pop("_in_prompt_factory", None)
+
+
 async def run_async_fallback(
     *args: object,
     litellm_router: LitellmRouter,
@@ -567,6 +576,7 @@ async def run_async_fallback(
                 kwargs["model"] = mg
             elif isinstance(mg, dict):
                 kwargs.update(mg)
+            _restore_fallback_prompt_state(kwargs)
             fallback_depth = fallback_depth + 1
             _hop_metadata = dict(kwargs.get(metadata_variable_name) or {})
             _original_model_group_stamp = _hop_metadata.pop("original_model_group", original_model_group)

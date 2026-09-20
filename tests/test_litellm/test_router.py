@@ -16485,3 +16485,484 @@ class TestMemberAutoRouterInference:
         monkeypatch.setitem(sys.modules, "fastapi", None)
         monkeypatch.delitem(sys.modules, "litellm.proxy.auth.auto_router_checks", raising=False)
         assert (await self._route(router, {"metadata": {"user_api_key_team_id": "router-team"}})).model == "restricted-model"
+
+
+@pytest.fixture
+def prompt_version_clean_registry():
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+    IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.clear()
+    IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt.clear()
+    yield IN_MEMORY_PROMPT_REGISTRY
+    IN_MEMORY_PROMPT_REGISTRY.IN_MEMORY_PROMPTS.clear()
+    IN_MEMORY_PROMPT_REGISTRY.prompt_id_to_custom_prompt.clear()
+
+
+@pytest.fixture
+def prompt_captured_calls(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    calls: list[dict] = []
+
+    async def mock_acompletion(*args, **kwargs):
+        calls.append(dict(kwargs))
+        return litellm.ModelResponse(
+            choices=[litellm.utils.Choices(message=litellm.utils.Message(content="mock reply", role="assistant"))]
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", mock_acompletion)
+    return calls
+
+
+def test_router_serves_specified_prompt_version_instead_of_first_registered(
+    prompt_version_clean_registry, prompt_captured_calls: list[dict]
+) -> None:
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    spec_v1: Final = PromptSpec(
+        prompt_id="assistant.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="assistant",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: You are Assistant V1\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec_v1)
+
+    spec_v2: Final = PromptSpec(
+        prompt_id="assistant.v2",
+        version=2,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="assistant",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: You are Assistant V2\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec_v2)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "agent-v2",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o",
+                    "prompt_id": "assistant",
+                    "prompt_version": 2,
+                },
+            }
+        ]
+    )
+
+    response: Final = asyncio.run(
+        router.acompletion(
+            model="agent-v2",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+    )
+    assert response.choices[0].message.content == "mock reply"
+    assert len(prompt_captured_calls) == 1
+    call_messages: Final = prompt_captured_calls[0]["messages"]
+    system_messages: Final = [m for m in call_messages if m.get("role") == "system"]
+    assert len(system_messages) == 1
+    assert "You are Assistant V2" in system_messages[0]["content"]
+    assert "You are Assistant V1" not in system_messages[0]["content"]
+
+
+def test_router_prompt_management_prevents_double_rendering(
+    prompt_version_clean_registry, prompt_captured_calls: list[dict]
+) -> None:
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    spec: Final = PromptSpec(
+        prompt_id="greet.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="greet",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Single greeting template\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "greet-model",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o",
+                    "prompt_id": "greet",
+                    "prompt_version": 1,
+                },
+            }
+        ]
+    )
+
+    asyncio.run(
+        router.acompletion(
+            model="greet-model",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    )
+
+    assert len(prompt_captured_calls) == 1
+    captured: Final = prompt_captured_calls[0]
+    call_messages: Final = captured["messages"]
+    system_messages: Final = [m for m in call_messages if m.get("role") == "system"]
+    assert len(system_messages) == 1
+    assert "prompt_id" not in captured
+    assert "prompt_variables" not in captured
+    assert "prompt_version" not in captured
+    assert "prompt_environment" not in captured
+
+
+def test_router_serves_prompt_version_passed_as_string(
+    prompt_version_clean_registry, prompt_captured_calls: list[dict]
+) -> None:
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    spec_v1: Final = PromptSpec(
+        prompt_id="bot.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="bot",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Bot V1\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec_v1)
+    spec_v2: Final = PromptSpec(
+        prompt_id="bot.v2",
+        version=2,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="bot",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Bot V2\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec_v2)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bot-model",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o",
+                    "prompt_id": "bot",
+                    "prompt_version": "2",
+                },
+            }
+        ]
+    )
+
+    asyncio.run(
+        router.acompletion(
+            model="bot-model",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+    )
+    assert len(prompt_captured_calls) == 1
+    call_messages: Final = prompt_captured_calls[0]["messages"]
+    system_messages: Final = [m for m in call_messages if m.get("role") == "system"]
+    assert len(system_messages) == 1
+    assert "Bot V2" in system_messages[0]["content"]
+
+
+def test_router_serves_reloaded_prompt_version_immediately(
+    prompt_version_clean_registry, prompt_captured_calls: list[dict]
+) -> None:
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    spec_v1: Final = PromptSpec(
+        prompt_id="dyn.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="dyn",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Initial text\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec_v1)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "dyn-model",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o",
+                    "prompt_id": "dyn",
+                    "prompt_version": 1,
+                },
+            }
+        ]
+    )
+
+    asyncio.run(router.acompletion(model="dyn-model", messages=[{"role": "user", "content": "1"}]))
+    assert "Initial text" in prompt_captured_calls[-1]["messages"][0]["content"]
+
+    updated_spec: Final = PromptSpec(
+        prompt_id="dyn.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="dyn",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Updated text\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.reload_prompt(updated_spec)
+
+    asyncio.run(router.acompletion(model="dyn-model", messages=[{"role": "user", "content": "2"}]))
+    assert "Updated text" in prompt_captured_calls[-1]["messages"][0]["content"]
+
+
+def test_dotprompt_managers_with_different_versions_have_distinct_logger_keys() -> None:
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+
+    mgr_v1: Final = DotpromptManager(
+        prompt_id="greeting",
+        prompt_version=1,
+        prompt_data={"content": "v1"},
+    )
+    mgr_v2: Final = DotpromptManager(
+        prompt_id="greeting",
+        prompt_version=2,
+        prompt_data={"content": "v2"},
+    )
+
+    key_v1: Final = litellm.logging_callback_manager._get_custom_logger_key(mgr_v1)
+    key_v2: Final = litellm.logging_callback_manager._get_custom_logger_key(mgr_v2)
+
+    assert key_v1 != key_v2
+    assert "prompt_version=1" in key_v1
+    assert "prompt_version=2" in key_v2
+
+
+def test_router_serves_underscore_version_prompt(
+    prompt_version_clean_registry, prompt_captured_calls: list[dict]
+) -> None:
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    spec_v1: Final = PromptSpec(
+        prompt_id="assistant_v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="assistant",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: You are Assistant V1 Underscore\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec_v1)
+
+    spec_v2: Final = PromptSpec(
+        prompt_id="assistant_v2",
+        version=2,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="assistant",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: You are Assistant V2 Underscore\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec_v2)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "agent-underscore-v2",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o",
+                    "prompt_id": "assistant",
+                    "prompt_version": 2,
+                },
+            }
+        ]
+    )
+
+    response: Final = asyncio.run(
+        router.acompletion(
+            model="agent-underscore-v2",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+    )
+    assert response.choices[0].message.content == "mock reply"
+    assert len(prompt_captured_calls) == 1
+    call_messages: Final = prompt_captured_calls[0]["messages"]
+    system_messages: Final = [m for m in call_messages if m.get("role") == "system"]
+    assert len(system_messages) == 1
+    assert "You are Assistant V2 Underscore" in system_messages[0]["content"]
+    assert "You are Assistant V1 Underscore" not in system_messages[0]["content"]
+
+
+def test_router_fallback_isolates_prompt_rendering_between_deployments(
+    prompt_version_clean_registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    spec_primary: Final = PromptSpec(
+        prompt_id="agent_primary.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="agent_primary",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Primary Prompt\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec_primary)
+
+    spec_fallback: Final = PromptSpec(
+        prompt_id="agent_fallback.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="agent_fallback",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Fallback Prompt\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec_fallback)
+
+    calls: list[dict] = []
+
+    async def mock_failover_acompletion(*args, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs.get("model") == "gpt-4o-primary":
+            raise litellm.RateLimitError(
+                message="Rate limit reached",
+                response=httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+                llm_provider="openai",
+                model="gpt-4o-primary",
+            )
+        return litellm.ModelResponse(
+            choices=[litellm.utils.Choices(message=litellm.utils.Message(content="fallback success", role="assistant"))]
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", mock_failover_acompletion)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o-primary",
+                    "prompt_id": "agent_primary",
+                    "prompt_version": 1,
+                },
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o-fallback",
+                    "prompt_id": "agent_fallback",
+                    "prompt_version": 1,
+                },
+            },
+        ],
+        fallbacks=[{"primary-model": ["fallback-model"]}],
+    )
+
+    response: Final = asyncio.run(
+        router.acompletion(
+            model="primary-model",
+            messages=[{"role": "user", "content": "run task"}],
+        )
+    )
+
+    assert response.choices[0].message.content == "fallback success"
+    assert len(calls) == 2
+    primary_call_messages: Final = calls[0]["messages"]
+    fallback_call_messages: Final = calls[1]["messages"]
+    primary_system_messages: Final = [m for m in primary_call_messages if m.get("role") == "system"]
+    fallback_system_messages: Final = [m for m in fallback_call_messages if m.get("role") == "system"]
+    assert len(primary_system_messages) == 1
+    assert "Primary Prompt" in primary_system_messages[0]["content"]
+    assert len(fallback_system_messages) == 1
+    assert "Fallback Prompt" in fallback_system_messages[0]["content"]
+    assert "Primary Prompt" not in fallback_system_messages[0]["content"]
+
+
+def test_router_fallback_to_standard_model_uses_unrendered_messages(
+    prompt_version_clean_registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    spec: Final = PromptSpec(
+        prompt_id="primary_prompt.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="primary_prompt",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Isolated Prompt\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec)
+
+    calls: list[dict] = []
+
+    async def mock_standard_failover_acompletion(*args, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs.get("model") == "gpt-4o-primary":
+            raise litellm.RateLimitError(
+                message="Rate limit reached",
+                response=httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+                llm_provider="openai",
+                model="gpt-4o-primary",
+            )
+        return litellm.ModelResponse(
+            choices=[litellm.utils.Choices(message=litellm.utils.Message(content="standard reply", role="assistant"))]
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", mock_standard_failover_acompletion)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o-primary",
+                    "prompt_id": "primary_prompt",
+                    "prompt_version": 1,
+                },
+            },
+            {
+                "model_name": "standard-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-standard",
+                },
+            },
+        ],
+        fallbacks=[{"primary-model": ["standard-model"]}],
+    )
+
+    response: Final = asyncio.run(
+        router.acompletion(
+            model="primary-model",
+            messages=[{"role": "user", "content": "direct query"}],
+        )
+    )
+
+    assert response.choices[0].message.content == "standard reply"
+    assert len(calls) == 2
+    standard_call_messages: Final = calls[1]["messages"]
+    system_messages: Final = [m for m in standard_call_messages if m.get("role") == "system"]
+    assert len(system_messages) == 0
+    assert standard_call_messages == [{"role": "user", "content": "direct query"}]
