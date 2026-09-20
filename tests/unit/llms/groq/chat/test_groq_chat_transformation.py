@@ -202,5 +202,3 @@ class TestGroqWebSearchUsageSignal:
         model_response = litellm.ModelResponse()
         GroqChatConfig()._add_web_search_usage(model_response=model_response)
         assert getattr(model_response, "usage", None) is None
-
-
