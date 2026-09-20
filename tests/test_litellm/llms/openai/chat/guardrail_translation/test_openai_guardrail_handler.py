@@ -6,6 +6,7 @@ with guardrail transformations, including tool calls.
 """
 
 import json
+from collections.abc import Mapping
 from typing import Any, Literal, Optional
 
 import pytest
@@ -1390,7 +1391,7 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
             async def apply_guardrail(
                 self,
                 inputs: GenericGuardrailAPIInputs,
-                request_data: dict,
+                request_data: Mapping[str, object],
                 input_type: Literal["request", "response"],
                 logging_obj: object = None,
             ) -> GenericGuardrailAPIInputs:
