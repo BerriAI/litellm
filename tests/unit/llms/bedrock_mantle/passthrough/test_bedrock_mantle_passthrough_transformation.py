@@ -109,7 +109,13 @@ def test_region_falls_back_to_the_mantle_default_without_any_hint(no_ambient_aws
         ({}, {"AWS_BEARER_TOKEN_BEDROCK": "aws-env-key"}, "aws-env-key"),
     ],
 )
-def test_sign_request_uses_the_deployment_bearer_token(no_ambient_aws, monkeypatch, litellm_params, env, expected_bearer):
+def test_sign_request_uses_the_deployment_bearer_token(
+    no_ambient_aws,
+    monkeypatch,
+    litellm_params,
+    env,
+    expected_bearer,
+):
     for name, value in env.items():
         monkeypatch.setenv(name, value)
     headers, body = BedrockMantlePassthroughConfig().sign_request(
