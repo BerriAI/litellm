@@ -312,7 +312,7 @@ def test_litellm_proxy_server_config_no_general_settings():
 def test_litellm_proxy_server_config_no_general_settings_legacy_resolver():
     """Exercises the opt-out legacy (v1) migration resolver.
 
-    Runs in a separate CI job against a local Postgres to avoid collisions
-    with the default variant when they share a database.
+    Runs after the default variant in the CI job that provides a local
+    Postgres, so both resolvers get real-database proxy-boot coverage.
     """
     _run_proxy_server_smoke_test(extra_proxy_args=["--use_legacy_migration_resolver"])
