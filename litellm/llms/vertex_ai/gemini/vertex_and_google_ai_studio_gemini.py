@@ -1720,6 +1720,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return non_thinking_tokens == usage_metadata.get("totalTokenCount", 0)
 
     @staticmethod
+    def _prompt_token_count_excludes_cache(usage_metadata: UsageMetadata) -> bool:
+        cached: Final = usage_metadata.get("cachedContentTokenCount", 0)
+        return cached > usage_metadata.get("promptTokenCount", 0)
+
+    @staticmethod
     def _response_has_search_grounding(
         completion_response: GenerateContentResponseBody | BidiGenerateContentServerMessage,
     ) -> bool:
@@ -1861,25 +1866,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         ## Calculate non-cached tokens by subtracting cached from total (per modality)
         ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
         ## See: https://github.com/BerriAI/litellm/issues/18750
-        if cached_text_tokens is not None and prompt_text_tokens is not None:
-            # Explicit caching: subtract cached tokens per modality from cacheTokensDetails
-            prompt_text_tokens = prompt_text_tokens - cached_text_tokens
-        elif (
-            cached_tokens is not None
-            and prompt_text_tokens is not None
-            and cached_text_tokens is None
-            and "cacheTokensDetails" not in usage_metadata
-        ):
-            # Implicit caching: only cachedContentTokenCount is provided (no cacheTokensDetails)
-            # Subtract from text tokens since implicit caching is primarily for text content
-            # See: https://github.com/BerriAI/litellm/issues/16341
-            prompt_text_tokens = prompt_text_tokens - cached_tokens
-        if cached_audio_tokens is not None and prompt_audio_tokens is not None:
-            prompt_audio_tokens = prompt_audio_tokens - cached_audio_tokens
-        if cached_image_tokens is not None and prompt_image_tokens is not None:
-            prompt_image_tokens = prompt_image_tokens - cached_image_tokens
-        if cached_video_tokens is not None and prompt_video_tokens is not None:
-            prompt_video_tokens = prompt_video_tokens - cached_video_tokens
+        prompt_excludes_cache: Final = VertexGeminiConfig._prompt_token_count_excludes_cache(usage_metadata)
+        if not prompt_excludes_cache:
+            if cached_text_tokens is not None and prompt_text_tokens is not None:
+                # Explicit caching: subtract cached tokens per modality from cacheTokensDetails
+                prompt_text_tokens = prompt_text_tokens - cached_text_tokens
+            elif (
+                cached_tokens is not None
+                and prompt_text_tokens is not None
+                and cached_text_tokens is None
+                and "cacheTokensDetails" not in usage_metadata
+            ):
+                # Implicit caching: only cachedContentTokenCount is provided (no cacheTokensDetails)
+                # Subtract from text tokens since implicit caching is primarily for text content
+                # See: https://github.com/BerriAI/litellm/issues/16341
+                prompt_text_tokens = prompt_text_tokens - cached_tokens
+            if cached_audio_tokens is not None and prompt_audio_tokens is not None:
+                prompt_audio_tokens = prompt_audio_tokens - cached_audio_tokens
+            if cached_image_tokens is not None and prompt_image_tokens is not None:
+                prompt_image_tokens = prompt_image_tokens - cached_image_tokens
+            if cached_video_tokens is not None and prompt_video_tokens is not None:
+                prompt_video_tokens = prompt_video_tokens - cached_video_tokens
 
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
@@ -1905,14 +1912,16 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             else (tool_use_prompt_tokens or 0)
         )
 
+        uncounted_cache: Final = (cached_tokens or 0) if prompt_excludes_cache else 0
+
         completion_tokens = response_tokens or completion_response["usageMetadata"].get("candidatesTokenCount", 0)
         if not VertexGeminiConfig.is_candidate_token_count_inclusive(usage_metadata) and reasoning_tokens:
             completion_tokens = reasoning_tokens + completion_tokens
         ## GET USAGE ##
         usage: Final = Usage(
-            prompt_tokens=usage_metadata.get("promptTokenCount", 0) + billable_tool_use_prompt_tokens,
+            prompt_tokens=usage_metadata.get("promptTokenCount", 0) + billable_tool_use_prompt_tokens + uncounted_cache,
             completion_tokens=completion_tokens,
-            total_tokens=usage_metadata.get("totalTokenCount", 0),
+            total_tokens=usage_metadata.get("totalTokenCount", 0) + uncounted_cache,
             prompt_tokens_details=prompt_tokens_details,
             cache_read_input_tokens=cached_tokens,
             reasoning_tokens=reasoning_tokens,

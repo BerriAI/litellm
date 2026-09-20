@@ -6292,3 +6292,63 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+def test_vertex_ai_prompt_token_count_excluding_cached_content_is_normalized():
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 5,
+        "candidatesTokenCount": 20,
+        "totalTokenCount": 25,
+        "cachedContentTokenCount": 13710,
+        "thoughtsTokenCount": 18,
+    }
+
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata_dict})
+
+    assert result.prompt_tokens == 13715
+    assert result.total_tokens == 13735
+    assert result.prompt_tokens_details.cached_tokens == 13710
+    assert result.prompt_tokens_details.cached_tokens <= result.prompt_tokens
+
+
+def test_vertex_ai_cached_modality_tokens_not_subtracted_when_prompt_count_excludes_cache():
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 5,
+        "candidatesTokenCount": 20,
+        "totalTokenCount": 25,
+        "cachedContentTokenCount": 13710,
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 5}],
+        "cacheTokensDetails": [{"modality": "TEXT", "tokenCount": 13710}],
+    }
+
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata_dict})
+
+    assert result.prompt_tokens_details.text_tokens == 5
+    assert result.prompt_tokens == 13715
+
+
+def test_vertex_ai_prompt_token_count_including_cached_content_is_unchanged():
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 10449,
+        "candidatesTokenCount": 79,
+        "totalTokenCount": 10528,
+        "cachedContentTokenCount": 5120,
+        "promptTokensDetails": [
+            {"modality": "VIDEO", "tokenCount": 10240},
+            {"modality": "TEXT", "tokenCount": 9},
+            {"modality": "AUDIO", "tokenCount": 200},
+        ],
+        "cacheTokensDetails": [{"modality": "VIDEO", "tokenCount": 5120}],
+    }
+
+    result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata_dict})
+
+    assert result.prompt_tokens == 10449
+    assert result.total_tokens == 10528
+    assert result.prompt_tokens_details.video_tokens == 5120
