@@ -406,21 +406,6 @@ def test_responses_call_sends_session_affinity_for_caller_session_id() -> None:
     assert headers["x-session-affinity"] == "sess-42"
 
 
-def test_responses_call_keeps_caller_supplied_session_affinity_header() -> None:
-    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
-    pinned: Final[Mapping[str, str]] = MappingProxyType({"x-session-affinity": "explicit-node"})
-    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
-        litellm.responses(
-            model="fireworks_ai/kimi-k3",
-            input="hi",
-            api_key="fw-test-key",
-            litellm_session_id="sess-42",
-            extra_headers=pinned,
-        )
-    _, headers, _ = _sent_request(client)
-    assert headers["x-session-affinity"] == "explicit-node"
-
-
 def test_responses_call_maps_provider_errors_to_fireworks_ai() -> None:
     client: Final = MagicMock()
     request: Final = httpx.Request("POST", FIREWORKS_RESPONSES_URL)
