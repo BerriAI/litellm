@@ -6,6 +6,7 @@ Manages a LiteLLM API key.
 
 ```hcl
 resource "litellm_key" "example" {
+  key_type             = "llm_api"
   models               = ["gpt-3.5-turbo", "gpt-4"]
   max_budget           = 100.0
   user_id              = "user123"
@@ -51,6 +52,8 @@ resource "litellm_key" "example" {
 ## Argument Reference
 
 The following arguments are supported:
+
+* `key_type` - (Optional) Type of key that determines its default allowed routes. One of `llm_api`, `management`, `read_only` or `default`. Changing it creates a new key.
 
 * `models` - (Optional) List of models that can be used with this key. This restricts the key to only use the specified models.
 
