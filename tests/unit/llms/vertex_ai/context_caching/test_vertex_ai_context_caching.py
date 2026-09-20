@@ -1911,6 +1911,87 @@ class TestCheckCachePagination:
         assert result is None
         assert self.mock_async_client.get.call_count == 1
 
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_check_cache_pagination_max_pages_limit(
+        self, mock_get_token_url, custom_llm_provider
+    ):
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        cache_key_to_find = "nonexistent_cache_key"
+
+        def create_page_response(page_num):
+            response = MagicMock()
+            response.json.return_value = {
+                "cachedContents": [
+                    {"name": f"cache_{page_num}", "displayName": f"key_{page_num}"}
+                ],
+                "nextPageToken": f"token_page_{page_num + 1}",
+            }
+            return response
+
+        self.mock_client.get.side_effect = [
+            create_page_response(i) for i in range(100)
+        ]
+
+        result = self.context_caching.check_cache(
+            cache_key=cache_key_to_find,
+            client=self.mock_client,
+            headers={"Authorization": "Bearer token"},
+            api_key="test_key",
+            api_base=None,
+            logging_obj=self.mock_logging,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project="test_project",
+            vertex_location="us-central1",
+            vertex_auth_header="Bearer test-token",
+        )
+
+        assert result is None
+        assert self.mock_client.get.call_count == 100
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    async def test_async_check_cache_pagination_max_pages_limit(
+        self, mock_get_token_url, custom_llm_provider
+    ):
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        cache_key_to_find = "nonexistent_cache_key"
+
+        def create_page_response(page_num):
+            response = MagicMock()
+            response.json.return_value = {
+                "cachedContents": [
+                    {"name": f"cache_{page_num}", "displayName": f"key_{page_num}"}
+                ],
+                "nextPageToken": f"token_page_{page_num + 1}",
+            }
+            return response
+
+        self.mock_async_client.get = AsyncMock(
+            side_effect=[create_page_response(i) for i in range(100)]
+        )
+
+        result = await self.context_caching.async_check_cache(
+            cache_key=cache_key_to_find,
+            client=self.mock_async_client,
+            headers={"Authorization": "Bearer token"},
+            api_key="test_key",
+            api_base=None,
+            logging_obj=self.mock_logging,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project="test_project",
+            vertex_location="us-central1",
+            vertex_auth_header="Bearer test-token",
+        )
+
+        assert result is None
+        assert self.mock_async_client.get.call_count == 100
+
 
 
 

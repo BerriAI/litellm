@@ -387,6 +387,43 @@ def test_vertex_does_not_warn_when_dropping_non_guardrail_session_update(caplog)
     )
 
 
+@pytest.mark.asyncio
+async def test_async_realtime_does_not_forward_client_query_params_to_vertex_backend(
+    monkeypatch,
+):
+    import websockets
+
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    cfg = VertexAIRealtimeConfig(
+        access_token="tok", project="my-proj", location="us-central1"
+    )
+
+    captured = {}
+
+    def fake_connect(url, *args, **kwargs):
+        captured["url"] = url
+        raise RuntimeError("stop before establishing the backend connection")
+
+    monkeypatch.setattr(websockets, "connect", fake_connect)
+
+    await BaseLLMHTTPHandler().async_realtime(
+        model="gemini-live-2.5-flash-preview-native-audio-09-2025",
+        websocket=AsyncMock(),
+        logging_obj=MagicMock(),
+        provider_config=cfg,
+        headers={},
+        query_params={
+            "model": "gemini-live-2.5-flash-preview-native-audio-09-2025",
+            "intent": "chat",
+        },
+    )
+
+    assert "?" not in captured["url"]
+    assert "model=" not in captured["url"]
+    assert "intent=" not in captured["url"]
+
+
 
 
 def test_vertex_function_call_output_omits_id():
