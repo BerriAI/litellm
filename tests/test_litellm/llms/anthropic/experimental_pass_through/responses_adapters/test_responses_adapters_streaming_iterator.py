@@ -533,12 +533,41 @@ class TestCountAnthropicInputTokens:
 
         messages = [{"role": "user", "content": "hello world"}]
         bare = _count_anthropic_input_tokens(messages=messages, model="gpt-4o", system=None, tools=None)
-        prefixed = _count_anthropic_input_tokens(
-            messages=messages, model="openai/gpt-4o", system=None, tools=None
-        )
+        prefixed = _count_anthropic_input_tokens(messages=messages, model="openai/gpt-4o", system=None, tools=None)
 
         assert bare is not None and prefixed is not None
         assert prefixed == bare
+
+    def test_image_urls_are_not_fetched(self, monkeypatch):
+        import requests
+        from litellm.llms.anthropic.experimental_pass_through.responses_adapters.handler import (
+            _count_anthropic_input_tokens,
+        )
+
+        def fail(*args, **kwargs):
+            raise AssertionError("token counting must not fetch a caller-supplied URL")
+
+        monkeypatch.setattr(requests, "get", fail)
+
+        counted = _count_anthropic_input_tokens(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://attacker.example/x.png", "detail": "high"},
+                        },
+                    ],
+                }
+            ],
+            model="gpt-4o",
+            system=None,
+            tools=None,
+        )
+
+        assert isinstance(counted, int) and counted > 0
 
     def test_counting_failure_returns_none(self, monkeypatch):
         import litellm

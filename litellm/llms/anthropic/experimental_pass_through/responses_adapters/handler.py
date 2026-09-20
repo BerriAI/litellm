@@ -70,6 +70,7 @@ def _count_anthropic_input_tokens(
             model=local_model_name(model, provider),
             messages=prompt_messages,
             tools=tools,
+            use_default_image_token_count=True,
         )
     except Exception:  # noqa: BLE001  # counting must not block a request over an informational field
         verbose_logger.debug("Could not count input tokens for message_start", exc_info=True)
