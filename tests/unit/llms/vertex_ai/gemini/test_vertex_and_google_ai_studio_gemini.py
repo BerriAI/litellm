@@ -6342,10 +6342,10 @@ _GROUNDING_METADATA: Final = {
     ],
 }
 _GROUNDED_TEXT: Final = "As of today spot gold trades near $4,270"
-_GROUNDING_URIS: Final = [
+_GROUNDING_URIS: Final = (
     "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbC123",
     "https://vertexaisearch.cloud.google.com/grounding-api-redirect/DeF456",
-]
+)
 
 
 def _gemini_stream_iterator() -> "ModelResponseIterator":
@@ -6356,17 +6356,16 @@ def _gemini_stream_iterator() -> "ModelResponseIterator":
     return ModelResponseIterator(streaming_response=iter([]), sync_stream=True, logging_obj=logging_obj)
 
 
-def _delta_annotations(model_response: object) -> List[dict]:
-    found: List[dict] = []
-    for choice in model_response.choices:
-        annotations = getattr(getattr(choice, "delta", None), "annotations", None)
-        if annotations:
-            found.extend(annotations)
-    return found
+def _delta_annotations(model_response: object) -> tuple[dict, ...]:
+    return tuple(
+        annotation
+        for choice in getattr(model_response, "choices", ())
+        for annotation in (getattr(getattr(choice, "delta", None), "annotations", None) or ())
+    )
 
 
-def _citation_urls(annotations: List[dict]) -> List[str]:
-    return [annotation["url_citation"]["url"] for annotation in annotations]
+def _citation_urls(annotations: tuple[dict, ...]) -> tuple[str, ...]:
+    return tuple(annotation["url_citation"]["url"] for annotation in annotations)
 
 
 def test_streaming_grounding_on_the_final_chunk_produces_annotations() -> None:
@@ -6409,7 +6408,7 @@ def test_streaming_without_grounding_carries_no_annotations() -> None:
         {"candidates": [{"index": 0, "content": {"role": "model", "parts": [{"text": "Paris."}]}, "finishReason": "STOP"}]}
     )
 
-    assert _delta_annotations(chunk) == []
+    assert _delta_annotations(chunk) == ()
 
 
 def test_streaming_grounding_without_web_chunks_carries_no_annotations() -> None:
@@ -6432,7 +6431,7 @@ def test_streaming_grounding_without_web_chunks_carries_no_annotations() -> None
         }
     )
 
-    assert _delta_annotations(chunk) == []
+    assert _delta_annotations(chunk) == ()
 
 
 def test_non_streaming_grounding_annotations_are_unchanged() -> None:
@@ -6451,7 +6450,7 @@ def test_non_streaming_grounding_annotations_are_unchanged() -> None:
     )
 
     annotations = getattr(model_response.choices[-1].message, "annotations", None)
-    assert _citation_urls(annotations or []) == _GROUNDING_URIS
+    assert _citation_urls(tuple(annotations or ())) == _GROUNDING_URIS
 
 
 def test_streamed_grounding_survives_reassembly() -> None:
@@ -6468,4 +6467,4 @@ def test_streamed_grounding_survives_reassembly() -> None:
     rebuilt = litellm.stream_chunk_builder(chunks=[chunk for chunk in chunks if chunk is not None])
 
     assert rebuilt is not None
-    assert _citation_urls(getattr(rebuilt.choices[0].message, "annotations", None) or []) == _GROUNDING_URIS
+    assert _citation_urls(tuple(getattr(rebuilt.choices[0].message, "annotations", None) or ())) == _GROUNDING_URIS
