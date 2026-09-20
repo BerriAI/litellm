@@ -3015,7 +3015,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, extensions, sdk, browser]
+              suite: [management, accounting, database, providers, extensions, sdk, cost, browser]
           filters:
             branches:
               only:

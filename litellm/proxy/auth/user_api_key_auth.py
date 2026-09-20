@@ -58,6 +58,7 @@ from litellm.proxy.auth.auth_checks import (
     get_jwt_key_mapping_object,
     get_key_end_user_budget_id,
     get_object_permission,
+    get_org_object_for_request,
     get_project_object,
     get_team_membership,
     get_team_object,
@@ -2611,6 +2612,47 @@ def _token_can_vouch_for_team(valid_token: UserAPIKeyAuth, lookup_error: BaseExc
     return PrismaDBExceptionHandler.should_allow_request_on_db_unavailable()
 
 
+async def _inherit_org_identity(
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTableCachedObj | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging | None,
+) -> None:
+    if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
+        user_api_key_auth_obj.org_id = team_object.organization_id
+    already_populated: Final = any(
+        value is not None
+        for value in (
+            user_api_key_auth_obj.organization_alias,
+            user_api_key_auth_obj.organization_max_budget,
+            user_api_key_auth_obj.organization_tpm_limit,
+            user_api_key_auth_obj.organization_rpm_limit,
+            user_api_key_auth_obj.organization_metadata,
+        )
+    )
+    if user_api_key_auth_obj.org_id is None or already_populated or prisma_client is None:
+        return
+    org_object: Final = await get_org_object_for_request(
+        org_id=user_api_key_auth_obj.org_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if org_object is None:
+        return
+    user_api_key_auth_obj.organization_alias = org_object.organization_alias
+    user_api_key_auth_obj.organization_metadata = org_object.metadata
+    budget: Final = org_object.litellm_budget_table
+    if budget is None:
+        return
+    user_api_key_auth_obj.organization_max_budget = budget.max_budget
+    user_api_key_auth_obj.organization_tpm_limit = budget.tpm_limit
+    user_api_key_auth_obj.organization_rpm_limit = budget.rpm_limit
+
+
 def is_no_auth_dev_mode(master_key: str | None, general_settings: Mapping[str, object]) -> bool:
     return master_key is None and not any(
         general_settings.get(flag, False)
@@ -2849,8 +2891,14 @@ async def _run_centralized_common_checks(
         user_object=user_object,
     )
 
-    if user_api_key_auth_obj.org_id is None and team_object is not None and team_object.organization_id is not None:
-        user_api_key_auth_obj.org_id = team_object.organization_id
+    await _inherit_org_identity(
+        user_api_key_auth_obj=user_api_key_auth_obj,
+        team_object=team_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
     # common_checks identifies admin via user_object, not the token
     # (non_proxy_admin_allowed_routes_check). JWT admin shortcut and

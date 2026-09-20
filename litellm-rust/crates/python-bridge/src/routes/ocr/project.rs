@@ -592,7 +592,7 @@ kwargs = {
             );
             assert_eq!(
                 projected.transport.timeout,
-                std::time::Duration::from_secs(5)
+                Some(std::time::Duration::from_secs(5))
             );
         });
     }

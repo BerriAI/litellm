@@ -1180,10 +1180,10 @@ def test_validate_chat_completion_tool_choice(tool_choice, expected_bool):
     from litellm.utils import validate_chat_completion_tool_choice
 
     if expected_bool:
-        validate_chat_completion_tool_choice(tool_choice=tool_choice)
+        validate_chat_completion_tool_choice(tool_choice=tool_choice, model="gpt-5.6-sol")
     else:
-        with pytest.raises(Exception, match="Invalid tool choice"):
-            validate_chat_completion_tool_choice(tool_choice=tool_choice)
+        with pytest.raises(litellm.BadRequestError, match="Invalid tool choice"):
+            validate_chat_completion_tool_choice(tool_choice=tool_choice, model="gpt-5.6-sol")
 
 
 def test_models_by_provider():
