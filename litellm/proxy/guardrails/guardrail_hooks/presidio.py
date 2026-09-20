@@ -696,7 +696,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     @staticmethod
     def _resolve_overlapping_spans(
         analyze_results: Sequence[PresidioAnalyzeResponseItem],
-    ) -> Sequence[PresidioAnalyzeResponseItem]:
+    ) -> Any:
         if not analyze_results:
             return ()
 
@@ -711,11 +711,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         merged: Final[list[PresidioAnalyzeResponseItem]] = []  # mutable-ok: required for sequential boundary merge
         for item in sorted_by_span:
-            s: Final = int(item.get("start") or 0)
-            e: Final = int(item.get("end") or 0)
+            s = int(item.get("start") or 0)
+            e = int(item.get("end") or 0)
             if s >= e:
                 continue
-            item_copy: Final[PresidioAnalyzeResponseItem] = {
+            item_copy: PresidioAnalyzeResponseItem = {
                 "entity_type": item.get("entity_type"),
                 "start": s,
                 "end": e,
@@ -725,12 +725,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 merged.append(item_copy)
                 continue
 
-            prev: Final = merged[-1]
-            prev_e: Final = int(prev.get("end") or 0)
+            prev = merged[-1]
+            prev_e = int(prev.get("end") or 0)
 
             if s < prev_e:
-                curr_score: Final = float(item.get("score") or 0.0)
-                prev_score: Final = float(prev.get("score") or 0.0)
+                curr_score = float(item.get("score") or 0.0)
+                prev_score = float(prev.get("score") or 0.0)
                 prev["end"] = max(prev_e, e)
                 if curr_score > prev_score:
                     prev["entity_type"] = item.get("entity_type")
@@ -769,7 +769,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
-        sorted_forward: Final = sorted(valid_analyze_results, key=lambda x: x["start"])
+        sorted_forward: Final = sorted(valid_analyze_results, key=lambda x: int(x.get("start") or 0))
         seq_map: Final = {}
         for idx, ar in enumerate(sorted_forward, start=1):
             seq_map[(ar["start"], ar["end"])] = idx
