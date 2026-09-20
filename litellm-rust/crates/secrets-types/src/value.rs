@@ -1,0 +1,32 @@
+use crate::SecretValue;
+
+#[derive(Clone, PartialEq, Eq, veil::Redact)]
+pub enum Secret {
+    String(SecretValue),
+    Bool(#[redact] bool),
+    Json(#[redact] serde_json::Value),
+}
+
+impl From<SecretValue> for Secret {
+    fn from(value: SecretValue) -> Self {
+        Self::String(value)
+    }
+}
+
+impl Secret {
+    pub fn from_json(value: serde_json::Value) -> Option<Self> {
+        match value {
+            serde_json::Value::Null => None,
+            serde_json::Value::String(value) => Some(Self::String(SecretValue::new(value))),
+            serde_json::Value::Bool(value) => Some(Self::Bool(value)),
+            value => Some(Self::Json(value)),
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(value) => Some(value.expose()),
+            Self::Bool(_) | Self::Json(_) => None,
+        }
+    }
+}
