@@ -473,13 +473,13 @@ mod tests {
             _ => unreachable!(),
         }
         assert!(ByteLevelCounter::detect(&anthropic_tokenizer).is_none());
-        let counter = crate::TokenCounter::from_json(
+        let counter = crate::FastTokenizer::from_json(
             &anthropic_tokenizer.to_string(false).expect("serialize"),
         )
         .expect("load");
         for text in ["", "Hello WORLD!  ＡＢ ﬁ Ⅳ", "<EOT> stop"] {
             assert_eq!(
-                counter.count_text(text).expect("count"),
+                counter.count_tokens(text).expect("count"),
                 reference_count(&anthropic_tokenizer, text)
             );
         }
@@ -545,7 +545,7 @@ mod tests {
                 .rstrip(rstrip)])
             .expect("add token");
         let fast = ByteLevelCounter::detect(&anthropic_tokenizer).expect("supported");
-        let counter = crate::TokenCounter::from_json(
+        let counter = crate::FastTokenizer::from_json(
             &anthropic_tokenizer.to_string(false).expect("serialize"),
         )
         .expect("load");
@@ -557,7 +557,7 @@ mod tests {
         ] {
             assert_eq!(fast.count(&anthropic_tokenizer, text), None);
             assert_eq!(
-                counter.count_text(text).expect("count"),
+                counter.count_tokens(text).expect("count"),
                 reference_count(&anthropic_tokenizer, text)
             );
         }
@@ -571,17 +571,17 @@ mod tests {
         assert_eq!(fast.count(&tokenizer, "hello"), None);
         assert!(tokenizer.encode_fast("hello", true).is_err());
         let counter =
-            crate::TokenCounter::from_json(&tokenizer.to_string(false).expect("serialize"))
+            crate::FastTokenizer::from_json(&tokenizer.to_string(false).expect("serialize"))
                 .expect("load");
         assert!(matches!(
-            counter.count_text("hello"),
+            counter.count_tokens("hello"),
             Err(crate::Error::Encode(_))
         ));
     }
 
     #[rstest]
     fn shared_counter_matches_encoder_across_threads(anthropic_tokenizer: Tokenizer) {
-        let counter = crate::TokenCounter::from_json(
+        let counter = crate::FastTokenizer::from_json(
             &anthropic_tokenizer.to_string(false).expect("serialize"),
         )
         .expect("load");
@@ -598,7 +598,7 @@ mod tests {
                 scope.spawn(move || {
                     for _ in 0..100 {
                         for (text, count) in inputs.iter().zip(expected) {
-                            assert_eq!(counter.count_text(text).expect("count"), count);
+                            assert_eq!(counter.count_tokens(text).expect("count"), count);
                         }
                     }
                 });
@@ -614,10 +614,10 @@ mod tests {
         let fast = ByteLevelCounter::detect(&anthropic_tokenizer).expect("supported");
         assert_eq!(reference_count(&anthropic_tokenizer, "ABCD EFGH"), 1);
         assert_eq!(fast.count(&anthropic_tokenizer, "ABCD EFGH"), None);
-        let counter = crate::TokenCounter::from_json(
+        let counter = crate::FastTokenizer::from_json(
             &anthropic_tokenizer.to_string(false).expect("serialize"),
         )
         .expect("load");
-        assert_eq!(counter.count_text("ABCD EFGH").expect("count"), 1);
+        assert_eq!(counter.count_tokens("ABCD EFGH").expect("count"), 1);
     }
 }
