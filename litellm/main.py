@@ -8135,10 +8135,7 @@ def speech(
             )
         if custom_llm_provider == "openrouter":
             api_base = (  # rebind-ok: resolve openrouter speech api_base
-                api_base
-                or litellm.api_base
-                or get_secret_str("OPENROUTER_API_BASE")
-                or "https://openrouter.ai/api/v1"
+                api_base or litellm.api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
             )
             api_key = (  # rebind-ok: resolve openrouter speech api_key
                 api_key
