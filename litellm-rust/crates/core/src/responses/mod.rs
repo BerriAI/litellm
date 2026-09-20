@@ -1,3 +1,3 @@
-pub mod instrumentation;
-pub mod types;
+mod error;
+pub use error::Error;
 pub mod websocket;

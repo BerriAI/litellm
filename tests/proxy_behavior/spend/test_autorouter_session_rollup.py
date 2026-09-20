@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
+from prisma import Prisma
 
 from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
@@ -42,6 +43,8 @@ async def _turn(
     saved: float = 0.02,
     classifier_cost: float = 0.0,
     tier: "str | None" = None,
+    baseline: "str | None" = None,
+    estimated: bool = True,
 ) -> None:
     touched: Final = 1 if (hit or ttl is not None or not covered) else 0
     await db.execute_raw(
@@ -61,6 +64,10 @@ async def _turn(
         ttl,
         touched,
         tier,
+        baseline,
+        int(estimated),
+        spend if estimated else 0.0,
+        saved if estimated else 0.0,
     )
 
 
@@ -206,6 +213,9 @@ async def test_subtotal_coverage_survives_legacy_and_rolling_writers(db, writers
     assert row["saved_spend"] == pytest.approx(0.02 * len(writers))
     assert row["classifier_cost"] == pytest.approx(0.004 * sum(writers))
     assert row["classifier_cost_recorded_turns"] == sum(writers)
+    assert row["savings_estimated_turns"] == sum(writers)
+    assert row["savings_estimated_actual_spend"] == pytest.approx(0.01 * sum(writers))
+    assert row["savings_estimated_saved_spend"] == pytest.approx(0.02 * sum(writers))
     groups: Final = await db.query_raw(
         AUTOROUTER_BENCHMARKS_SQL, T0.isoformat(), (T0 + timedelta(days=1)).isoformat(), key
     )
@@ -215,6 +225,32 @@ async def test_subtotal_coverage_survives_legacy_and_rolling_writers(db, writers
     assert groups[0]["turns"] == len(writers)
     assert groups[0]["spend"] == row["spend"]
     assert groups[0]["saved_spend"] == row["saved_spend"]
+    assert groups[0]["savings_estimated_turns"] == sum(writers)
+    assert groups[0]["savings_estimated_actual_spend"] == row["savings_estimated_actual_spend"]
+    assert groups[0]["savings_estimated_saved_spend"] == row["savings_estimated_saved_spend"]
+
+
+async def test_unknown_and_legacy_turns_preserve_actual_spend_without_entering_the_estimated_cohort(db: Prisma) -> None:
+    key: Final = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, spend=0.25, saved=-0.05, baseline="opus")
+    await _turn(
+        db, key, "B", T0 + timedelta(seconds=1), spend=0.7, saved=0, baseline="sonnet", estimated=False
+    )
+    await _legacy_turn(db, key, T0 + timedelta(seconds=2))
+
+    row: Final = await _row(db, key)
+    assert row["saved_spend"] == pytest.approx(-0.03)
+    assert row["savings_estimated_baseline_models"] == {"opus": 1}
+    groups: Final = await db.query_raw(
+        AUTOROUTER_BENCHMARKS_SQL, T0.isoformat(), (T0 + timedelta(days=1)).isoformat(), key
+    )
+    assert len(groups) == 1
+    for actual in (row, groups[0]):
+        assert actual["turns"] == 3
+        assert actual["spend"] == pytest.approx(0.96)
+        assert actual["savings_estimated_turns"] == 1
+        assert actual["savings_estimated_actual_spend"] == pytest.approx(0.25)
+        assert actual["savings_estimated_saved_spend"] == pytest.approx(-0.05)
 
 
 async def test_the_benchmarks_aggregate_reads_only_overlapping_sessions(db):
@@ -335,6 +371,27 @@ async def test_a_mid_session_router_type_change_keeps_foreign_tier_names_out_of_
 
     row = await _row(db, key)
     assert row["tier_turns"] == {"medium": 2}
+    assert row["turns"] == 3
+
+
+async def test_baseline_models_count_the_turns_priced_against_each_baseline(db):
+    key = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, baseline="opus")
+    await _turn(db, key, "B", T0 + timedelta(seconds=10), baseline="opus")
+    await _turn(db, key, "A", T0 + timedelta(seconds=20), baseline="sonnet")
+
+    assert (await _row(db, key))["baseline_models"] == {"opus": 2, "sonnet": 1}
+
+
+async def test_a_turn_priced_against_no_baseline_leaves_the_map_alone(db):
+    key = f"k-{uuid.uuid4()}"
+    await _turn(db, key, "A", T0, baseline=None)
+    assert (await _row(db, key))["baseline_models"] == {}
+
+    await _turn(db, key, "A", T0 + timedelta(seconds=10), baseline="opus")
+    await _turn(db, key, "A", T0 + timedelta(seconds=20), baseline=None)
+    row = await _row(db, key)
+    assert row["baseline_models"] == {"opus": 1}
     assert row["turns"] == 3
 
 

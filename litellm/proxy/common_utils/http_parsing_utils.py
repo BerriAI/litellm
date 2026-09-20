@@ -9,7 +9,11 @@ from fastapi import Request, UploadFile, status
 from typing_extensions import NotRequired, ReadOnly, Required
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
+from litellm.constants import (
+    AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
+    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -39,7 +43,7 @@ def _is_form_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
 
 
-def _is_json_content_type(content_type: str) -> bool:
+def is_json_content_type(content_type: str) -> bool:
     """True iff the body should be parsed as JSON."""
     return _normalize_media_type(content_type) == "application/json"
 
@@ -189,8 +193,9 @@ async def _read_request_body(request: Request | None) -> dict:
 
                     try:
                         parsed_body = json.loads(body_str)
-                    except json.JSONDecodeError:
-                        # If both orjson and json.loads fail, throw a proper error
+                        json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
+                    except (json.JSONDecodeError, UnicodeEncodeError):
+                        # json.loads accepts lone surrogate escapes that no provider can encode
                         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
                         raise ProxyException(
                             message=f"Invalid JSON payload: {e}",
@@ -213,6 +218,26 @@ async def _read_request_body(request: Request | None) -> dict:
         return {}
 
 
+def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
+    """Azure Speech bodies (raw audio, multipart uploads) are forwarded byte for byte, so auth must not consume them."""
+    media_type: Final = _normalize_media_type(content_type)
+    return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
+        media_type.startswith("audio/") or media_type == "multipart/form-data"
+    )
+
+
+async def read_raw_json_body(request: Request | None) -> bytes | None:
+    if request is None or _safe_get_request_parsed_body(request=request) is None:
+        return None
+    content_type: Final = _safe_get_request_headers(request=request).get("content-type", "")
+    if _is_form_content_type(content_type):
+        return None
+    try:
+        return await request.body()
+    except RuntimeError:
+        return None
+
+
 def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
     if request is None:
         return None
@@ -220,6 +245,13 @@ def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
         accepted_keys, parsed_body = request.scope["parsed_body"]
         return {key: parsed_body[key] for key in accepted_keys}
     return None
+
+
+def get_client_requested_model(request: Request | None) -> str | None:
+    if request is None or not hasattr(request, "scope"):
+        return None
+    model: Final = request.scope.get(CLIENT_REQUESTED_MODEL_SCOPE_KEY)
+    return model if isinstance(model, str) else None
 
 
 def _safe_get_request_query_params(request: Request | None) -> dict:
@@ -244,6 +276,24 @@ def _safe_set_request_parsed_body(
         request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug("Unexpected error setting request parsed body - %s", e)
+
+
+def rewrite_request_model(
+    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
+    request: Request | None,
+    model: str,
+) -> None:
+    """Point the auth-time payload, the parsed-body cache, ``request.json()`` and ``request.body()`` at ``model``.
+    The cache and raw body keep only the keys the client sent, not params auth merged into ``request_data``.
+    """
+    request_data["model"] = model
+    if request is None:
+        return
+    cached_body: Final = _safe_get_request_parsed_body(request=request)
+    body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
+    _safe_set_request_parsed_body(request=request, parsed_body=body)
+    request._json = body
+    request._body = orjson.dumps(body)
 
 
 def _safe_get_request_headers(request: Request | None) -> dict:
@@ -406,7 +456,7 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     """
     if request.method == "POST":
         content_type: Final = request.headers.get("content-type", "")
-        if _is_json_content_type(content_type):
+        if is_json_content_type(content_type):
             return await _read_request_body(request)
         elif _is_form_content_type(content_type):
             return await get_form_data(request)

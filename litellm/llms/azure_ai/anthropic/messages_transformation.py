@@ -68,6 +68,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
+            messages=messages,
         )
 
         return headers, api_base

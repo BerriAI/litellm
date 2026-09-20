@@ -7,7 +7,7 @@ import {
 } from "@/components/add_model/auto_router_strategies";
 import { normalizeTierModels } from "@/components/add_model/complexity_router_tiers";
 import { Team } from "@/components/networking";
-import { type ModelActor, canModifyModel } from "@/utils/modelPermissions";
+import { type ModelActor, canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
 
 export type { AutoRouterKind };
 
@@ -57,6 +57,8 @@ const dedupe = (models: string[]): string[] => Array.from(new Set(models));
 
 const COMPLEXITY_TYPE_LABELS: Record<string, string> = {
   llm: "LLM Classifier",
+  capability: "Capability",
+  llm_v2: "Fuse v2",
   heuristic_first: "Heuristic first",
   hybrid: "Hybrid",
   custom: "Custom classifier",
@@ -106,13 +108,20 @@ export const toAutoRouterRow = (
   const name = deployment.model_name ?? "";
   const strategy = autoRouterStrategy(params);
   const { canEdit, canDelete, editBlockedReason } = autoRouterCapabilities(params, info);
-  const mayActOnRow = canModifyModel(actor, teams, { teamId: info.team_id, isDbModel: info.db_model === true });
+  const origin = {
+    teamId: info.team_id,
+    isDbModel: info.db_model === true,
+    createdBy: info.created_by,
+    model: params.model,
+  };
+  const mayActOnRow = canModifyModel(actor, teams, origin);
+  const mayEditRouter = canEditAutoRouter(actor, teams, origin);
 
   return {
     id: info.id ?? `${name}-${index}`,
     name,
     kind: strategy.kind,
-    canEdit: canEdit && mayActOnRow,
+    canEdit: canEdit && mayEditRouter,
     canDelete: canDelete && mayActOnRow,
     editBlockedReason,
     createdAt: info.created_at ?? undefined,

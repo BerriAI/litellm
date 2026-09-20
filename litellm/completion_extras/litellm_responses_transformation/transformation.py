@@ -25,7 +25,7 @@ import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    responses_reasoning_item_from_thinking_blocks,
+    responses_reasoning_items_from_thinking_blocks,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -129,8 +129,8 @@ def _reasoning_input_items(msg: "AllMessageValues") -> list[dict[str, object]]: 
         return stored
     raw_blocks: Final = msg.get("thinking_blocks") or ()
     blocks: Final = cast("Iterable[ChatCompletionThinkingBlock]", raw_blocks)  # cast-ok: untyped client json
-    from_thinking: Final = responses_reasoning_item_from_thinking_blocks(blocks)
-    return [] if from_thinking is None else [dict(from_thinking)]  # mutable-ok: API message payload
+    replayed: Final = responses_reasoning_items_from_thinking_blocks(blocks)
+    return [dict(item) for item in replayed]  # mutable-ok: API message payload
 
 
 def _build_reasoning_item(
@@ -227,7 +227,7 @@ class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
 
 
-def _tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _ChatToolCallDict:
+def tool_call_dict_from_output_item(item: Mapping[str, Any], index: int) -> _ChatToolCallDict:
     """Convert a ``function_call`` or ``custom_tool_call`` output item dict to a chat
     completions tool_call dict. Custom (grammar/freeform) tool calls carry their raw
     string payload in ``input`` rather than ``arguments``; both map to
@@ -502,7 +502,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
                 if text_format:
-                    responses_api_request["text"] = text_format
+                    responses_api_request["text"] = self._merge_text(responses_api_request, text_format)
+            elif key == "verbosity":
+                responses_api_request["text"] = self._merge_text(
+                    responses_api_request,
+                    MappingProxyType({"verbosity": value}),  # pyright: ignore[reportUnknownArgumentType]  # untyped value
+                )
             elif key == "tool_choice":
                 responses_api_request["tool_choice"] = self._normalize_tool_choice_for_responses_api(value)
             elif key == "stream_options":
@@ -517,6 +522,19 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["reasoning"] = self._map_reasoning_effort(value)
             elif key == "web_search_options":
                 self._add_web_search_tool(responses_api_request, value)
+
+    @staticmethod
+    def _merge_text(
+        responses_api_request: "ResponsesAPIOptionalRequestParams", update: Mapping[str, object]
+    ) -> "ResponseText":
+        existing: Final = cast(  # cast-ok: text field is a ResponseText | dict[str, Any] | None union
+            "dict[str, object]",
+            dict(responses_api_request).get("text") or {},  # mutable-ok: one-shot merge seed
+        )
+        return cast(  # cast-ok: merged mapping is a valid ResponseText shape
+            "ResponseText",
+            {**existing, **update},  # mutable-ok: one-shot merged payload
+        )
 
     def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
         """Build sanitized litellm_params with merged metadata."""
@@ -755,7 +773,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Tool calls accumulate into the single trailing tool_calls choice
                     # like the typed branches above; a choice per call would hide every
                     # call after choices[0] from chat clients
-                    accumulated_tool_calls.append(_tool_call_dict_from_output_item(raw_item, tool_call_index))
+                    accumulated_tool_calls.append(tool_call_dict_from_output_item(raw_item, tool_call_index))
                     tool_call_index += 1
                 elif handle_raw_dict_callback is not None:
                     choice, index = handle_raw_dict_callback(item=raw_item, index=index)
@@ -1201,6 +1219,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Cast to Any to match the expected union type for tools list items
         tools.append(cast(Any, web_search_tool))
 
+    def transform_response_format_to_text_format(self, response_format: object) -> "ResponseText | None":
+        return self._transform_response_format_to_text_format(response_format)
+
     def _transform_response_format_to_text_format(self, response_format: object) -> "ResponseText | None":
         """
         Transform Chat Completion response_format parameter to Responses API text.format parameter.
@@ -1409,7 +1430,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # New output item added
             output_item = parsed_chunk.get("item", {})
             if output_item.get("type") in ("function_call", "custom_tool_call"):
-                converted: Final = _tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
+                converted: Final = tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
                 provider_specific_fields: Final = converted.get("provider_specific_fields")
 
                 function_chunk: Final = ChatCompletionToolCallFunctionChunk(
@@ -1484,7 +1505,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                 index=0,
                                 delta=Delta(
                                     tool_calls=(
-                                        _tool_call_dict_from_output_item(
+                                        tool_call_dict_from_output_item(
                                             output_item, parsed_chunk.get("output_index", 0)
                                         ),
                                     )

@@ -46,6 +46,43 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
+  it.each(["capability", "llm_v2", "heuristic"] as const)(
+    "handles enabled stored overrides when editing %s with or without keyword form state",
+    (classifier_type) => {
+      const stored = {
+        ...STORED,
+        classifier_type,
+        adaptive: classifier_type !== "llm_v2",
+        adaptive_weights: { quality: 0.6, cost: 0.4 },
+        adaptive_eligible: "all",
+        tier_distance_penalty: 0.8,
+        enable_context_window_escalation: true,
+        context_window_escalation_buffer: 0.9,
+      };
+      const value = hydrateComplexityRouterConfig(stored, undefined);
+      for (const keywordState of [undefined, hydratedState]) {
+        const saved = buildUpdatedComplexityRouterConfig(stored, value, undefined, keywordState);
+        const forecast = classifier_type !== "heuristic";
+        expect(saved.adaptive).toBe(!forecast);
+        expect(saved.enable_context_window_escalation).toBe(!forecast);
+        expect(saved.escalation_keywords).toEqual(forecast ? [] : stored.escalation_keywords);
+        for (const key of [
+          "adaptive_weights",
+          "adaptive_eligible",
+          "tier_distance_penalty",
+          "context_window_escalation_buffer",
+        ]) {
+          expect(Object.hasOwn(saved, key)).toBe(!forecast);
+        }
+        expect(saved.keyword_tier_rules).toEqual(STORED.keyword_tier_rules);
+        expect(saved.semantic_keyword_matching).toBe(true);
+        expect(saved.some_future_backend_key).toEqual(STORED.some_future_backend_key);
+      }
+      expect(value.enable_context_window_escalation).toBe(true);
+      expect(stored.escalation_keywords).toEqual(["urgent", "outage"]);
+    },
+  );
+
   it("round-trips an untouched edit without changing any keyword-matching value", () => {
     // Opening the modal hydrates state from STORED; saving with nothing changed must be a
     // no-op. These keys are now MANAGED, so a hydration bug silently wipes them.
@@ -163,6 +200,32 @@ const STORED_LLM = {
   classifier_context_window_size: 5,
   classifier_context_per_turn_chars: 300,
 };
+
+describe("capability classifier configuration", () => {
+  it("preserves the judge and calibrated policy through an untouched dashboard edit", () => {
+    const stored = {
+      tiers: { SIMPLE: ["efficient-model"], REASONING: ["capable-model"] },
+      classifier_type: "capability" as const,
+      classifier_llm_config: { model: "judge", timeout_ms: 30000, temperature: 0 },
+      capability_classifier_config: {
+        efficient_tier: "SIMPLE",
+        capable_tier: "REASONING",
+        base_threshold: 0.66,
+        max_output_tokens: 512,
+        response_format: "json_object",
+        calibration: { version: "fitted-v1", slope: 0.15, intercept: 0.19 },
+      },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, null);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.classifier_type).toBe("capability");
+    expect(saved.classifier_llm_config).toEqual(stored.classifier_llm_config);
+    expect(saved.capability_classifier_config).toEqual(stored.capability_classifier_config);
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("custom_dimensions");
+  });
+});
 
 describe("buildUpdatedComplexityRouterConfig classifier context window", () => {
   it("round-trips an untouched edit without changing the classifier context values", () => {
@@ -647,6 +710,14 @@ describe("managed keys survive an untouched open-and-save", () => {
     "stall_escalation_repeat_threshold",
   ]);
 
+  // The opt-in fifth tier requires the LLM classifier, which this heuristic_first fixture is not,
+  // so it gets its own round trip below.
+  const KEYS_ANOTHER_TIER_LADDER_OWNS = new Set([
+    "capability_classifier_config",
+    "llm_v2_config",
+    "enable_non_reasoning_tier",
+  ]);
+
   it("carries every managed key a built-in router can hold through hydrate then save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     const saved = buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated);
@@ -654,8 +725,53 @@ describe("managed keys survive an untouched open-and-save", () => {
     const dropped = [...MANAGED_COMPLEXITY_ROUTER_KEYS]
       .filter((key) => !KEYS_ANOTHER_CLASSIFIER_TYPE_OWNS.has(key))
       .filter((key) => !KEYS_ANOTHER_CLASSIFICATION_FREQUENCY_OWNS.has(key))
+      .filter((key) => !KEYS_ANOTHER_TIER_LADDER_OWNS.has(key))
       .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
+  });
+
+  it("carries an enabled non-reasoning tier and its models through their own round trip", () => {
+    // `tiers` is rewritten wholesale on save, so this is the regression that matters: opening an
+    // enabled router and saving an unrelated edit must not delete the tier or its pool.
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "haiku-classifier" },
+      heuristic_first_max_tier: undefined,
+      enable_non_reasoning_tier: true,
+      tiers: { ...(STORED_ALL_MANAGED.tiers as object), NON_REASONING: ["gpt-4o-mini"] },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+
+    expect(saved.enable_non_reasoning_tier).toBe(true);
+    expect((saved.tiers as Record<string, string[]>).NON_REASONING).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("keeps a stored non-reasoning tier when the stored config never wrote the flag", () => {
+    // A hand-written config that names the tier: the flag is inferred from the stored pool, so an
+    // edit made for an unrelated reason cannot silently turn the tier off.
+    const stored: Record<string, unknown> = {
+      ...STORED_ALL_MANAGED,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "haiku-classifier" },
+      heuristic_first_max_tier: undefined,
+      tiers: { ...(STORED_ALL_MANAGED.tiers as object), NON_REASONING: ["gpt-4o-mini"] },
+    };
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrateComplexityRouterConfig(stored, undefined));
+
+    expect(saved.enable_non_reasoning_tier).toBe(true);
+    expect((saved.tiers as Record<string, string[]>).NON_REASONING).toEqual(["gpt-4o-mini"]);
+  });
+
+  it("leaves the tier and its flag out of a saved config that never had it on", () => {
+    const saved = buildUpdatedComplexityRouterConfig(
+      STORED_ALL_MANAGED,
+      hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined),
+    );
+
+    expect(saved).not.toHaveProperty("enable_non_reasoning_tier");
+    expect(saved.tiers).not.toHaveProperty("NON_REASONING");
   });
 
   it("carries the stall-escalation keys through their own round trip", () => {
@@ -765,5 +881,47 @@ describe("managed keys survive an untouched open-and-save", () => {
     const hydrated = hydrateComplexityRouterConfig(STORED_ALL_MANAGED, undefined);
     expect(hydrated.heuristic_first_max_tier).toBe("SIMPLE");
     expect(buildUpdatedComplexityRouterConfig(STORED_ALL_MANAGED, hydrated).heuristic_first_max_tier).toBe("SIMPLE");
+  });
+});
+
+describe("LLM V2 configuration preservation", () => {
+  const v2Config = {
+    efficient_profile: "Efficient coding model",
+    capable_profile: "Capable coding model",
+    harness: "Shell access, one attempt",
+    max_quality_gap: 0.03,
+    response_format: "json_object",
+    calibration: {
+      version: "pair-v1",
+      prompt_version: "llm-v2-1",
+      efficient: { slope: 1.2, intercept: -0.3 },
+      capable: { slope: 0.9, intercept: 0.1 },
+    },
+  };
+  const stored = {
+    tiers: { SIMPLE: ["efficient"], REASONING: ["capable"] },
+    classifier_type: "llm_v2" as const,
+    classifier_llm_config: { model: "judge", timeout_ms: 15000 },
+    llm_v2_config: v2Config,
+    classification_mode: "user_turn" as const,
+    adaptive: false,
+  };
+
+  it("preserves profiles and the judge when saving an existing V2 router", () => {
+    const value = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, value);
+    expect(saved.classifier_type).toBe("llm_v2");
+    expect(saved.classifier_llm_config).toMatchObject(stored.classifier_llm_config);
+    expect(saved.llm_v2_config).toEqual(v2Config);
+    expect(saved.classification_mode).toBe("user_turn");
+    expect(saved).not.toHaveProperty("classification_prompt");
+    expect(saved).not.toHaveProperty("dimension_weights");
+  });
+
+  it("drops V2 settings when switching to a different classifier", () => {
+    const value = hydrateComplexityRouterConfig(stored, undefined);
+    const saved = buildUpdatedComplexityRouterConfig(stored, { ...value, classifier_type: "heuristic" });
+    expect(saved).not.toHaveProperty("llm_v2_config");
+    expect(saved).not.toHaveProperty("classifier_llm_config");
   });
 });

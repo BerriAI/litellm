@@ -22,6 +22,7 @@ from litellm.proxy.auth.auth_utils import (
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
+    get_key_own_model_rate_limit,
     get_key_tag_rpm_limit,
     get_model_from_request,
     get_project_model_rpm_limit,
@@ -140,6 +141,35 @@ class TestLogOnceIfBudgetReservationDisabled:
 
 class TestGetKeyModelRpmLimit:
     """Tests for get_key_model_rpm_limit function."""
+
+    def test_own_limit_excludes_team_metadata(self):
+        """A team-only limit is inherited, not owned: the key resolves it but does not override it."""
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"some_other_key": "value"},
+            team_metadata={"model_rpm_limit": {"gpt-4": 50}, "model_tpm_limit": {"gpt-4": 500}},
+        )
+        assert get_key_model_rpm_limit(user_api_key_dict) == {"gpt-4": 50}
+        assert get_key_own_model_rate_limit(user_api_key_dict, "model_rpm_limit") is None
+        assert get_key_own_model_rate_limit(user_api_key_dict, "model_tpm_limit") is None
+
+    def test_own_limit_resolves_metadata_then_model_max_budget(self):
+        from_metadata = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"model_rpm_limit": {"gpt-4": 100}},
+            model_max_budget={"gpt-4": {"rpm_limit": 10, "tpm_limit": 1000}},
+            team_metadata={"model_rpm_limit": {"gpt-4": 50}},
+        )
+        assert get_key_own_model_rate_limit(from_metadata, "model_rpm_limit") == {"gpt-4": 100}
+        assert get_key_own_model_rate_limit(from_metadata, "model_tpm_limit") == {"gpt-4": 1000}
+
+        from_budget = UserAPIKeyAuth(
+            api_key="sk-123",
+            model_max_budget={"gpt-4": {"rpm_limit": 10}, "gpt-3.5-turbo": {"tpm_limit": 1000}},
+            team_metadata={"model_rpm_limit": {"gpt-4": 50}},
+        )
+        assert get_key_own_model_rate_limit(from_budget, "model_rpm_limit") == {"gpt-4": 10}
+        assert get_key_own_model_rate_limit(from_budget, "model_tpm_limit") == {"gpt-3.5-turbo": 1000}
 
     def test_returns_key_metadata_when_present(self):
         """Key metadata takes priority over team metadata."""
@@ -433,6 +463,232 @@ def test_get_model_from_request_no_request_extracts_model():
     )
 
 
+def _cache_prediction_router():
+    from litellm.router import Router
+
+    return Router(model_list=[
+        {
+            "model_name": group,
+            "litellm_params": {"model": "anthropic/claude-sonnet-5", "api_key": "test-provider-key"},
+            "model_info": {"id": deployment_id, "team_id": team_id},
+        }
+        for group, deployment_id, team_id in (
+            ("current-group", "current-id", None), ("candidate-group", "candidate-id", None),
+            ("own-group", "own-id", "prediction-team"), ("foreign-group", "foreign-id", "foreign-team"),
+        )
+    ])
+
+
+@pytest.mark.parametrize("candidate,team_id,expected", [
+    ("candidate-id", None, ["current-group", "candidate-group"]),
+    ("current-id", None, "current-group"),
+    ("missing-id", None, None),
+    ("candidate-group", None, None),
+    ("own-id", None, None),
+    ("own-id", "prediction-team", ["current-group", "own-group"]),
+    ("foreign-id", "prediction-team", None),
+])
+def test_cache_prediction_auth_resolves_only_exact_deployment_ids(candidate, team_id, expected):
+    assert get_model_from_request(
+        request_data={
+            "current_deployment_id": "current-id", "candidate_deployment_id": candidate,
+            "request": {"model": "caller-controlled-provider-model"},
+        },
+        route="/cost/predict-cache",
+        llm_router=_cache_prediction_router(),
+        team_id=team_id,
+    ) == expected
+
+
+def _cache_prediction_auth_app(
+    monkeypatch, allowed_routes, user_models, metadata=None, *, team_id=None, key_models=None, team_models=None
+):
+    import importlib
+    from unittest.mock import AsyncMock
+
+    from fastapi import FastAPI
+
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj, LiteLLM_UserTable, LitellmUserRoles, ProxyException
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.management_endpoints import prompt_cache_prediction as endpoint
+    from litellm.proxy.utils import InternalUsageCache, ProxyLogging
+
+    auth = importlib.import_module("litellm.proxy.auth.user_api_key_auth")
+    router = _cache_prediction_router()
+    allowed_models = ["current-group", "candidate-group", "own-group"]
+    token = UserAPIKeyAuth(
+        api_key="test-proxy-key-hash", user_id="prediction-user", user_role=LitellmUserRoles.INTERNAL_USER,
+        models=allowed_models if key_models is None else key_models, team_id=team_id,
+        team_models=allowed_models if team_models is None else team_models,
+        allowed_routes=allowed_routes, metadata=metadata or {},
+    )
+    user = LiteLLM_UserTable(
+        user_id=token.user_id, user_role=LitellmUserRoles.INTERNAL_USER.value, models=user_models,
+    )
+    async def authenticate(request, request_data, **_headers):
+        await auth._enforce_key_and_fallback_model_access(
+            valid_token=token, request_data=request_data, route=request.url.path, request=request,
+            llm_model_list=router.get_model_list(), llm_router=router,
+        )
+        return token
+
+    monkeypatch.setattr(auth, "_user_api_key_auth_builder", authenticate)
+    monkeypatch.setattr(auth, "get_user_object", AsyncMock(return_value=user))
+    team = LiteLLM_TeamTableCachedObj(team_id=team_id, models=token.team_models) if team_id else None
+    monkeypatch.setattr(auth, "get_team_object", AsyncMock(return_value=team))
+    monkeypatch.setattr(auth_checks, "get_team_object", AsyncMock(return_value=team))
+    monkeypatch.setattr(auth_checks, "get_team_membership", AsyncMock(return_value=None))
+    monkeypatch.setattr(auth, "get_global_proxy_spend", AsyncMock(return_value=0))
+    monkeypatch.setattr(proxy_server, "master_key", "test-master-key")
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", router.get_model_list())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    logging = ProxyLogging(user_api_key_cache=DualCache())
+    logging.proxy_hook_mapping["parallel_request_limiter"] = _PROXY_MaxParallelRequestsHandler_v3(
+        InternalUsageCache(dual_cache=DualCache())
+    )
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
+    counts = AsyncMock(return_value=6_000)
+    monkeypatch.setattr(endpoint, "count_prompt_tokens", counts)
+    app = FastAPI()
+    app.include_router(endpoint.router)
+    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
+    return app, counts
+
+
+def _cache_prediction_payload(candidate="candidate-id", current="current-id"):
+    return {
+        "current_deployment_id": current, "candidate_deployment_id": candidate,
+        "request": {"messages": [{"role": "user", "content": [{
+            "type": "text", "text": "Stable cached context",
+            "cache_control": {"type": "ephemeral"},
+        }]}]},
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("allowed_routes,user_models,candidate,status_code", [
+    (["/chat/completions"], ["current-group", "candidate-group"], "candidate-id", 403),
+    (["/cost/predict-cache"], ["current-group"], "candidate-id", 403),
+    (["/cost/*"], ["current-group", "candidate-group"], "candidate-id", 200),
+    (["/cost/predict-cache"], ["current-group"], "current-id", 200),
+    (["/cost/predict-cache"], ["current-group"], "missing-id", 404),
+])
+async def test_cache_prediction_authorizes_route_and_personal_models_before_provider_counts(
+    monkeypatch, allowed_routes, user_models, candidate, status_code
+):
+    import httpx
+
+    app, counts = _cache_prediction_auth_app(monkeypatch, allowed_routes, user_models)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/cost/predict-cache", json=_cache_prediction_payload(candidate))
+
+    assert response.status_code == status_code, response.text
+    if status_code == 200:
+        assert counts.await_count == (2 if candidate == "current-id" else 4)
+    else:
+        assert counts.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arm", ["current_deployment_id", "candidate_deployment_id"])
+@pytest.mark.parametrize("team_id,key_models,user_models,team_models", [
+    (None, ["*"], ["*"], None),
+    (None, ["current-group", "candidate-group"], ["*"], None),
+    (None, ["*"], ["current-group", "candidate-group"], None),
+    ("prediction-team", ["*"], ["*"], ["current-group", "candidate-group"]),
+])
+async def test_cache_prediction_hides_foreign_and_missing_ids_before_model_authorization(
+    monkeypatch, arm, team_id, key_models, user_models, team_models
+):
+    import httpx
+
+    app, counts = _cache_prediction_auth_app(
+        monkeypatch, ["/cost/predict-cache"], user_models,
+        team_id=team_id, key_models=key_models, team_models=team_models,
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        missing = await client.post("/cost/predict-cache", json={**_cache_prediction_payload(), arm: "missing-id"})
+        foreign = await client.post("/cost/predict-cache", json={**_cache_prediction_payload(), arm: "foreign-id"})
+
+    assert missing.status_code == foreign.status_code == 404, foreign.text
+    assert missing.json() == foreign.json() == {"detail": "Deployment not found"}
+    assert counts.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arm", ["current_deployment_id", "candidate_deployment_id"])
+@pytest.mark.parametrize("key_models,team_models,status_code", [
+    (["*"], ["*"], 200),
+    (["current-group", "candidate-group"], ["*"], 403),
+    (["*"], ["current-group", "candidate-group"], 403),
+])
+async def test_cache_prediction_checks_each_visible_team_deployment_model(
+    monkeypatch, arm, key_models, team_models, status_code
+):
+    import httpx
+
+    app, counts = _cache_prediction_auth_app(
+        monkeypatch, ["/cost/predict-cache"], ["*"],
+        team_id="prediction-team", key_models=key_models, team_models=team_models,
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/cost/predict-cache", json={**_cache_prediction_payload(), arm: "own-id"})
+
+    assert response.status_code == status_code, response.text
+    assert counts.await_count == (4 if status_code == 200 else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("arm", ["current_deployment_id", "candidate_deployment_id"])
+async def test_cache_prediction_checks_each_visible_personal_deployment_model(monkeypatch, arm):
+    import httpx
+
+    app, counts = _cache_prediction_auth_app(monkeypatch, ["/cost/predict-cache"], ["current-group"])
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/cost/predict-cache", json={**_cache_prediction_payload(candidate="current-id"), arm: "candidate-id"}
+        )
+
+    assert response.status_code == 403, response.text
+    assert response.json()["error"]["type"] == "user_model_access_denied"
+    assert counts.await_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("header_tag,key_tags,limit,status_code,provider_calls", [
+    ("limited", [], 1, 429, 1),
+    (None, ["limited"], 1, 429, 1),
+    ("limited", ["limited"], 4, 200, 4),
+    ("unlimited", [], 1, 200, 4),
+])
+async def test_cache_prediction_preserves_authenticated_header_and_key_tag_rpm(
+    monkeypatch, header_tag, key_tags, limit, status_code, provider_calls
+):
+    import httpx
+
+    app, counts = _cache_prediction_auth_app(
+        monkeypatch, ["/cost/predict-cache"], ["current-group", "candidate-group"],
+        metadata={"tag_rpm_limit": {"limited": limit}, "tags": key_tags},
+    )
+    headers = {"x-litellm-tags": header_tag} if header_tag else {}
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post("/cost/predict-cache", json=_cache_prediction_payload(), headers=headers)
+        assert response.status_code == status_code, response.text
+        assert counts.await_count == provider_calls
+        if limit == 4:
+            exhausted = await client.post("/cost/predict-cache", json=_cache_prediction_payload(), headers=headers)
+            assert exhausted.status_code == 429, exhausted.text
+            assert counts.await_count == 4
+    assert all("metadata" not in call.args[2] for call in counts.await_args_list)
+
+
 def test_get_model_from_request_supports_google_model_names_with_slashes():
     assert (
         get_model_from_request(
@@ -563,6 +819,114 @@ def test_get_model_from_request_bedrock_unparseable_endpoint_keeps_body_model():
         )
         == "us.anthropic.claude-sonnet-4-6"
     )
+
+
+def _azure_relay_router():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://a.services.ai.azure.com", "api_key": "k"},
+            },
+            {
+                "model_name": "other-group",
+                "litellm_params": {"model": "azure/gpt-5.4", "api_base": "https://b.openai.azure.com", "api_key": "k"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/azure_ai/other-group/openai/deployments/other-group/chat/completions", {"model": "gpt"}, "other-group"),
+        ("/azure_ai/other-group/models/chat/completions", {}, "other-group"),
+        ("/azure/openai/deployments/gpt/chat/completions", {"model": "other-group"}, "gpt"),
+        ("/azure/openai/deployments/gpt/chat/completions", {}, "gpt"),
+        ("/azure/openai/deployments/my-azure-deployment/chat/completions", {"model": "gpt"}, "gpt"),
+        ("/azure_ai/gpt", {"model": "other-group"}, "other-group"),
+    ],
+)
+def test_get_model_from_request_azure_relay_routes_use_the_model_group_in_the_path(route, request_data, expected):
+    assert get_model_from_request(request_data=request_data, route=route, llm_router=_azure_relay_router()) == expected
+
+
+def _nvidia_nim_relay_router():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "nim-page-elements",
+                "litellm_params": {
+                    "model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2",
+                    "api_base": "http://nim-a.internal:8000",
+                    "api_key": "k",
+                },
+            },
+            {
+                "model_name": "nvidia/nemoretriever-table-structure-v1",
+                "litellm_params": {
+                    "model": "nvidia_nim/nvidia/nemoretriever-table-structure-v1",
+                    "api_base": "http://nim-b.internal:8000",
+                    "api_key": "k",
+                },
+            },
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+            },
+            {
+                "model_name": "detect",
+                "litellm_params": {
+                    "model": "nvidia_nim/nvidia/nemoretriever-page-elements-v2",
+                    "api_base": "http://nim-a.internal:8000",
+                    "api_key": "k",
+                },
+            },
+            {
+                "model_name": "detect",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"},
+            },
+        ]
+    )
+
+
+NIM_INFER_BODY = {"input": [{"type": "image_url", "url": "data:image/png;base64,AAAA"}]}
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/nvidia_nim/nim-page-elements/v1/infer", NIM_INFER_BODY, "nim-page-elements"),
+        (
+            "/nvidia_nim/nim-page-elements/v1/infer",
+            {"model": "nvidia/nemoretriever-table-structure-v1"},
+            "nim-page-elements",
+        ),
+        (
+            "/nvidia_nim/nvidia/nemoretriever-table-structure-v1/v1/infer",
+            NIM_INFER_BODY,
+            "nvidia/nemoretriever-table-structure-v1",
+        ),
+        ("/nvidia_nim/v1/infer", NIM_INFER_BODY, None),
+        ("/nvidia_nim/unknown-group/v1/infer", NIM_INFER_BODY, None),
+        ("/nvidia_nim/nim-page-elements-v2/v1/infer", NIM_INFER_BODY, None),
+        ("/nvidia_nim/gpt-4o/v1/infer", NIM_INFER_BODY, None),
+        ("/nvidia_nim/detect/v1/infer", NIM_INFER_BODY, None),
+    ],
+)
+def test_get_model_from_request_nvidia_nim_relay_routes_use_the_model_group_in_the_path(route, request_data, expected):
+    assert (
+        get_model_from_request(request_data=request_data, route=route, llm_router=_nvidia_nim_relay_router())
+        == expected
+    )
+
+
+def test_get_model_from_request_nvidia_nim_relay_without_a_router_has_no_model():
+    assert get_model_from_request(request_data=NIM_INFER_BODY, route="/nvidia_nim/nim-page-elements/v1/infer") is None
 
 
 def test_get_model_from_request_includes_file_endpoint_header_model():
@@ -795,7 +1159,7 @@ async def test_managed_batch_routes_pass_team_model_access_check(route, request_
         is True
     )
 
-    with pytest.raises(Exception, match="team not allowed to access model"):
+    with pytest.raises(Exception, match="is not available for this API key"):
         await can_team_access_model(
             model=model,
             team_object=LiteLLM_TeamTable(team_id="team-other", models=["some-other-model"]),
@@ -3497,7 +3861,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
     @pytest.mark.parametrize(
         "selector",
-        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+        ["aws_profile_name", "aws_session_name", "aws_external_id", "aws_session_tags"],
     )
     def test_aws_identity_selector_in_batch_body_is_rejected(self, selector):
         with pytest.raises(ValueError, match=selector):
@@ -3516,7 +3880,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
     @pytest.mark.parametrize(
         "selector",
-        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+        ["aws_profile_name", "aws_session_name", "aws_external_id", "aws_session_tags"],
     )
     def test_aws_identity_selector_under_extra_body_is_rejected(self, selector):
         with pytest.raises(ValueError, match=selector):

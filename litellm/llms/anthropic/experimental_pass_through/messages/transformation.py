@@ -25,6 +25,12 @@ from ...common_utils import (
     AnthropicModelInfo,
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
+    strip_encrypted_reasoning_blocks_from_anthropic_messages,
+)
+from .mid_conversation_system import (
+    as_system_content_blocks,
+    convert_mid_conversation_system_turns,
+    is_system_role_message,
 )
 
 DEFAULT_ANTHROPIC_API_VERSION: Final = "2023-06-01"
@@ -39,6 +45,10 @@ DROP_UNFITTING_REASONING_EFFORT_WARNING: Final = (
     "Dropping `thinking` mapped from reasoning_effort=%s for model=%s: max_tokens=%s "
     "is too small to fit the minimum thinking budget."
 )
+
+
+def _messages_carry_output_config(messages: Sequence[object]) -> bool:
+    return any(isinstance(message, Mapping) and "output_config" in message for message in messages)
 
 
 class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
@@ -146,73 +156,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         else:
             return system_param
 
-    @staticmethod
-    def _as_system_content_blocks(value: object) -> list:
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return list(value)
-        if isinstance(value, str):
-            return [{"type": "text", "text": value}]
-        return [value]
-
-    @staticmethod
-    def _is_system_role_message(message: object) -> bool:
-        return isinstance(message, dict) and message.get("role") == "system"
-
-    _CONVERTED_SYSTEM_NOTE: Final = (
-        "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
-    )
-
-    def _system_role_message_as_user(self, message: Mapping) -> Mapping:
-        return {
-            "role": "user",
-            "content": self._as_system_content_blocks(self._CONVERTED_SYSTEM_NOTE)
-            + self._as_system_content_blocks(message.get("content")),
-        }
-
-    @staticmethod
-    def _opens_with_tool_results(message: object) -> bool:
-        if not isinstance(message, dict) or message.get("role") != "user":
-            return False
-        content: Final = message.get("content")
-        return (
-            isinstance(content, list)
-            and len(content) > 0
-            and isinstance(content[0], dict)
-            and content[0].get("type") == "tool_result"
-        )
-
-    def _system_run_before(self, messages: Sequence, index: int) -> Sequence:
-        start: Final = next(
-            (j + 1 for j in range(index - 1, -1, -1) if not self._is_system_role_message(messages[j])),
-            0,
-        )
-        return messages[start:index]
-
-    def _system_run_end(self, messages: Sequence, index: int) -> int:
-        return next(
-            (j for j in range(index, len(messages)) if not self._is_system_role_message(messages[j])),
-            len(messages),
-        )
-
-    def _reordered_around_tool_results(self, messages: Sequence, index: int) -> tuple:
-        message: Final = messages[index]
-        if self._opens_with_tool_results(message):
-            return (message, *self._system_run_before(messages, index))
-        if not self._is_system_role_message(message):
-            return (message,)
-        run_end: Final = self._system_run_end(messages, index)
-        follower: Final = messages[run_end] if run_end < len(messages) else None
-        return () if self._opens_with_tool_results(follower) else (message,)
-
-    def _system_turns_after_tool_results(self, messages: Sequence) -> tuple:
-        return tuple(
-            message
-            for index in range(len(messages))
-            for message in self._reordered_around_tool_results(messages, index)
-        )
-
     def _normalize_system_role_messages(self, anthropic_messages_request: dict, model: str) -> None:
         """Normalize ``role: "system"`` entries in ``messages`` per the Anthropic
         ``/v1/messages`` contract, which the first-party API, Bedrock Invoke,
@@ -249,7 +192,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if not isinstance(messages, list):
             return
         leading_count: Final = next(
-            (i for i, m in enumerate(messages) if not self._is_system_role_message(m)),
+            (i for i, m in enumerate(messages) if not is_system_role_message(m)),
             len(messages),
         )
         hoisted: Final = messages[:leading_count]
@@ -260,10 +203,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 custom_llm_provider=self.custom_llm_provider,
                 key="supports_mid_conversation_system",
             )
-            else [
-                self._system_role_message_as_user(m) if self._is_system_role_message(m) else m
-                for m in self._system_turns_after_tool_results(messages[leading_count:])
-            ]
+            else list(convert_mid_conversation_system_turns(messages[leading_count:]))
         )
         if hoisted or remaining != messages:
             anthropic_messages_request["messages"] = remaining
@@ -273,7 +213,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 anthropic_messages_request.get("system"),
                 *(m.get("content") for m in hoisted),
             )
-            for block in self._as_system_content_blocks(source)
+            for block in as_system_content_blocks(source)
         ]
         filtered_system: Final = self._filter_billing_headers_from_system(system_content)
         if filtered_system:
@@ -330,6 +270,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
+            messages=messages,
         )
 
         return headers, api_base
@@ -613,7 +554,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             messages = strip_advisor_blocks_from_messages(messages)
 
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
-            messages=messages,
+            messages=strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
             max_tokens=max_tokens,
             model=model,
             **anthropic_messages_optional_request_params,
@@ -663,6 +604,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers: dict,
         optional_params: dict,
         custom_llm_provider: str = "anthropic",
+        messages: Sequence[object] = (),
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
@@ -672,24 +614,30 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - tool_search: adds provider-specific tool search header
         - output_format: adds 'structured-outputs-2025-11-13'
         - speed: adds 'fast-mode-2026-02-01'
+        - a message carrying output_config: adds 'per-turn-control-2026-07-01'
 
         Args:
             headers: Request headers dict
             optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
+            messages: Request messages, scanned for per-message output_config
         """
         beta_values: Final[set] = set()
 
-        # Get existing beta headers if any
-        existing_beta: Final = headers.get("anthropic-beta")
-        if existing_beta:
-            beta_values.update(b.strip() for b in existing_beta.split(","))
+        existing_beta: Final = tuple(
+            piece.strip()
+            for key, value in headers.items()
+            if key.lower() == "anthropic-beta"
+            for piece in value.split(",")
+            if piece.strip()
+        )
+        beta_values.update(existing_beta)
 
         # Check for context management
         context_management_param: Final = optional_params.get("context_management")
         if context_management_param is not None:
             # Check edits array for compact_20260112 type
-            edits: Final = context_management_param.get("edits", [])
+            edits: Final = context_management_param.get("edits", ())
             has_compact = False
             has_other = False
 
@@ -721,24 +669,18 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
 
-        # Check for advisor tool
-        tools = optional_params.get("tools")
-        if tools:
-            for tool in tools:
-                if isinstance(tool, dict) and tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE:
-                    beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value)
-                    break
+        if _messages_carry_output_config(messages):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
 
-        # Check for tool search tools
-        tools = optional_params.get("tools")
-        if tools:
-            anthropic_model_info: Final = AnthropicModelInfo()
-            if anthropic_model_info.is_tool_search_used(tools):
-                # Use provider-specific tool search header
-                tool_search_header: Final = get_tool_search_beta_header(custom_llm_provider)
-                beta_values.add(tool_search_header)
+        tools: Final = optional_params.get("tools")
+        if any(isinstance(tool, dict) and tool.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for tool in tools or ()):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.ADVISOR_TOOL_2026_03_01.value)
 
-        if beta_values:
-            headers["anthropic-beta"] = ",".join(sorted(beta_values))
+        if AnthropicModelInfo().is_tool_search_used(tools):
+            beta_values.add(get_tool_search_beta_header(custom_llm_provider))
 
-        return headers
+        if not beta_values:
+            return headers
+        merged: Final = {key: value for key, value in headers.items() if key.lower() != "anthropic-beta"}
+        merged["anthropic-beta"] = ",".join(sorted(beta_values))
+        return merged

@@ -340,6 +340,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     optional_params=optional_params,
                     litellm_params=litellm_params,
                     encoding=encoding,
+                    json_mode=json_mode,
                 )
             elif provider == "twelvelabs":
                 return litellm.AmazonTwelveLabsPegasusConfig().transform_response(

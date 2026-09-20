@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -81,6 +82,25 @@ def test_missing_execution_evidence_fails(tmp_path: Path, contents: str) -> None
     assert result.returncode == 1
 
 
+@pytest.mark.parametrize("omitted_role", ("proxy_admin", "team_member", "internal_user_viewer"))
+def test_one_passing_management_case_cannot_hide_a_missing_actor(tmp_path: Path, omitted_role: str) -> None:
+    suite: Final = ET.Element("testsuite")
+    path: Final = "tests/e2e/management/test_jwt_management_e2e.py"
+    case: Final = ET.SubElement(suite, "testcase", file=path)
+    properties: Final = ET.SubElement(case, "properties")
+    _ = ET.SubElement(
+        properties,
+        "property",
+        name="management_node",
+        value=f"{path}::TestJwtManagement::test_actor_subject_and_database_role[proxy_admin_viewer]",
+    )
+    report: Final = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+    result: Final = subprocess.run([sys.executable, str(GATE), str(report), path], capture_output=True, text=True)
+    assert result.returncode == 1
+    assert f"test_actor_subject_and_database_role[{omitted_role}]" in result.stdout
+
+
 def test_short_values_are_written_without_masking_every_digit_in_the_log(tmp_path: Path) -> None:
     env_path: Final = tmp_path / ".env"
 
@@ -112,6 +132,7 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
     (
         (("tests/e2e/logging/test_datadog_e2e.py", "litellm/router.py"), ("tests/e2e/logging/test_datadog_e2e.py",)),
         (("tests/e2e/ui/test_keys.py", "tests/e2e/claude_code/test_cli.py", "tests/e2e/load/test_burst.py"), ()),
+        (("tests/e2e/migrations/test_startup.py", "tests/e2e/migrations/test_recovery.py"), ()),
         (("tests/e2e/batches/test_managed_files_enforcement_e2e.py",), ()),
         (("tests/e2e/guardrails/test_presidio_masking_e2e.py",), ()),
         (("tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e.py",), ()),
@@ -123,7 +144,7 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
             ("tests/e2e/guardrails/test_bedrock_guardrail_e2e.py",),
             ("tests/e2e/guardrails/test_bedrock_guardrail_e2e.py",),
         ),
-        (("tests/e2e/logging/helpers.py", "docs/my-website/docs/index.md", "tests/e2e/CLAUDE.md"), ()),
+        (("tests/e2e/logging/helpers.py", "docs/my-website/docs/index.md", "tests/e2e/AGENTS.md"), ()),
         (
             ("tests/e2e/logging/test_datadog_e2e.py", "tests/e2e/logging/test_datadog_e2e.py"),
             ("tests/e2e/logging/test_datadog_e2e.py",),
@@ -141,9 +162,15 @@ def test_changed_suite_files_are_selected_unless_the_stack_cannot_run_them(
     (
         "tests/e2e/proxy_client.py",
         "tests/e2e/conftest.py",
+        "tests/e2e/management/management_client.py",
+        "tests/e2e/management/jwt_actors.py",
+        "tests/e2e/management/conftest.py",
+        "tests/e2e/coverage_registry/management_cases.py",
         "tests/e2e/pytest.ini",
         "tests/e2e/gateway/stage_mirror_ci_config.yml",
         ".github/e2e-stack/up.sh",
+        ".github/e2e-stack/start-idp.sh",
+        "tests/e2e/idp_realm.json",
         ".github/workflows/test-e2e-changed.yml",
     ),
 )
@@ -153,6 +180,10 @@ def test_harness_changes_run_the_canary_suite(harness_file: str) -> None:
 
 def test_a_changed_canary_file_is_selected_once_alongside_a_harness_change() -> None:
     assert select_tests((CANARY[1], "tests/e2e/proxy_client.py")) == CANARY
+
+
+def test_dedicated_migration_tests_do_not_suppress_shared_harness_canaries() -> None:
+    assert select_tests(("tests/e2e/migrations/test_startup.py", "tests/e2e/conftest.py")) == CANARY
 
 
 def test_the_canary_joins_directly_selected_files_in_sorted_order() -> None:
@@ -201,3 +232,61 @@ def test_an_unusable_secret_is_named_without_printing_its_value(
     assert unprintable not in result.stderr
     assert result.stdout == ""
     assert not env_path.exists()
+
+
+@pytest.mark.parametrize("phase", ("setup", "call", "teardown"))
+@pytest.mark.parametrize("required_count", ("1", "4"))
+def test_oauth_failure_diagnostics_do_not_publish_private_payloads(
+    tmp_path: Path, phase: str, required_count: str
+) -> None:
+    suite: Final = ET.Element("testsuite")
+    case: Final = ET.SubElement(suite, "testcase", file=SELECTED[0])
+    private: Final = "private-token-in-exception-message"
+    failure: Final = ET.SubElement(case, "failure", message=private)
+    failure.text = private
+    properties: Final = ET.SubElement(case, "properties")
+    for name, value in (
+        ("oauth_failure_phase", phase),
+        ("oauth_exception_type", "AssertionError"),
+        ("oauth_frame", "oauth_gateway.py:120:start"),
+        ("oauth_frame", f"injected\\n{private}"),
+        ("unrelated_property", private),
+    ):
+        _ = ET.SubElement(properties, "property", name=name, value=value)
+    report: Final = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+    result: Final = subprocess.run(
+        [sys.executable, "-I", str(GATE), str(report), SELECTED[0]],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "E2E_REQUIRED_TEST_COUNT": required_count},
+    )
+    assert result.returncode == 1
+    assert f"oauth_failure_phase: {phase}" in result.stdout
+    assert "oauth_exception_type: AssertionError" in result.stdout
+    assert "oauth_frame: oauth_gateway.py:120:start" in result.stdout
+    assert private not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("count", "skip", "expected"), ((0, False, 1), (3, False, 1), (4, False, 0), (5, False, 1), (4, True, 1))
+)
+def test_required_count_reports_cases_before_rejecting(tmp_path: Path, count: int, skip: bool, expected: int) -> None:
+    suite = ET.Element("testsuite")
+    for index in range(count):
+        case = ET.SubElement(suite, "testcase", file=SELECTED[0], classname="OAuth", name=f"variant{index}")
+        if skip and index == 0:
+            ET.SubElement(case, "skipped", message="private-skip-reason")
+    report = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+    result = subprocess.run(
+        [sys.executable, "-I", str(GATE), str(report), SELECTED[0]],
+        env={**os.environ, "E2E_REQUIRED_TEST_COUNT": "4"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == expected
+    assert f"{count} collected, {int(skip)} skipped" in result.stdout
+    if skip:
+        assert "skipped: OAuth::variant0" in result.stdout
+    assert "private-skip-reason" not in result.stdout + result.stderr

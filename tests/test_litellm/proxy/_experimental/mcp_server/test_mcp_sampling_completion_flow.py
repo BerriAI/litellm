@@ -28,14 +28,14 @@ def _params(**overrides):
                 role="user", content=SimpleNamespace(type="text", text="hi")
             )
         ],
-        systemPrompt="be concise",
-        maxTokens=128,
+        system_prompt="be concise",
+        max_tokens=128,
         temperature=None,
-        stopSequences=None,
+        stop_sequences=None,
         tools=None,
-        toolChoice=None,
+        tool_choice=None,
         metadata=None,
-        modelPreferences=None,
+        model_preferences=None,
     )
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -52,13 +52,13 @@ class TestBuildCompletionKwargs:
     async def test_should_include_sampling_options_and_tools(self):
         params = _params(
             temperature=0.3,
-            stopSequences=["STOP"],
+            stop_sequences=["STOP"],
             tools=[
                 SimpleNamespace(
-                    name="search", description="d", inputSchema={"type": "object"}
+                    name="search", description="d", input_schema={"type": "object"}
                 )
             ],
-            toolChoice=SimpleNamespace(mode="required"),
+            tool_choice=SimpleNamespace(mode="required"),
             metadata={"trace": "abc"},
         )
         with patch(
@@ -179,7 +179,7 @@ class TestHandleSamplingCreateMessagePipeline:
 
         assert isinstance(result, CreateMessageResult)
         assert result.content.text == "the answer is 42"
-        assert result.stopReason == "endTurn"
+        assert result.stop_reason== "endTurn"
 
     async def test_should_reraise_known_proxy_exceptions(self):
         from litellm.exceptions import RateLimitError

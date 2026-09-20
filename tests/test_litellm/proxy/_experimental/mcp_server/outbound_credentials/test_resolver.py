@@ -12,13 +12,14 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-import httpx
+import httpx2
 import jwt as pyjwt
 import pytest
 from pydantic import SecretStr
 
 from litellm.proxy._experimental.mcp_server.outbound_credentials import (
     ApiKeyConfig,
+    AuthConfig,
     AuthorizationCodeConfig,
     AwsSigV4Config,
     Byok,
@@ -108,8 +109,8 @@ def _spec(config):
     return ServerSpec(server_id="s", resource="https://upstream.example.com", config=config)
 
 
-def _emitted(auth: httpx.Auth) -> httpx.Headers:
-    request = httpx.Request("GET", "https://upstream.example.com/mcp")
+def _emitted(auth: httpx2.Auth) -> httpx2.Headers:
+    request = httpx2.Request("GET", "https://upstream.example.com/mcp")
     flow = auth.auth_flow(request)
     next(flow)
     flow.close()
@@ -411,15 +412,15 @@ _M2M = ClientCredentialsConfig(
 )
 
 
-async def _emitted_async(auth: httpx.Auth, respond=None) -> tuple[httpx.Headers, list[httpx.Request]]:
+async def _emitted_async(auth: httpx2.Auth, respond=None) -> tuple[httpx2.Headers, list[httpx2.Request]]:
     """Drive the async auth flow one request at a time, replying via ``respond`` when given."""
-    seen: list[httpx.Request] = []
+    seen: list[httpx2.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:
+    def handler(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
-        return respond(request) if respond else httpx.Response(200)
+        return respond(request) if respond else httpx2.Response(200)
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as client:
+    async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler), auth=auth) as client:
         await client.get("https://upstream.example.com/mcp")
     return seen[-1].headers, seen
 
@@ -457,9 +458,9 @@ async def test_client_credentials_auth_retries_a_401_through_the_source():
     )
     assert isinstance(result, Ok)
 
-    def respond(request: httpx.Request) -> httpx.Response:
+    def respond(request: httpx2.Request) -> httpx2.Response:
         is_stale = request.headers["Authorization"] == "Bearer stale-at"
-        return httpx.Response(401) if is_stale else httpx.Response(200)
+        return httpx2.Response(401) if is_stale else httpx2.Response(200)
 
     headers, seen = await _emitted_async(result.ok, respond)
     assert headers["Authorization"] == "Bearer fresh-m2m"
@@ -1203,3 +1204,71 @@ async def test_passthrough_ignores_the_carrier_and_keeps_the_callers_slot():
     assert isinstance(result, Ok)
     headers, _ = await _emitted_async(result.ok)
     assert headers["Authorization"] == "caller-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("config", "subject", "expected_source", "expected_header"),
+    [
+        (NoneConfig(), _SUBJECT, "no-auth", None),
+        (PassthroughConfig(), _SUBJECT, "no-auth", None),
+        (PassthroughConfig(), _with_inbound("Bearer caller-token"), "oauth2-passthrough", "Bearer caller-token"),
+        (ApiKeyConfig(key_source=SharedKey(value=SecretStr("static-key"))), _SUBJECT, "static-token", "Bearer static-key"),
+        (AuthorizationCodeConfig(), Subject(tenant_id="", subject_id="alice"), "stored-user-token", "Bearer stored-alice"),
+    ],
+)
+async def test_resolved_source_matches_the_credential_sent_upstream(
+    config: AuthConfig, subject: Subject, expected_source: str, expected_header: str | None
+) -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
+
+    store = _FakeTokenStore({("alice", "s"): OAuthToken(access_token="stored-alice")})
+    provider = UpstreamCredentialProvider(oauth_token_store=store)
+    result = await resolve_credentials_with_source(provider, subject, _spec(config))
+    assert isinstance(result, Ok)
+    assert result.ok.source.value == expected_source
+    assert _emitted(result.ok.auth).get("Authorization") == expected_header
+    assert "stored-alice" not in repr(result.ok)
+    assert "static-key" not in repr(result.ok)
+
+
+@pytest.mark.asyncio
+async def test_resolved_source_preserves_missing_user_token_error() -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
+
+    result = await resolve_credentials_with_source(UpstreamCredentialProvider(), _SUBJECT, _spec(AuthorizationCodeConfig()))
+    assert isinstance(result, Error)
+    assert result.error.tag == "unauthorized"
+
+
+@pytest.mark.asyncio
+async def test_minted_token_sources_match_egress_and_do_not_fetch_twice() -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
+
+    source = _FakeM2MSource(Ok(OAuthToken(access_token="m2m-at")))
+    m2m = await resolve_credentials_with_source(UpstreamCredentialProvider(client_credentials_source=source), _SUBJECT, _spec(_M2M))
+    assert isinstance(m2m, Ok)
+    headers, _ = await _emitted_async(m2m.ok.auth)
+    assert headers["Authorization"] == "Bearer m2m-at"
+    assert m2m.ok.source.value == "m2m-client-credentials"
+    assert source.gets == ["s"]
+
+    exchanger = _FakeExchanger(Ok(OAuthToken(access_token="exchanged-at")))
+    exchanged = await resolve_credentials_with_source(UpstreamCredentialProvider(token_exchanger=exchanger), _with_inbound("subject"), _spec(_OBO))
+    assert isinstance(exchanged, Ok)
+    assert _emitted(exchanged.ok.auth)["Authorization"] == "Bearer exchanged-at"
+    assert exchanged.ok.source.value == "token-exchange"
+    assert len(exchanger.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_id_jag_source_describes_final_token_after_both_exchanges() -> None:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import resolve_credentials_with_source
+
+    endpoint = _FakeTokenEndpoint(_two_leg_ok("resource-token"))
+    provider = UpstreamCredentialProvider(token_endpoint=endpoint)
+    result = await resolve_credentials_with_source(provider, _with_inbound("identity-token"), _spec(_id_jag_config()))
+    assert isinstance(result, Ok)
+    assert result.ok.source.value == "id-jag"
+    assert _emitted(result.ok.auth)["Authorization"] == "Bearer resource-token"
+    assert len(endpoint.calls) == 2

@@ -721,10 +721,18 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             }
         }
 
-    def _record_scan_id(self, request_data: dict[str, object], scan_result: Mapping[str, object]) -> None:
+    def _record_scan_id(
+        self, request_data: dict[str, object], scan_result: Mapping[str, object], stage: GuardrailEventHooks
+    ) -> None:
         """Surface the AIRS scan id on the response, so allowed calls are auditable too."""
         scan_id: Final = scan_result.get("scan_id")
-        add_guardrail_scan_id(request_data=request_data, scan_id=str(scan_id) if scan_id else None)
+        add_guardrail_scan_id(
+            request_data=request_data,
+            scan_id=str(scan_id) if scan_id else None,
+            guardrail_name=self.guardrail_name,
+            provider=self._PROVIDER_NAME,
+            stage=stage,
+        )
 
     def _handle_api_error_with_logging(
         self,
@@ -948,7 +956,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             event_type=GuardrailEventHooks.post_call,
         )
         add_guardrail_to_applied_guardrails_header(request_data=request_data, guardrail_name=self.guardrail_name)
-        self._record_scan_id(request_data, scan_result)
+        self._record_scan_id(request_data, scan_result, GuardrailEventHooks.post_call)
 
     def _check_and_mark_scanned(self, data: dict, scan_type: str) -> bool:
         """
@@ -1078,7 +1086,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.pre_call,
             )
-            self._record_scan_id(data, scan_result)
+            self._record_scan_id(data, scan_result, GuardrailEventHooks.pre_call)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1199,7 +1207,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 duration=(end_time - start_time).total_seconds(),
                 event_type=GuardrailEventHooks.post_call,
             )
-            self._record_scan_id(data, scan_result)
+            self._record_scan_id(data, scan_result, GuardrailEventHooks.post_call)
 
             action: Final = scan_result.get("action", "block")
             category: Final = scan_result.get("category", "unknown")
@@ -1401,7 +1409,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     duration=(end_time - start_time).total_seconds(),
                     event_type=GuardrailEventHooks.post_call,
                 )
-                self._record_scan_id(request_data, scan_result)
+                self._record_scan_id(request_data, scan_result, GuardrailEventHooks.post_call)
 
                 # Add guardrail to applied guardrails header for observability
                 add_guardrail_to_applied_guardrails_header(
@@ -1475,7 +1483,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 continue
 
-            self._record_scan_id(request_data, scan_result)
+            self._record_scan_id(
+                request_data,
+                scan_result,
+                GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
+            )
 
             action = scan_result.get("action", "block")
             masked_args = self._masked_tool_call_arguments(
@@ -1588,8 +1600,8 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         Args:
             texts: Flattened text entries from the framework.
-            messages: Original request messages (request_data["messages"]),
-                      NOT structured_messages (which may have injected system content).
+            messages: The structured messages the framework flattened into ``texts``,
+                      hoisted top-level system prompt included, so positions line up.
 
         Returns a set of scannable indices, or None on count mismatch or no user/developer
         message (safety fallback to existing role-filter behavior).
@@ -1776,15 +1788,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             structured_messages: Final = inputs.get("structured_messages")
             if structured_messages:
                 # For Anthropic /v1/messages: default to latest-user-only scanning.
-                # Uses request_data["messages"] (original format), NOT structured_messages
-                # (which has injected system content from adapter translation).
                 if self._use_latest_user_only(request_data, logging_obj):
-                    original_messages: Final = request_data.get("messages")
-                    if original_messages:
-                        scannable_indices = self._get_latest_user_text_indices(texts, original_messages)
+                    scannable_indices = self._get_latest_user_text_indices(texts, structured_messages)
                 # Fall through to existing role filtering if:
                 # - not Anthropic, OR flag explicitly False, OR
-                # - no original messages, OR
                 # - latest-user extraction returned None (no user / count mismatch)
                 if scannable_indices is None:
                     scannable_indices = self._get_scannable_text_indices(texts, structured_messages)
@@ -1829,7 +1836,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 new_texts.append(text)
                 continue
 
-            self._record_scan_id(request_data, scan_result)
+            self._record_scan_id(
+                request_data,
+                scan_result,
+                GuardrailEventHooks.post_call if is_response else GuardrailEventHooks.pre_call,
+            )
 
             action = scan_result.get("action", "block")
             masked_text = self._get_masked_text(scan_result, is_response=is_response)
@@ -1901,7 +1912,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
                 # If we reach here, fallback_on_error="allow"
             else:
-                self._record_scan_id(request_data, mcp_scan_result)
+                self._record_scan_id(request_data, mcp_scan_result, GuardrailEventHooks.pre_call)
                 action = mcp_scan_result.get("action", "block")
                 masked_text = self._get_masked_text(mcp_scan_result, is_response=False)
                 if action == "allow":

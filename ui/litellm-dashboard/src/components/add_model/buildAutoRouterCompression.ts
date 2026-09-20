@@ -14,7 +14,7 @@ export const NO_COMPRESSION = "none";
 
 /** Guardrail providers that compress prompts, mirroring COMPRESSION_GUARDRAIL_PROVIDERS in
  * litellm/proxy/guardrails/auto_router_compression.py. Both are selectable per hop. */
-export const COMPRESSION_GUARDRAIL_PROVIDERS: readonly string[] = ["headroom", "compresr"];
+export const COMPRESSION_GUARDRAIL_PROVIDERS: readonly string[] = ["headroom", "compresr", "typesafe"];
 
 export const isCompressionGuardrailProvider = (provider: unknown): boolean =>
   typeof provider === "string" && COMPRESSION_GUARDRAIL_PROVIDERS.includes(provider.toLowerCase());
@@ -29,6 +29,8 @@ export interface AutoRouterCompressionLitellmParams {
   auto_router_routing_compression?: string;
   auto_router_model_compression?: string;
 }
+
+type AutoRouterCompressionPatch = Partial<Record<keyof AutoRouterCompressionLitellmParams, string | null>>;
 
 export const DEFAULT_AUTO_ROUTER_COMPRESSION: AutoRouterCompressionState = {
   routing: undefined,
@@ -66,4 +68,19 @@ export const hydrateAutoRouterCompression = (litellmParams: {
   const model = storedModel ?? NO_COMPRESSION;
   const sameAsRouting = model === routing;
   return { routing, sameAsRouting, model: sameAsRouting ? undefined : model };
+};
+
+export const buildAutoRouterCompressionPatch = (
+  state: AutoRouterCompressionState,
+  stored: AutoRouterCompressionPatch,
+): AutoRouterCompressionPatch => {
+  const initial = hydrateAutoRouterCompression(stored);
+  const modelUnchanged = state.sameAsRouting || state.model === initial.model;
+  if (state.routing === initial.routing && state.sameAsRouting === initial.sameAsRouting && modelUnchanged) {
+    return {};
+  }
+  if (state.routing === undefined) {
+    return { auto_router_routing_compression: null, auto_router_model_compression: null };
+  }
+  return buildAutoRouterCompressionParams(state);
 };

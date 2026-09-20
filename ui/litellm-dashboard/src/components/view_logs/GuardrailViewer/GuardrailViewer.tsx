@@ -38,9 +38,9 @@ interface MatchDetail {
 }
 
 interface GuardrailInformation {
-  duration: number;
-  end_time: number;
-  start_time: number;
+  duration: number | null;
+  end_time: number | null;
+  start_time: number | null;
   guardrail_mode: string | string[] | Record<string, unknown> | null;
   guardrail_name: string;
   guardrail_status: string;
@@ -121,7 +121,8 @@ const formatMode = (mode: GuardrailInformation["guardrail_mode"]): string => {
   return s.replace(/_/g, "-").toUpperCase();
 };
 
-const formatDurationMs = (seconds: number): string => {
+const formatDurationMs = (seconds: number | null): string => {
+  if (seconds == null) return "—";
   const ms = Math.round(seconds * 1000);
   return `${ms}ms`;
 };
@@ -133,12 +134,13 @@ const getTotalMasked = (entry: GuardrailInformation): number => {
   );
 };
 
-type EntryOutcome = "passed" | "flagged" | "failed";
+type EntryOutcome = "passed" | "flagged" | "failed" | "not_run";
 
 const getEntryOutcome = (entry: GuardrailInformation): EntryOutcome => {
   const status = (entry.guardrail_status ?? "").toLowerCase();
   if (status === "success") return "passed";
   if (status === "guardrail_flagged") return "flagged";
+  if (status === "not_run") return "not_run";
   return "failed";
 };
 
@@ -148,12 +150,21 @@ const OUTCOME_LABEL: Record<EntryOutcome, string> = {
   passed: "PASSED",
   flagged: "FLAGGED",
   failed: "FAILED",
+  not_run: "NOT RUN",
 };
 
 const OUTCOME_BADGE_CLASS: Record<EntryOutcome, string> = {
   passed: "bg-success/15 text-success border border-success/20",
   flagged: "bg-warning/15 text-warning border border-warning/20",
   failed: "bg-destructive/15 text-destructive border border-destructive/20",
+  not_run: "bg-muted text-muted-foreground border border-border",
+};
+
+const getHeaderOutcome = (counts: { evaluated: number; passed: number; flagged: number }): EntryOutcome => {
+  if (counts.evaluated === 0) return "not_run";
+  if (counts.passed === counts.evaluated) return "passed";
+  if (counts.passed + counts.flagged === counts.evaluated) return "flagged";
+  return "failed";
 };
 
 const getRiskColor = (score: number): string => {
@@ -231,6 +242,7 @@ const FlagCircleIcon = ({ className }: { className?: string }) => (
 const OutcomeIcon = ({ outcome }: { outcome: EntryOutcome }) => {
   if (outcome === "passed") return <CheckCircleIcon />;
   if (outcome === "flagged") return <FlagCircleIcon />;
+  if (outcome === "not_run") return <GrayDotIcon />;
   return <FailCircleIcon />;
 };
 
@@ -349,77 +361,94 @@ const GenericGuardrailResponse = ({ response }: { response: any }) => {
 interface TimelineEntry {
   type: "request" | "guardrail" | "llm" | "response";
   label: string;
-  offsetMs: number;
+  offsetMs: number | null;
   outcome?: EntryOutcome;
 }
 
+type TimedGuardrailInformation = GuardrailInformation & { start_time: number; end_time: number };
+
+const isTimed = (e: GuardrailInformation): e is TimedGuardrailInformation =>
+  typeof e.start_time === "number" && typeof e.end_time === "number";
+
+const belongsOnLifecycle = (e: GuardrailInformation): boolean => isTimed(e) || getEntryOutcome(e) !== "not_run";
+
+// Sorts a phase's timed entries by start time while leaving its untimed entries in the
+// slots they were recorded in. Applied per phase, never globally: an entry can land in
+// more than one phase bucket, so a global pass can reorder one phase by another's clock.
+const orderWithinPhase = (group: GuardrailInformation[]): GuardrailInformation[] => {
+  const byStart = group.filter(isTimed).sort((a, b) => a.start_time - b.start_time);
+  const timedSlots = new Map(group.flatMap((e, i) => (isTimed(e) ? [i] : [])).map((slot, k) => [slot, byStart[k]]));
+  return group.map((e, i) => timedSlots.get(i) ?? e);
+};
+
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
-  const sorted = useMemo(() => [...entries].sort((a, b) => (a.start_time ?? 0) - (b.start_time ?? 0)), [entries]);
+  const sorted = useMemo(() => entries.filter(belongsOnLifecycle), [entries]);
 
   const timeline = useMemo(() => {
     if (sorted.length === 0) return [];
 
-    const baseTime = sorted[0].start_time;
+    const timed = sorted.filter(isTimed);
+    const baseTime = timed.length > 0 ? Math.min(...timed.map((e) => e.start_time)) : null;
+    const offsetOf = (e: GuardrailInformation): number | null =>
+      baseTime === null || !isTimed(e) ? null : Math.round((e.end_time - baseTime) * 1000);
     const items: TimelineEntry[] = [];
 
     // Request received
-    items.push({ type: "request", label: "Request received", offsetMs: 0 });
+    items.push({ type: "request", label: "Request received", offsetMs: baseTime === null ? null : 0 });
 
     // Pre-call guardrails — use modeMatches so array modes (e.g. ["pre_call", "post_call"])
     // place the entry in every matching bucket.
-    const preCalls = sorted.filter((e) => modeMatches(e.guardrail_mode, "pre_call"));
-    const postCalls = sorted.filter(
-      (e) => modeMatches(e.guardrail_mode, "post_call") || modeMatches(e.guardrail_mode, "logging_only"),
+    const preCalls = orderWithinPhase(sorted.filter((e) => modeMatches(e.guardrail_mode, "pre_call")));
+    const postCalls = orderWithinPhase(
+      sorted.filter((e) => modeMatches(e.guardrail_mode, "post_call") || modeMatches(e.guardrail_mode, "logging_only")),
     );
-    const duringCalls = sorted.filter((e) => modeMatches(e.guardrail_mode, "during_call"));
+    const duringCalls = orderWithinPhase(sorted.filter((e) => modeMatches(e.guardrail_mode, "during_call")));
 
     for (const e of preCalls) {
-      const offsetMs = Math.round((e.end_time - baseTime) * 1000);
       items.push({
         type: "guardrail",
         label: `Pre-call guardrail: ${getDisplayName(e)}`,
-        offsetMs,
+        offsetMs: offsetOf(e),
         outcome: getEntryOutcome(e),
       });
     }
 
     // LLM call — infer from gap between pre-call end and post-call start
-    const lastPreEnd = preCalls.length > 0 ? Math.max(...preCalls.map((e) => e.end_time)) : baseTime;
-    const firstPostStart = postCalls.length > 0 ? Math.min(...postCalls.map((e) => e.start_time)) : undefined;
-    const llmEndTime = firstPostStart ?? lastPreEnd + 1;
-    const llmOffsetMs = Math.round((llmEndTime - baseTime) * 1000);
+    const timedPre = preCalls.filter(isTimed);
+    const timedPost = postCalls.filter(isTimed);
+    const lastPreEnd = timedPre.length > 0 ? Math.max(...timedPre.map((e) => e.end_time)) : baseTime;
+    const firstPostStart = timedPost.length > 0 ? Math.min(...timedPost.map((e) => e.start_time)) : undefined;
+    const llmEndTime = firstPostStart ?? (lastPreEnd === null ? null : lastPreEnd + 1);
 
     items.push({
       type: "llm",
       label: "LLM call",
-      offsetMs: llmOffsetMs,
+      offsetMs: llmEndTime === null || baseTime === null ? null : Math.round((llmEndTime - baseTime) * 1000),
     });
 
     // During-call guardrails (rare)
     for (const e of duringCalls) {
-      const offsetMs = Math.round((e.end_time - baseTime) * 1000);
       items.push({
         type: "guardrail",
         label: `During-call guardrail: ${getDisplayName(e)}`,
-        offsetMs,
+        offsetMs: offsetOf(e),
         outcome: getEntryOutcome(e),
       });
     }
 
     // Post-call guardrails
     for (const e of postCalls) {
-      const offsetMs = Math.round((e.end_time - baseTime) * 1000);
       items.push({
         type: "guardrail",
         label: `Post-call guardrail: ${getDisplayName(e)}`,
-        offsetMs,
+        offsetMs: offsetOf(e),
         outcome: getEntryOutcome(e),
       });
     }
 
     // Response returned
-    const maxEnd = Math.max(...sorted.map((e) => e.end_time));
-    const responseOffsetMs = Math.round((maxEnd - baseTime) * 1000) + 1;
+    const maxEnd = timed.length > 0 ? Math.max(...timed.map((e) => e.end_time)) : null;
+    const responseOffsetMs = maxEnd === null || baseTime === null ? null : Math.round((maxEnd - baseTime) * 1000) + 1;
     items.push({ type: "response", label: "Response returned", offsetMs: responseOffsetMs });
 
     return items;
@@ -430,7 +459,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
       <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-4">Request Lifecycle</h4>
       <div className="relative">
         {timeline.map((item, idx) => (
-          <div key={idx} className="flex items-start gap-3 relative">
+          <div key={idx} data-testid="lifecycle-row" className="flex items-start gap-3 relative">
             {/* Vertical line */}
             <div className="flex flex-col items-center">
               <div className="shrink-0">
@@ -458,7 +487,9 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
                     {OUTCOME_LABEL[item.outcome]}
                   </span>
                 )}
-                <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">T+{item.offsetMs}ms</span>
+                <span className="text-xs text-muted-foreground font-mono ml-auto shrink-0">
+                  {item.offsetMs === null ? "—" : `T+${item.offsetMs}ms`}
+                </span>
               </div>
             </div>
           </div>
@@ -658,6 +689,10 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
             </div>
           )}
 
+          {outcome === "not_run" && typeof guardrailResponse === "string" && (
+            <p className="text-sm text-muted-foreground">{guardrailResponse}</p>
+          )}
+
           {/* Provider-specific details */}
           {guardrailProvider === "presidio" && presidioEntities.length > 0 && (
             <div className="mt-3">
@@ -696,12 +731,10 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
 
   const passedCount = guardrailEntries.filter(isEntrySuccess).length;
   const flaggedCount = guardrailEntries.filter((e) => getEntryOutcome(e) === "flagged").length;
-  const allPassed = passedCount === guardrailEntries.length;
-  const headerOutcome: EntryOutcome = allPassed
-    ? "passed"
-    : passedCount + flaggedCount === guardrailEntries.length
-      ? "flagged"
-      : "failed";
+  const notRunCount = guardrailEntries.filter((e) => getEntryOutcome(e) === "not_run").length;
+  const evaluatedCount = guardrailEntries.length - notRunCount;
+  const allPassed = evaluatedCount > 0 && passedCount === evaluatedCount;
+  const headerOutcome = getHeaderOutcome({ evaluated: evaluatedCount, passed: passedCount, flagged: flaggedCount });
 
   const totalOverheadMs = useMemo(() => {
     return Math.round(guardrailEntries.reduce((sum, e) => sum + (e.duration ?? 0), 0) * 1000);
@@ -733,7 +766,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
             <h3 className="text-lg font-semibold text-foreground">Guardrails &amp; Policy Compliance</h3>
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-sm text-muted-foreground">
-                {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
+                {evaluatedCount} guardrail{evaluatedCount !== 1 ? "s" : ""} evaluated
               </span>
               <span className="text-muted-foreground">|</span>
               <span
@@ -757,6 +790,13 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
                   className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${OUTCOME_BADGE_CLASS.flagged}`}
                 >
                   {flaggedCount} Flagged
+                </span>
+              )}
+              {notRunCount > 0 && (
+                <span
+                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold ${OUTCOME_BADGE_CLASS.not_run}`}
+                >
+                  {notRunCount} Not run
                 </span>
               )}
             </div>
