@@ -445,19 +445,44 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert chunks == original
 
     @pytest.mark.asyncio
-    async def test_unended_stream_rewrite_with_delivery_expected_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_unended_stream_rewrite_with_delivery_expected_lands_in_the_buffered_deltas(self):
         handler = AnthropicMessagesHandler()
         chunks = self._ended_sse_chunks()[:-2]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert self._delta_texts(chunks) == ["hello [MASKED]", ""]
+        raw = b"".join(chunks).decode()
+        assert "event: message_start" in raw and "event: content_block_stop" in raw
+        assert "event: message_stop" not in raw
+
+    @pytest.mark.asyncio
+    async def test_unended_stream_rewrite_with_no_text_delta_to_carry_it_fails_open(self):
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        class FillEmpty(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                return {**inputs, "texts": ["[INJECTED]" for _ in inputs.get("texts", [])]}
+
+        handler = AnthropicMessagesHandler()
+        chunks = self._ended_sse_chunks()[:2]
+        original = [bytes(chunk) for chunk in chunks]
 
         with pytest.raises(UndeliverableStreamRewrite):
             await handler.process_output_streaming_response(
                 responses_so_far=chunks,
-                guardrail_to_apply=self._masking_guardrail(),
+                guardrail_to_apply=FillEmpty(guardrail_name="test"),
                 litellm_logging_obj=MagicMock(),
                 deliver_ended_stream_rewrites=True,
             )
+
+        assert chunks == original
 
     @pytest.mark.asyncio
     async def test_unended_stream_without_rewrite_is_released_with_delivery_expected(self):

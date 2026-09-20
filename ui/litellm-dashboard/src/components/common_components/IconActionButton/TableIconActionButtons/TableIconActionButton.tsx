@@ -30,6 +30,7 @@ export const TableIconActionButtonMap: Record<string, TableIconActionButtonBaseP
   Delete: { icon: TrashIcon, className: "hover:text-destructive" },
   Test: { icon: PlayIcon, className: "hover:text-info" },
   Regenerate: { icon: RefreshIcon, className: "hover:text-success" },
+  Reset: { icon: RefreshIcon, className: "hover:text-info" },
   Up: { icon: ChevronUpIcon, className: "hover:text-info" },
   Down: { icon: ChevronDownIcon, className: "hover:text-info" },
   Open: { icon: ExternalLinkIcon, className: "hover:text-success" },

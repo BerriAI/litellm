@@ -26,7 +26,14 @@ interface VaultFieldGroup {
 const FIELD_GROUPS: VaultFieldGroup[] = [
   {
     title: "Connection",
-    fields: ["vault_addr", "vault_namespace", "vault_mount_name", "vault_path_prefix"],
+    fields: [
+      "vault_addr",
+      "vault_namespace",
+      "vault_login_namespace",
+      "vault_secret_namespace",
+      "vault_mount_name",
+      "vault_path_prefix",
+    ],
   },
   {
     title: "Token Authentication",

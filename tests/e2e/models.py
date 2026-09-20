@@ -136,6 +136,7 @@ class LiteLLMBudgetTable(BaseModel):
 
 class KeyInfo(BaseModel):
     key_alias: str | None = None
+    status: str | None = None
     metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
@@ -191,7 +192,7 @@ class ImageUrl(BaseModel):
 class TextContentPart(BaseModel):
     type: str = "text"
     text: str
-    cache_control: "CacheControl | None" = None
+    cache_control: CacheControl | None = None
 
 
 class ImageContentPart(BaseModel):
@@ -571,6 +572,10 @@ class McpInfo(BaseModel):
     logo_url: str | None = None
 
 
+class McpOauthCredentials(BaseModel):
+    upstream_resource: str
+
+
 class McpServerCreateBody(BaseModel):
     """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
     `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
@@ -583,8 +588,11 @@ class McpServerCreateBody(BaseModel):
     allow_all_keys: bool = True
     auth_type: str | None = None
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
+    per_server_oauth_discovery: bool | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    registration_url: str | None = None
+    credentials: McpOauthCredentials | None = None
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -622,6 +630,26 @@ class McpServerRow(McpServerInfo):
 
 class McpServerListResponse(RootModel[list[McpServerRow]]):
     """GET /v1/mcp/server answers with a bare array of servers."""
+
+
+class McpServerUserCredentialRow(BaseModel):
+    user_id: str
+    credential_type: Literal["oauth2", "byok"]
+    expires_at: str | None = None
+    connected_at: str | None = None
+    updated_at: str
+
+
+class McpServerUserCredentialListResponse(RootModel[tuple[McpServerUserCredentialRow, ...]]):
+    """GET /v1/mcp/server/{server_id}/user-credentials answers with a bare array."""
+
+
+class McpOauthUserCredentialStatus(BaseModel):
+    server_id: str
+    has_credential: bool
+    expires_at: str | None = None
+    is_expired: bool = False
+    connected_at: str | None = None
 
 
 class ToolsetTool(BaseModel):
@@ -951,6 +979,7 @@ class LiteLLMParamsBody(BaseModel):
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = None
@@ -1170,8 +1199,9 @@ class TeamNewResponse(BaseModel):
 
 class TeamUpdateBody(BaseModel):
     team_id: str
-    team_alias: str
+    team_alias: str | None = None
     models: list[str] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class TeamInfoParams(BaseModel):

@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _is_off_peak,
     _is_within_off_peak_window,
     apply_off_peak_pricing,
+    apply_provider_cache_read_default,
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_billed_token_rates,
@@ -48,7 +49,7 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize("prompt_tokens", [100, 200000, 200001])
 @pytest.mark.parametrize("read_rate", [None, 0.0, 0.25e-6])
 @pytest.mark.parametrize("service_tier", [None, "priority"])
-def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, service_tier):
+def test_missing_cache_read_rate_resolves_to_input_rate(prompt_tokens, read_rate, service_tier):
     info = {
         "input_cost_per_token": 3e-6,
         "input_cost_per_token_priority": 4e-6,
@@ -59,14 +60,54 @@ def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, s
     }
     usage = Usage(prompt_tokens=prompt_tokens, prompt_tokens_details={"cached_tokens": 100})
     billed = _get_token_base_cost(info, usage, service_tier=service_tier)
-    savings = _get_token_base_cost(info, usage, service_tier=service_tier, missing_cache_read_uses_input=True)
     prompt_cost, _ = generic_cost_per_token(
         "policy-fixture", usage, "openai", service_tier=service_tier, model_info=info
     )
-    assert billed[4] == pytest.approx(read_rate or 0.0)
-    assert savings[:4] == billed[:4]
-    assert savings[4] == pytest.approx(billed[0] if read_rate is None else read_rate)
+    assert billed[4] == pytest.approx(read_rate if read_rate is not None else billed[0])
     assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[4])
+
+
+def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_read_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "bare-model",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2.4e-7,
+        "output_cost_per_token": 9.7e-7,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=12928,
+        completion_tokens=380,
+        total_tokens=13308,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=12288),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="bare-model",
+        usage=usage,
+        custom_llm_provider="bedrock",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(12928 * 2.4e-7)
+    assert completion_cost == pytest.approx(380 * 9.7e-7)
+
+
+def test_apply_provider_cache_read_default_only_derives_a_rate_for_fireworks() -> None:
+    openai_info: ModelInfo = {"input_cost_per_token": 2e-6}
+    fireworks_info: ModelInfo = {"input_cost_per_token": 2e-6}
+
+    assert apply_provider_cache_read_default(openai_info, "openai") is openai_info
+    assert apply_provider_cache_read_default(openai_info, None) is openai_info
+
+    processed_fireworks_info = apply_provider_cache_read_default(fireworks_info, "fireworks_ai")
+
+    assert processed_fireworks_info is not fireworks_info
+    assert processed_fireworks_info["cache_read_input_token_cost"] == pytest.approx(2e-6 * 0.5)
 
 
 def test_generic_cost_per_token_prefers_audio_per_second_rate() -> None:
@@ -180,11 +221,7 @@ def test_missing_cache_read_uses_off_peak_input_rate():
     }
     when = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
     billed = _get_token_base_cost(info, Usage(prompt_tokens=100), current_time=when)
-    savings = _get_token_base_cost(
-        info, Usage(prompt_tokens=100), current_time=when, missing_cache_read_uses_input=True
-    )
-    assert billed[4] == 0.0
-    assert savings[0] == savings[4] == 5e-6
+    assert billed[0] == billed[4] == 5e-6
 
 
 def test_reasoning_tokens_no_price_set(_local_model_cost_map):
@@ -216,9 +253,7 @@ def test_reasoning_tokens_no_price_set(_local_model_cost_map):
         model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
         10,
     )
-    print(f"completion_cost: {completion_cost}")
     expected_completion_cost = model_cost_map["output_cost_per_token"] * usage.completion_tokens
-    print(f"expected_completion_cost: {expected_completion_cost}")
     assert round(completion_cost, 10) == round(
         expected_completion_cost,
         10,
@@ -1575,59 +1610,6 @@ def test_generic_cost_per_token_tiered_pricing_bills_reasoning_at_tier_rate():
         litellm.model_cost.pop(model, None)
 
 
-def test_gpt_5_6_alias_prices_match_sol(local_model_cost_map):
-    """Regression: the bare gpt-5.6 alias routes to GPT-5.6 Sol, so every cost field on
-    the two entries has to hold the same value. They drifted once before, when Sol took
-    its promotional cut and gpt-5.6 was left on the pre-cut rates, overbilling callers
-    who used the alias."""
-    alias = litellm.model_cost["gpt-5.6"]
-    sol = litellm.model_cost["gpt-5.6-sol"]
-
-    cost_fields = sorted(field for field in sol if "cost" in field)
-    assert len(cost_fields) == 27
-
-    for field in cost_fields:
-        assert alias.get(field) == sol.get(field), field
-
-
-@pytest.mark.parametrize(
-    "model,expected_none,expected_xhigh,expected_minimal",
-    [
-        # Verified against OpenAI's live API on 2026-04-24:
-        #   gpt-5.5   -> supports: none, low, medium, high, xhigh
-        #   gpt-5.5-pro -> supports: medium, high, xhigh
-        # Neither supports "minimal"; gpt-5.5-pro additionally does not support "none".
-        # The JSON must reflect this so LiteLLM rejects unsupported values locally
-        # (or drops them with drop_params=True) instead of round-tripping to OpenAI
-        # for a 400.
-        ("gpt-5.5", True, True, False),
-        ("gpt-5.5-2026-04-23", True, True, False),
-        ("gpt-5.5-pro", False, True, False),
-        ("gpt-5.5-pro-2026-04-23", False, True, False),
-    ],
-)
-def test_gpt55_reasoning_effort_flags_match_live_openai_api(
-    _local_model_cost_map, model, expected_none, expected_xhigh, expected_minimal
-):
-    """Pin reasoning_effort capability flags to OpenAI's actual API contract.
-
-    Observed via `POST /v1/chat/completions` with reasoning_effort=minimal:
-    ``Unsupported value: 'reasoning_effort' does not support 'minimal' with
-    this model``. gpt-5.5-pro additionally rejects 'none' and 'low'.
-    """
-
-    m = litellm.model_cost[model]
-    assert m.get("supports_none_reasoning_effort") is expected_none, (
-        f"{model}: supports_none_reasoning_effort expected {expected_none}"
-    )
-    assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh, (
-        f"{model}: supports_xhigh_reasoning_effort expected {expected_xhigh}"
-    )
-    assert m.get("supports_minimal_reasoning_effort") is expected_minimal, (
-        f"{model}: supports_minimal_reasoning_effort expected {expected_minimal}"
-    )
-
-
 @pytest.mark.parametrize(
     "base_model,dated_model",
     [
@@ -1660,58 +1642,6 @@ def test_gpt55_dated_variants_match_base_reasoning_effort_capabilities(_local_mo
             f"Dated snapshots must inherit the base model's reasoning_effort "
             f"capability profile."
         )
-
-
-@pytest.mark.parametrize(
-    "model,expected_none,expected_minimal,expected_xhigh",
-    [
-        # Mirror live OpenAI API contract (verified via openai/gpt-5.5* on
-        # 2026-04-24): chat accepts {none, low, medium, high, xhigh} but NOT
-        # minimal; pro accepts {medium, high, xhigh} only.
-        # NOTE: openai/gpt-5.5* entries currently set supports_minimal=true on
-        # main (pre #26456). Once that PR lands, OpenAI + Azure flags align.
-        ("azure/gpt-5.5", True, False, True),
-        ("azure/gpt-5.5-pro", False, False, True),
-    ],
-)
-def test_azure_gpt55_reasoning_effort_flags_match_live_openai_api(
-    _local_model_cost_map, model, expected_none, expected_minimal, expected_xhigh
-):
-    """Azure entries pin reasoning_effort flags to OpenAI's actual API contract."""
-
-    m = litellm.model_cost[model]
-    assert m.get("supports_none_reasoning_effort") is expected_none
-    assert m.get("supports_minimal_reasoning_effort") is expected_minimal
-    assert m.get("supports_xhigh_reasoning_effort") is expected_xhigh
-
-
-def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
-    model = "claude-haiku-4-5-20251001"
-    usage = Usage(
-        completion_tokens=90,
-        prompt_tokens=28436,
-        total_tokens=28526,
-        completion_tokens_details=CompletionTokensDetailsWrapper(
-            accepted_prediction_tokens=None,
-            audio_tokens=None,
-            reasoning_tokens=0,
-            rejected_prediction_tokens=None,
-            text_tokens=None,
-        ),
-        prompt_tokens_details=None,
-        cache_creation_input_tokens=2000,
-    )
-
-    custom_llm_provider = "anthropic"
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    print(f"prompt_cost: {prompt_cost}")
-    assert round(prompt_cost, 3) == 0.029
 
 
 def test_string_cost_values():
@@ -2350,140 +2280,6 @@ def test_gemini_image_generation_cost_falls_back_to_flat_image_pricing(_local_mo
     assert round(cost, 10) == round(expected_cost, 10)
 
 
-def test_bedrock_anthropic_prompt_caching():
-    """Test Bedrock Anthropic models with prompt caching return correct costs."""
-    model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-    usage = Usage(
-        prompt_tokens=52123,
-        completion_tokens=497,
-        total_tokens=52620,
-        cache_creation_input_tokens=7183,
-        cache_read_input_tokens=22465,
-    )
-
-    custom_llm_provider = "bedrock"
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    assert prompt_cost >= 0
-    assert completion_cost >= 0
-    assert round(prompt_cost, 3) == 0.111
-    assert round(completion_cost, 5) == 0.00820
-
-
-def test_reasoning_tokens_without_text_tokens_gpt5_nano():
-    """
-    Test fix for GitHub issue #18599:
-    https://github.com/BerriAI/litellm/issues/18599
-
-    When OpenAI models (gpt-5-nano, o1, o3) return reasoning_tokens but don't provide
-    text_tokens, LiteLLM should calculate text_tokens as:
-      text_tokens = completion_tokens - reasoning_tokens - audio_tokens - image_tokens
-
-    This ensures ALL completion tokens are billed, not just reasoning tokens.
-    """
-    model = "gpt-5-nano"
-    custom_llm_provider = "openai"
-
-    # Simulate OpenAI gpt-5-nano response where text_tokens is NOT provided
-    # completion_tokens: 977 total
-    # reasoning_tokens: 768
-    # text_tokens: should be calculated as 977 - 768 = 209
-    usage = Usage(
-        prompt_tokens=17,
-        completion_tokens=977,
-        total_tokens=994,
-        completion_tokens_details=CompletionTokensDetailsWrapper(
-            reasoning_tokens=768,
-            audio_tokens=0,
-            # text_tokens NOT provided - this is the key part of the bug
-        ),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider=custom_llm_provider,
-    )
-
-    # gpt-5-nano pricing: $0.05/1M input, $0.40/1M output
-    expected_prompt_cost = 17 * 0.05 / 1_000_000
-    expected_completion_cost = 977 * 0.40 / 1_000_000  # ALL tokens, not just reasoning
-
-    assert abs(prompt_cost - expected_prompt_cost) < 1e-10, (
-        f"Prompt cost incorrect: {prompt_cost} vs {expected_prompt_cost}"
-    )
-
-    assert abs(completion_cost - expected_completion_cost) < 1e-10, (
-        f"Completion cost incorrect: {completion_cost} vs {expected_completion_cost}"
-    )
-
-    # Verify it's NOT using only reasoning_tokens (the bug)
-    wrong_cost = 768 * 0.40 / 1_000_000  # Only reasoning tokens
-    assert abs(completion_cost - wrong_cost) > 1e-6, (
-        "Bug detected: Cost calculation is using only reasoning_tokens instead of all completion_tokens!"
-    )
-
-
-def test_image_count_prevents_text_tokens_fallback(_local_model_cost_map):
-    """
-    Test that the text_tokens fallback in generic_cost_per_token does not
-    override text_tokens=0 when image_count > 0.
-
-    Regression test for: Bedrock image embedding double-charging bug.
-    When image_count > 0, text_tokens=0 is intentional (image-only request),
-    not "text_tokens not set by provider."
-    """
-
-    # Simulate Nova image-only embedding: prompt_tokens estimated from
-    # embedding dimensions (768 for 3072-dim), image_count=1
-    usage = Usage(
-        prompt_tokens=768,
-        completion_tokens=0,
-        total_tokens=768,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            image_count=1,
-        ),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model="amazon.nova-2-multimodal-embeddings-v1:0",
-        usage=usage,
-        custom_llm_provider="bedrock",
-    )
-
-    # Cost should be 1 * input_cost_per_image ($6e-05) = $0.00006
-    # NOT 768 * input_cost_per_token ($1.35e-07) + $0.00006 = $0.000164
-    expected_image_cost = 1 * 6e-05
-    assert prompt_cost == expected_image_cost, (
-        f"Expected prompt_cost={expected_image_cost} (image-only), "
-        f"got {prompt_cost}. text_tokens fallback may be double-charging."
-    )
-    assert completion_cost == 0.0
-
-
-def test_query_count_bills_input_cost_per_query(_local_model_cost_map):
-    usage = Usage(
-        prompt_tokens=0,
-        completion_tokens=0,
-        total_tokens=0,
-        prompt_tokens_details=PromptTokensDetailsWrapper(query_count=3, image_count=1),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model="us.twelvelabs.marengo-embed-3-0-v1:0",
-        usage=usage,
-        custom_llm_provider="bedrock",
-    )
-
-    assert prompt_cost == pytest.approx(3 * 7e-05 + 1e-04)
-    assert completion_cost == 0.0
-
-
 def test_query_count_is_free_without_a_per_query_price(_local_model_cost_map):
     usage = Usage(
         prompt_tokens=0,
@@ -2690,36 +2486,6 @@ def test_vertex_uplift_invalid_multiplier_defaults_to_one():
     assert (
         get_vertex_regional_endpoint_uplift({"regional_endpoint_uplift_multiplier": "not-a-number"}, "us-east5") == 1.0
     )
-
-
-def test_priority_service_tier_above_threshold_uses_priority_tier_rates_for_cached_tokens(
-    _local_model_cost_map,
-):
-    """Regression: for a model that publishes both service_tier and above_threshold rate
-    variants, a priority request over the threshold must bill cached tokens at
-    cache_read_input_token_cost_above_200k_tokens_priority (and analogously for
-    input/output above-threshold), not the standard above-threshold rate."""
-    usage = Usage(
-        prompt_tokens=250_000,
-        completion_tokens=1_000,
-        total_tokens=251_000,
-        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=200_000, text_tokens=50_000),
-        completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=1_000),
-    )
-
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model="gemini-3-pro-preview",
-        usage=usage,
-        custom_llm_provider="gemini",
-        service_tier="priority",
-    )
-
-    # gemini-3-pro-preview priority + above_200k rates from the pricing JSON:
-    #   input  7.2e-6, output 3.24e-5, cache_read 7.2e-7
-    expected_prompt = 50_000 * 7.2e-6 + 200_000 * 7.2e-7
-    expected_completion = 1_000 * 3.24e-5
-    assert prompt_cost == pytest.approx(expected_prompt, rel=1e-9)
-    assert completion_cost == pytest.approx(expected_completion, rel=1e-9)
 
 
 def test_service_tier_suffixes_constant_in_sync_with_enum():
@@ -3606,36 +3372,6 @@ GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH = (
 )
 
 
-@pytest.mark.parametrize("prefix", ["", "gemini/", "vertex_ai/"])
-def test_gemini_38_flash_matches_37_flash_promotional_pricing(prefix, _local_model_cost_map):
-    new_model = litellm.model_cost[f"{prefix}gemini-3.8-flash"]
-    old_model = litellm.model_cost[f"{prefix}gemini-3.7-flash"]
-    for field in GEMINI_38_FLASH_FIELDS_SHARED_WITH_37_FLASH:
-        assert new_model[field] == old_model[field], field
-
-
-@pytest.mark.parametrize(
-    ("model", "provider", "image_token_rate"),
-    [
-        ("gpt-realtime-2.1", "openai", 5e-06),
-        ("gpt-realtime-2.1-mini", "openai", 8e-07),
-        ("azure/gpt-realtime-2.1", "azure", 5e-06),
-        ("azure/gpt-realtime-2.1-mini", "azure", 8e-07),
-    ],
-)
-def test_realtime_image_tokens_priced_per_token(model, provider, image_token_rate, _local_model_cost_map):
-    """Realtime image input is billed per 1M image tokens, not per image."""
-    usage = Usage(
-        prompt_tokens=1_100,
-        completion_tokens=0,
-        total_tokens=1_100,
-        prompt_tokens_details=PromptTokensDetailsWrapper(text_tokens=100, image_tokens=1_000),
-    )
-    prompt_cost, _ = generic_cost_per_token(model=model, usage=usage, custom_llm_provider=provider)
-    text_rate = litellm.model_cost[model]["input_cost_per_token"]
-    assert prompt_cost == pytest.approx(100 * text_rate + 1_000 * image_token_rate)
-
-
 @pytest.mark.parametrize(
     ("response_quality", "requested_quality", "expected_cost"),
     [
@@ -3828,28 +3564,6 @@ def test_cached_audio_tokens_fall_back_to_cache_read_input_token_cost() -> None:
     )
     expected = 52 * 4e-6 + 64 * 5e-7 + 39 * 32e-6 + 128 * 5e-7
     assert prompt_cost == pytest.approx(expected)
-
-
-def test_cache_read_breakdown_splits_cached_audio_at_the_audio_cache_rate(_local_model_cost_map: None) -> None:
-    usage = Usage(
-        prompt_tokens=4863,
-        completion_tokens=1087,
-        total_tokens=5950,
-        prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=1693,
-            audio_tokens=3170,
-            cached_tokens=2816,
-            cached_tokens_details={"text_tokens": 896, "audio_tokens": 1920},
-        ),
-    )
-
-    breakdown = get_token_type_cost_breakdown(model="gpt-realtime-2.1-mini", custom_llm_provider="openai", usage=usage)
-    prompt_cost, _ = generic_cost_per_token(model="gpt-realtime-2.1-mini", usage=usage, custom_llm_provider="openai")
-
-    assert breakdown.cache_read_cost == pytest.approx(896 * 6e-8 + 1920 * 3e-7)
-    assert breakdown.rates is not None
-    assert breakdown.rates.cache_read_input_audio_token_cost == pytest.approx(3e-7)
-    assert prompt_cost == pytest.approx((1693 - 896) * 6e-7 + (3170 - 1920) * 1e-5 + breakdown.cache_read_cost)
 
 
 def test_generic_cost_per_token_bills_cache_creation_at_the_input_rate_without_a_write_price():

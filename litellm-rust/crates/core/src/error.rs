@@ -1,7 +1,9 @@
+use litellm_llms::base_llm::ocr::error::Error as OcrError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
-    Ocr(#[from] crate::ocr::Error),
+    Ocr(#[from] OcrError),
     #[error(transparent)]
     Messages(#[from] crate::messages::Error),
     #[error(transparent)]

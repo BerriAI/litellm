@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,7 +14,7 @@ from fastapi import HTTPException
 import litellm
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import AlertType, ProxyErrorTypes
+from litellm.proxy._types import AlertType, ProxyErrorTypes, UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 
 
@@ -154,6 +155,23 @@ async def test_post_call_failure_hook_non_http_exception_in_callback_swallowed(
         user_api_key_dict=make_user_api_key_auth(),
     )
     assert out is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("logging_value", (None, "caller-controlled", {"baseline_cache_context": "untrusted"}))  # mutable-ok: emulate an untrusted JSON request field
+async def test_terminal_baseline_cleanup_ignores_missing_or_untrusted_logging(
+    proxy_logging: ProxyLogging, monkeypatch: pytest.MonkeyPatch, logging_value: object
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", ())
+    proxy_logging.alert_types = []  # mutable-ok: disable optional alert sinks for this boundary test  # rebind-ok: isolate the fixture-owned alert configuration
+    request_data: Final = {"litellm_call_id": "untrusted-logging", "litellm_logging_obj": logging_value}  # mutable-ok: the production failure owner removes internal fields in place
+    result: Final = await proxy_logging.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # exercise the existing proxy terminal owner with its legacy request dictionary contract
+        request_data=request_data,
+        original_exception=ValueError("original provider failure"),
+        user_api_key_dict=UserAPIKeyAuth(request_route="/v1/messages"),
+    )
+    assert result is None
+    assert "litellm_logging_obj" not in request_data
 
 
 # ---------------------------------------------------------------------------

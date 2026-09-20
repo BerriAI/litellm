@@ -853,6 +853,32 @@ def _is_converted_stream_result(result: object) -> bool:
     return isinstance(result, (CustomStreamWrapper, BaseResponsesAPIStreamingIterator))
 
 
+async def _run_success_deployment_hook_on_converted_chat_stream(
+    result: object, request_data: dict[str, object], call_type: str
+) -> None:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
+
+    if not isinstance(result, CustomStreamWrapper):
+        return
+    completion_stream: Final = result.completion_stream
+    if not isinstance(completion_stream, MockResponseIterator):
+        return
+    call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
+    if call_type_enum is None:
+        return
+    hooked: Final = await async_post_call_success_deployment_hook(
+        request_data=request_data,
+        response=completion_stream.model_response,
+        call_type=call_type_enum,
+    )
+    if not isinstance(hooked, ModelResponse) or hooked is completion_stream.model_response:
+        return
+    result.completion_stream = MockResponseIterator(  # rebind-ok: a new wrapper would drop headers and fire __del__
+        model_response=hooked, json_mode=completion_stream.json_mode
+    )
+
+
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
 def function_setup(
     original_function: str,
@@ -1855,6 +1881,7 @@ def client(original_function):
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
 
+            kwargs["litellm_logging_obj"] = logging_obj
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -1956,9 +1983,14 @@ def client(original_function):
                 raise
             end_time = datetime.datetime.now()
 
-            if _is_streaming_request(kwargs=kwargs, call_type=call_type) or _is_converted_stream_result(result):
+            streaming_requested: Final = _is_streaming_request(kwargs=kwargs, call_type=call_type)
+            if streaming_requested or _is_converted_stream_result(result):
                 logging_obj.stream = True
                 logging_obj.model_call_details["stream"] = True
+                if not streaming_requested:
+                    await _run_success_deployment_hook_on_converted_chat_stream(
+                        result=result, request_data=kwargs, call_type=call_type
+                    )
                 if "complete_response" in kwargs and kwargs["complete_response"] is True:
                     chunks: Final = []
                     for idx, chunk in enumerate(result):
@@ -1977,7 +2009,7 @@ def client(original_function):
                         result=result,
                         call_type=call_type,
                     )
-            elif call_type == CallTypes.arealtime.value:
+            elif call_type in (CallTypes.arealtime.value, CallTypes.aresponses_websocket.value):
                 return result
             ### POST-CALL RULES ###
             post_call_processing(
@@ -2689,7 +2721,7 @@ def declared_value_factory(model: str, custom_llm_provider: str | None, key: str
     """Return a string value the model map declares for *key*, or ``None`` when it says nothing.
 
     The string-valued sibling of :func:`_supports_factory` and
-    :func:`_is_explicitly_disabled_factory`, public where those two are not because it is read
+    :func:`is_explicitly_disabled_factory`, public like the latter because both are read
     from the provider configs rather than from this module, sharing their
     ``get_llm_provider`` -> ``_get_model_info_helper`` chain and their unprefixed-twin
     fallback (#20885), so a provider-prefixed entry that omits the key still answers
@@ -2725,7 +2757,7 @@ def declared_value_factory(model: str, custom_llm_provider: str | None, key: str
         return None
 
 
-def _is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
+def is_explicitly_disabled_factory(model: str, custom_llm_provider: str | None, key: str) -> bool:
     """Return True only when the model map explicitly sets *key* to ``False``.
 
     This is the opt-out mirror of :func:`_supports_factory`.  Where
@@ -2817,6 +2849,14 @@ def supports_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None
     )
 
 
+def supports_thinking_cache_preservation(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_thinking_cache_preservation",
+    )
+
+
 def supports_computer_use(model: str, custom_llm_provider: str | None = None) -> bool:
     """
     Check if the given model supports computer use and return a boolean value.
@@ -2844,7 +2884,7 @@ def is_vision_explicitly_disabled(model: str, custom_llm_provider: str | None = 
     The opt-out mirror of :func:`supports_vision`: a missing declaration reads as not
     disabled, so unknown or newly added models stay eligible for image routing.
     """
-    return _is_explicitly_disabled_factory(model, custom_llm_provider, "supports_vision")
+    return is_explicitly_disabled_factory(model, custom_llm_provider, "supports_vision")
 
 
 def supports_vision(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -2883,6 +2923,15 @@ def supports_none_reasoning_effort(model: str, custom_llm_provider: str | None =
     Check if the given model accepts reasoning effort "none" and return a boolean value.
     """
     return _supports_factory(model=model, custom_llm_provider=custom_llm_provider, key="supports_none_reasoning_effort")
+
+
+def supports_mid_conversation_system(model: str, custom_llm_provider: str | None = None) -> bool:
+    """
+    Check if the given model accepts a system role message after the leading system block and return a boolean value.
+    """
+    return _supports_factory(
+        model=model, custom_llm_provider=custom_llm_provider, key="supports_mid_conversation_system"
+    )
 
 
 def supports_native_structured_output(model: str, custom_llm_provider: str | None = None) -> bool:
@@ -3114,6 +3163,22 @@ def reapply_runtime_model_cost_registrations() -> None:
         _LiveDeploymentReplay.callback()
     if _runtime_registered_model_cost:
         register_model(model_cost=dict(_runtime_registered_model_cost))  # mutable-ok: snapshot, replay rewrites it
+
+
+def cost_map_omits_token_price(*keys: object) -> bool:
+    """Whether the raw ``litellm.model_cost`` entries under ``keys`` exist but none carries a per-token price.
+
+    ``get_model_info`` substitutes 0 for a missing price, which reads exactly like a declared
+    zero. Surfaces that report pricing use this to keep an unpriced deployment at ``None``.
+    """
+    entries: Final = tuple(
+        entry
+        for entry in (litellm.model_cost.get(key) for key in keys if isinstance(key, str))
+        if isinstance(entry, dict)
+    )
+    return len(entries) > 0 and not any(
+        "input_cost_per_token" in entry or "output_cost_per_token" in entry for entry in entries
+    )
 
 
 def register_model(
@@ -4470,7 +4535,7 @@ def get_optional_params(
                     drop_params=bool(drop_params),
                 )
             else:
-                optional_params = litellm.MistralConfig().map_openai_params(
+                optional_params = litellm.VertexAIMistralConfig().map_openai_params(
                     model=model,
                     non_default_params=non_default_params,
                     optional_params=optional_params,
@@ -5286,6 +5351,13 @@ def _strip_stable_vertex_version(model_name) -> str:
     return re.sub(r"-\d+$", "", model_name)
 
 
+_DATED_SNAPSHOT_SUFFIX: Final = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+
+def _strip_dated_snapshot_suffix(model_name: str) -> str:
+    return _DATED_SNAPSHOT_SUFFIX.sub("", model_name)
+
+
 def _get_base_bedrock_model(model_name) -> str:
     """
     Get the base model from the given model name.
@@ -5333,7 +5405,7 @@ def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
         strip_finetune: Final = _strip_openai_finetune_model_name(model_name=model)
         return strip_finetune
     else:
-        return model
+        return _strip_dated_snapshot_suffix(model_name=model)
 
 
 # Global case-insensitive lookup map for model_cost (built eagerly at module import)
@@ -5759,6 +5831,7 @@ def _get_model_info_helper(
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
                 supports_prompt_cache_breakpoint=None,
+                supports_thinking_cache_preservation=None,
                 supports_computer_use=None,
                 supports_pdf_input=None,
             )
@@ -6031,6 +6104,7 @@ def _get_model_info_helper(
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
+                supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
@@ -6062,8 +6136,10 @@ def _get_model_info_helper(
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
+                ocr_cost_per_page_batches=_model_info.get("ocr_cost_per_page_batches", None),
                 ocr_cost_per_credit=_model_info.get("ocr_cost_per_credit", None),
                 annotation_cost_per_page=_model_info.get("annotation_cost_per_page", None),
+                annotation_cost_per_page_batches=_model_info.get("annotation_cost_per_page_batches", None),
                 provider_specific_entry=_model_info.get("provider_specific_entry", None),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
@@ -8052,6 +8128,7 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 
 def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
+    model: str = "",
 ) -> dict | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
@@ -8067,12 +8144,19 @@ def validate_chat_completion_tool_choice(
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
-            raise Exception(
-                f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"
+            raise BadRequestError(
+                message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
+                model=model,
+                llm_provider="",
             )
         return tool_choice
-    raise Exception(
-        f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
+    raise BadRequestError(
+        message=(
+            f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. "
+            "Please ensure tool_choice follows the OpenAI tool_choice spec"
+        ),
+        model=model,
+        llm_provider="",
     )
 
 
@@ -8340,7 +8424,7 @@ class ProviderConfigManager:
         elif model in litellm.vertex_mistral_models:
             if "codestral" in model:
                 return litellm.CodestralTextCompletionConfig()
-            return litellm.MistralConfig()
+            return litellm.VertexAIMistralConfig()
         elif model in litellm.vertex_ai_ai21_models:
             return litellm.VertexAIAi21Config()
         else:
@@ -8674,6 +8758,10 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsAudioTranscriptionConfig()
+        elif litellm.LlmProviders.XAI == provider:
+            from litellm.llms.xai.audio_transcription.transformation import XAIAudioTranscriptionConfig
+
+            return XAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             if "gpt-4o" in model:
                 return litellm.OpenAIGPTAudioTranscriptionConfig()
@@ -8746,6 +8834,7 @@ class ProviderConfigManager:
     def get_provider_responses_api_config(
         provider: LlmProviders | str,
         model: str | None = None,
+        api_base: str | None = None,
     ) -> BaseResponsesAPIConfig | None:
         from litellm.llms.openai_like.dynamic_config import (
             create_responses_config_class,
@@ -8767,7 +8856,7 @@ class ProviderConfigManager:
                 pass
 
         # Check Python classes first (custom overrides take priority)
-        result: Final = ProviderConfigManager._get_python_responses_api_config(provider_enum, model)
+        result: Final = ProviderConfigManager._get_python_responses_api_config(provider_enum, model, api_base)
         if result is not None:
             return result
 
@@ -8783,6 +8872,7 @@ class ProviderConfigManager:
     def _get_python_responses_api_config(
         provider: LlmProviders | None,
         model: str | None = None,
+        api_base: str | None = None,
     ) -> BaseResponsesAPIConfig | None:
         """Check for Python-class-based responses API configs (custom overrides)."""
         if provider is None:
@@ -8801,6 +8891,14 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIOSeriesResponsesAPIConfig()
             else:
                 return litellm.AzureOpenAIResponsesAPIConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.common_utils import (
+                azure_ai_supports_native_responses,
+            )
+
+            if azure_ai_supports_native_responses(model, api_base):
+                return litellm.AzureAIResponsesAPIConfig()
+            return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
@@ -9044,6 +9142,10 @@ class ProviderConfigManager:
             from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
 
             return AnthropicFilesConfig()
+        elif LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.files.transformation import MistralFilesConfig
+
+            return MistralFilesConfig()
         return None
 
     @staticmethod
@@ -9055,6 +9157,10 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
             return BedrockBatchesConfig()
+        elif LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+            return MistralBatchesConfig()
         return None
 
     @staticmethod

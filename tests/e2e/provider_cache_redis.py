@@ -134,6 +134,10 @@ def write_metrics(cache: CacheEdge) -> None:
             root: Final = Path(directory)
             root.mkdir(parents=True, exist_ok=True)
             (root / f"{os.getpid()}.json").write_text(report + "\n")
+            if cache.probe.rows:
+                (root / f"keys-{os.getpid()}.json").write_text(
+                    json.dumps([dict(row) for row in cache.probe.rows]) + "\n"
+                )
         except OSError:
             logging.getLogger(__name__).warning("provider cache metrics artifact unavailable")
     logging.getLogger(__name__).info("%s", report)

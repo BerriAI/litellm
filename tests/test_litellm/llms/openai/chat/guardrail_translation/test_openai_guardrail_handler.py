@@ -6,6 +6,7 @@ with guardrail transformations, including tool calls.
 """
 
 import json
+from collections.abc import Mapping
 from typing import Any, Literal, Optional
 
 import pytest
@@ -1261,19 +1262,81 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         return MaskWorld(guardrail_name="test-mask")
 
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_rewrite_on_multi_choice_stream_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
+    async def test_deliver_ended_stream_rewrite_lands_on_the_rewritten_choice_only(self):
         handler = OpenAIChatCompletionsHandler()
         chunks = self._two_choice_stream_chunks()
 
-        with pytest.raises(UndeliverableStreamRewrite):
-            await handler.process_output_streaming_response(
-                responses_so_far=chunks,
-                guardrail_to_apply=self._world_masking_guardrail(),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
-            )
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._world_masking_guardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert [(c.choices[0].index, c.choices[0].delta.content) for c in chunks] == [
+            (0, "safe "),
+            (1, "hello [MASKED]"),
+            (0, "text"),
+            (1, ""),
+        ]
+        assert [c.choices[0].finish_reason for c in chunks] == [None, None, "stop", "stop"]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_each_choice_with_its_own_text(self):
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        chunks = self._two_choice_stream_chunks()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert guardrail.last_inputs["texts"] == ["safe text", "hello world"]
+        assert [(c.choices[0].index, c.choices[0].delta.content) for c in chunks] == [
+            (0, "SAFE TEXT"),
+            (1, "HELLO WORLD"),
+            (0, ""),
+            (1, ""),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_every_choice_when_a_usage_only_chunk_closes_the_stream(self):
+        from litellm.types.utils import ModelResponseStream, Usage
+
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+        usage_chunk = ModelResponseStream(
+            id="chatcmpl-123",
+            created=1234567890,
+            model="gpt-4",
+            object="chat.completion.chunk",
+            choices=[],
+            usage=Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12),
+        )
+        chunks = [*self._two_choice_stream_chunks(), usage_chunk]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert guardrail.last_inputs["texts"] == ["safe text", "hello world"]
+        assert [(c.choices[0].index, c.choices[0].delta.content) for c in chunks[:4]] == [
+            (0, "SAFE TEXT"),
+            (1, "HELLO WORLD"),
+            (0, ""),
+            (1, ""),
+        ]
+        assert [c.choices[0].finish_reason for c in chunks[:4]] == [None, None, "stop", "stop"]
+        assert chunks[4].choices == []
+        assert chunks[4].usage.completion_tokens == 7
 
     @staticmethod
     def _two_choice_tool_call_stream_chunks() -> list:
@@ -1310,11 +1373,50 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         return [
             chunk(0, fragment("", name="lookup_fruit", call_id="call_1")),
             chunk(1, fragment("", name="lookup_fruit", call_id="call_2")),
-            chunk(0, fragment('{"fruit": "persimmon"}')),
-            chunk(1, fragment('{"fruit": "durian"}')),
+            chunk(0, fragment('{"fruit": "pers')),
+            chunk(1, fragment('{"fruit": "dur')),
+            chunk(0, fragment('immon"}')),
+            chunk(1, fragment('ian"}')),
             chunk(0, None, finish_reason="tool_calls"),
             chunk(1, None, finish_reason="tool_calls"),
         ]
+
+    @staticmethod
+    def _recording_guardrail() -> CustomGuardrail:
+        class Recorder(CustomGuardrail):
+            def __init__(self) -> None:
+                super().__init__(guardrail_name="recorder")
+                self.seen_inputs: list[GenericGuardrailAPIInputs] = []
+
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: Mapping[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                self.seen_inputs.append(inputs)
+                return inputs
+
+        return Recorder()
+
+    @pytest.mark.asyncio
+    async def test_ended_multi_choice_stream_scans_each_choices_tool_call_arguments_apart(self):
+        handler = OpenAIChatCompletionsHandler()
+        chunks = self._two_choice_tool_call_stream_chunks()
+        guardrail = self._recording_guardrail()
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert [
+            (tool_call["id"], tool_call["function"]["arguments"])
+            for tool_call in guardrail.seen_inputs[-1]["tool_calls"]
+        ] == [("call_1", '{"fruit": "persimmon"}'), ("call_2", '{"fruit": "durian"}')]
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_call_rewrite_on_multi_choice_stream_fails_closed(self):
@@ -1323,13 +1425,18 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         handler = OpenAIChatCompletionsHandler()
         chunks = self._two_choice_tool_call_stream_chunks()
 
-        with pytest.raises(UndeliverableStreamRewrite):
+        with pytest.raises(UndeliverableStreamRewrite, match="the stream carries 2 choices") as raised:
             await handler.process_output_streaming_response(
                 responses_so_far=chunks,
                 guardrail_to_apply=MockGuardrail(guardrail_name="test"),
                 litellm_logging_obj=None,
                 deliver_ended_stream_rewrites=True,
             )
+
+        assert raised.value.guardrail_name == "test"
+        assert raised.value.reason == (
+            "the stream carries 2 choices and tool-call rewrites are only written back on single-choice streams"
+        )
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_clean_multi_choice_stream_released_untouched(self):

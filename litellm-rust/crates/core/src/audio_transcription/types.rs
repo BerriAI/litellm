@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use litellm_llms::base_llm::audio_transcription::transformation::{
+    BaseAudioTranscriptionConfig, RequestAuth,
+};
 use serde_json::{Map, Value};
-
-use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
 
 pub struct AudioTranscriptionRequest<'a> {
     pub model: &'a str,
@@ -18,15 +18,15 @@ pub struct AudioTranscriptionRequest<'a> {
 
 #[derive(Clone)]
 pub struct ProviderAudioTranscriptionRequest {
-    pub(super) model: String,
-    pub(super) custom_llm_provider: String,
-    pub(super) config: &'static dyn AudioTranscriptionProviderConfig,
-    pub(super) url: String,
-    pub(super) body: Value,
-    pub(super) upstream_headers: Vec<(String, String)>,
-    pub(super) auth: AudioTranscriptionAuth,
-    pub(super) optional_params: Map<String, Value>,
-    pub(super) timeout: Option<Duration>,
+    pub model: String,
+    pub custom_llm_provider: String,
+    pub config: &'static dyn BaseAudioTranscriptionConfig,
+    pub url: String,
+    pub body: Value,
+    pub upstream_headers: Vec<(String, String)>,
+    pub auth: RequestAuth,
+    pub optional_params: Map<String, Value>,
+    pub timeout: Option<Duration>,
 }
 
 impl ProviderAudioTranscriptionRequest {
@@ -48,23 +48,5 @@ impl ProviderAudioTranscriptionRequest {
 
     pub fn with_body(self, body: Value) -> Self {
         Self { body, ..self }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AudioTranscriptionRequestData {
-    pub body: Value,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AudioTranscriptionResponseData {
-    pub text: String,
-}
-
-impl AudioTranscriptionResponseData {
-    pub fn into_json(self) -> Value {
-        serde_json::json!({
-            "text": self.text,
-        })
     }
 }
