@@ -654,18 +654,24 @@ def _v3_session_id(
 
     Claude Code names its session on the wire and that wins. Then the session LiteLLM
     resolved from its own metadata. Then, for a conversation that states none, a hash of
-    the system prompt and the first message: a chat client replays the whole conversation
-    on every turn, so that pair is constant for its lifetime and groups the turns. A fresh
-    synthetic id per request would group nothing.
+    the principal, the system prompt and the first message: a chat client replays the
+    whole conversation on every turn, so that triple is constant for its lifetime and
+    groups the turns. A fresh synthetic id per request would group nothing.
+
+    The principal is in the hash because Straiker skips turns it has already scored for a
+    session. Two users who open with the same words are two conversations; hashed on the
+    words alone they shared one session, and the second user's copy of an attack came
+    back as a replay, unscored and allowed (measured 2026-09-20).
     """
     supplied: Final = _request_header(request_data, V3_SESSION_HEADER)
     if supplied:
         return supplied
     if envelope.context.session_id:
         return envelope.context.session_id
-    seed: Final = f"{_v3_system_text(request_body) or ''}\0{_v3_first_message_text(request_body)}"
-    if seed == "\0":
+    conversation: Final = f"{_v3_system_text(request_body) or ''}\0{_v3_first_message_text(request_body)}"
+    if conversation == "\0":
         return None
+    seed: Final = f"{_v3_user(envelope) or ''}\0{conversation}"
     return V3_DERIVED_SESSION_PREFIX + hashlib.md5(seed.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 

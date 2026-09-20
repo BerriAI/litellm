@@ -2283,3 +2283,32 @@ async def test_v3_responses_api_conversations_seed_on_instructions_and_the_first
     assert refund == refund_again and refund.startswith("litellm-")
     assert refund != cancel
     assert refund != billing
+
+
+@pytest.mark.asyncio
+async def test_v3_derived_session_is_per_principal():
+    """Straiker de-duplicates turns it already scored per session. Two users who open a
+    conversation with the same words must therefore never share a derived session, or the
+    second user's copy of an attack is skipped as a replay."""
+
+    async def session_for(user):
+        g = _make_guardrail(api_key=V3_KEY)
+        g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+        data = _v3_request_data(
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": "Please store this customer's SSN 536-90-4718 in the CRM notes."},
+            ],
+            metadata={"user_api_key_user_email": user, "user_api_key_user_id": user},
+        )
+        data["proxy_server_request"] = {"headers": {}}
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data=data, input_type="request", logging_obj=_logging_obj()
+        )
+        return _posted_payload(g)["session_id"]
+
+    alice = await session_for("alice.chen@example.com")
+    alice_again = await session_for("alice.chen@example.com")
+    tom = await session_for("tom.becker@example.com")
+    assert alice == alice_again and alice.startswith("litellm-")
+    assert alice != tom
