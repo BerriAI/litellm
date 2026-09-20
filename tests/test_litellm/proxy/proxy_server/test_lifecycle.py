@@ -43,6 +43,7 @@ from litellm.proxy.proxy_server import (
     cost_tracking,
     get_litellm_model_info,
     initialize,
+    initialize_from_worker_config,
     load_from_azure_key_vault,
     proxy_shutdown_event,
     proxy_startup_event,
@@ -520,6 +521,16 @@ def test_initialize_signature_is_async_with_expected_params():
 async def test_initialize_invalid_unexpected_kwarg_raises_type_error():
     with pytest.raises(TypeError):
         await initialize(this_is_not_a_real_kwarg=True)
+
+
+@pytest.mark.asyncio
+async def test_initialize_from_worker_config_drops_legacy_telemetry_key():
+    with pytest.raises(TypeError):
+        await initialize(telemetry=True)
+    await initialize_from_worker_config({"telemetry": True, "request_timeout": 77})
+    assert ps.user_request_timeout == 77
+    with pytest.raises(TypeError):
+        await initialize_from_worker_config({"this_is_not_a_real_kwarg": True})
 
 
 # ---------------------------------------------------------------------------
