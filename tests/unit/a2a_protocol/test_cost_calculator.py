@@ -122,7 +122,7 @@ class CostLogger(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_asend_message_uses_cost_per_query():
+async def test_asend_message_uses_cost_per_query(monkeypatch):
     """
     Test that asend_message uses cost_per_query param for response_cost.
     """
@@ -131,7 +131,7 @@ async def test_asend_message_uses_cost_per_query():
     # Setup logger
     litellm.logging_callback_manager._reset_all_callbacks()
     cost_logger = CostLogger()
-    litellm.callbacks = [cost_logger]
+    monkeypatch.setattr(litellm, "callbacks", [cost_logger])
 
     # Mock A2A client
     mock_client = MagicMock()
@@ -157,7 +157,7 @@ async def test_asend_message_uses_cost_per_query():
 
 
 @pytest.mark.asyncio
-async def test_asend_message_uses_cost_per_query_from_litellm_params_dict():
+async def test_asend_message_uses_cost_per_query_from_litellm_params_dict(monkeypatch):
     """
     Proxy passes agent pricing as the litellm_params dict param (not top-level
     kwargs). Regression for cost_per_query landing at $0 on the native path.
@@ -166,7 +166,7 @@ async def test_asend_message_uses_cost_per_query_from_litellm_params_dict():
 
     litellm.logging_callback_manager._reset_all_callbacks()
     cost_logger = CostLogger()
-    litellm.callbacks = [cost_logger]
+    monkeypatch.setattr(litellm, "callbacks", [cost_logger])
 
     mock_client = MagicMock()
     mock_client._litellm_agent_card = MagicMock()
@@ -217,7 +217,7 @@ class TokenAndCostLogger(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_asend_message_uses_input_output_cost_per_token():
+async def test_asend_message_uses_input_output_cost_per_token(monkeypatch):
     """
     Test that asend_message calculates cost using input_cost_per_token and output_cost_per_token.
     Validates exact cost calculation: cost = (prompt_tokens * input_cost) + (completion_tokens * output_cost)
@@ -227,7 +227,7 @@ async def test_asend_message_uses_input_output_cost_per_token():
     # Setup logger
     litellm.logging_callback_manager._reset_all_callbacks()
     token_cost_logger = TokenAndCostLogger()
-    litellm.callbacks = [token_cost_logger]
+    monkeypatch.setattr(litellm, "callbacks", [token_cost_logger])
 
     # Mock A2A client
     mock_client = MagicMock()
@@ -292,7 +292,7 @@ class AgentIdLogger(CustomLogger):
 
 
 @pytest.mark.asyncio
-async def test_asend_message_passes_agent_id_to_callback():
+async def test_asend_message_passes_agent_id_to_callback(monkeypatch):
     """
     Test that asend_message passes agent_id to callbacks via kwargs.
     """
@@ -301,7 +301,7 @@ async def test_asend_message_passes_agent_id_to_callback():
     # Setup logger
     litellm.logging_callback_manager._reset_all_callbacks()
     agent_id_logger = AgentIdLogger()
-    litellm.callbacks = [agent_id_logger]
+    monkeypatch.setattr(litellm, "callbacks", [agent_id_logger])
 
     # Mock A2A client
     mock_client = MagicMock()
