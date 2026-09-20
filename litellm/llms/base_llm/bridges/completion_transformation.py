@@ -7,11 +7,11 @@ from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
-    import tiktoken
     from pydantic import BaseModel
 
     from litellm import LiteLLMLoggingObj, ModelResponse
     from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+    from litellm.rust_bridge._native import Tokenizer
     from litellm.types.llms.openai import AllMessageValues
 
 
@@ -39,7 +39,7 @@ class CompletionTransformationBridge(ABC):
         messages: list["AllMessageValues"],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":

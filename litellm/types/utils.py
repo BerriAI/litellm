@@ -81,6 +81,8 @@ from .llms.openai import (
 from .rerank import RerankResponse as RerankResponse
 
 if TYPE_CHECKING:
+    from litellm.rust_bridge._native import Tokenizer
+
     from .vector_stores import VectorStoreSearchResponse
 else:
     VectorStoreSearchResponse = Any
@@ -4304,7 +4306,7 @@ class ProviderSpecificHeader(TypedDict):
 
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
-    tokenizer: Any
+    tokenizer: ReadOnly["Tokenizer"]
 
 
 class LiteLLMFineTuningJob(FineTuningJob):

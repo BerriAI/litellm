@@ -22,10 +22,8 @@ from litellm.proxy.proxy_server import token_counter
 
 
 def _fake_hf_tokenizer(num_tokens: int) -> MagicMock:
-    encoding = MagicMock()
-    encoding.__len__.return_value = num_tokens
     tokenizer = MagicMock()
-    tokenizer.encode_batch_fast.return_value = [encoding]
+    tokenizer.count.return_value = num_tokens
     return tokenizer
 
 

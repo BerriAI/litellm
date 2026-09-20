@@ -60,10 +60,9 @@ from litellm.utils import convert_to_model_response_object
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.llms.base_llm.base_utils import BaseTokenCounter
+    from litellm.rust_bridge._native import Tokenizer
     from litellm.types.llms.openai import ChatCompletionToolParam
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -671,7 +670,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

@@ -14817,7 +14817,7 @@ async def test_token_counter_keeps_the_event_loop_free_during_a_huggingface_coun
 
 
 async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeypatch):
-    from tokenizers import Tokenizer
+    from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
     from tests.test_litellm.litellm_core_utils.event_loop_lag import assert_loop_stayed_free, timed_with_loop_lags
@@ -14854,7 +14854,7 @@ async def test_token_counter_loads_a_custom_tokenizer_off_the_event_loop(monkeyp
 
 
 async def test_token_counter_loads_a_custom_tokenizer_once_per_identifier_revision_and_token(monkeypatch):
-    from tokenizers import Tokenizer
+    from litellm.rust_bridge._native import Tokenizer
 
     from litellm import Router
     from litellm.types.router import DeploymentTypedDict

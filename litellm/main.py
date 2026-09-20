@@ -37,7 +37,6 @@ if TYPE_CHECKING:
 import dotenv
 import httpx
 import openai
-import tiktoken
 from pydantic import BaseModel
 from typing_extensions import overload
 
@@ -114,6 +113,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_model_route,
 )
 from litellm.realtime_api.main import _realtime_health_check
+from litellm.rust_bridge._native import Tokenizer
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
     _CompletionDispatchContext,
@@ -7393,7 +7393,7 @@ def text_completion(
         if isinstance(prompt, list):
             import concurrent.futures
 
-            tokenizer: Final = tiktoken.encoding_for_model("text-davinci-003")
+            tokenizer: Final = Tokenizer.from_tiktoken("p50k_base")
             ## if it's a 2d list - each element in the list is a text_completion() request
             if len(prompt) > 0 and isinstance(prompt[0], list):
                 responses: Final = [None for x in prompt]  # init responses
@@ -9147,7 +9147,7 @@ async def acount_tokens(
     except Exception as e:
         verbose_logger.debug("Provider token counting failed for model=%s, falling back to local: %s", model, e)
 
-    # Fallback to local tiktoken-based token counting
+    # Fallback to local token counting
     fallback_messages = messages or []
     if system and fallback_messages:
         fallback_messages = [{"role": "system", "content": system}] + fallback_messages
@@ -9166,16 +9166,16 @@ async def acount_tokens(
 
 
 # Cache for encoding to avoid repeated __getattr__ calls
-_encoding_cache: tiktoken.Encoding | None = None
+_encoding_cache: Tokenizer | None = None
 
 
-def _load_module_encoding() -> tiktoken.Encoding:
+def _load_module_encoding() -> Tokenizer:
     import sys
 
     return sys.modules[__name__].encoding
 
 
-def _get_encoding() -> tiktoken.Encoding:
+def _get_encoding() -> Tokenizer:
     """Get encoding, loading it lazily if needed."""
     global _encoding_cache
     if _encoding_cache is None:
@@ -9184,18 +9184,15 @@ def _get_encoding() -> tiktoken.Encoding:
     return _encoding_cache
 
 
-def _load_default_encoding() -> tiktoken.Encoding:
+def _load_default_encoding() -> Tokenizer:
     from litellm._lazy_imports import _get_default_encoding
 
     return _get_default_encoding()
 
 
-def __getattr__(name: str) -> tiktoken.Encoding:
+def __getattr__(name: str) -> Tokenizer:
     """Lazy import handler for main module"""
     if name == "encoding":
-        # Use _get_default_encoding which properly sets TIKTOKEN_CACHE_DIR
-        # before loading tiktoken, ensuring the local cache is used
-        # instead of downloading from the internet
         _encoding: Final = _load_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
         import sys

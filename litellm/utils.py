@@ -40,14 +40,11 @@ from types import MappingProxyType
 import dotenv
 import httpx
 import openai
-import tiktoken
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
-from tiktoken import Encoding
-from tokenizers import Tokenizer
 
 import litellm
 import litellm.litellm_core_utils
@@ -87,6 +84,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.rust_bridge._native import Tokenizer
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -2309,7 +2307,7 @@ def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> Tokenizer:
         case "cohere":
             return Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         case "anthropic":
-            return Tokenizer.from_str(claude_json_str)
+            return Tokenizer.from_json(claude_json_str)
         case "llama2":
             return Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
         case "llama3":
@@ -2329,15 +2327,7 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
         enc: The encoded text.
     """
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
-    if isinstance(tokenizer_json["tokenizer"], Encoding):
-        enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
-    else:
-        enc = tokenizer_json["tokenizer"].encode(text)
-    # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
-    # extract .ids so the return type is always List[int].
-    if hasattr(enc, "ids"):
-        return enc.ids
-    return enc
+    return tokenizer_json["tokenizer"].encode(text)
 
 
 def decode(
@@ -2356,26 +2346,8 @@ def decode(
     """
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
     if tokenizer_json["type"] == "huggingface_tokenizer":
-        if skip_special_tokens:
-            tokens = _strip_huggingface_special_token_ids(tokenizer_json["tokenizer"], tokens)
-        dec = tokenizer_json["tokenizer"].decode(tokens, skip_special_tokens=skip_special_tokens)
-        return dec
-    dec = tokenizer_json["tokenizer"].decode(tokens)
-    return dec
-
-
-def _strip_huggingface_special_token_ids(tokenizer: Tokenizer, tokens: Sequence[int]) -> Sequence[int]:
-    try:
-        added_tokens_decoder: Final = tokenizer.get_added_tokens_decoder()
-    except Exception:
-        return tokens
-
-    special_token_ids: Final = {
-        token_id for token_id, added_token in added_tokens_decoder.items() if getattr(added_token, "special", False)
-    }
-    if not special_token_ids:
-        return tokens
-    return [token for token in tokens if token not in special_token_ids]
+        return tokenizer_json["tokenizer"].decode(tokens, skip_special_tokens=skip_special_tokens)
+    return tokenizer_json["tokenizer"].decode(tokens)
 
 
 def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: str | None = None):
@@ -2406,7 +2378,7 @@ def create_tokenizer(json: str):
     dict: A dictionary with the tokenizer and its type.
     """
 
-    tokenizer: Final = Tokenizer.from_str(json)
+    tokenizer: Final = Tokenizer.from_json(json)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 

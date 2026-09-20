@@ -4,13 +4,12 @@ import base64
 import io
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from functools import lru_cache
 from typing import Final, Literal, cast
 
 import anyio
 import anyio.lowlevel
 import httpx
-import tiktoken
-from tokenizers import Tokenizer
 from typing_extensions import ParamSpec, TypeVar
 
 import litellm
@@ -32,6 +31,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.rust_bridge._native import Tokenizer, tiktoken_encoding_for_model
 from litellm.types.llms.anthropic import (
     AnthropicContentParamSource,
     AnthropicContentParamSourceFileId,
@@ -623,14 +623,14 @@ def _get_exact_count_function(
             tokenizer: Final[Tokenizer] = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
-                return len(tokenizer.encode_batch_fast([text])[0])
+                return tokenizer.count(text)
 
             return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":
             encoding: Final = openai_tokenizer_encoding(model)
 
             def encode_length(text: str) -> int:
-                return len(encoding.encode(text, disallowed_special=()))
+                return encoding.count(text)
 
             return _get_tiktoken_count_function(encode_length)
         else:
@@ -638,23 +638,28 @@ def _get_exact_count_function(
     else:
 
         def encode_length(text: str) -> int:
-            return len(_get_default_encoding().encode(text, disallowed_special=()))
+            return _get_default_encoding().count(text)
 
         return _get_tiktoken_count_function(encode_length)
 
 
-def openai_tokenizer_encoding(model: str) -> tiktoken.Encoding:
-    """The tiktoken encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
+@lru_cache(maxsize=8)
+def _native_tokenizer_for_encoding(name: str) -> Tokenizer:
+    return Tokenizer.from_tiktoken(name)
+
+
+def openai_tokenizer_encoding(model: str) -> Tokenizer:
+    """The native encoding `token_counter` uses for a model on the `openai_tokenizer` path."""
     from litellm.utils import print_verbose
 
     model_to_use: Final = _fix_model_name(model)
     if "gpt-4o" in model_to_use:
-        return tiktoken.get_encoding("o200k_base")
-    try:
-        return tiktoken.encoding_for_model(model_to_use)
-    except KeyError:
+        return _native_tokenizer_for_encoding("o200k_base")
+    name: Final = tiktoken_encoding_for_model(model_to_use)
+    if name is None:
         print_verbose("Warning: model not found. Using cl100k_base encoding.")
-        return tiktoken.get_encoding("cl100k_base")
+        return _native_tokenizer_for_encoding("cl100k_base")
+    return _native_tokenizer_for_encoding(name)
 
 
 def uses_legacy_message_accounting(model: str) -> bool:

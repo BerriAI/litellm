@@ -12,11 +12,10 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
-import tiktoken
-from tokenizers import Tokenizer
 
 import litellm
 from litellm.constants import TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS
+from litellm.rust_bridge._native import Tokenizer
 from litellm.litellm_core_utils.token_counter import openai_tokenizer_encoding
 from litellm.proxy.spend_tracking.budget_reservation import _count_input_tokens
 from litellm.rust_bridge import bindings, configuration
@@ -273,8 +272,8 @@ def test_rust_tokenizer_names_the_encoding_python_actually_counts_with(model: st
         "Hello, world! camelCase ABCdef \u00e9\u00e8 12345 \u3053\u3093\u306b\u3061\u306f <|endoftext|>\r\n" * 9
     )
     python_count: Final = litellm.token_counter(model=model, text=text)
-    cl100k_count: Final = len(tiktoken.get_encoding("cl100k_base").encode(text, disallowed_special=()))
-    o200k_count: Final = len(tiktoken.get_encoding("o200k_base").encode(text, disallowed_special=()))
+    cl100k_count: Final = Tokenizer.from_tiktoken("cl100k_base").count(text)
+    o200k_count: Final = Tokenizer.from_tiktoken("o200k_base").count(text)
     assert cl100k_count != o200k_count
     match bridge.rust_tokenizer(model):
         case "cl100k_base":
@@ -282,7 +281,7 @@ def test_rust_tokenizer_names_the_encoding_python_actually_counts_with(model: st
         case "o200k_base":
             assert python_count == o200k_count
         case "anthropic":
-            assert python_count == len(Tokenizer.from_str(claude_json_str).encode(text).ids)
+            assert python_count == Tokenizer.from_json(claude_json_str).count(text)
             assert python_count not in {cl100k_count, o200k_count}
         case None:
             pytest.fail(f"{model} must have a Rust tokenizer")
@@ -405,8 +404,8 @@ async def test_tiktoken_counts_long_text_exactly_where_python_chunks(
     litellm.rust(True)
     text: Final = "x " * 20_000
     body: Final = {"model": model, "messages": [{"role": "user", "content": text}]}
-    encoding: Final = tiktoken.get_encoding(tokenizer)
-    exact: Final = 3 + len(encoding.encode("user")) + len(encoding.encode(text)) + 3
+    encoding: Final = Tokenizer.from_tiktoken(tokenizer)
+    exact: Final = 3 + encoding.count("user") + encoding.count(text) + 3
     chunks: Final = -(-len(text) // TIKTOKEN_ENCODE_CHUNK_SIZE_CHARS)
 
     rust_count: Final = await bridge.count_input_tokens(json.dumps(body).encode(), tokenizer)

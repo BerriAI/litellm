@@ -35,9 +35,8 @@ from litellm.types.utils import (
 from ..common_utils import OllamaError, OllamaModelInfo, _convert_image
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.rust_bridge._native import Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -252,7 +251,7 @@ class OllamaConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -332,7 +331,7 @@ class OllamaConfig(BaseConfig):
         tokenizer: Final = encoding if encoding is not None else litellm.encoding
         prompt_tokens: Final = response_json.get(
             "prompt_eval_count",
-            len(tokenizer.encode(_prompt, disallowed_special=())),
+            len(tokenizer.encode(_prompt)),
         )
         completion_tokens: Final = response_json.get(
             "eval_count", len(response_json.get("message", dict()).get("content", ""))

@@ -2,15 +2,19 @@
 
 mod error;
 
+use std::collections::HashSet;
+
 pub use error::Error;
 
-pub struct HuggingFaceTokenizer(Box<tokenizers::Tokenizer>);
+pub struct HuggingFaceTokenizer {
+    tokenizer: Box<tokenizers::Tokenizer>,
+    special_token_ids: HashSet<u32>,
+}
 
 impl HuggingFaceTokenizer {
     pub fn from_json(json: &str) -> Result<Self, Error> {
         json.parse::<tokenizers::Tokenizer>()
-            .map(Box::new)
-            .map(Self)
+            .map(Self::new)
             .map_err(Error::Load)
     }
 
@@ -27,28 +31,47 @@ impl HuggingFaceTokenizer {
                 ..Default::default()
             }),
         )
-        .map(Box::new)
-        .map(Self)
+        .map(Self::new)
         .map_err(Error::Download)
     }
 
+    fn new(tokenizer: tokenizers::Tokenizer) -> Self {
+        let special_token_ids: HashSet<u32> = tokenizer
+            .get_added_tokens_decoder()
+            .into_iter()
+            .filter_map(|(id, token)| token.special.then_some(id))
+            .collect();
+        Self {
+            tokenizer: Box::new(tokenizer),
+            special_token_ids,
+        }
+    }
+
     pub fn count_tokens(&self, text: &str) -> Result<usize, Error> {
-        self.0
+        self.tokenizer
             .encode_fast(text, true)
             .map(|encoding| encoding.len())
             .map_err(Error::Encode)
     }
 
     pub fn encode(&self, text: &str) -> Result<Vec<u32>, Error> {
-        self.0
+        self.tokenizer
             .encode_fast(text, true)
             .map(|encoding| encoding.get_ids().to_vec())
             .map_err(Error::Encode)
     }
 
     pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, Error> {
-        self.0
-            .decode(ids, skip_special_tokens)
+        if !skip_special_tokens {
+            return self.tokenizer.decode(ids, false).map_err(Error::Decode);
+        }
+        let filtered_ids: Vec<u32> = ids
+            .iter()
+            .copied()
+            .filter(|id| !self.special_token_ids.contains(id))
+            .collect();
+        self.tokenizer
+            .decode(&filtered_ids, true)
             .map_err(Error::Decode)
     }
 
@@ -72,5 +95,38 @@ mod tests {
 
         assert!(tokenizer.decode(&ids, false).unwrap().contains("<SOS>"));
         assert_eq!(tokenizer.decode(&ids, true).unwrap(), "hello");
+    }
+
+    #[test]
+    fn decode_filters_special_added_tokens() {
+        let json = r#"{
+            "version": "1.0",
+            "truncation": null,
+            "padding": null,
+            "added_tokens": [
+                {
+                    "id": 1,
+                    "content": "<s>",
+                    "single_word": false,
+                    "lstrip": false,
+                    "rstrip": false,
+                    "normalized": false,
+                    "special": true
+                }
+            ],
+            "normalizer": null,
+            "pre_tokenizer": {"type": "Whitespace"},
+            "post_processor": null,
+            "decoder": null,
+            "model": {
+                "type": "WordLevel",
+                "vocab": {"<unk>": 0, "<s>": 1, "hello": 2},
+                "unk_token": "<unk>"
+            }
+        }"#;
+        let tokenizer = HuggingFaceTokenizer::from_json(json).unwrap();
+
+        assert!(!tokenizer.decode(&[1, 2], true).unwrap().contains("<s>"));
+        assert!(tokenizer.decode(&[1, 2], false).unwrap().contains("<s>"));
     }
 }

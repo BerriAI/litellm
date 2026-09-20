@@ -278,10 +278,7 @@ def completion(
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
         prompt_tokens: Final = len(encoding.encode(prompt))
         completion_tokens: Final = len(
-            encoding.encode(
-                model_response["choices"][0]["message"]["content"],
-                disallowed_special=(),
-            )
+            encoding.encode(model_response["choices"][0]["message"]["content"])
         )
 
         model_response.created = int(time.time())
