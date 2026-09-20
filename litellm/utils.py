@@ -1881,6 +1881,7 @@ def client(original_function):
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
 
+            kwargs["litellm_logging_obj"] = logging_obj
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -2845,6 +2846,14 @@ def supports_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None
         model=model,
         custom_llm_provider=custom_llm_provider,
         key="supports_prompt_cache_breakpoint",
+    )
+
+
+def supports_thinking_cache_preservation(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_thinking_cache_preservation",
     )
 
 
@@ -5342,6 +5351,13 @@ def _strip_stable_vertex_version(model_name) -> str:
     return re.sub(r"-\d+$", "", model_name)
 
 
+_DATED_SNAPSHOT_SUFFIX: Final = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+
+def _strip_dated_snapshot_suffix(model_name: str) -> str:
+    return _DATED_SNAPSHOT_SUFFIX.sub("", model_name)
+
+
 def _get_base_bedrock_model(model_name) -> str:
     """
     Get the base model from the given model name.
@@ -5389,7 +5405,7 @@ def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
         strip_finetune: Final = _strip_openai_finetune_model_name(model_name=model)
         return strip_finetune
     else:
-        return model
+        return _strip_dated_snapshot_suffix(model_name=model)
 
 
 # Global case-insensitive lookup map for model_cost (built eagerly at module import)
@@ -5815,6 +5831,7 @@ def _get_model_info_helper(
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
                 supports_prompt_cache_breakpoint=None,
+                supports_thinking_cache_preservation=None,
                 supports_computer_use=None,
                 supports_pdf_input=None,
             )
@@ -6087,6 +6104,7 @@ def _get_model_info_helper(
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
+                supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),

@@ -453,7 +453,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["model"] = response.model
 
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
+                inputs=inputs,
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
@@ -616,7 +616,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             if responses_so_far and hasattr(responses_so_far[0], "model") and responses_so_far[0].model:
                 inputs["model"] = responses_so_far[0].model
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-                inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
+                inputs=inputs,
                 request_data=request_data,
                 input_type="response",
                 logging_obj=litellm_logging_obj,
@@ -797,7 +797,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if responses_so_far and getattr(responses_so_far[0], "model", None):
             inputs["model"] = responses_so_far[0].model
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
-            inputs=self.with_response_context(inputs, request_data, guardrail_to_apply),
+            inputs=inputs,
             request_data=request_data,
             input_type="response",
             logging_obj=litellm_logging_obj,
