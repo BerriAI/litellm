@@ -3026,6 +3026,33 @@ jobs:
       - store_artifacts:
           path: test-results
 
+  unit:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Generate Prisma client
+          command: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+      - run:
+          name: Run unit tests
+          command: |
+            mkdir -p test-results/unit
+            mapfile -t files < <(find tests/unit -name 'test_*.py' | sort)
+            if [ "${#files[@]}" -eq 0 ]; then echo "tests/unit holds no test_*.py files; nothing to run"; exit 0; fi
+            set +e
+            LITELLM_LOCAL_MODEL_COST_MAP=True uv run --no-sync pytest "${files[@]}" -p no:rerunfailures -p no:pytest-retry --timeout=90 -n 4 --dist=loadscope --tb=short --junitxml=test-results/unit/junit.xml
+            status=$?
+            set -e
+            if [ "$status" -eq 5 ]; then echo "pytest collected no tests from tests/unit; passing"; exit 0; fi
+            exit "$status"
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+
 workflows:
   integration:
     jobs:
@@ -3047,6 +3074,8 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - unit:
+          filters: *main_branches
       - provider_replay_harness
       - base_sdk_install:
           filters: *main_branches

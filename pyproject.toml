@@ -196,6 +196,7 @@ dev = [
     "mypy==1.20.1",
     "keyring==25.7.0",
     "pytest==9.0.3",
+    "pytest-socket==0.8.1",
     "tomli==2.4.1; python_version < '3.11'",
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.3.0",
