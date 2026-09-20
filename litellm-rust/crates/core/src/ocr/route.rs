@@ -6,9 +6,8 @@ use litellm_host::{
     machine::{HostChannel, HostTokenProvider, MachineFault, RouteMachine, TokenRoute},
     route::Route,
 };
-use litellm_llms::{
-    base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse},
-    custom_httpx::llm_http_handler::OcrClient,
+use litellm_llms::base_llm::ocr::{
+    error::Error, handler::OcrClient, transformation::LiteLLMOcrResponse,
 };
 
 use super::handler::perform_ocr_request;
