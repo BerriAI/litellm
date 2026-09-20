@@ -880,7 +880,7 @@ async def invoke_agent_a2a(
                     logging_obj._enqueue_deferred_logging = None
                     _enqueue_fn()
 
-            response_dict: Final[dict[str, object]] = (
+            response_dict: Final[dict[str, Any]] = (
                 response.model_dump(mode="json", exclude_none=True)
                 if hasattr(response, "model_dump")
                 else response
