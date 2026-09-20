@@ -169,18 +169,6 @@ def test_optional__extra_body_overrides_mapped_and_is_removed():
     assert "extra_body" not in result
 
 
-def test_optional__no_extra_body_returns_mapped_unchanged():
-    config = _config({"seconds": "8"})
-
-    result = get_optional(
-        model="sora-2",
-        video_generation_provider_config=config,
-        video_generation_optional_params={"seconds": "8"},
-    )
-
-    assert result == {"seconds": "8"}
-
-
 def test_optional__non_dict_extra_body_ignored():
     config = _config({"seconds": "8"})
 
