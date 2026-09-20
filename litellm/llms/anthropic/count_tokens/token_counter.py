@@ -54,6 +54,16 @@ class AnthropicTokenCounter(BaseTokenCounter):
         deployment = deployment or {}
         litellm_params: Final = deployment.get("litellm_params", {})
 
+        # Skip the provider CountTokens API when the deployment points at a
+        # third-party Anthropic-compatible endpoint: the handler targets
+        # https://api.anthropic.com, so with a custom api_base the request
+        # would go to the wrong destination. Deployments that explicitly
+        # configure the official endpoint keep the provider API. Returning
+        # None lets the caller fall back to local token counting.
+        api_base: Final = litellm_params.get("api_base")
+        if api_base and api_base.rstrip("/") != "https://api.anthropic.com":
+            return None
+
         # Get Anthropic API key from deployment config or environment
         api_key = litellm_params.get("api_key")
         if not api_key:
@@ -81,7 +91,11 @@ class AnthropicTokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         except AnthropicError as e:
-            verbose_logger.warning("Anthropic CountTokens API error: status=%s, message=%s", e.status_code, e.message)
+            verbose_logger.warning(
+                "Anthropic CountTokens API error: status=%s, message=%s",
+                e.status_code,
+                e.message,
+            )
             return TokenCountResponse(
                 total_tokens=0,
                 request_model=request_model,
