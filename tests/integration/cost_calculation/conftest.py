@@ -10,12 +10,11 @@ from typing import Final
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from pydantic import BaseModel, ConfigDict
-
 from integration._support.client import JSON_OBJECT, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase, StoredResponse
+from pydantic import BaseModel, ConfigDict
 
 
 class CostBreakdown(BaseModel):
@@ -45,6 +44,7 @@ class CostRow(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     model_id: str | None = None
+    call_type: str | None = None
     metadata: CostMetadata | None = None
 
     @property
@@ -112,7 +112,7 @@ def poll_cost_row(key: str) -> CostRow:
 
     def read() -> CostRow | None:
         rows: Final = read_rows(
-            'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id '
+            'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id, call_type '
             'FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
             (digest,),
         )
@@ -126,7 +126,7 @@ def poll_cost_row(key: str) -> CostRow:
 def read_rows_now(key: str) -> tuple[CostRow, ...]:
     digest: Final = sha256(key.encode()).hexdigest()
     rows: Final = read_rows(
-        'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id '
+        'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id, call_type '
         'FROM "LiteLLM_SpendLogs" WHERE api_key=%s ORDER BY "startTime"',
         (digest,),
     )
