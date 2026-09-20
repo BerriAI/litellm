@@ -15,6 +15,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
     _restore_redacted_litellm_params,
     redact_sensitive_agent_litellm_params,
 )
+from litellm.types.agents import PatchAgentRequest
 
 # Obviously-fake stand-ins for a real AWS credential pair (LIT-6736 regression
 # fixtures) -- never a real key shape, and must never appear in any response.
@@ -1052,7 +1053,9 @@ async def test_add_agent_to_db_without_access_group_ids_leaves_column_to_its_def
         ({"access_group_ids": None}, []),
     ],
 )
-async def test_patch_agent_in_db_replaces_access_group_ids_when_provided(patch_body: dict, expected: list[str]):
+async def test_patch_agent_in_db_replaces_access_group_ids_when_provided(
+    patch_body: PatchAgentRequest, expected: list[str]
+):
     registry: Final = AgentRegistry()
     mock_prisma: Final = MagicMock()
     mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(

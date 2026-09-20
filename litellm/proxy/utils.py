@@ -8188,7 +8188,7 @@ async def _get_access_group_models(
 
 async def _agent_access_group_visible_models(
     user_api_key_dict: "UserAPIKeyAuth",
-    llm_router: Optional["Router"],
+    llm_router: "Router | None",
     include_model_access_groups: bool,
     return_wildcard_routes: bool,
     team_id: str | None,
