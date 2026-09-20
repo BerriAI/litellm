@@ -3,7 +3,7 @@ from __future__ import annotations
 import functools
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Final
@@ -134,8 +134,16 @@ def read_rows_now(key: str) -> tuple[CostRow, ...]:
 
 
 def poll_rows(key: str, count: int) -> tuple[CostRow, ...]:
+    return poll_rows_where(key, count, lambda _row: True)
+
+
+def poll_rows_where(
+    key: str,
+    count: int,
+    predicate: Callable[[CostRow], bool],
+) -> tuple[CostRow, ...]:
     result: Final = eventually(
-        lambda: read_rows_now(key),
+        lambda: tuple(row for row in read_rows_now(key) if predicate(row)),
         lambda rows: len(rows) >= count,
         seconds=60,
     )
