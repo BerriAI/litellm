@@ -12,6 +12,7 @@ from litellm.constants import (
     BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS,
     MAX_BASE64_LENGTH_FOR_LOGGING,
 )
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -286,6 +287,20 @@ def _set_duration_in_model_call_details(
         duration_ms: Final = (end_time - start_time).total_seconds() * 1000
         if logging_obj and hasattr(logging_obj, "model_call_details"):
             logging_obj.model_call_details["llm_api_duration_ms"] = duration_ms
+            metadata: Final[dict[str, object]] = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
+            recorded: Final = metadata.get("llm_api_timing_windows")
+            earlier: Final[tuple[tuple[float, float], ...]] = tuple(
+                (float(window[0]), float(window[1]))
+                for window in (recorded if isinstance(recorded, (list, tuple)) else ())
+                if isinstance(window, (list, tuple))
+                and len(window) == 2
+                and isinstance(window[0], (int, float))
+                and isinstance(window[1], (int, float))
+            )
+            metadata["llm_api_timing_windows"] = (
+                *earlier,
+                (start_time.timestamp(), end_time.timestamp()),
+            )
         else:
             verbose_logger.debug("`logging_obj` not found - unable to track `llm_api_duration_ms")
     except Exception as e:

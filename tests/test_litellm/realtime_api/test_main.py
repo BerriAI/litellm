@@ -499,3 +499,69 @@ async def test_arealtime_azure_env_beta_protocol_wins_over_a_ga_client(monkeypat
     assert await _azure_backend_url_dialed_for(_GA_CLIENT) == (
         "wss://my-endpoint.openai.azure.com/openai/realtime?api-version=2024-10-01-preview&deployment=gpt-realtime"
     )
+
+
+async def _vertex_provider_config_for(monkeypatch, model: str, vertex_location: str | None):
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+    from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import VertexChirpRealtimeConfig
+
+    captured: dict[str, object] = {}
+
+    def mock_get_llm_provider(model, api_base, api_key):
+        return model.removeprefix("vertex_ai/"), "vertex_ai", None, api_base
+
+    async def mock_token_resolver(**kwargs):
+        return "access-token", kwargs["project_id"]
+
+    async def mock_async_realtime(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main, "vertex_access_token_resolver", mock_token_resolver)
+    monkeypatch.setattr(realtime_main.base_llm_http_handler, "async_realtime", mock_async_realtime)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+    await realtime_main._arealtime.__wrapped__(
+        model=model,
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        query_params={"model": model, "intent": "transcription"},
+        vertex_credentials="fake-credentials",
+        vertex_project="proj-1",
+        vertex_location=vertex_location,
+    )
+    provider_config = captured["provider_config"]
+    assert isinstance(provider_config, (VertexAIRealtimeConfig, VertexChirpRealtimeConfig))
+    return provider_config, captured["model"]
+
+
+@pytest.mark.asyncio
+async def test_arealtime_routes_chirp_models_to_the_speech_to_text_backend(monkeypatch):
+    from litellm.llms.vertex_ai.audio_transcription.realtime_transformation import VertexChirpRealtimeConfig
+
+    provider_config, model = await _vertex_provider_config_for(monkeypatch, "vertex_ai/chirp_3", None)
+    assert isinstance(provider_config, VertexChirpRealtimeConfig)
+    assert model == "chirp_3"
+    assert provider_config.get_complete_url(None, model) == "us-speech.googleapis.com"
+    assert provider_config.validate_environment({}, model, "https://us-speech.googleapis.com") == {}
+
+
+@pytest.mark.asyncio
+async def test_arealtime_routes_chirp_models_to_the_configured_speech_region(monkeypatch):
+    provider_config, model = await _vertex_provider_config_for(monkeypatch, "vertex_ai/chirp_3", "europe-west4")
+    assert provider_config.get_complete_url(None, model) == "europe-west4-speech.googleapis.com"
+
+
+@pytest.mark.asyncio
+async def test_arealtime_keeps_gemini_live_on_the_vertex_realtime_websocket(monkeypatch):
+    from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
+
+    provider_config, model = await _vertex_provider_config_for(monkeypatch, "vertex_ai/gemini-live-2.5-flash", None)
+    assert isinstance(provider_config, VertexAIRealtimeConfig)
+    assert provider_config.get_complete_url(None, model).startswith("wss://us-central1-aiplatform.googleapis.com/")
+
+
+@pytest.mark.asyncio
+async def test_realtime_health_check_names_the_batch_mode_for_chirp_models():
+    with pytest.raises(ValueError, match="mode audio_transcription"):
+        await realtime_main._realtime_health_check(model="chirp_3", custom_llm_provider="vertex_ai", api_key=None)

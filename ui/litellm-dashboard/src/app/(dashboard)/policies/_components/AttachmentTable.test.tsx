@@ -45,7 +45,24 @@ describe("AttachmentTable", () => {
     expect(screen.getByText("Keys")).toBeInTheDocument();
     expect(screen.getByText("Models")).toBeInTheDocument();
     expect(screen.getByText("Tags")).toBeInTheDocument();
+    expect(screen.getByText("Priority")).toBeInTheDocument();
     expect(screen.getByText("Created At")).toBeInTheDocument();
+  });
+
+  it("should show the priority and a dash for attachments without one", () => {
+    const attachments = [
+      makeAttachment({ attachment_id: "att-prio0001", policy_name: "prioritized", priority: 5 }),
+      makeAttachment({ attachment_id: "att-prio0002", policy_name: "unprioritized" }),
+    ];
+    renderWithProviders(<AttachmentTable {...defaultProps} attachments={attachments} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    const prioritizedRow = rows.find((row) => within(row).queryByText("prioritized"));
+    const unprioritizedRow = rows.find((row) => within(row).queryByText("unprioritized"));
+    expect(within(prioritizedRow!).getByText("5")).toBeInTheDocument();
+    expect(within(unprioritizedRow!).queryByText("5")).not.toBeInTheDocument();
+    expect(within(unprioritizedRow!).getAllByText("-")).toHaveLength(
+      within(prioritizedRow!).getAllByText("-").length + 1,
+    );
   });
 
   it("should show skeleton rows when isLoading is true", () => {

@@ -18,13 +18,15 @@ dependencies = [
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",
-    "tiktoken>=0.8.0,<1.0",
+    "tiktoken>=0.8.0,<1.0; python_version < '3.14'",
+    "tiktoken>=0.12.0,<1.0; python_version >= '3.14'",
     "importlib-metadata>=8.0.0,<9.0",
     "tokenizers>=0.21.0,<1.0",
     "click>=8.0.0,<9.0",
     "jinja2>=3.1.6,<4.0",
     "aiohttp>=3.14.2,<4.0",
-    "pydantic>=2.10.0,<3.0.0",
+    "pydantic>=2.11.0,<3.0.0; python_version < '3.14'",
+    "pydantic>=2.12.0,<3.0.0; python_version >= '3.14'",
     "pydantic-settings>=2.14.1,<3.0",
     "jsonschema>=4.0.0,<5.0",
     "boto3>=1.43.1,<2.0",
@@ -66,9 +68,11 @@ proxy = [
     "boto3>=1.43.1,<2.0",
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
-    "mcp>=1.28.1,<2.0",
-    "litellm-proxy-extras==0.4.99",
-    "litellm-enterprise==0.1.68",
+    "mcp>=2.2.0,<3",
+    "httpx2>=2.5.0,<3",
+    "pydantic>=2.12.0,<3",
+    "litellm-proxy-extras==0.4.100",
+    "litellm-enterprise==0.1.69",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -113,7 +117,7 @@ utils = [
     "numpydoc>=1.8.0,<2.0",
 ]
 caching = ["diskcache>=5.6.3,<6.0"]
-mcp = ["mcp>=1.28.1,<2.0"]
+mcp = ["mcp>=2.2.0,<3", "httpx2>=2.5.0,<3", "pydantic>=2.12.0,<3"]
 # Driver for the MongoDB Atlas vector store; Atlas Vector Search has no HTTP query API.
 # The floor is 4.9 because that is the release AsyncMongoClient landed in.
 # SAML SSO for the admin UI. python3-saml pulls in xmlsec/lxml, whose wheels
@@ -128,6 +132,12 @@ mlflow = ["mlflow>=3.11.1,<4.0"]
 grpc = [
     # Newest non-yanked release older than the 30-day cutoff.
     "grpcio==1.78.0",
+]
+stt-vertex-chirp = [
+    # Google Cloud Speech-to-Text v2 streaming (gRPC) for Chirp models on
+    # /v1/realtime. Imported lazily inside the backend so litellm core stays
+    # usable without it.
+    "google-cloud-speech>=2.40.0,<3.0",
 ]
 stt-nvidia-riva = [
     # NVIDIA Riva STT provider (gRPC). These are imported lazily inside the
@@ -152,6 +162,7 @@ proxy-runtime = [
     # Keep these in a dedicated extra so uv-based images preserve the same
     # feature surface without forcing the base SDK install to grow.
     "google-cloud-aiplatform>=1.133.0,<2.0",
+    "google-cloud-speech>=2.40.0,<3.0",
     "google-genai>=1.37.0,<2.0",
     "anthropic[vertex]>=0.84.0,<1.0",
     "grpcio==1.78.0",
@@ -225,7 +236,7 @@ e2e-dev = [
     "websockets>=15.0.1,<16.0",
     "locust==2.45.0",
     "psutil==7.2.2",
-    "mcp>=1.28.1,<2.0",
+    "mcp>=2.2.0,<3",
 ]
 proxy-dev = [
     "prisma==0.11.0",
@@ -265,11 +276,11 @@ ci = [
     "blockbuster==1.5.26",
     "beautifulsoup4==4.14.3",
     "pylint==4.0.5",
-    "langchain-mcp-adapters==0.2.1",
     "langchain-openai==1.1.14",
     "langgraph>=1.2.4,<1.3.0",
     "langgraph-prebuilt>=1.1.0,<1.3.0",
     "claude-agent-sdk==0.1.44",
+    "google-cloud-speech==2.40.0",
 ]
 healthcheck = [
     "httpx==0.28.1",
@@ -291,6 +302,7 @@ editable-profile = "dev"
 include = [
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
+    "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/client/cli/commands/codex_base_instructions.md",
 ]
 exclude = [
@@ -328,9 +340,6 @@ litellm-enterprise = { workspace = true }
 
 [tool.uv.workspace]
 members = ["enterprise", "litellm-proxy-extras"]
-
-[tool.isort]
-profile = "black"
 
 [tool.commitizen]
 version = "1.103.0"

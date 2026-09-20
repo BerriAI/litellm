@@ -1,13 +1,14 @@
+use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_http::request::{has_header, string_headers};
+use litellm_llms::{
+    base_llm::audio_transcription::transformation::{BaseAudioTranscriptionConfig, RequestAuth},
+    bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG,
+};
+
 use super::Error;
-use super::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
-use crate::http_utils::{has_header, string_headers};
-use crate::litellm_core_utils::get_llm_provider_logic::{
-    CustomLlmProvider, get_custom_llm_provider,
+use crate::audio_transcription::types::{
+    AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
 };
-use litellm_providers::base_llm::audio_transcription::transformation::{
-    AudioTranscriptionAuth, BaseAudioTranscriptionConfig,
-};
-use litellm_providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
 
 fn provider_config(provider: &str) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
     if provider == "bedrock" {
@@ -40,11 +41,14 @@ pub fn prepare_audio_transcription_provider_call(
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers("audio transcription", request.extra_headers)?;
     let auth = config.auth_strategy(&model, &request.optional_params, &env_lookup)?;
-    if matches!(auth, AudioTranscriptionAuth::Bearer)
-        && !has_header(&headers, "authorization")
-        && let Some(api_key) = request.api_key
-    {
-        headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
+    match &auth {
+        RequestAuth::Bearer { token } if !has_header(&headers, "authorization") => {
+            headers.push(("Authorization".to_string(), format!("Bearer {token}")));
+        }
+        RequestAuth::Header { name, value } if !has_header(&headers, name) => {
+            headers.push(((*name).to_string(), value.clone()));
+        }
+        RequestAuth::Bearer { .. } | RequestAuth::Header { .. } | RequestAuth::AwsSigV4 { .. } => {}
     }
     if !has_header(&headers, "content-type") {
         headers.push(("Content-Type".to_string(), "application/json".to_string()));

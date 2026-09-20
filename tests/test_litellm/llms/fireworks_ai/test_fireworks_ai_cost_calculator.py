@@ -5,6 +5,11 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    calculate_prompt_caching_savings,
+    generic_cost_per_token,
+    get_token_type_cost_breakdown,
+)
 from litellm.llms.fireworks_ai.cost_calculator import cost_per_token
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
@@ -48,11 +53,13 @@ STANDARD_CACHE_READ_COST = 1.5e-08
 
 
 def _register_off_peak_model(
-    off_peak_pricing: OffPeakPricing, cache_read_cost: float | None = STANDARD_CACHE_READ_COST
+    off_peak_pricing: OffPeakPricing,
+    cache_read_cost: float | None = STANDARD_CACHE_READ_COST,
+    model: str = OFF_PEAK_MODEL,
 ) -> None:
-    litellm.model_cost = {  # test-quality-ok: the save/restore conftest returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
+    litellm.model_cost = {  # test-quality-ok: conftest restores litellm.model_cost after each test
         **litellm.model_cost,
-        f"fireworks_ai/{OFF_PEAK_MODEL}": {
+        f"fireworks_ai/{model}": {
             "litellm_provider": "fireworks_ai",
             "mode": "chat",
             "input_cost_per_token": STANDARD_INPUT_COST,
@@ -103,9 +110,8 @@ def test_off_peak_rates_left_unset_keep_the_standard_rates():
     assert math.isclose(completion_cost, 200 * STANDARD_OUTPUT_COST, rel_tol=1e-10)
 
 
-def test_off_peak_window_bills_cached_tokens_at_the_off_peak_input_rate_without_a_cache_read_rate():
-    """Most fireworks_ai price-map entries carry no cache_read_input_token_cost, so cached tokens
-    fall back to the input rate, and inside the window that has to be the off-peak one."""
+def test_off_peak_window_bills_cached_tokens_at_the_discounted_off_peak_input_rate_without_a_cache_read_rate():
+    """Entries without a cache-read rate use Fireworks' documented 50% cached-token discount."""
     _register_off_peak_model(
         {"hours_utc": OFF_PEAK_WINDOW, "input_cost_per_token": 1e-08, "output_cost_per_token": 2e-08},
         cache_read_cost=None,
@@ -114,12 +120,116 @@ def test_off_peak_window_bills_cached_tokens_at_the_off_peak_input_rate_without_
 
     prompt_cost, completion_cost = cost_per_token(model=OFF_PEAK_MODEL, usage=usage, current_time=INSIDE_WINDOW)
 
-    assert math.isclose(prompt_cost, 1000 * 1e-08, rel_tol=1e-10)
+    assert math.isclose(prompt_cost, (700 * 1e-08) + (300 * 1e-08 * 0.5), rel_tol=1e-10)
     assert math.isclose(completion_cost, 200 * 2e-08, rel_tol=1e-10)
 
     peak_prompt_cost, _ = cost_per_token(model=OFF_PEAK_MODEL, usage=usage, current_time=OUTSIDE_WINDOW)
 
-    assert math.isclose(peak_prompt_cost, 1000 * STANDARD_INPUT_COST, rel_tol=1e-10)
+    assert math.isclose(
+        peak_prompt_cost,
+        (700 * STANDARD_INPUT_COST) + (300 * STANDARD_INPUT_COST * 0.5),
+        rel_tol=1e-10,
+    )
+
+    no_input_rate_model = "accounts/fireworks/models/off-peak-no-input-rate-test"
+    _register_off_peak_model(
+        {"hours_utc": OFF_PEAK_WINDOW, "output_cost_per_token": 2e-08},
+        cache_read_cost=None,
+        model=no_input_rate_model,
+    )
+
+    standard_cache_prompt_cost, _ = cost_per_token(model=no_input_rate_model, usage=usage, current_time=INSIDE_WINDOW)
+
+    assert math.isclose(
+        standard_cache_prompt_cost,
+        (700 * STANDARD_INPUT_COST) + (300 * STANDARD_INPUT_COST * 0.5),
+        rel_tol=1e-10,
+    )
+
+
+def test_an_entry_without_a_cache_read_rate_bills_cached_tokens_at_the_documented_default_discount():
+    """Fireworks documents a default 50% cached-token discount for serverless models:
+    https://docs.fireworks.ai/guides/prompt-caching, accessed 2026-09-19."""
+    model = "accounts/fireworks/models/default-cache-read-test"
+    litellm.model_cost = {  # test-quality-ok: conftest restores litellm.model_cost after each test
+        **litellm.model_cost,
+        f"fireworks_ai/{model}": {
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+            "input_cost_per_token": INPUT_COST,
+            "output_cost_per_token": OUTPUT_COST,
+        },
+    }
+    usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
+
+    prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+
+    assert math.isclose(prompt_cost, (700 * INPUT_COST) + (300 * INPUT_COST * 0.5), rel_tol=1e-10)
+    assert prompt_cost < 1000 * INPUT_COST
+    assert math.isclose(completion_cost, 200 * OUTPUT_COST, rel_tol=1e-10)
+
+
+def test_fireworks_cache_read_rates_match_breakdown_and_caching_savings():
+    model = "accounts/fireworks/models/breakdown-cache-read-test"
+    litellm.model_cost = {  # test-quality-ok: the save/restore conftest returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
+        **litellm.model_cost,
+        f"fireworks_ai/{model}": {
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+            "input_cost_per_token": INPUT_COST,
+            "output_cost_per_token": OUTPUT_COST,
+        },
+    }
+    usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
+
+    breakdown = get_token_type_cost_breakdown(
+        model=model,
+        custom_llm_provider="fireworks_ai",
+        usage=usage,
+    )
+    prompt_cost, _ = cost_per_token(model=model, usage=usage)
+    savings = calculate_prompt_caching_savings(
+        model_info=litellm.get_model_info(model=model, custom_llm_provider="fireworks_ai"),
+        usage=usage,
+        custom_llm_provider="fireworks_ai",
+    )
+
+    assert math.isclose(breakdown.cache_read_cost, 300 * INPUT_COST * 0.5, rel_tol=1e-10)
+    assert math.isclose(breakdown.rates.cache_read_input_token_cost, INPUT_COST * 0.5, rel_tol=1e-10)
+    assert math.isclose(
+        (700 * breakdown.rates.input_cost_per_token) + breakdown.cache_read_cost, prompt_cost, rel_tol=1e-10
+    )
+    assert math.isclose(savings, 300 * INPUT_COST * 0.5, rel_tol=1e-10)
+
+
+def test_generic_cost_per_token_applies_fireworks_cache_read_default_with_or_without_model_info():
+    model = "accounts/fireworks/models/generic-cache-read-test"
+    litellm.model_cost = {  # test-quality-ok: conftest restores litellm.model_cost after each test
+        **litellm.model_cost,
+        f"fireworks_ai/{model}": {
+            "litellm_provider": "fireworks_ai",
+            "mode": "chat",
+            "input_cost_per_token": INPUT_COST,
+            "output_cost_per_token": OUTPUT_COST,
+        },
+    }
+    usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
+    expected_prompt_cost = (700 * INPUT_COST) + (300 * INPUT_COST * 0.5)
+
+    implicit_model_info_cost, _ = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="fireworks_ai",
+    )
+    explicit_model_info_cost, _ = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="fireworks_ai",
+        model_info=litellm.get_model_info(model=model, custom_llm_provider="fireworks_ai"),
+    )
+
+    assert math.isclose(implicit_model_info_cost, expected_prompt_cost, rel_tol=1e-10)
+    assert math.isclose(explicit_model_info_cost, expected_prompt_cost, rel_tol=1e-10)
 
 
 def test_off_peak_defaults_to_the_current_time():

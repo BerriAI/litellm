@@ -387,3 +387,39 @@ async def test_public_aocr_routes_through_dispatch(monkeypatch: pytest.MonkeyPat
         NATIVE_AOCR.reset()
     assert result is expected
     assert [request.model for request in captured] == ["mistral/mistral-ocr-latest"]
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected"),
+    (
+        ("aws_textract/detect-document-text", None, "native"),
+        ("detect-document-text", "aws_textract", "native"),
+        ("mistral/mistral-ocr-latest", None, "python"),
+        ("mistral/mistral-ocr-latest", "aws_textract", "native"),
+        ("aws_textract", None, "python"),
+    ),
+)
+def test_provider_scoped_rule_sees_the_provider_named_by_the_model_prefix(
+    model: str, custom_llm_provider: str | None, expected: str
+) -> None:
+    rules: Final[Rules] = (
+        Rule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
+        Rule(Route.OCR, Rollout.PYTHON_ONLY),
+    )
+    document: Final[Mapping[str, object]] = {"type": "image_url", "image_url": "data:image/png;base64,YQ=="}
+    kwargs: Final[Mapping[str, object]] = (
+        {} if custom_llm_provider is None else {"custom_llm_provider": custom_llm_provider}
+    )
+    python_response: Final = response("python")
+    native_response: Final = response("native")
+
+    result: Final = _DISPATCH.run(
+        (model, document),
+        kwargs,
+        python=lambda *_args, **_kwargs: python_response,
+        binding=ocr_binding(lambda *_args, **_kwargs: native_response),
+        native=lambda _hook, _request, _args, _kwargs: native_response,
+        rules=rules,
+    )
+
+    assert cast(OCRResponse, result).model == expected  # noqa: TID251  # sync dispatch returns the response itself
