@@ -2,6 +2,30 @@
 
 Code-style rules for writing tests under `tests/e2e/`. The harness already encodes the plumbing; your job is the feature-specific behavior, not reinventing it. For what a complete test must do (the lifecycle contract, asserting both recorded state and enforced behavior) and how to run a suite, see `CONTRIBUTING.md` in this directory. Repo-wide conventions live in the root `AGENTS.md`
 
+## What good looks like
+
+Only what a real provider proves. If it holds against our scripted upstream: `tests/integration`
+
+```python
+def test_pre_call_masks_pii_on_chat_completions(self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str) -> None:
+    name = f"e2e-presidio-pre-chat-{unique_marker()}"
+    _register_presidio(client, resources, name=name)
+    email = _fake_email()
+    _assert_eventually_masked(
+        lambda: client.chat(scoped_key, MODEL, _pii_prompt(unique_marker(), email), guardrails=[name], max_tokens=128),
+        _first_content,
+        email=email,
+    )
+```
+
+Marker per run, so a leftover guardrail cannot pass it. `resources.defer(...)` at creation, so a failed
+assert still tears down. Assert what the caller receives
+
+## Where it goes
+
+By the surface a customer would name: `guardrails`, `llm_translation`, `management`. Mutation check
+deferred; it needs credentials
+
 ## Suite folders
 
 Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family or behavior area. If you add a new folder, you must add a line here describing what kind of tests belong in it, so the layout stays self-describing. `gateway/` is the exception: it holds proxy configuration only and never tests
