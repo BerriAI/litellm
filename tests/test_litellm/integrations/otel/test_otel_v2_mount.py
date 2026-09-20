@@ -32,6 +32,7 @@ from litellm.integrations.otel.model.config import (  # noqa: E402
 from litellm.integrations.otel.mount import (  # noqa: E402
     LITELLM_TRACE_ID_HEADER,
     PASSTHROUGH_PREFIXES,
+    _install_trace_correlation,
     _passthrough_span_name_hook,
     instrument_fastapi_app,
 )
@@ -196,21 +197,18 @@ def test_proxy_response_omits_trace_id_without_a_recording_span(monkeypatch):
     assert LITELLM_TRACE_ID_HEADER not in response.headers
 
 
-def test_failed_instrumentation_leaves_trace_correlation_inactive(monkeypatch):
-    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
-    is_otel_v2_enabled.cache_clear()
+def test_failed_instrumentation_leaves_trace_correlation_inactive():
     app = fastapi.FastAPI()
 
     @app.get("/ping")
     async def ping():
         return fastapi.Response(headers={"x-litellm-call-id": "unrelated-call"})
 
-    monkeypatch.setattr(
-        FastAPIInstrumentor,
-        "instrument_app",
-        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("instrumentation unavailable")),
-    )
-    instrument_fastapi_app(app)
+    def fail_instrumentation() -> None:
+        raise RuntimeError("instrumentation unavailable")
+
+    with pytest.raises(RuntimeError, match="instrumentation unavailable"):
+        _install_trace_correlation(app, fail_instrumentation)
 
     unrelated_span = TracerProvider().get_tracer("unrelated").start_span("unrelated")
 
