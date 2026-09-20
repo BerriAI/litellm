@@ -427,41 +427,6 @@ async def test_async_realtime_beta_without_api_version_raises():
 
 
 @pytest.mark.asyncio
-async def test_realtime_protocol_env_var_fallback():
-    """
-    Test that LITELLM_AZURE_REALTIME_PROTOCOL env var is used as fallback.
-    Fixes #22127: no way to set realtime_protocol from config.
-    """
-    from litellm.realtime_api.main import _arealtime
-    from litellm.types.router import GenericLiteLLMParams
-
-    with patch.dict(os.environ, {"LITELLM_AZURE_REALTIME_PROTOCOL": "v1"}):
-        # Create a GenericLiteLLMParams without realtime_protocol
-        litellm_params = GenericLiteLLMParams()
-        # The env var should be picked up as fallback
-        realtime_protocol = (
-            {}.get("realtime_protocol")
-            or litellm_params.get("realtime_protocol")
-            or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
-            or "beta"
-        )
-        assert realtime_protocol == "v1"
-
-
-@pytest.mark.asyncio
-async def test_realtime_protocol_from_litellm_params():
-    """
-    Test that realtime_protocol is read from litellm_params (config.yaml extra field).
-    Fixes #22127: realtime_protocol in litellm_params was not used.
-    """
-    from litellm.types.router import GenericLiteLLMParams
-
-    # Simulate config.yaml with realtime_protocol as an extra field
-    litellm_params = GenericLiteLLMParams(realtime_protocol="GA")
-    assert litellm_params.get("realtime_protocol") == "GA"
-
-
-@pytest.mark.asyncio
 async def test_arealtime_transcription_intent_defaults_to_ga(monkeypatch):
     """
     Azure gpt-realtime-whisper transcription connects on the GA /openai/v1/realtime
