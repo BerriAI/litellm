@@ -2867,20 +2867,13 @@ class MCPServerManager:
             normalize_server_name(value) for value in (*iter_known_server_prefixes(server), server.name) if value
         )
 
-    def _server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
+    def server_exposes_tool(self, server: MCPServer, tool_name: str) -> bool:
         owned: Final = self._owned_mapping_values(server)
         mapped_owners: Final = (
             self.tool_name_to_mcp_server_name_mapping.get(spelling)
             for spelling in iter_known_tool_name_spellings(tool_name, server)
         )
         return any(owner is not None and normalize_server_name(owner) in owned for owner in mapped_owners)
-
-    def has_listed_tools(self, server: MCPServer) -> bool:
-        """True once this worker holds at least one tool row for ``server``."""
-        owned: Final = self._owned_mapping_values(server)
-        return any(
-            normalize_server_name(owner) in owned for owner in self.tool_name_to_mcp_server_name_mapping.values()
-        )
 
     def _known_prefix_to_server(self) -> Mapping[str, MCPServer]:
         """Every prefix form a tool name may carry, keyed to its server; a form two servers share
@@ -6135,7 +6128,7 @@ class MCPServerManager:
         if mcp_server is None:
             raise ValueError(f"Tool {name} not found")
 
-        if resolved_by_server_name_only and not self._server_exposes_tool(mcp_server, name):
+        if resolved_by_server_name_only and not self.server_exposes_tool(mcp_server, name):
             raise ValueError(f"Tool {name} not found")
 
         return mcp_server
@@ -6514,7 +6507,7 @@ class MCPServerManager:
         if matched is not None:
             matched_prefix, original_tool_name = matched
             matched_server: Final = prefix_to_server.get(matched_prefix)
-            if matched_server is not None and self._server_exposes_tool(matched_server, original_tool_name):
+            if matched_server is not None and self.server_exposes_tool(matched_server, original_tool_name):
                 return matched_server
 
         return None

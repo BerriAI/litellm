@@ -2890,6 +2890,7 @@ if MCP_AVAILABLE:
 
     async def _list_tools_before_first_call(
         server: MCPServer | None,
+        tool_name: str,
         allowed_mcp_servers: list[MCPServer],
         user_api_key_auth: UserAPIKeyAuth | None,
         mcp_auth_header: str | None,
@@ -2897,13 +2898,15 @@ if MCP_AVAILABLE:
         oauth2_headers: dict[str, str] | None,
         raw_headers: dict[str, str] | None,
     ) -> None:
-        """Fill this worker's tool rows for ``server`` with the caller's own credentials.
+        """List ``server`` with the caller's own credentials when it does not yet expose ``tool_name`` here.
 
         The startup fill skips a server whose upstream wants the caller's token, and mcp 2 no
         longer lists before an uncached tools/call, so a worker that has not served tools/list
-        would otherwise answer 404 for every tool on that server.
+        for this caller would otherwise answer 404 for a tool the caller can see. Gating on the
+        requested tool, not on any prior listing, keeps callers with different upstream catalogs
+        from masking each other.
         """
-        if server is None or global_mcp_server_manager.has_listed_tools(server):
+        if server is None or global_mcp_server_manager.server_exposes_tool(server, tool_name):
             return
         if all(allowed.server_id != server.server_id for allowed in allowed_mcp_servers):
             return
@@ -2984,8 +2987,14 @@ if MCP_AVAILABLE:
             if requested_server is not None and not name_is_prefixed
             else global_mcp_server_manager.server_owning_tool_name_prefix(name)
         )
+        first_call_tool_name: Final = (
+            name
+            if first_call_target is None or (requested_server is not None and not name_is_prefixed)
+            else strip_known_server_prefix(name, first_call_target)
+        )
         await _list_tools_before_first_call(
             server=first_call_target,
+            tool_name=first_call_tool_name,
             allowed_mcp_servers=allowed_mcp_servers,
             user_api_key_auth=user_api_key_auth,
             mcp_auth_header=mcp_auth_header,
