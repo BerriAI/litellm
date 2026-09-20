@@ -1,17 +1,9 @@
 use std::sync::Arc;
 
-#[cfg(any(
-    feature = "token-counter-fast",
-    feature = "token-counter-huggingface",
-    feature = "token-counter-tiktoken"
-))]
+#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
 use std::{num::NonZero, thread::available_parallelism};
 
-#[cfg(any(
-    feature = "token-counter-fast",
-    feature = "token-counter-huggingface",
-    feature = "token-counter-tiktoken"
-))]
+#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
 use litellm_host_python::release_gil;
 use litellm_host_python::run_async;
 use litellm_token_counter::{
@@ -41,45 +33,45 @@ pub(crate) struct TokenCounter {
 impl TokenCounter {
     #[new]
     fn new(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
-        #[cfg(feature = "token-counter-huggingface")]
+        #[cfg(feature = "huggingface")]
         {
             Self::load(py, || CoreTokenCounter::from_json(tokenizer_json))
         }
-        #[cfg(not(feature = "token-counter-huggingface"))]
+        #[cfg(not(feature = "huggingface"))]
         {
             let _ = (py, tokenizer_json);
             Err(RustBridgeDeclined::new_err(
-                "tokenizer backend requires the token-counter-huggingface feature",
+                "tokenizer backend requires the huggingface feature",
             ))
         }
     }
 
     #[staticmethod]
     fn from_json_fast(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
-        #[cfg(feature = "token-counter-fast")]
+        #[cfg(feature = "fast")]
         {
             Self::load(py, || CoreTokenCounter::from_json_fast(tokenizer_json))
         }
-        #[cfg(not(feature = "token-counter-fast"))]
+        #[cfg(not(feature = "fast"))]
         {
             let _ = (py, tokenizer_json);
             Err(RustBridgeDeclined::new_err(
-                "tokenizer backend requires the token-counter-fast feature",
+                "tokenizer backend requires the fast feature",
             ))
         }
     }
 
     #[staticmethod]
     fn from_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<Self> {
-        #[cfg(feature = "token-counter-tiktoken")]
+        #[cfg(feature = "tiktoken")]
         {
             Self::load(py, || CoreTokenCounter::from_tiktoken(encoding))
         }
-        #[cfg(not(feature = "token-counter-tiktoken"))]
+        #[cfg(not(feature = "tiktoken"))]
         {
             let _ = (py, encoding);
             Err(RustBridgeDeclined::new_err(
-                "tokenizer backend requires the token-counter-tiktoken feature",
+                "tokenizer backend requires the tiktoken feature",
             ))
         }
     }
@@ -105,11 +97,7 @@ impl TokenCounter {
 }
 
 impl TokenCounter {
-    #[cfg(any(
-        feature = "token-counter-fast",
-        feature = "token-counter-huggingface",
-        feature = "token-counter-tiktoken"
-    ))]
+    #[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
     fn load(
         py: Python<'_>,
         load: impl FnOnce() -> Result<CoreTokenCounter, Error> + Send,
@@ -122,11 +110,7 @@ impl TokenCounter {
     }
 }
 
-#[cfg(any(
-    feature = "token-counter-fast",
-    feature = "token-counter-huggingface",
-    feature = "token-counter-tiktoken"
-))]
+#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
 fn encode_parallelism() -> usize {
     available_parallelism().map_or(1, NonZero::get)
 }
