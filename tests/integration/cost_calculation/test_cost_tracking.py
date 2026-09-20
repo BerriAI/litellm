@@ -209,6 +209,35 @@ def _assert_exact(
         assert_total_is_sum_of_components(row, breakdown, case.name)
 
 
+def _assert_recount(case: CostTrackingTestCase, expected: RecountExpected, row: CostRow) -> None:
+    assert row.prompt_tokens is not None and row.prompt_tokens > 0, (
+        f"{case.name}: recount case counted no input tokens: prompt_tokens={row.prompt_tokens}"
+    )
+    assert row.completion_tokens is not None and row.completion_tokens > 0, (
+        f"{case.name}: recount case counted no output tokens: completion_tokens={row.completion_tokens}"
+    )
+    if expected.prompt_tokens is not None:
+        assert row.prompt_tokens == expected.prompt_tokens, (
+            f"{case.name}: prompt_tokens {row.prompt_tokens} != pinned {expected.prompt_tokens}"
+        )
+    if expected.completion_tokens is not None:
+        assert row.completion_tokens == expected.completion_tokens, (
+            f"{case.name}: completion_tokens {row.completion_tokens} != pinned {expected.completion_tokens}"
+        )
+    if expected.min_completion_tokens is not None:
+        assert row.completion_tokens >= expected.min_completion_tokens, (
+            f"{case.name}: completion_tokens {row.completion_tokens} < minimum {expected.min_completion_tokens}"
+        )
+    recount: Final = row.prompt_tokens * expected.recount.input_cost_per_token + (
+        row.completion_tokens * expected.recount.output_cost_per_token
+    )
+    assert row.spend is not None and approx_equal(row.spend, recount), (
+        f"{case.name}: spend {row.spend} != recount {recount} at map rates"
+    )
+    assert row.breakdown is not None, f"{case.name}: no cost_breakdown persisted"
+    assert_total_is_sum_of_components(row, row.breakdown, case.name)
+
+
 @pytest.mark.parametrize("case", _CASES)
 def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) -> None:
     marker: Final = sha256(case.name.encode()).hexdigest()[:12]
@@ -251,20 +280,6 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             if case.fallback_from is not None
             else None
         )
-        if isinstance(expected, ExactExpected) and expected.rollups:
-            assert deployment is not None
-            rollup_deployments: Final = tuple(
-                register_scenario_deployment(
-                    scenario,
-                    case,
-                    marker,
-                    key,
-                    marker_suffix=f"-r{index}",
-                    model_name=deployment.model_name,
-                )
-                for index in (2, 3)
-            )
-            assert len(rollup_deployments) == 2
         model_name: Final = (
             case.model
             if passthrough_provider in {"gemini", "anthropic"}
@@ -334,18 +349,8 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                 assert len(frames) == case.disconnect_after_frames
             row: Final = poll_cost_row(key)
             assert isinstance(expected, RecountExpected)
-            if expected.prompt_tokens is not None:
-                assert row.prompt_tokens == expected.prompt_tokens
-            if expected.completion_tokens is not None:
-                assert row.completion_tokens == expected.completion_tokens
-            assert row.prompt_tokens is not None and row.prompt_tokens > 0
-            assert row.completion_tokens is not None and row.completion_tokens > 0
-            recount: Final = row.prompt_tokens * expected.recount.input_cost_per_token + (
-                row.completion_tokens * expected.recount.output_cost_per_token
-            )
-            assert row.spend is not None and approx_equal(row.spend, recount)
-            assert row.breakdown is not None
-            assert_total_is_sum_of_components(row, row.breakdown, case.name)
+            assert row.status == "success", f"{case.name}: disconnect row status was {row.status}"
+            _assert_recount(case, expected, row)
             return
         responses: Final = tuple(
             (
@@ -374,21 +379,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         rows: Final = poll_rows(key) if len(responses) > 1 else (poll_cost_row(key),)
         if isinstance(expected, RecountExpected):
             row: Final = rows[0]
-            assert row.prompt_tokens is not None and row.prompt_tokens > 0, (
-                f"{case.name}: recount case counted no input tokens: prompt_tokens={row.prompt_tokens}"
-            )
-            assert row.completion_tokens is not None and row.completion_tokens > 0, (
-                f"{case.name}: recount case counted no output tokens: completion_tokens={row.completion_tokens}"
-            )
-            recount: Final = row.prompt_tokens * case.expected.recount.input_cost_per_token + (
-                row.completion_tokens * case.expected.recount.output_cost_per_token
-            )
-            assert row.spend is not None and approx_equal(row.spend, recount), (
-                f"{case.name}: spend {row.spend} != recount {recount} at map rates"
-            )
-            breakdown: Final = row.breakdown
-            assert breakdown is not None, f"{case.name}: no cost_breakdown persisted"
-            assert_total_is_sum_of_components(row, breakdown, case.name)
+            _assert_recount(case, expected, row)
             return
         assert isinstance(expected, ExactExpected)
         if fallback_deployment is not None:
@@ -423,8 +414,8 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert approx_equal(rollups.team_spend, target_spend)
             assert approx_equal(rollups.user_spend, target_spend)
             assert approx_equal(rollups.end_user_spend, target_spend)
-            assert approx_equal(rollups.daily_user.spend or 0.0, target_spend)
-            assert approx_equal(rollups.daily_team.spend or 0.0, target_spend)
+            assert approx_equal(rollups.daily_user.spend, target_spend)
+            assert approx_equal(rollups.daily_team.spend, target_spend)
             assert rollups.daily_user.prompt_tokens == expected.prompt_tokens * 3
             assert rollups.daily_user.completion_tokens == expected.completion_tokens * 3
             assert rollups.daily_user.api_requests == 3

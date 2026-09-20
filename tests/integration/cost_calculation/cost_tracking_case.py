@@ -177,6 +177,7 @@ class RecountExpected(BaseModel):
     recount: RecountRates
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    min_completion_tokens: int | None = None
 
 
 class FailureDetails(BaseModel):
@@ -463,6 +464,23 @@ def data_errors() -> tuple[str, ...]:
             or not isinstance(case.expected, RecountExpected)
         )
     )
+    invalid_rollup_ids: Final = sorted(
+        case.name
+        for case in CASES
+        if isinstance(case.expected, ExactExpected)
+        and case.expected.rollups
+        and "$UNIQUE_ID" not in case.response.model_dump_json()
+    )
+    invalid_pinned_tool_ids: Final = sorted(
+        case.name
+        for case in CASES
+        if isinstance(case.expected, RecountExpected)
+        and (case.expected.prompt_tokens is not None or case.expected.completion_tokens is not None)
+        and any(
+            marker in case.response.model_dump_json()
+            for marker in ('"id": "call_$REQUEST_ID"', '"id": "toolu_$REQUEST_ID"')
+        )
+    )
     return tuple(
         message
         for message in (
@@ -478,6 +496,10 @@ def data_errors() -> tuple[str, ...]:
             f"invalid passthrough opt-outs: {invalid_opt_outs}" if invalid_opt_outs else None,
             f"invalid fallback responses: {invalid_fallbacks}" if invalid_fallbacks else None,
             f"invalid disconnect cases: {invalid_disconnects}" if invalid_disconnects else None,
+            f"rollup responses lack $UNIQUE_ID: {invalid_rollup_ids}" if invalid_rollup_ids else None,
+            f"pinned tool IDs contain $REQUEST_ID: {invalid_pinned_tool_ids}"
+            if invalid_pinned_tool_ids
+            else None,
         )
         if message is not None
     )
