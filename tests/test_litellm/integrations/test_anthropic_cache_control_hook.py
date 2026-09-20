@@ -2596,6 +2596,42 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         _, result_sys = self._inject(self._marked_user_turns(3), kwargs)
         assert result_sys == expected_system
 
+    @pytest.mark.parametrize(
+        "params,tools,marked_turns,injected",
+        [
+            ({"extra_body": {"tools": [MARKED_TOOL_TOP_LEVEL]}}, [MARKED_TOOL_TOP_LEVEL], 2, 1),
+            ({"extra_body": {"tools": [UNMARKED_TOOL]}}, [MARKED_TOOL_TOP_LEVEL], 3, 1),
+            ({"extra_body": {"tools": [MARKED_TOOL_TOP_LEVEL]}}, [UNMARKED_TOOL], 3, 0),
+            ({"extra_body": {"cache_control": EPHEMERAL}, "cache_control": EPHEMERAL}, None, 2, 1),
+        ],
+        ids=["same_marked_tool_both_ways", "extra_body_unmarks", "extra_body_marks", "root_cache_control_both_ways"],
+    )
+    def test_chat_cap_counts_extra_body_fields_in_place_of_the_direct_ones(self, params, tools, marked_turns, injected):
+        """``extra_body`` is merged over the request on the wire, so its ``tools`` and
+        ``cache_control`` replace the direct ones rather than adding to them."""
+        messages = [{"role": "system", "content": "sys"}, *self._marked_user_turns(marked_turns)]
+        params = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED), **copy.deepcopy(params)}
+        self._seed(params, copy.deepcopy(messages), tools=tools)
+        processed = self._chat(params, copy.deepcopy(messages))
+        assert _count_cache_control(processed) == marked_turns + injected
+
+    @pytest.mark.parametrize(
+        "kwargs,tools,marked_turns,expected_system",
+        [
+            ({"extra_body": {"tools": [MARKED_V1_TOOL]}}, [MARKED_V1_TOOL], 2, [{"type": "text", "text": "sys", "cache_control": EPHEMERAL}]),
+            ({"extra_body": {"tools": [UNMARKED_V1_TOOL]}}, [MARKED_V1_TOOL], 3, [{"type": "text", "text": "sys", "cache_control": EPHEMERAL}]),
+            ({"extra_body": {"tools": [MARKED_V1_TOOL]}}, [UNMARKED_V1_TOOL], 3, "sys"),
+            ({"extra_body": {"cache_control": EPHEMERAL}, "cache_control": EPHEMERAL}, None, 2, [{"type": "text", "text": "sys", "cache_control": EPHEMERAL}]),
+        ],
+        ids=["same_marked_tool_both_ways", "extra_body_unmarks", "extra_body_marks", "root_cache_control_both_ways"],
+    )
+    def test_v1_messages_cap_counts_extra_body_fields_in_place_of_the_direct_ones(
+        self, kwargs, tools, marked_turns, expected_system
+    ):
+        kwargs = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED), **copy.deepcopy(kwargs)}
+        _, result_sys = self._inject(self._marked_user_turns(marked_turns), kwargs, tools=tools)
+        assert result_sys == expected_system
+
     def test_v1_messages_automatic_defaults_stand_down_for_root_cache_control(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
         root_cache_control = {"type": "ephemeral"}
