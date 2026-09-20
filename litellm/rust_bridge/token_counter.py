@@ -77,7 +77,14 @@ def rust_tokenizer(model: str) -> RustTokenizer | None:
     if kind is not None or uses_legacy_message_accounting(model):
         return None
     encoding: Final = openai_tokenizer_encoding(model).name
-    if encoding in {"cl100k_base", "o200k_base", "o200k_harmony", "p50k_base", "p50k_edit", "r50k_base"}:
+    if encoding in (
+        "cl100k_base",
+        "o200k_base",
+        "o200k_harmony",
+        "p50k_base",
+        "p50k_edit",
+        "r50k_base",
+    ):
         return cast(RustTokenizer, encoding)
     return None
 
