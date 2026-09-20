@@ -648,32 +648,36 @@ def _fix_enum_types(schema, depth=0):
 
 
 def _convert_const_to_enum(schema: object, depth: int = 0) -> None:
-    if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
-    if not isinstance(schema, dict):
-        return
+    pending: Final[list[tuple[object, int]]] = [  # mutable-ok: depth-capped worklist avoids recursive schema traversal
+        (schema, depth)
+    ]
+    while pending:
+        current_schema, current_depth = pending.pop()
+        if current_depth > DEFAULT_MAX_RECURSE_DEPTH:
+            raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+        if not isinstance(current_schema, dict):
+            continue
 
-    if "const" in schema and "enum" not in schema:
-        const_value: Final = schema["const"]
-        if not isinstance(const_value, str):
-            raise ValueError("Gemini function declarations only support string const values.")
-        del schema["const"]
-        schema["type"] = "string"
-        schema["enum"] = [const_value]
+        if "const" in current_schema and "enum" not in current_schema:
+            const_value: Final = current_schema["const"]
+            if not isinstance(const_value, str):
+                raise ValueError("Gemini function declarations only support string const values.")
+            del current_schema["const"]
+            current_schema["type"] = "string"
+            current_schema["enum"] = [const_value]  # mutable-ok: JSON Schema enum values must be an array
 
-    properties: Final = schema.get("properties")
-    if isinstance(properties, dict):
-        for value in properties.values():
-            _convert_const_to_enum(value, depth + 1)
+        next_depth: Final = current_depth + 1
+        properties: Final = current_schema.get("properties")
+        if isinstance(properties, dict):
+            pending.extend((value, next_depth) for value in properties.values())
 
-    items: Final = schema.get("items")
-    if items is not None:
-        _convert_const_to_enum(items, depth + 1)
+        items: Final = current_schema.get("items")
+        if items is not None:
+            pending.append((items, next_depth))
 
-    any_of: Final = schema.get("anyOf")
-    if isinstance(any_of, list):
-        for value in any_of:
-            _convert_const_to_enum(value, depth + 1)
+        any_of: Final = current_schema.get("anyOf")
+        if isinstance(any_of, list):
+            pending.extend((value, next_depth) for value in any_of)
 
 
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
