@@ -126,6 +126,10 @@ tests:
       # connected to the wrong host, or to none. The entrypoint builds the URL
       # from these four instead, percent-encoding as it goes, which is what the
       # proxy Deployment already relies on for this same case.
+      # The bug class, pinned independently of how a URL would be spelled: the
+      # Job must carry no connection string at all for this case.
+      - notMatchRegexRaw:
+          pattern: "postgresql://"
       - notContains:
           path: spec.template.spec.containers[0].env
           content:

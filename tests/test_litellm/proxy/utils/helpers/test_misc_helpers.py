@@ -1,3 +1,5 @@
+from urllib.parse import unquote, urlparse
+
 import pytest
 from fastapi import HTTPException
 
@@ -165,6 +167,45 @@ def test_construct_database_url_from_env_vars_special_chars_encoded(monkeypatch)
         "username_encoded": True,
         "password_encoded": True,
         "name_encoded": True,
+    }
+
+
+@pytest.mark.parametrize(
+    "password",
+    [
+        "p@ss/w+rd=",
+        "s3cr#t?x",
+        "a:b@c",
+        "br[ack]ets",
+    ],
+)
+def test_construct_database_url_from_env_vars_round_trips_special_char_password(monkeypatch, password):
+    """A client parsing the assembled URL gets back the host, database and password we put in.
+
+    The Helm chart's bundled-postgres path hands these four variables to the migrations Job
+    instead of building a URL itself, because interpolating a password holding any of
+    : / ? # [ ] @ + into a connection string silently moves the host and truncates the
+    password. Asserting the parse, rather than the encoded spelling, is what says the
+    resulting URL still addresses the right database.
+    """
+    monkeypatch.setenv("DATABASE_HOST", "release-postgresql")
+    monkeypatch.setenv("DATABASE_USERNAME", "litellm")
+    monkeypatch.setenv("DATABASE_PASSWORD", password)
+    monkeypatch.setenv("DATABASE_NAME", "litellm")
+    monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
+
+    parsed = urlparse(construct_database_url_from_env_vars())
+
+    assert {
+        "hostname": parsed.hostname,
+        "database": parsed.path.lstrip("/"),
+        "username": unquote(parsed.username or ""),
+        "password": unquote(parsed.password or ""),
+    } == {
+        "hostname": "release-postgresql",
+        "database": "litellm",
+        "username": "litellm",
+        "password": password,
     }
 
 
