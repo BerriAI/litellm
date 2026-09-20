@@ -3522,6 +3522,31 @@ def test_cost_per_token_region_name_applies_to_provider_prefixed_model(_local_mo
     )
 
 
+def test_completion_cost_mantle_native_messages_prices_claude_from_the_bedrock_row(_local_model_cost_map):
+    """Mantle's native Messages API answers with Anthropic's canonical model name and the proxy
+    resolves a Mantle region for every call, so the first cost candidate is
+    bedrock_mantle/<region>/claude-sonnet-5. That name has no row of its own and must fall through to
+    the deployment's bare Bedrock row instead of stopping on an unpriced capability rule at $0."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-sonnet-5",
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    row = litellm.model_cost["anthropic.claude-sonnet-5"]
+    expected = 100 * row["input_cost_per_token"] + 10 * row["output_cost_per_token"]
+    assert expected > 0
+
+    for region_name in ("us-east-1", None):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model="bedrock_mantle/anthropic.claude-sonnet-5",
+            custom_llm_provider="bedrock_mantle",
+            region_name=region_name,
+        ) == pytest.approx(expected)
+
+
 def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
     """An explicit base_model keeps pricing on that model's own key even when the request carries a
     region with different regional rates, so the private provider model never widens region pricing."""

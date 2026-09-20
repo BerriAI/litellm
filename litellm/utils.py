@@ -5624,6 +5624,12 @@ def _get_model_info_from_generalization(
     return None
 
 
+def _strip_mantle_region_prefix(model: str) -> str:
+    from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
+
+    return split_mantle_region_prefix(model)[1]
+
+
 def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> PotentialModelNamesAndCustomLLMProvider:
     if custom_llm_provider is None:
         # Get custom_llm_provider
@@ -5656,17 +5662,22 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
 
         split_model = strip_bedrock_routing_prefix(split_model)
 
+    region_free_split_model: Final = (
+        _strip_mantle_region_prefix(split_model) if custom_llm_provider == "bedrock_mantle" else split_model
+    )
     provider_model_info: Final = (
-        ProviderConfigManager.get_provider_model_info(model=split_model, provider=LlmProviders(custom_llm_provider))
+        ProviderConfigManager.get_provider_model_info(
+            model=region_free_split_model, provider=LlmProviders(custom_llm_provider)
+        )
         if custom_llm_provider in LlmProvidersSet
         else None
     )
     provider_cost_key: Final = (
-        provider_model_info.get_model_cost_key(split_model) if provider_model_info is not None else None
+        provider_model_info.get_model_cost_key(region_free_split_model) if provider_model_info is not None else None
     )
 
     return PotentialModelNamesAndCustomLLMProvider(
-        split_model=split_model,
+        split_model=region_free_split_model,
         combined_model_name=combined_model_name,
         stripped_model_name=stripped_model_name,
         combined_stripped_model_name=combined_stripped_model_name,
