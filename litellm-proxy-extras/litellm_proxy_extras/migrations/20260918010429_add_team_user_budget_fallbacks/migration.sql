@@ -1,0 +1,2 @@
+ALTER TABLE "LiteLLM_TeamTable" ADD COLUMN IF NOT EXISTS "budget_fallbacks" JSONB NOT NULL DEFAULT '{}';
+ALTER TABLE "LiteLLM_UserTable" ADD COLUMN IF NOT EXISTS "budget_fallbacks" JSONB NOT NULL DEFAULT '{}';

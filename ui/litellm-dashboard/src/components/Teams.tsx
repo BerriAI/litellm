@@ -49,6 +49,7 @@ import BudgetDurationDropdown, {
 import { Organization, getDefaultTeamSettings, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import { ModelMaxBudget, ModelMaxBudgetField } from "./key_team_helpers/ModelMaxBudgetEditor";
+import { BudgetFallbacksEditor } from "./key_team_helpers/BudgetFallbacksEditor";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./search_tools/SearchToolSelector";
 import SkillSelector from "./skills/SkillSelector";
@@ -273,6 +274,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
+  const [budgetFallbacks, setBudgetFallbacks] = useState<Record<string, string[]>>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
@@ -351,6 +353,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
     setLoggingSettings([]);
     setModelAliases({});
     setModelMaxBudget({});
+    setBudgetFallbacks({});
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
   };
@@ -530,6 +533,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
 
         if (Object.keys(modelMaxBudget).length > 0) {
           formValues.model_max_budget = modelMaxBudget;
+        }
+
+        if (Object.keys(budgetFallbacks).length > 0) {
+          formValues.budget_fallbacks = budgetFallbacks;
         }
 
         // Add router_settings if any are defined
@@ -828,6 +835,19 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                     availableModels={userModels}
                     hint="Cap this team's spend on individual models, each with its own reset window. Every key on the team shares the cap unless the key sets its own budget for that model."
                   />
+                  <Field>
+                    <FieldLabel>
+                      {labelWithHint(
+                        "Budget Fallbacks",
+                        "When a model exceeds its per-model budget, requests automatically reroute to fallback models instead of failing",
+                      )}
+                    </FieldLabel>
+                    <BudgetFallbacksEditor
+                      value={budgetFallbacks}
+                      onChange={setBudgetFallbacks}
+                      availableModels={userModels}
+                    />
+                  </Field>
                   <FormField control={form.control} name="tpm_limit" label="Tokens per minute Limit (TPM)">
                     {({ ref, value, ...field }) => (
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />

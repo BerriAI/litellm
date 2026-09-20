@@ -2153,6 +2153,9 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     router_settings: RouterSettingsDict | None = None
     access_group_ids: list[str] | None = None
     budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
+    budget_fallbacks: dict[str, list[str]] | None = (
+        None  # per-model fallback chain when the team's model budget is exhausted
+    )
     default_team_member_models: list[str] | None = None  # default allowed_models seeded onto new team members
     model_max_budget: GenericBudgetConfigType | None = Field(
         default=None,
@@ -3136,6 +3139,7 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     team_max_budget: float | None = None
     team_soft_budget: float | None = None
     team_model_max_budget: dict[str, object] | None = None
+    team_budget_fallbacks: dict[str, list[str]] | None = None
     team_models: list = []
     team_blocked: bool = False
     soft_budget: float | None = None
@@ -3216,6 +3220,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # and validating it here would make one malformed row fail auth outright.
     # resolve_model_budget validates the single entry a request actually needs.
     user_model_max_budget: Mapping[str, object] | None = None
+    user_budget_fallbacks: dict[str, list[str]] | None = None
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path
@@ -3408,6 +3413,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     object_permission: LiteLLM_ObjectPermissionTable | None = None
     model_max_budget: Mapping[str, object] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
+    budget_fallbacks: dict[str, list[str]] | None = None
 
 
 from litellm.models.config import LiteLLM_Config as LiteLLM_Config  # noqa: E402

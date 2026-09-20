@@ -493,6 +493,77 @@ async def test_custom_auth_honors_key_level_model_access_restriction_denied_with
         assert exc.value.type == ProxyErrorTypes.key_model_access_denied
 
 
+@pytest.mark.asyncio
+async def test_custom_auth_end_user_check_uses_model_after_user_budget_fallback():
+    """A user-level budget fallback rewrites request_data["model"]; the
+    end-user model budget check must run against the rewritten model, not
+    the pre-rewrite one."""
+    valid_token = UserAPIKeyAuth(
+        token="test_token",
+        user_id="user-1",
+        end_user_id="eu-1",
+        end_user_model_max_budget={"model-a": {"max_budget": 1}},
+    )
+    request_data = {"model": "model-a"}
+    request = MagicMock()
+    request.scope = {}
+
+    end_user_calls: list[str] = []
+
+    async def is_user_within_model_budget(user_id=None, user_model_max_budget=None, model=""):
+        if model == "model-b":
+            return True
+        raise litellm.BudgetExceededError(current_cost=10, max_budget=1)
+
+    async def is_end_user_within_model_budget(end_user_id=None, end_user_model_max_budget=None, model=""):
+        end_user_calls.append(model)
+        if model == "model-b":
+            return True
+        raise litellm.BudgetExceededError(current_cost=10, max_budget=1)
+
+    limiter = MagicMock()
+    limiter.is_user_within_model_budget = is_user_within_model_budget
+    limiter.is_end_user_within_model_budget = is_end_user_within_model_budget
+    limiter.is_key_within_model_budget = AsyncMock(return_value=True)
+    limiter.is_team_within_model_budget = AsyncMock(return_value=True)
+
+    user_row = MagicMock()
+    user_row.model_max_budget = {"model-a": {"max_budget": 1}}
+    user_row.budget_fallbacks = {"model-a": ["model-b"]}
+
+    with (
+        patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(  # test-quality-ok: the function reads the user row seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth._read_user_budget_row",
+            new=AsyncMock(return_value=user_row),
+        ),
+        patch(  # test-quality-ok: the function reads the end-user lookup seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth._lookup_end_user_and_apply_budget",
+            new=AsyncMock(side_effect=lambda **kwargs: (kwargs["valid_token"], None)),
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.llm_model_list", []),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+        patch("litellm.proxy.proxy_server.model_max_budget_limiter", limiter),  # test-quality-ok: function reads proxy_server globals internally; no injection point
+    ):
+        await _run_post_custom_auth_checks(
+            valid_token=valid_token,
+            request=request,
+            request_data=request_data,
+            route="/v1/chat/completions",
+            parent_otel_span=None,
+        )
+
+    assert request_data["model"] == "model-b"
+    assert end_user_calls and set(end_user_calls) == {"model-b"}
+
+
 def _proxy_server_attrs_for_custom_auth(*, user_custom_auth):
     """
     Build the minimal set of proxy_server module attributes that
@@ -7412,6 +7483,16 @@ class TestCheckKeyModelBudgetWithFallback:
         request.scope = {}
         return request
 
+    def _exceeded_limiter(self, within: frozenset, error=None):
+        async def check(user_api_key_dict=None, model="", **_kwargs):
+            if model in within:
+                return True
+            raise error or litellm.BudgetExceededError(current_cost=10, max_budget=5)
+
+        limiter = AsyncMock()
+        limiter.is_key_within_model_budget.side_effect = check
+        return limiter
+
     @pytest.mark.asyncio
     async def test_within_budget_does_not_reroute(self):
         valid_token = UserAPIKeyAuth(
@@ -7440,11 +7521,7 @@ class TestCheckKeyModelBudgetWithFallback:
             token="test-key",
             budget_fallbacks={"gpt-4o": ["gpt-4o-mini", "claude-haiku"]},
         )
-        limiter = AsyncMock()
-        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(
-            current_cost=10, max_budget=5
-        )
-        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
+        limiter = self._exceeded_limiter(within=frozenset({"gpt-4o-mini"}))
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
@@ -7457,8 +7534,8 @@ class TestCheckKeyModelBudgetWithFallback:
         )
 
         assert request_data["model"] == "gpt-4o-mini"
-        limiter.get_fallback_model_within_budget.assert_awaited_once_with(
-            user_api_key_dict=valid_token, model="gpt-4o"
+        limiter.is_key_within_model_budget.assert_any_await(
+            user_api_key_dict=valid_token, model="gpt-4o-mini"
         )
         # the rerouted model must be visible to a later, separate
         # `_read_request_body` call on the same `request` (route handlers
@@ -7474,7 +7551,6 @@ class TestCheckKeyModelBudgetWithFallback:
         limiter = AsyncMock()
         original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
         limiter.is_key_within_model_budget.side_effect = original_error
-        limiter.get_fallback_model_within_budget.return_value = None
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
@@ -7503,7 +7579,9 @@ class TestCheckKeyModelBudgetWithFallback:
         limiter = AsyncMock()
         original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
         limiter.is_key_within_model_budget.side_effect = original_error
-        limiter.get_fallback_model_within_budget.return_value = "restricted-model"
+        limiter.is_key_within_model_budget.side_effect = self._exceeded_limiter(
+            within=frozenset({"restricted-model"}), error=original_error
+        ).is_key_within_model_budget.side_effect
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
@@ -7540,10 +7618,9 @@ class TestCheckKeyModelBudgetWithFallback:
             budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
         )
         limiter = AsyncMock()
-        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(
-            current_cost=10, max_budget=5
-        )
-        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
+        limiter.is_key_within_model_budget.side_effect = self._exceeded_limiter(
+            within=frozenset({"gpt-4o-mini"})
+        ).is_key_within_model_budget.side_effect
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
@@ -7577,7 +7654,9 @@ class TestCheckKeyModelBudgetWithFallback:
         limiter = AsyncMock()
         original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
         limiter.is_key_within_model_budget.side_effect = original_error
-        limiter.get_fallback_model_within_budget.return_value = "restricted-model"
+        limiter.is_key_within_model_budget.side_effect = self._exceeded_limiter(
+            within=frozenset({"restricted-model"}), error=original_error
+        ).is_key_within_model_budget.side_effect
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
 
@@ -7610,10 +7689,9 @@ class TestCheckKeyModelBudgetWithFallback:
             budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
         )
         limiter = AsyncMock()
-        limiter.is_key_within_model_budget.side_effect = litellm.BudgetExceededError(
-            current_cost=10, max_budget=5
-        )
-        limiter.get_fallback_model_within_budget.return_value = "gpt-4o-mini"
+        limiter.is_key_within_model_budget.side_effect = self._exceeded_limiter(
+            within=frozenset({"gpt-4o-mini"})
+        ).is_key_within_model_budget.side_effect
         request_data = {"model": "gpt-4o"}
         request = self._make_request()
         request.scope["path_params"] = {"model": "gpt-4o"}
@@ -7662,6 +7740,377 @@ class TestCheckKeyModelBudgetWithFallback:
 
         assert exc_info.value is original_error
         assert "model" not in request_data
+
+
+class TestEntityModelBudgetFallbacks:
+    """Team and user `budget_fallbacks` must reroute a request whose model
+    exceeds that entity's per-model budget to the first fallback still within
+    the same entity's budget, using the same authorization and request
+    rewrite the key-level fallback applies."""
+
+    def _make_request(self):
+        request = MagicMock()
+        request.scope = {}
+        return request
+
+    def _exceeded_except(self, within: frozenset):
+        async def is_team_within_model_budget(
+            team_id=None, team_model_max_budget=None, key_model_max_budget=None, model=""
+        ):
+            if model in within:
+                return True
+            raise litellm.BudgetExceededError(current_cost=10, max_budget=5)
+
+        async def is_user_within_model_budget(user_id=None, user_model_max_budget=None, model=""):
+            if model in within:
+                return True
+            raise litellm.BudgetExceededError(current_cost=10, max_budget=5)
+
+        limiter = MagicMock()
+        limiter.is_team_within_model_budget = is_team_within_model_budget
+        limiter.is_user_within_model_budget = is_user_within_model_budget
+        return limiter
+
+    @pytest.mark.asyncio
+    async def test_team_fallback_reroutes_request_to_fallback_model(self):
+        from litellm.proxy.auth.user_api_key_auth import _check_team_model_budget
+
+        valid_token = UserAPIKeyAuth(
+            team_id="team-1",
+            team_model_max_budget={"gpt-4o": {"max_budget": 5}},
+            team_budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        )
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+        request.scope["path_params"] = {"model": "gpt-4o"}
+
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ):
+            await _check_team_model_budget(
+                valid_token=valid_token,
+                model_max_budget_limiter=self._exceeded_except(frozenset({"gpt-4o-mini"})),
+                models=["gpt-4o"],
+                request_data=request_data,
+                request=request,
+            )
+
+        assert request_data["model"] == "gpt-4o-mini"
+        _, cached_body = request.scope["parsed_body"]
+        assert cached_body["model"] == "gpt-4o-mini"
+        assert request.scope["path_params"]["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_user_fallback_reroutes_request_to_fallback_model(self):
+        from litellm.proxy.auth.user_api_key_auth import _check_user_model_budget
+
+        valid_token = UserAPIKeyAuth(
+            user_id="user-1",
+            user_model_max_budget={"gpt-4o": {"max_budget": 5}},
+            user_budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        )
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ):
+            await _check_user_model_budget(
+                valid_token=valid_token,
+                model_max_budget_limiter=self._exceeded_except(frozenset({"gpt-4o-mini"})),
+                models=["gpt-4o"],
+                request_data=request_data,
+                request=request,
+            )
+
+        assert request_data["model"] == "gpt-4o-mini"
+        _, cached_body = request.scope["parsed_body"]
+        assert cached_body["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_team_fallback_not_in_team_models_raises_original_error(self):
+        from litellm.proxy.auth.user_api_key_auth import _check_team_model_budget
+
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+
+        async def over_budget(team_id=None, team_model_max_budget=None, key_model_max_budget=None, model=""):
+            if model == "restricted-model":
+                return True
+            raise original_error
+
+        limiter = MagicMock()
+        limiter.is_team_within_model_budget = over_budget
+        valid_token = UserAPIKeyAuth(
+            team_id="team-1",
+            team_models=["gpt-4o"],
+            team_model_max_budget={"gpt-4o": {"max_budget": 5}},
+            team_budget_fallbacks={"gpt-4o": ["restricted-model"]},
+        )
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _check_team_model_budget(
+                    valid_token=valid_token,
+                    model_max_budget_limiter=limiter,
+                    models=["gpt-4o"],
+                    request_data=request_data,
+                    request=request,
+                    llm_model_list=None,
+                    llm_router=None,
+                )
+
+        assert exc_info.value is original_error
+        assert request_data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_user_without_fallbacks_raises_original_error(self):
+        from litellm.proxy.auth.user_api_key_auth import _check_user_model_budget
+
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+
+        async def over_budget(**_kwargs):
+            raise original_error
+
+        limiter = MagicMock()
+        limiter.is_user_within_model_budget = over_budget
+        valid_token = UserAPIKeyAuth(
+            user_id="user-1",
+            user_model_max_budget={"gpt-4o": {"max_budget": 5}},
+        )
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await _check_user_model_budget(
+                valid_token=valid_token,
+                model_max_budget_limiter=limiter,
+                models=["gpt-4o"],
+                request_data=request_data,
+                request=request,
+            )
+
+        assert exc_info.value is original_error
+        assert request_data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_team_fallback_only_tries_first_within_budget_fallback(self):
+        """A fallback that is itself over budget must be skipped, matching the
+        key-level semantics of first-in-order chain resolution."""
+        from litellm.proxy.auth.user_api_key_auth import _check_team_model_budget
+
+        valid_token = UserAPIKeyAuth(
+            team_id="team-1",
+            team_model_max_budget={"gpt-4o": {"max_budget": 5}},
+            team_budget_fallbacks={"gpt-4o": ["gpt-4o-mini", "claude-haiku"]},
+        )
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ):
+            await _check_team_model_budget(
+                valid_token=valid_token,
+                model_max_budget_limiter=self._exceeded_except(frozenset({"claude-haiku"})),
+                models=["gpt-4o"],
+                request_data=request_data,
+                request=request,
+            )
+
+        assert request_data["model"] == "claude-haiku"
+
+    @pytest.mark.asyncio
+    async def test_team_fallback_over_key_budget_raises_original_error(self):
+        """A team fallback must still satisfy the key's per-model budget;
+        without that check a team chain could reroute to a model the key
+        already spent out on."""
+        from litellm.proxy.auth.user_api_key_auth import _check_team_model_budget
+
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+
+        async def is_team_within_model_budget(
+            team_id=None, team_model_max_budget=None, key_model_max_budget=None, model=""
+        ):
+            if model == "gpt-4o-mini":
+                return True
+            raise original_error
+
+        async def is_key_within_model_budget(user_api_key_dict=None, model=""):
+            raise litellm.BudgetExceededError(current_cost=10, max_budget=1)
+
+        limiter = MagicMock()
+        limiter.is_team_within_model_budget = is_team_within_model_budget
+        limiter.is_key_within_model_budget = is_key_within_model_budget
+        valid_token = UserAPIKeyAuth(
+            token="sk-test",
+            model_max_budget={"gpt-4o-mini": {"max_budget": 1}},
+            team_id="team-1",
+            team_model_max_budget={"gpt-4o": {"max_budget": 5}},
+            team_budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        )
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _check_team_model_budget(
+                    valid_token=valid_token,
+                    model_max_budget_limiter=limiter,
+                    models=["gpt-4o"],
+                    request_data=request_data,
+                    request=request,
+                )
+
+        assert exc_info.value is original_error
+        assert request_data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_team_fallback_over_user_budget_skips_to_next_fallback(self):
+        """A fallback over the internal user's budget must be skipped so the
+        next in-scope fallback in the chain is used."""
+        from litellm.proxy.auth.user_api_key_auth import _check_team_model_budget
+
+        async def is_team_within_model_budget(
+            team_id=None, team_model_max_budget=None, key_model_max_budget=None, model=""
+        ):
+            if model in ("gpt-4o-mini", "claude-haiku"):
+                return True
+            raise litellm.BudgetExceededError(current_cost=10, max_budget=5)
+
+        async def is_user_within_model_budget(user_id=None, user_model_max_budget=None, model=""):
+            if model == "claude-haiku":
+                return True
+            raise litellm.BudgetExceededError(current_cost=10, max_budget=1)
+
+        limiter = MagicMock()
+        limiter.is_team_within_model_budget = is_team_within_model_budget
+        limiter.is_user_within_model_budget = is_user_within_model_budget
+        valid_token = UserAPIKeyAuth(
+            user_id="user-1",
+            user_model_max_budget={"gpt-4o-mini": {"max_budget": 1}},
+            team_id="team-1",
+            team_model_max_budget={"gpt-4o": {"max_budget": 5}},
+            team_budget_fallbacks={"gpt-4o": ["gpt-4o-mini", "claude-haiku"]},
+        )
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ):
+            await _check_team_model_budget(
+                valid_token=valid_token,
+                model_max_budget_limiter=limiter,
+                models=["gpt-4o"],
+                request_data=request_data,
+                request=request,
+            )
+
+        assert request_data["model"] == "claude-haiku"
+
+    @pytest.mark.asyncio
+    async def test_user_fallback_over_end_user_budget_raises_original_error(self):
+        """A user-level fallback must still satisfy the end user's per-model
+        budget; without that check it reroutes to a model the end user
+        already spent out on."""
+        from litellm.proxy.auth.user_api_key_auth import _check_user_model_budget
+
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+
+        async def is_user_within_model_budget(user_id=None, user_model_max_budget=None, model=""):
+            if model == "gpt-4o-mini":
+                return True
+            raise original_error
+
+        async def is_end_user_within_model_budget(end_user_id=None, end_user_model_max_budget=None, model=""):
+            raise litellm.BudgetExceededError(current_cost=10, max_budget=1)
+
+        limiter = MagicMock()
+        limiter.is_user_within_model_budget = is_user_within_model_budget
+        limiter.is_end_user_within_model_budget = is_end_user_within_model_budget
+        valid_token = UserAPIKeyAuth(
+            user_id="user-1",
+            user_model_max_budget={"gpt-4o": {"max_budget": 5}},
+            user_budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+            end_user_id="eu-1",
+            end_user_model_max_budget={"gpt-4o-mini": {"max_budget": 1}},
+        )
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _check_user_model_budget(
+                    valid_token=valid_token,
+                    model_max_budget_limiter=limiter,
+                    models=["gpt-4o"],
+                    request_data=request_data,
+                    request=request,
+                )
+
+        assert exc_info.value is original_error
+        assert request_data["model"] == "gpt-4o"
+
+    @pytest.mark.asyncio
+    async def test_key_fallback_over_team_budget_raises_original_error(self):
+        """A key-level fallback must still satisfy the team's per-model
+        budget; without that check a key chain could reroute to a model the
+        team already spent out on."""
+        original_error = litellm.BudgetExceededError(current_cost=10, max_budget=5)
+
+        async def is_key_within_model_budget(user_api_key_dict=None, model=""):
+            if model == "gpt-4o-mini":
+                return True
+            raise original_error
+
+        async def is_team_within_model_budget(
+            team_id=None, team_model_max_budget=None, key_model_max_budget=None, model=""
+        ):
+            raise litellm.BudgetExceededError(current_cost=10, max_budget=1)
+
+        limiter = MagicMock()
+        limiter.is_key_within_model_budget = is_key_within_model_budget
+        limiter.is_team_within_model_budget = is_team_within_model_budget
+        valid_token = UserAPIKeyAuth(
+            token="sk-test",
+            model_max_budget={"gpt-4o": {"max_budget": 5}},
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+            team_id="team-1",
+            team_model_max_budget={"gpt-4o-mini": {"max_budget": 1}},
+        )
+        request_data = {"model": "gpt-4o"}
+        request = self._make_request()
+
+        with patch(  # test-quality-ok: the fallback check reads the limiter seam from module scope; no injection point
+            "litellm.proxy.auth.user_api_key_auth.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ):
+            with pytest.raises(litellm.BudgetExceededError) as exc_info:
+                await _check_key_model_budget_with_fallback(
+                    valid_token=valid_token,
+                    model_max_budget_limiter=limiter,
+                    model_name="gpt-4o",
+                    request_data=request_data,
+                    request=request,
+                )
+
+        assert exc_info.value is original_error
+        assert request_data["model"] == "gpt-4o"
 
 
 @pytest.mark.asyncio

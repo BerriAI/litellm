@@ -15650,6 +15650,51 @@ def test_team_model_cap_authority_skips_omitted_field_malformed_rows_and_proxy_a
     assert outcomes == (None, None, None)
 
 
+def test_team_admin_cannot_change_team_budget_fallbacks() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_budget_fallbacks_update_authority
+
+    with pytest.raises(HTTPException) as exc:
+        _check_team_budget_fallbacks_update_authority(
+            data=UpdateTeamRequest(team_id="t1", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin"),
+            existing_budget_fallbacks={},
+        )
+    assert exc.value.status_code == 403
+    assert "proxy admin" in exc.value.detail["error"]
+
+
+def test_proxy_admin_can_change_team_budget_fallbacks() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_budget_fallbacks_update_authority
+
+    assert (
+        _check_team_budget_fallbacks_update_authority(
+            data=UpdateTeamRequest(team_id="t1", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            existing_budget_fallbacks={},
+        )
+        is None
+    )
+
+
+def test_team_budget_fallbacks_authority_skips_unchanged_and_omitted() -> None:
+    from litellm.proxy.management_endpoints.team_endpoints import _check_team_budget_fallbacks_update_authority
+
+    team_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin")
+    outcomes = (
+        _check_team_budget_fallbacks_update_authority(
+            data=UpdateTeamRequest(team_id="t1", budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]}),
+            user_api_key_dict=team_admin,
+            existing_budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        ),
+        _check_team_budget_fallbacks_update_authority(
+            data=UpdateTeamRequest(team_id="t1", max_budget=1.0),
+            user_api_key_dict=team_admin,
+            existing_budget_fallbacks={},
+        ),
+    )
+    assert outcomes == (None, None)
+
+
 @pytest.mark.asyncio
 async def test_new_team_persists_model_max_budget(mock_db_client, mock_admin_auth):
     mock_db_client.jsonify_team_object = lambda db_data: db_data
@@ -16319,6 +16364,104 @@ async def test_team_info_reports_what_the_caller_may_edit(caller, org_admin, ena
         )
 
     assert response["team_info"].caller_edit_access.model_dump(mode="json") == expected
+
+
+@pytest.mark.asyncio
+async def test_new_team_persists_budget_fallbacks(mock_db_client, mock_admin_auth):
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
+
+    team_create_result = MagicMock(team_id="team-fallbacks")
+    team_create_result.model_dump.return_value = {"team_id": "team-fallbacks"}
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    _wire_team_create_tx(mock_db_client)
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    await new_team(
+        data=NewTeamRequest(
+            team_alias="fallbacks-team",
+            budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+        ),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    team_data = mock_team_create.call_args.kwargs["data"]
+    assert team_data["budget_fallbacks"] == {"gpt-4o": ["gpt-4o-mini"]}
+
+
+@pytest.mark.asyncio
+async def test_update_team_replaces_budget_fallbacks(disable_audit_logging_for_mocked_team):
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1")
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client,  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.proxy_server.llm_router"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.proxy_server.user_api_key_cache"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.proxy_server.proxy_logging_obj"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch("litellm.proxy.management_endpoints.team_endpoints._cache_team_object"),  # test-quality-ok: same module-global mocking every test in this file already uses
+        patch(  # test-quality-ok: same module-global mocking every test in this file already uses
+            "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table",
+            new=AsyncMock(side_effect=lambda **kwargs: kwargs["updated_kv"]),
+        ),
+    ):
+        mock_existing_team = MagicMock()
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "team-1",
+            "team_alias": "team",
+            "metadata": {},
+            "budget_fallbacks": {"gpt-4o": ["claude-haiku"]},
+        }
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_existing_team)
+        mock_updated_team = MagicMock()
+        mock_updated_team.team_id = "team-1"
+        mock_updated_team.model_dump.return_value = {"team_id": "team-1"}
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=mock_updated_team)
+
+        import json as _json
+
+        def _jsonify(db_data):
+            return {
+                k: (_json.dumps(v) if isinstance(v, dict) else v)
+                for k, v in db_data.items()
+            }
+
+        mock_prisma_client.jsonify_team_object = MagicMock(side_effect=_jsonify)
+
+        await update_team(
+            data=UpdateTeamRequest(
+                team_id="team-1",
+                budget_fallbacks={"gpt-4o": ["gpt-4o-mini"]},
+            ),
+            http_request=Mock(spec=Request),
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        update_call = mock_prisma_client.db.litellm_teamtable.update.call_args
+        written = update_call.kwargs["data"]
+        assert _json.loads(written["budget_fallbacks"]) == {"gpt-4o": ["gpt-4o-mini"]}
 
 
 def test_member_budget_patch_maps_temp_budget_fields() -> None:

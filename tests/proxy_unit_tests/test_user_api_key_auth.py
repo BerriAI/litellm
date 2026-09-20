@@ -1508,7 +1508,7 @@ async def test_user_budget_lookup_tolerates_an_unreadable_user():
     the budget being looked up lives on the row that could not be read.
     """
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget
+    from litellm.proxy.auth.user_api_key_auth import _read_user_budget_row
 
     prisma_client = MagicMock()
 
@@ -1516,7 +1516,7 @@ async def test_user_budget_lookup_tolerates_an_unreadable_user():
         "litellm.proxy.auth.user_api_key_auth.get_user_object",
         new=AsyncMock(side_effect=Exception("No user table row")),
     ):
-        budget = await _read_user_model_max_budget(
+        row = await _read_user_budget_row(
             user_id="user-with-no-row",
             prisma_client=prisma_client,
             user_api_key_cache=DualCache(),
@@ -1524,7 +1524,7 @@ async def test_user_budget_lookup_tolerates_an_unreadable_user():
             proxy_logging_obj=MagicMock(),
         )
 
-    assert budget is None
+    assert row is None
 
 
 @pytest.mark.asyncio
@@ -1546,7 +1546,7 @@ async def test_user_budget_lookup_is_also_unenforced_when_the_database_is_down()
     the absent case and a change to both auth paths.
     """
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget
+    from litellm.proxy.auth.user_api_key_auth import _read_user_budget_row
 
     db_down = ValueError("User doesn't exist in db. 'user_id'=u-1. Got error - Connection refused")
 
@@ -1554,7 +1554,7 @@ async def test_user_budget_lookup_is_also_unenforced_when_the_database_is_down()
         "litellm.proxy.auth.user_api_key_auth.get_user_object",
         new=AsyncMock(side_effect=db_down),
     ):
-        budget = await _read_user_model_max_budget(
+        row = await _read_user_budget_row(
             user_id="u-1",
             prisma_client=MagicMock(),
             user_api_key_cache=DualCache(),
@@ -1562,14 +1562,14 @@ async def test_user_budget_lookup_is_also_unenforced_when_the_database_is_down()
             proxy_logging_obj=MagicMock(),
         )
 
-    assert budget is None
+    assert row is None
 
 
 @pytest.mark.asyncio
 async def test_user_budget_lookup_returns_the_budget_when_the_row_reads():
     """Positive control: the tolerance above must not be swallowing every result."""
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy.auth.user_api_key_auth import _read_user_model_max_budget
+    from litellm.proxy.auth.user_api_key_auth import _read_user_budget_row
 
     stored = {"claude-opus-4-8": {"budget_limit": 1.0, "time_period": "18h"}}
     user_obj = MagicMock()
@@ -1579,7 +1579,7 @@ async def test_user_budget_lookup_returns_the_budget_when_the_row_reads():
         "litellm.proxy.auth.user_api_key_auth.get_user_object",
         new=AsyncMock(return_value=user_obj),
     ):
-        budget = await _read_user_model_max_budget(
+        row = await _read_user_budget_row(
             user_id="user-1",
             prisma_client=MagicMock(),
             user_api_key_cache=DualCache(),
@@ -1587,7 +1587,7 @@ async def test_user_budget_lookup_returns_the_budget_when_the_row_reads():
             proxy_logging_obj=MagicMock(),
         )
 
-    assert budget == stored
+    assert row is not None and row.model_max_budget == stored
 
 
 def test_zero_cost_models_skip_the_user_budget_check_on_every_path():

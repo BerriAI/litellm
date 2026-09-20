@@ -4616,6 +4616,8 @@ async def generate_key_helper_fn(
             # Only when supplied: the SSO and default-key callers reach this with the
             # empty default, and writing that would clear an existing user's budgets.
             user_data["model_max_budget"] = model_max_budget_json
+        if budget_fallbacks is not None:
+            user_data["budget_fallbacks"] = budget_fallbacks_json
         key_data: Final = {
             "token": token,
             "key_alias": key_alias,
