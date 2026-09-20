@@ -19,6 +19,15 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
 class TestChatGPTResponsesAPITransformation:
     @pytest.mark.parametrize(
         "model_name",

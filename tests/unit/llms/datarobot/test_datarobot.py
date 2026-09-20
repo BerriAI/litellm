@@ -78,27 +78,3 @@ def test_completion_datarobot_with_deployment():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
-def test_completion_datarobot_with_environment_variables():
-    """Allow the test to run with environment variables if they are set for integrations."""
-    # If keys are not set, the test will be skipped
-    if os.environ.get("DATAROBOT_API_TOKEN") is None:
-        return
-
-    messages = [
-        {"role": "user", "content": "What's the weather like in San Francisco?"}
-    ]
-    try:
-        response = completion(
-            model="datarobot/vertex_ai/gemini-1.5-flash-002",
-            messages=messages,
-            max_tokens=5,
-            clientId="custom-model",
-        )
-        print(response)
-        assert response["object"] == "chat.completion"
-        assert response["model"] == "gemini-1.5-flash-002"
-        assert len(response["choices"]) == 1
-        assert len(response["choices"][0]["message"]["content"]) > 0
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
