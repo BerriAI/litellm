@@ -3114,6 +3114,36 @@ async def test_output_parse_pii_numbered_tokens_across_chunks():
     assert pii_tokens["<CREDIT_CARD_2>"] == CHUNK_MARKER_TWO
 
 
+def test_finalize_presidio_anonymize_numbered_tokens_overlapping_spans():
+    """
+    When analyzer results contain overlapping spans (e.g. PHONE_NUMBER and UK_NHS
+    covering overlapping digit ranges), ensure _finalize_presidio_anonymize_numbered_tokens
+    resolves conflicts rather than splicing placeholders or eating trailing text.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _PresidioPII
+
+    guardrail = _PresidioPII()
+    text = "My name is John Smith, phone +1 415 555 2671, please check the order."
+    analyze_results = [
+        {"entity_type": "PERSON", "start": 11, "end": 21, "score": 0.9},
+        {"entity_type": "PHONE_NUMBER", "start": 29, "end": 44, "score": 0.85},
+        {"entity_type": "UK_NHS", "start": 32, "end": 44, "score": 0.6},
+    ]
+    request_data = {"metadata": {}}
+    masked_entity_count = {}
+    result = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=text,
+        analyze_results=analyze_results,
+        request_data=request_data,
+        masked_entity_count=masked_entity_count,
+    )
+    assert result == "My name is <PERSON_1>, phone <PHONE_NUMBER_2>, please check the order."
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert pii_tokens["<PERSON_1>"] == "John Smith"
+    assert pii_tokens["<PHONE_NUMBER_2>"] == "+1 415 555 2671"
+    assert "<UK_NHS_" not in pii_tokens
+
+
 @pytest.mark.asyncio
 async def test_analyze_text_chunked_failure_stays_fail_closed():
     """If one chunk still fails, the chunked path raises exactly like a single
