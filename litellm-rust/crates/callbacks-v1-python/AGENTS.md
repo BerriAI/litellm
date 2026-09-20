@@ -1,7 +1,9 @@
 - Target invariants, not completion claims
 - Keep this crate the Python runtime adapter for `litellm-callbacks-v1` and nothing else: the subscriber snapshot and one `PythonLifecycle` that delivers the core contract
-  - Envelopes, sequencing, redaction, handler selection and wire patch validation belong to `litellm-callbacks-v1`
-  - `litellm/rust_bridge/callbacks_v1_python.py` is the only Python module behind it; `python_contract.json` pins its functions on both sides
+  - Envelopes, sequencing, routing, the interceptor fold, redaction, handler selection and wire patch validation belong to `litellm-callbacks-v1`; this adapter drives its `CallSession` and adds only projection (Python arguments, response and exception into facts) and execution (calling handlers, `Await`/`resume`, cancellation, GC traversal)
+  - The snapshot splits each subscriber into the contract's `Subscription` and this crate's `Handlers`, kept at the same index
+  - `litellm/rust_bridge/callbacks_v1.py` is the only Python module Rust imports; `python_contract.json` pins its functions on both sides
+  - The typed authoring surface (callback protocols, envelope and patch types, the registry) is `litellm/callbacks_v1/__init__.py`; the bridge module re-exports `snapshot` from it and otherwise holds only marshalling
 - Terms (contract terms are in `callbacks-v1/AGENTS.md`, lifecycle terms in `host-python/AGENTS.md`)
   - Registry: the process-wide subscriber list; it lives in Python (`register`/`unregister`), never in Rust
   - Snapshot: that list read once per call, with one observer and one interceptor handler already selected per subscriber for the call's mode (`subscribers.rs`)

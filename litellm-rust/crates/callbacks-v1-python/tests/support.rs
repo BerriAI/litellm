@@ -1,7 +1,6 @@
 use std::ffi::CStr;
 
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{prelude::*, types::PyDict};
 
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
 
@@ -11,10 +10,10 @@ import json
 import sys
 import types
 
-for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_v1_python'):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_v1'):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-module = sys.modules['litellm.rust_bridge.callbacks_v1_python']
+module = sys.modules['litellm.rust_bridge.callbacks_v1']
 contract = json.loads(python_contract)
 
 def contracted(name, fake):

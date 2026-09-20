@@ -1,13 +1,19 @@
 //! The per-call subscriber snapshot: what Python's `register` recorded, read once, with
 //! one handler chosen per role for the call's execution mode. `register` has already
-//! rejected everything rejectable, so this only parses.
+//! rejected everything rejectable, so this only parses. Each subscriber splits in two: the
+//! [`Subscription`] the contract's session routes by, and the [`Handlers`] only this host
+//! can call.
 
 use std::collections::BTreeSet;
 
-use litellm_callbacks_v1::{EventKind, ExecutionMode, HandlerSelection, select_handler};
-use pyo3::exceptions::PyValueError;
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
+use litellm_callbacks_v1::{
+    EventKind, ExecutionMode, HandlerSelection, Subscription, select_handler,
+};
+use pyo3::{
+    exceptions::PyValueError,
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+};
 
 use crate::python::V1Python;
 
@@ -17,9 +23,9 @@ pub enum Handler {
     Async(Py<PyAny>),
 }
 
-pub struct Subscriber {
+/// The Python callables of one subscriber, at the index of its [`Subscription`].
+pub struct Handlers {
     pub name: String,
-    pub events: BTreeSet<EventKind>,
     /// `on_event` or `async_on_event`: cannot affect the call.
     pub observe: Option<Handler>,
     /// `before_send` or `async_before_send`: returns a patch; its failure fails the call.
@@ -43,7 +49,7 @@ fn selected_handler(
     )
 }
 
-pub fn snapshot(py: Python<'_>, asynchronous: bool) -> PyResult<Vec<Subscriber>> {
+pub fn snapshot(py: Python<'_>, asynchronous: bool) -> PyResult<Vec<(Subscription, Handlers)>> {
     let mode = if asynchronous {
         ExecutionMode::Async
     } else {
@@ -64,23 +70,28 @@ pub fn snapshot(py: Python<'_>, asynchronous: bool) -> PyResult<Vec<Subscriber>>
                     })
                 })
                 .collect::<PyResult<BTreeSet<_>>>()?;
-            Ok(Subscriber {
-                name: subscriber.getattr("name")?.extract()?,
-                events,
-                observe: selected_handler(&subscriber, mode, "on_event", "async_on_event")?,
-                intercept: selected_handler(&subscriber, mode, "before_send", "async_before_send")?,
-            })
+            let name: String = subscriber.getattr("name")?.extract()?;
+            let observe = selected_handler(&subscriber, mode, "on_event", "async_on_event")?;
+            let intercept =
+                selected_handler(&subscriber, mode, "before_send", "async_before_send")?;
+            Ok((
+                Subscription {
+                    name: name.clone(),
+                    events,
+                    observes: observe.is_some(),
+                    intercepts: intercept.is_some(),
+                },
+                Handlers {
+                    name,
+                    observe,
+                    intercept,
+                },
+            ))
         })
         .collect()
 }
 
-impl Subscriber {
-    pub fn observer(&self, kind: EventKind) -> Option<&Handler> {
-        self.observe
-            .as_ref()
-            .filter(|_| self.events.contains(&kind))
-    }
-
+impl Handlers {
     pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         for handler in self.observe.iter().chain(&self.intercept) {
             visit.call(handler.object())?;

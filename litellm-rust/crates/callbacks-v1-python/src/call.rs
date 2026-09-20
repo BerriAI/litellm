@@ -2,8 +2,7 @@
 
 use pyo3::prelude::*;
 
-use crate::adapter::V1PythonLifecycle;
-use crate::subscribers::snapshot;
+use crate::{adapter::V1PythonLifecycle, subscribers::snapshot};
 
 #[derive(Clone, Copy, Debug)]
 pub struct V1PythonSurface {
@@ -19,7 +18,9 @@ impl V1PythonLifecycle {
         surface: V1PythonSurface,
         asynchronous: bool,
     ) -> PyResult<Option<Self>> {
-        let subscribers = snapshot(py, asynchronous)?;
-        Ok((!subscribers.is_empty()).then(|| Self::new(surface, subscribers, asynchronous)))
+        let (subscriptions, handlers): (Vec<_>, Vec<_>) =
+            snapshot(py, asynchronous)?.into_iter().unzip();
+        Ok((!subscriptions.is_empty())
+            .then(|| Self::new(surface, subscriptions, handlers, asynchronous)))
     }
 }

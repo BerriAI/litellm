@@ -1,0 +1,44 @@
+- Target invariants, not completion claims
+- This package holds built-in callbacks ported from `CustomLogger` to the v1 contract (`litellm/callbacks_v1/__init__.py`), and nothing else
+  - Porting is exploration: its first product is the gap ledger (`python -m litellm.callbacks_v1.builtin.manifest`), which says what the contract has to grow
+  - `../MIGRATION.md` is the whole flow from first port to removing the legacy twin; this file is the rules for writing one port
+  - A port is never registered by the product while its legacy twin exists. Importing anything here registers nothing; only tests call `register`
+  - A port goes live by removing or unregistering its legacy twin. The two are never active together, so there is no per-call skip logic anywhere
+  - Never edit the legacy twin to make a port easier
+- A port is a frozen class of pure methods; the host does everything else
+  - Built-in and custom callbacks share one interface, the v1 contract. This rule is hygiene for built-ins, not the sandbox: a built-in holds vendor secrets and is the likeliest to be ported to Rust, and a pure transform is what survives both. Custom Python callbacks stay free-form; on the gateway they are isolated by an out-of-process extension host, not by this rule
+  - A port opens no socket, starts no thread, keeps no state between calls and reads neither the environment nor the clock. Whatever it needs arrives as a value: contract facts, its `Config`, `now`
+  - `port.py` is the whole interface: the two protocols a port declares as its base (`SinkPort`, `InterceptorPort`) and what they are written in (`CallRecord`, `Delivery`, `Batching`). Nothing in it is migration scaffolding, and a port imports nothing else from this package
+  - `runtime.py` is the in-process host: `Sink` and `Patcher`, the two subscribers, with `CallJoin`, `Transport`, the clock and `outbox.py` behind them. They are the only things here that implement the v1 contract, so a port never writes `name`, `events` or a handler. Each takes the registration name, because the name is the registration's and not the port's: one port configured twice is two subscribers. It stands in for what a host should own; when the contract grows off-path delivery and a joined call record, `runtime.py` is deleted and the ports do not change
+  - `manifest.py` is the migration, all of it: `Gap`, the name a port registers under, its twin, its status and its gaps. At cutover it is deleted outright and no port changes
+  - `test_conventions.py` holds a port's imports to a pure allow-list and checks that it declares the protocol of its kind. A port importing anything from `runtime.py` is a failure: wiring is the host's, and the tests do it
+- Terms
+  - Legacy twin: the `CustomLogger` subclass (or function of one) a port replaces, named in the port's docstring and in `manifest.py`
+  - Sink: a port that observes calls and tells a vendor (`SinkPort`, run by `runtime.Sink`). Interceptor: a port that patches the wire request (`InterceptorPort`, run by `runtime.Patcher`)
+  - Gap: one legacy input the contract does not supply: a missing `fact`, a missing `event`, or a missing `capability`
+    - Its `key` names what the contract would have to grow (`cost`, `usage`, `identity`), not what the twin read. Reuse an existing key when another port already waits on the same thing; the backlog counts ports per key
+  - Parity: the port and its twin handled the same call and every difference in what they sent is `Allowed` with a reason
+- What can be ported: a twin that only overrides the success/failure/pre/post log hooks is a sink; one that only rewrites the outgoing request is an interceptor. A twin overriding any other hook (guardrail, routing, prompt management, agentic loop, stream rewriting, audit log) has no v1 shape and stays out; `test_conventions.py` enforces this from the twin's own class
+- Every port module has the same parts, in this order
+  - Docstring: one line of what it is, `Legacy twin: <path>`, and `Not ported yet:` for legacy features left out on purpose
+  - `Config`: a frozen dataclass of plain data. Where its values come from (environment, config.yaml, the UI) is the host's business and an open decision in `../MIGRATION.md`; a port never reads the environment. A `from_env(env)` over a mapping is allowed as the record of the twin's variable names, not as the way a port gets configured
+  - The vendor's types, as `TypedDict`s, and any module-private pure helpers
+  - The port class: a frozen dataclass whose only field is `config`, declaring `SinkPort[<its record>]` or `InterceptorPort` as its base. Both kinds have exactly the same parts
+    - `payload(...)`: the port. For a sink, one `CallRecord` and the host's `now` to the vendor's body; for an interceptor, one `RequestFactsV1` to the `WirePatchV1` it needs. `None` means nothing to send or nothing to patch, which is also how a port filters
+    - A sink adds `deliveries(batch)`, a pure function from a batch of bodies to the `Delivery`s that carry them, headers and framing included, and `batching`, how large a batch the host should collect
+    - Nothing else. Not its name, not its gaps (`manifest.py` holds both), and nothing of the contract: no `events`, no `on_event`, no `before_send`, no subscriber class, no `build`. A port is registered by nobody; the tests name it, wrap it in `runtime.Sink` or `runtime.Patcher` and register that
+- A sink's handler never does I/O: v1 observers run inline in the call, where legacy callbacks ran on an executor or the logging worker
+  - `runtime.Sink` joins envelopes with `CallJoin`, calls `payload` with the clock's `now`, and `put`s the result on its `Outbox`; the outbox thread calls `deliveries` and sends, `batching` at a time
+  - So a sink has only the sync `on_event`; an async call falls back to it, and it never blocks
+  - The terminal envelope carries neither model nor metadata, which is why `CallJoin` exists. A cancelled call has no terminal envelope, which is why it is bounded
+  - Observer errors are reported and swallowed by the contract; a port does not wrap its handler in `try`
+- Tests, three layers; a port is not done without the first two
+  - Payload (`tests/test_litellm/callbacks_v1/builtin/test_<name>.py`): `payload` on the golden envelopes Rust pins, asserting the whole vendor body. No Rust needed
+  - Parity (`tests/test_litellm_rust/builtin/test_parity.py`): one native call with the twin in `callbacks=[...]` and the port registered by the test, each posting to its own recording vendor; `assert_parity` on the two raw bodies. Cover success and failure when the twin logs both
+    - An interceptor whose twin never runs on a native route is compared function to function on the same bodies instead, plus one native call proving the patch reaches the provider
+  - Conventions (`test_conventions.py`): runs for every manifest entry with no per-port code, the pure-import rule and the declared-protocol check included; add the port to `EXAMPLES` and `SUBSCRIBERS` in `support.py`
+- `Allowed` differences
+  - Every entry has a reason. One that exists because of a gap cites it as `gap="<key>"`, and `assert_parity` fails if the port's `GAPS` has no such key. One with no `gap` is a difference the port keeps on purpose
+  - Patterns are as narrow as the difference. A stale entry fails the test, so closing a gap in the contract forces the list to shrink, and deleting a `Gap` fails every entry still citing it
+  - Never allow a difference to get a test green; either port the behaviour or record the gap
+- Gaps and status live in `manifest.py`, next to the entry: `exploring` (payload tests pass), `parity` (parity test passes), `ready` (parity, no open gap, and every route the twin serves emits v1 envelopes). Only `ready` ports may replace their twin

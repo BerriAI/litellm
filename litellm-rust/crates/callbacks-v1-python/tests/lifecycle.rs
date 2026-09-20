@@ -1,18 +1,18 @@
 use std::collections::BTreeSet;
 
 use litellm_auth::SecretValue;
+use litellm_callbacks_v1::{EventKind, Subscription};
 use litellm_host::event::{MachineEvent, RawResponse, RequestContext, Timing, WireRequest};
 use litellm_host_python::{LifecycleEvent, LifecycleStep, PythonLifecycle, from_py};
-use pyo3::exceptions::asyncio::CancelledError;
-use pyo3::prelude::*;
-use pyo3::types::PyDict;
+use pyo3::{exceptions::asyncio::CancelledError, prelude::*, types::PyDict};
 use serde_json::{Value, json};
 
-use crate::adapter::V1PythonLifecycle;
-use crate::call::V1PythonSurface;
-use crate::subscribers::{Handler, Subscriber};
-use crate::test_support::{local, namespace};
-use litellm_callbacks_v1::EventKind;
+use crate::{
+    adapter::V1PythonLifecycle,
+    call::V1PythonSurface,
+    subscribers::{Handler, Handlers},
+    test_support::{local, namespace},
+};
 
 const TIMING: Timing = Timing {
     start_time: 10.0,
@@ -25,7 +25,7 @@ fn subscriber(
     events: &[EventKind],
     observe: Option<(&str, bool)>,
     intercept: Option<(&str, bool)>,
-) -> Subscriber {
+) -> (Subscription, Handlers) {
     let handler = |spec: Option<(&str, bool)>| {
         spec.map(|(local_name, asynchronous)| {
             let callable = local(locals, local_name).unbind();
@@ -36,18 +36,28 @@ fn subscriber(
             }
         })
     };
-    Subscriber {
+    let handlers = Handlers {
         name: name.to_string(),
-        events: events.iter().copied().collect::<BTreeSet<_>>(),
         observe: handler(observe),
         intercept: handler(intercept),
-    }
+    };
+    (
+        Subscription {
+            name: name.to_string(),
+            events: events.iter().copied().collect::<BTreeSet<_>>(),
+            observes: handlers.observe.is_some(),
+            intercepts: handlers.intercept.is_some(),
+        },
+        handlers,
+    )
 }
 
-fn lifecycle(subscribers: Vec<Subscriber>, asynchronous: bool) -> V1PythonLifecycle {
+fn lifecycle(subscribers: Vec<(Subscription, Handlers)>, asynchronous: bool) -> V1PythonLifecycle {
+    let (subscriptions, handlers): (Vec<_>, Vec<_>) = subscribers.into_iter().unzip();
     V1PythonLifecycle::new(
         V1PythonSurface { call_type: "ocr" },
-        subscribers,
+        subscriptions,
+        handlers,
         asynchronous,
     )
 }
@@ -245,7 +255,7 @@ def record(event):
             ["call.started"]
         );
         let reports = py
-            .import("litellm.rust_bridge.callbacks_v1_python")
+            .import("litellm.rust_bridge.callbacks_v1")
             .unwrap()
             .getattr("reports")
             .unwrap();

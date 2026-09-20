@@ -2058,6 +2058,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-v1-exthost"
+version = "0.1.0"
+dependencies = [
+ "litellm-callbacks-v1",
+ "litellm-host",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-callbacks-v1-python"
 version = "0.1.0"
 dependencies = [

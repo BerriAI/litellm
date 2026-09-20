@@ -1,5 +1,10 @@
 - Target invariants, not completion claims
-- Keep this crate the runtime-neutral v1 callback contract and nothing else: envelopes, sequencing, redaction, handler selection and validated wire patches
+- Keep this crate the runtime-neutral v1 callback contract and nothing else: envelopes, redaction, handler selection, validated wire patches, and the per-call session that sequences and routes them
+  - `CallSession` is the whole protocol of one call and does no I/O: which envelope a moment produces, which subscriptions receive it, how interceptor patches fold into the wire. A host adapter projects its runtime's values into facts, asks the session, and runs handlers its own way; it never decides protocol. A second host (out of process, for the gateway) reuses the session unchanged
+  - The two planes are in the types. An `Emission` has no return path, so nothing an observer does re-enters the session. An `Interception` takes exactly one patch per interceptor, in registration order, and `request_sending` yields the wire the host must send
+  - A terminal method consumes the session, which is how a call has exactly one terminal envelope, last
+  - `Subscription` is a subscriber as data (name, events, observes, intercepts) and serializes; handlers stay in the host adapter at the same index. It is what a host that loads handlers elsewhere reports back
+  - Protocol tests live here and need no interpreter; they are the conformance suite every host adapter inherits. An adapter's own tests cover projection and execution only
   - This crate may depend on `litellm-host`, but never on `litellm-host-python`, PyO3 or a runtime registry
   - `golden/v1` pins every serialized envelope shape; every `EventKind` has a golden file by construction, and Python's `EVENTS` and `SUPPORTED_SCHEMAS` are tested against those files
 - Terms (shared ones are in `host-python/AGENTS.md`)
@@ -7,10 +12,14 @@
   - Handler: one callable of a subscriber; an observer receives envelopes and cannot affect the call; an interceptor receives `RequestFacts` and returns a patch
   - Handler selection (`select_handler`): an async call prefers the async handler and falls back to the sync one; a sync call never selects an async handler
   - Event: one thing that happened in a call; `EventKind` is its dotted name (`call.started`, `request.sending`, `response.received`, `call.succeeded`, `call.failed`), the serde tag and the subscription name at once
-  - Envelope: schema + `call_id` + `call_type` + `seq` + event; the only value an observer receives; `Sequencer` numbers a call's envelopes from zero
+  - Envelope: schema + `call_id` + `call_type` + `seq` + event; the only value an observer receives; the session numbers a call's envelopes from zero
   - Facts (`CallFacts`, `RequestFacts`, `TimingFacts`, `ErrorFacts`): a redacted, serializable projection of runtime state; never a live object
   - Patch (`WirePatch`): an interceptor's edit of the wire: header `remove`, then header `set`, optional `body` replacement; `apply` validates it
   - Redaction: credential headers by name (`CREDENTIAL_HEADERS`) and optional params by the route's secret fields become `[REDACTED]`; shape never changes
+- Observers are asynchronous to the call. This is contract semantics, not a property of one host
+  - An envelope may reach an observer after the call has moved on or returned. Envelopes of one call arrive in `seq` order; nothing orders two calls. Delivery is at most once
+  - Running every observer inline before the step returns, as the in-process CPython host does, is one legal schedule and promises nothing a callback may rely on. A host that queues, batches or crosses a process boundary is equally conforming
+  - Nothing an observer does or returns has a path back into the call. Interceptors are the opposite: on the call path by nature, answered before the request leaves
 - No runtime object of a call reaches a callback contract value
 - `RequestFacts::new` is the only request projection and always applies the contract's credential redaction; its fields are private so no other crate can build one
 - A patch cannot change the URL or set or remove a credential header

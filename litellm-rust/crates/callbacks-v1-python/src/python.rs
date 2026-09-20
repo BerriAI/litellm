@@ -1,10 +1,10 @@
 //! The Python contract of this crate: every function of
-//! `litellm/rust_bridge/callbacks_v1_python.py` that Rust calls, by name.
+//! `litellm/rust_bridge/callbacks_v1.py` that Rust calls, by name.
 
 use pyo3::prelude::*;
 use strum::{IntoStaticStr, VariantArray};
 
-const MODULE: &str = "litellm.rust_bridge.callbacks_v1_python";
+const MODULE: &str = "litellm.rust_bridge.callbacks_v1";
 
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
 pub(crate) enum V1Python {

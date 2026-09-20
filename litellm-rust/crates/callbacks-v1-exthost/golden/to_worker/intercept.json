@@ -1,0 +1,22 @@
+{
+  "type": "intercept",
+  "id": 1,
+  "subscriber": 1,
+  "request": {
+    "model": "model",
+    "custom_llm_provider": "provider",
+    "optional_params": {
+      "temperature": 0.2
+    },
+    "url": "https://provider.example/v1",
+    "headers": [
+      [
+        "Authorization",
+        "[REDACTED]"
+      ]
+    ],
+    "body": {
+      "input": "hello"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "type": "error",
+  "id": 1,
+  "error_class": "builtins.PermissionError",
+  "message": "not this model"
+}

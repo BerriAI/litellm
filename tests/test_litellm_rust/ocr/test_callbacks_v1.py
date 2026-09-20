@@ -3,9 +3,9 @@ from typing import Final
 
 import pytest
 
+from litellm import callbacks_v1
+from litellm.callbacks_v1 import EVENTS, EnvelopeV1, EventName, RequestFactsV1, WirePatchV1
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.rust_bridge import callbacks_v1_python
-from litellm.rust_bridge.callbacks_v1_python import EVENTS, EnvelopeV1, RequestFactsV1, WirePatchV1
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
@@ -39,7 +39,7 @@ class Observer:
 class Interceptor:
     name: Final = "interceptor"
     schema: Final = 1
-    events: Final[frozenset[str]] = frozenset()
+    events: Final[frozenset[EventName]] = frozenset()
 
     def __init__(self) -> None:
         self.bodies: Final[list[object]] = []
@@ -52,21 +52,21 @@ class Interceptor:
 @pytest.fixture
 def observer() -> Generator[Observer]:
     subscriber: Final = Observer()
-    callbacks_v1_python.register(subscriber)
+    callbacks_v1.register(subscriber)
     try:
         yield subscriber
     finally:
-        callbacks_v1_python.unregister(subscriber)
+        callbacks_v1.unregister(subscriber)
 
 
 @pytest.fixture
 def interceptor() -> Generator[Interceptor]:
     subscriber: Final = Interceptor()
-    callbacks_v1_python.register(subscriber)
+    callbacks_v1.register(subscriber)
     try:
         yield subscriber
     finally:
-        callbacks_v1_python.unregister(subscriber)
+        callbacks_v1.unregister(subscriber)
 
 
 class LegacyCallId(CustomLogger):
@@ -139,3 +139,28 @@ def test_native_ocr_failure_reaches_both_contracts_once(
     ]
     assert [envelope["event"]["type"] for envelope in terminal] == ["call.failed"]
     assert observer.envelopes[-1] is terminal[0]
+
+
+def test_native_ocr_decorated_function_callbacks_run_through_the_native_call(
+    ocr_server: RecordingServer,
+) -> None:
+    seen: Final[list[str]] = []
+
+    @callbacks_v1.on_event("call.started", "call.succeeded", name="decorated-observer")
+    def record(event: EnvelopeV1) -> None:
+        seen.append(event["event"]["type"])
+
+    @callbacks_v1.before_send
+    def patch(request: RequestFactsV1) -> WirePatchV1 | None:
+        del request
+        return {"headers": {"set": [("x-v1-decorated", "seen")]}}
+
+    try:
+        call_native_ocr(ocr_server)
+    finally:
+        callbacks_v1.unregister("decorated-observer")
+        callbacks_v1.unregister(f"{patch.__module__}.{patch.__qualname__}")
+
+    assert seen == ["call.started", "call.succeeded"]
+    assert ocr_server.requests[-1].headers["x-v1-decorated"] == "seen"
+    assert callbacks_v1.snapshot() == ()

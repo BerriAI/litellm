@@ -1,23 +1,25 @@
-//! The v1 lifecycle: each step builds one envelope, hands every subscribed observer a
-//! fresh conversion of it, and, before the request is sent, folds every interceptor's
-//! patch into the wire request.
+//! The v1 lifecycle in CPython. The contract's [`CallSession`] decides which envelope a
+//! step produces, who receives it and how patches fold into the wire; this adapter only
+//! projects Python values into facts and runs the Python handlers: every observer of an
+//! emission gets a fresh conversion of its envelope, inline, and every interceptor's
+//! answer goes back to the session.
 
 use litellm_callbacks_v1::{
-    CallFacts, Envelope, ErrorFacts, Event, RequestFacts, Sequencer, WirePatch, apply,
+    CallFacts, CallSession, Emission, Envelope, ErrorFacts, Interception, Subscription, WirePatch,
 };
 use litellm_host::event::{MachineEvent, RequestContext, WireRequest};
 use litellm_host_python::{
     LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, is_cancellation, missing_state, to_py,
 };
-use pyo3::exceptions::PyValueError;
-use pyo3::gc::{PyTraverseError, PyVisit};
-use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyString};
+use pyo3::{
+    exceptions::PyValueError,
+    gc::{PyTraverseError, PyVisit},
+    prelude::*,
+    types::{PyDict, PyString},
+};
 use serde_json::{Map, Value};
 
-use crate::call::V1PythonSurface;
-use crate::python::V1Python;
-use crate::subscribers::Subscriber;
+use crate::{call::V1PythonSurface, python::V1Python, subscribers::Handlers};
 
 /// What a step hands back to the driver once every observer of its envelope has run.
 enum Continuation {
@@ -26,26 +28,29 @@ enum Continuation {
     Wire(Box<WireRequest>),
 }
 
-/// The suspended step; `index` is the subscriber whose awaitable the driver is awaiting.
+/// The suspended step, while the driver awaits one handler's awaitable.
 enum Pending {
+    /// `position` is the place in `emission.observers` of the observer being awaited.
     Observe {
-        envelope: Envelope,
-        index: usize,
+        emission: Emission,
+        position: usize,
         then: Continuation,
     },
+    /// `subscriber` is the interceptor whose turn it is.
     Intercept {
-        wire: Box<WireRequest>,
-        context: RequestContext,
-        index: usize,
+        interception: Interception,
+        subscriber: usize,
     },
 }
 
 pub struct V1PythonLifecycle {
     surface: V1PythonSurface,
-    subscribers: Vec<Subscriber>,
+    /// Held until `begin` learns the call's identity and hands them to the session.
+    subscriptions: Vec<Subscription>,
+    /// The Python side of each subscription, at the same index.
+    handlers: Vec<Handlers>,
     asynchronous: bool,
-    sequencer: Option<Sequencer>,
-    streamed: bool,
+    session: Option<CallSession>,
     pending: Option<Pending>,
     closed: bool,
 }
@@ -70,25 +75,19 @@ impl Continuation {
 impl V1PythonLifecycle {
     pub(crate) fn new(
         surface: V1PythonSurface,
-        subscribers: Vec<Subscriber>,
+        subscriptions: Vec<Subscription>,
+        handlers: Vec<Handlers>,
         asynchronous: bool,
     ) -> Self {
         Self {
             surface,
-            subscribers,
+            subscriptions,
+            handlers,
             asynchronous,
-            sequencer: None,
-            streamed: false,
+            session: None,
             pending: None,
             closed: false,
         }
-    }
-
-    fn envelope(&mut self, event: Event) -> PyResult<Envelope> {
-        self.sequencer
-            .as_mut()
-            .map(|sequencer| sequencer.envelope(event))
-            .ok_or_else(missing_state)
     }
 
     fn report(
@@ -98,7 +97,7 @@ impl V1PythonLifecycle {
         envelope: &Envelope,
         error: PyErr,
     ) -> PyResult<()> {
-        let name = &self.subscribers[index].name;
+        let name = &self.handlers[index].name;
         let event: &'static str = envelope.event.kind().into();
         match V1Python::Report.call(py, (name, event, error.value(py))) {
             Err(report_error) if is_cancellation(py, &report_error) => Err(report_error),
@@ -106,86 +105,87 @@ impl V1PythonLifecycle {
         }
     }
 
+    /// Runs the emission's observers inline from `from`, which is one legal schedule of
+    /// the contract and nothing a callback may rely on.
     fn observe(
         &mut self,
         py: Python<'_>,
-        envelope: Envelope,
+        emission: Emission,
         from: usize,
         then: Continuation,
     ) -> PyResult<LifecycleStep> {
-        for index in from..self.subscribers.len() {
-            let Some(handler) = self.subscribers[index]
-                .observer(envelope.event.kind())
+        for position in from..emission.observers.len() {
+            let index = emission.observers[position];
+            let Some(handler) = self.handlers[index]
+                .observe
+                .as_ref()
                 .map(|handler| handler.clone_ref(py))
             else {
                 continue;
             };
-            let outcome = to_py(py, &envelope).and_then(|argument| handler.call(py, argument));
+            let outcome =
+                to_py(py, &emission.envelope).and_then(|argument| handler.call(py, argument));
             match outcome {
                 Ok(awaitable) if handler.is_async() => {
                     self.pending = Some(Pending::Observe {
-                        envelope,
-                        index,
+                        emission,
+                        position,
                         then,
                     });
                     return Ok(LifecycleStep::Await(awaitable.unbind()));
                 }
                 Ok(_) => {}
                 Err(error) if is_cancellation(py, &error) => return Err(error),
-                Err(error) => self.report(py, index, &envelope, error)?,
+                Err(error) => self.report(py, index, &emission.envelope, error)?,
             }
         }
         Ok(then.into_step())
     }
 
-    fn apply_patch(
+    fn patched(
         &self,
         py: Python<'_>,
-        index: usize,
-        wire: WireRequest,
+        interception: Interception,
+        subscriber: usize,
         result: Py<PyAny>,
-    ) -> PyResult<WireRequest> {
+    ) -> PyResult<Interception> {
         let patch = if result.bind(py).is_none() {
             WirePatch::default()
         } else {
             from_py::<WirePatch>(result.bind(py))?
         };
-        let name = &self.subscribers[index].name;
-        apply(wire, patch)
+        let name = &self.handlers[subscriber].name;
+        interception
+            .patched(patch)
             .map_err(|error| PyValueError::new_err(format!("callback {name}: {error}")))
     }
 
-    fn intercept(
-        &mut self,
-        py: Python<'_>,
-        wire: Box<WireRequest>,
-        context: RequestContext,
-        from: usize,
-    ) -> PyResult<LifecycleStep> {
-        let mut current = wire;
-        for index in from..self.subscribers.len() {
-            let Some(handler) = self.subscribers[index]
+    fn intercept(&mut self, py: Python<'_>, interception: Interception) -> PyResult<LifecycleStep> {
+        let mut current = interception;
+        while let Some(turn) = current.turn() {
+            let Some(handler) = self.handlers[turn.subscriber]
                 .intercept
                 .as_ref()
                 .map(|handler| handler.clone_ref(py))
             else {
-                continue;
+                return Err(missing_state());
             };
-            let request = to_py(py, &RequestFacts::new(&current, &context))?;
-            let result = handler.call(py, request)?;
+            let result = handler.call(py, to_py(py, &turn.request)?)?;
             if handler.is_async() {
                 self.pending = Some(Pending::Intercept {
-                    wire: current,
-                    context,
-                    index,
+                    interception: current,
+                    subscriber: turn.subscriber,
                 });
                 return Ok(LifecycleStep::Await(result.unbind()));
             }
-            current = Box::new(self.apply_patch(py, index, *current, result.unbind())?);
+            current = self.patched(py, current, turn.subscriber, result.unbind())?;
         }
-        let envelope =
-            self.envelope(Event::RequestSending(RequestFacts::new(&current, &context)))?;
-        self.observe(py, envelope, 0, Continuation::Wire(current))
+        let (emission, wire) = self
+            .session
+            .as_mut()
+            .ok_or_else(missing_state)?
+            .request_sending(current);
+        self.observe(py, emission, 0, Continuation::Wire(Box::new(wire)))
     }
 
     fn metadata(arguments: &Bound<'_, PyDict>) -> PyResult<(Map<String, Value>, Vec<String>)> {
@@ -246,14 +246,19 @@ impl PythonLifecycle for V1PythonLifecycle {
     ) -> PyResult<LifecycleStep> {
         let call_id = Self::call_id(py, arguments.bind(py))?;
         let (metadata, metadata_dropped) = Self::metadata(arguments.bind(py))?;
-        self.sequencer = Some(Sequencer::new(call_id, self.surface.call_type));
-        let envelope = self.envelope(Event::CallStarted(CallFacts {
-            start_time,
-            asynchronous: self.asynchronous,
-            metadata,
-            metadata_dropped,
-        }))?;
-        self.observe(py, envelope, 0, Continuation::Arguments(arguments))
+        let (session, emission) = CallSession::start(
+            call_id,
+            self.surface.call_type,
+            std::mem::take(&mut self.subscriptions),
+            CallFacts {
+                start_time,
+                asynchronous: self.asynchronous,
+                metadata,
+                metadata_dropped,
+            },
+        );
+        self.session = Some(session);
+        self.observe(py, emission, 0, Continuation::Arguments(arguments))
     }
 
     fn before_send(
@@ -262,16 +267,23 @@ impl PythonLifecycle for V1PythonLifecycle {
         wire: Box<WireRequest>,
         context: &RequestContext,
     ) -> PyResult<LifecycleStep> {
-        self.intercept(py, wire, context.clone(), 0)
+        let interception = self
+            .session
+            .as_ref()
+            .ok_or_else(missing_state)?
+            .interception(*wire, context.clone());
+        self.intercept(py, interception)
     }
 
     fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
         match event {
             LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
-                let envelope = self.envelope(Event::ResponseReceived {
-                    body: raw.body.clone(),
-                })?;
-                self.observe(py, envelope, 0, Continuation::Done)
+                let emission = self
+                    .session
+                    .as_mut()
+                    .ok_or_else(missing_state)?
+                    .response_received(raw.body.clone());
+                self.observe(py, emission, 0, Continuation::Done)
             }
             LifecycleEvent::Succeeded { timing, response } => {
                 let projected = V1Python::ProjectResponse
@@ -282,13 +294,9 @@ impl PythonLifecycle for V1PythonLifecycle {
                     Err(error) if is_cancellation(py, &error) => return Err(error),
                     Err(error) => (Value::Null, Some(error.to_string())),
                 };
-                let envelope = self.envelope(Event::CallSucceeded {
-                    timing: timing.into(),
-                    streamed: self.streamed,
-                    response,
-                    response_error,
-                })?;
-                self.observe(py, envelope, 0, Continuation::Done)
+                let session = self.session.take().ok_or_else(missing_state)?;
+                let emission = session.succeeded(timing, response, response_error);
+                self.observe(py, emission, 0, Continuation::Done)
             }
             LifecycleEvent::Failed {
                 timing,
@@ -296,44 +304,41 @@ impl PythonLifecycle for V1PythonLifecycle {
                 error,
             } => {
                 let facts = Self::error_facts(py, error)?;
-                let envelope = self.envelope(Event::CallFailed {
-                    timing: timing.into(),
-                    streamed: self.streamed,
-                    origin: origin.into(),
-                    error: facts,
-                })?;
-                self.observe(py, envelope, 0, Continuation::Done)
+                let session = self.session.take().ok_or_else(missing_state)?;
+                let emission = session.failed(timing, origin, facts);
+                self.observe(py, emission, 0, Continuation::Done)
             }
         }
     }
 
     fn opened(&mut self, _py: Python<'_>) -> PyResult<()> {
-        self.streamed = true;
+        if let Some(session) = self.session.as_mut() {
+            session.opened();
+        }
         Ok(())
     }
 
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {
         match self.pending.take().ok_or_else(missing_state)? {
             Pending::Observe {
-                envelope,
-                index,
+                emission,
+                position,
                 then,
             } => {
                 if let Err(error) = result {
                     if is_cancellation(py, &error) {
                         return Err(error);
                     }
-                    self.report(py, index, &envelope, error)?;
+                    self.report(py, emission.observers[position], &emission.envelope, error)?;
                 }
-                self.observe(py, envelope, index + 1, then)
+                self.observe(py, emission, position + 1, then)
             }
             Pending::Intercept {
-                wire,
-                context,
-                index,
+                interception,
+                subscriber,
             } => {
-                let patched = self.apply_patch(py, index, *wire, result?)?;
-                self.intercept(py, Box::new(patched), context, index + 1)
+                let patched = self.patched(py, interception, subscriber, result?)?;
+                self.intercept(py, patched)
             }
         }
     }
@@ -344,12 +349,14 @@ impl PythonLifecycle for V1PythonLifecycle {
         }
         self.closed = true;
         self.pending = None;
-        self.subscribers.clear();
+        self.session = None;
+        self.subscriptions.clear();
+        self.handlers.clear();
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        for subscriber in &self.subscribers {
-            subscriber.traverse(visit)?;
+        for handlers in &self.handlers {
+            handlers.traverse(visit)?;
         }
         match &self.pending {
             Some(Pending::Observe { then, .. }) => then.traverse(visit),

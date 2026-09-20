@@ -1,0 +1,20 @@
+{
+  "type": "patch",
+  "id": 1,
+  "patch": {
+    "headers": {
+      "remove": [
+        "X-Trace"
+      ],
+      "set": [
+        [
+          "X-Team",
+          "core"
+        ]
+      ]
+    },
+    "body": {
+      "input": "patched"
+    }
+  }
+}

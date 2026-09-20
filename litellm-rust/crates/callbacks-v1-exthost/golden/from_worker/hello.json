@@ -1,0 +1,21 @@
+{
+  "type": "hello",
+  "schema": 1,
+  "subscriptions": [
+    {
+      "name": "recorder",
+      "events": [
+        "call.failed",
+        "call.succeeded"
+      ],
+      "observes": true,
+      "intercepts": false
+    },
+    {
+      "name": "my_pkg.cb.patch",
+      "events": [],
+      "observes": false,
+      "intercepts": true
+    }
+  ]
+}

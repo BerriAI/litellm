@@ -3,7 +3,7 @@
 //! redacted, serializable projection that never holds a runtime object of the call.
 
 use litellm_host::event::{FailureOrigin, RequestContext, Timing, WireRequest};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
@@ -57,17 +57,24 @@ pub enum Event {
     PartialOrd,
     Ord,
     Debug,
+    Serialize,
+    Deserialize,
 )]
 pub enum EventKind {
     #[strum(serialize = "call.started")]
+    #[serde(rename = "call.started")]
     CallStarted,
     #[strum(serialize = "request.sending")]
+    #[serde(rename = "request.sending")]
     RequestSending,
     #[strum(serialize = "response.received")]
+    #[serde(rename = "response.received")]
     ResponseReceived,
     #[strum(serialize = "call.succeeded")]
+    #[serde(rename = "call.succeeded")]
     CallSucceeded,
     #[strum(serialize = "call.failed")]
+    #[serde(rename = "call.failed")]
     CallFailed,
 }
 
@@ -156,14 +163,14 @@ impl Event {
     }
 }
 
-pub struct Sequencer {
+pub(crate) struct Sequencer {
     call_id: String,
     call_type: &'static str,
     next: u32,
 }
 
 impl Sequencer {
-    pub fn new(call_id: String, call_type: &'static str) -> Self {
+    pub(crate) fn new(call_id: String, call_type: &'static str) -> Self {
         Self {
             call_id,
             call_type,
@@ -171,7 +178,7 @@ impl Sequencer {
         }
     }
 
-    pub fn envelope(&mut self, event: Event) -> Envelope {
+    pub(crate) fn envelope(&mut self, event: Event) -> Envelope {
         let envelope = Envelope {
             schema: SCHEMA_V1,
             call_id: self.call_id.clone(),

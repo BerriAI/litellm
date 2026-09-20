@@ -1,0 +1,18 @@
+- Target invariants, not completion claims
+- Keep this crate the out-of-process host of `litellm-callbacks-v1` and nothing else: the wire protocol to an extension host worker and the client that speaks it
+  - The protocol of a call (which envelope, to whom, how patches fold, patch validation) belongs to `litellm-callbacks-v1`'s `CallSession`; this crate sends what the session says and brings answers back to it. It never decides protocol and never validates a patch itself
+  - No PyO3 and no interpreter in this crate or in the process that uses it. The worker is `python -m litellm.callbacks_v1.host` (`litellm/callbacks_v1/host.py`), which loads callbacks with the SDK's own `register` and decorators; a callback file is the same file in the SDK and behind this host
+  - `callbacks-v1-python` is the sibling adapter for the SDK (in process, inline). The two share the session and nothing else
+- Terms (contract terms are in `callbacks-v1/AGENTS.md`)
+  - Worker: the process that runs callbacks. Gateway: the process that owns calls and this crate
+  - Frame: a 4-byte big-endian length and one JSON object tagged by `type`. `ToWorker` is `event`, `intercept`, `flush`; `FromWorker` is `hello`, `patch`, `error`, `report`, `flushed`
+  - Hello: the worker's first frame, its `Subscription`s as data; `subscriber` in every later frame is an index into it
+  - Report: an observer's swallowed failure, told to the gateway for logging only
+- The worker only answers. There is no frame by which it calls into the gateway; a host service (sending vendor HTTP, a secret by name) would be a new frame and a contract capability, never an escape hatch
+- Everything from a worker is untrusted: frames are size-capped before they are read, unknown frame types and unknown fields are errors, and a patch is data until `Interception::patched` validates it
+- This crate isolates nothing. What a worker can reach (environment, files, user, network) is what the process it runs in was given; the spawner clears the environment and picks the working directory, and the deployment (a sidecar, a sandbox runtime, another host) supplies the rest
+- Observers are asynchronous to the call: `observe` writes and returns. Only `intercept` waits, and only it may carry a timeout or a failure policy
+  - An interceptor that raises is `ExtHostError::Interceptor`; whether that fails the call or skips the patch is the gateway's policy per subscriber, not the worker's
+- `golden/` pins every frame for both sides: Rust serialises `to_worker` and parses `from_worker`; `tests/test_litellm/callbacks_v1/test_host.py` feeds the worker the first and expects the second. The frames embed the contract's own golden envelope and request, so the two golden directories cannot drift
+- `Worker` is the blocking reference client: what a conforming gateway does, in the simplest form that can be tested end to end. The production host (async, supervised, a bounded queue per subscriber, restart, timeouts) replaces the client and keeps the protocol
+- `tests/worker.rs` is end to end against a real Python worker and is `#[ignore]`d because it needs an interpreter that can import `litellm`; run it with `PYO3_PYTHON=... cargo test -p litellm-callbacks-v1-exthost -- --ignored`

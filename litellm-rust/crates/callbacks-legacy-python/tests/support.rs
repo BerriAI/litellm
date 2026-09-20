@@ -5,12 +5,12 @@ use pyo3::types::{PyDict, PyTuple};
 
 use crate::{LegacyPythonLifecycle, LegacyPythonSurface, PublicCall};
 
-/// The parameters of every `callbacks_legacy_python` function, as the real module declares them.
-/// `tests/test_litellm/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
+/// The parameters of every `callbacks.legacy` function, as the real module declares them.
+/// `tests/test_litellm/rust_bridge/test_callbacks_legacy.py` pins this file to the Python
 /// signatures, and [`namespace`] binds every fake call against it.
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
 
-/// Stand-ins for `callbacks_legacy_python`, the only Python module the crate calls. Tests
+/// Stand-ins for `callbacks.legacy`, the only Python module the crate calls. Tests
 /// share one interpreter and run concurrently, so each fake is installed idempotently and
 /// forwards to the per-test `StubLogger` it is handed (directly, or as `kwargs['logger']`).
 /// Every fake is bound against the contract first, so a call the real module would reject
@@ -23,10 +23,10 @@ import sys
 import traceback
 import types
 
-for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_legacy_python'):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_legacy'):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-legacy = sys.modules['litellm.rust_bridge.callbacks_legacy_python']
+legacy = sys.modules['litellm.rust_bridge.callbacks_legacy']
 CONTRACT = json.loads(python_contract)
 
 

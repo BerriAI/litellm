@@ -10,8 +10,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.rust_bridge import callbacks_legacy_python as callbacks
-from litellm.rust_bridge.callbacks_legacy_python import check_limits, setup
+from litellm.rust_bridge import callbacks_legacy as callbacks
+from litellm.rust_bridge.callbacks_legacy import check_limits, setup
 
 _OCR_KWARGS: Final = MappingProxyType(
     {
