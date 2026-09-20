@@ -376,7 +376,7 @@ def _lit4152_worker_config_dict():
         "master_key": _LIT4152_SECRETS[0],
         "database_url": _LIT4152_SECRETS[3],
         "api_key": _LIT4152_SECRETS[2],
-        "telemetry": True,
+        "drop_params": True,
     }
 
 
@@ -394,7 +394,7 @@ def test__redact_worker_config_for_logging_dict_masks_all_secret_shapes():
         assert secret not in rendered, f"leak: {secret} in {rendered!r}"
     assert isinstance(redacted, dict)
     assert redacted["model"] == "openai/gpt-4o-mini"
-    assert redacted["telemetry"] is True
+    assert redacted["drop_params"] is True
 
 
 def test__redact_worker_config_for_logging_json_string_round_trips_masked():
@@ -501,7 +501,7 @@ def test__redact_worker_config_for_logging_masks_nested_secret_fields():
 def test_initialize_signature_is_async_with_expected_params():
     sig = inspect.signature(initialize)
     # Hard-coded so a signature change (param added/removed) trips the gate.
-    expected_param_count = 17
+    expected_param_count = 16
     observed = {
         "is_async": inspect.iscoroutinefunction(initialize),
         "param_count": len(sig.parameters),
