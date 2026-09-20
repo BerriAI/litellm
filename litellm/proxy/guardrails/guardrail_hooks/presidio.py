@@ -720,7 +720,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 continue
 
             prev = merged[-1]
-            prev_s = int(prev.get("start") or 0)
             prev_e = int(prev.get("end") or 0)
 
             if s < prev_e:
