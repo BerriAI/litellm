@@ -4361,6 +4361,108 @@ async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_fin
 
 
 @pytest.mark.asyncio
+async def test_finalize_completed_stream_uses_routed_model_for_logging(logging_obj):
+    routed_model = "anthropic/claude-haiku-4-5"
+    client_alias = "myalias/haiku"
+
+    async def _empty_aiter():
+        if False:
+            yield None
+
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=_empty_aiter(),
+        model=routed_model,
+        logging_obj=logging_obj,
+        custom_llm_provider="anthropic",
+    )
+
+    wrapper.sent_last_chunk = True
+    wrapper.chunks = [MagicMock()]
+    wrapper.async_success_handler = AsyncMock()
+
+    assembled_response = ModelResponse(
+        model=client_alias,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=27,
+            completion_tokens=1,
+            total_tokens=28,
+        ),
+    )
+
+    with patch(
+        "litellm.stream_chunk_builder",
+        return_value=assembled_response,
+    ):
+        with pytest.raises(StopAsyncIteration):
+            await wrapper._finalize_completed_stream(cache_hit=False)
+
+        await asyncio.sleep(0)
+
+    logging_obj.dispatch_success_handlers.assert_awaited_once()
+
+    logged_response = logging_obj.dispatch_success_handlers.await_args.args[0]
+
+    assert logged_response.model == routed_model
+
+
+@pytest.mark.asyncio
+async def test_finalize_completed_stream_preserves_model_recovered_from_later_chunk(
+    logging_obj,
+):
+    wrapper_model = "anthropic/claude-haiku-4-5"
+    client_alias = "myalias/haiku"
+    recovered_routed_model = "anthropic/claude-sonnet-4-5"
+
+    async def _empty_aiter():
+        if False:
+            yield None
+
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=_empty_aiter(),
+        model=wrapper_model,
+        logging_obj=logging_obj,
+        custom_llm_provider="anthropic",
+    )
+
+    wrapper.sent_last_chunk = True
+    wrapper.chunks = [
+        {"model": client_alias},
+        {"model": recovered_routed_model},
+    ]
+    wrapper.async_success_handler = AsyncMock()
+
+    assembled_response = ModelResponse(
+        model=recovered_routed_model,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=27,
+            completion_tokens=1,
+            total_tokens=28,
+        ),
+    )
+
+    with patch(
+        "litellm.stream_chunk_builder",
+        return_value=assembled_response,
+    ):
+        with pytest.raises(StopAsyncIteration):
+            await wrapper._finalize_completed_stream(cache_hit=False)
+
+        await asyncio.sleep(0)
+
+    logging_obj.dispatch_success_handlers.assert_awaited_once()
+
+    logged_response = logging_obj.dispatch_success_handlers.await_args.args[0]
+
+    assert logged_response.model == recovered_routed_model
+
+
+@pytest.mark.asyncio
 async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_correlation_context(monkeypatch):
     """_check_max_streaming_duration() raises litellm.Timeout when a client keeps
     an async stream open past LITELLM_MAX_STREAMING_DURATION_SECONDS. That raise
