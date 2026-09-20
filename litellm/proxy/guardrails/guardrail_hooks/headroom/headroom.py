@@ -115,7 +115,7 @@ async def _estimate_compressible_tokens(model: object, messages: list[dict[str, 
             model=model if isinstance(model, str) else "",
             messages=string_rows,
         )
-    except ValueError as e:
+    except (ValueError, TypeError, AttributeError) as e:
         verbose_proxy_logger.debug("Headroom: token estimate unavailable, compressing: %s", e)
         return None
 

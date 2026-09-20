@@ -381,8 +381,9 @@ async def test_apply_guardrail_min_tokens_ignores_rows_the_service_cannot_compre
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_compresses_when_a_row_shape_cannot_be_counted():
-    odd_row = {"role": "user", "content": "Run it.", "tool_calls": "not-a-list"}
+@pytest.mark.parametrize("tool_calls", ["not-a-list", [1], [{"function": None}]])
+async def test_apply_guardrail_compresses_when_a_row_shape_cannot_be_counted(tool_calls: object):
+    odd_row = {"role": "user", "content": "Run it.", "tool_calls": tool_calls}
     messages = [ORIGINAL_MESSAGES[0], odd_row, ORIGINAL_MESSAGES[2], ORIGINAL_MESSAGES[3]]
     inputs = GenericGuardrailAPIInputs(texts=["Run it."], structured_messages=messages)
     request_data = {"model": "gpt-4o"}
