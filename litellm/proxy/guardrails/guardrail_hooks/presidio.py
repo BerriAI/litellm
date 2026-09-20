@@ -9,11 +9,13 @@
 
 
 import asyncio
-import json
-import threading
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import reduce
+import json
+import threading
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
 
 import aiohttp
@@ -695,32 +697,57 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
     @staticmethod
     def _resolve_overlapping_spans(
-        analyze_results: list[dict[str, Any]] | list[PresidioAnalyzeResponseItem],
-    ) -> list[dict[str, Any]]:
-        if not analyze_results:
-            return []
-
-        sorted_by_priority = sorted(
-            analyze_results,
-            key=lambda x: (
-                -x.get("score", 0),
-                -(x.get("end", 0) - x.get("start", 0)),
-                x.get("start", 0),
-            ),
+        analyze_results: Sequence[Mapping[str, Any]],
+    ) -> tuple[Mapping[str, Any], ...]:
+        valid_candidates: Final = tuple(
+            c
+            for c in analyze_results
+            if c.get("start") is not None
+            and c.get("end") is not None
+            and int(c["start"]) < int(c["end"])
         )
-        accepted_spans: list[dict[str, Any]] = []
-        for candidate in sorted_by_priority:
-            c_start = candidate["start"]
-            c_end = candidate["end"]
-            overlaps = False
-            for acc in accepted_spans:
-                if max(c_start, acc["start"]) < min(c_end, acc["end"]):
-                    overlaps = True
-                    break
-            if not overlaps:
-                accepted_spans.append(candidate)
+        if not valid_candidates:
+            return ()
 
-        return sorted(accepted_spans, key=lambda x: x["start"])
+        sorted_by_start: Final = sorted(
+            valid_candidates,
+            key=lambda x: (int(x["start"]), int(x["end"])),
+        )
+
+        def _cluster_reducer(
+            acc: tuple[tuple[Mapping[str, Any], ...], ...],
+            item: Mapping[str, Any],
+        ) -> tuple[tuple[Mapping[str, Any], ...], ...]:
+            if not acc:
+                return ((item,),)
+            last_cluster: Final = acc[-1]
+            cluster_max_end: Final = max(int(s["end"]) for s in last_cluster)
+            if int(item["start"]) < cluster_max_end:
+                return acc[:-1] + (last_cluster + (item,),)
+            return acc + ((item,),)
+
+        clusters: Final = reduce(_cluster_reducer, sorted_by_start, ())
+
+        def _resolve_cluster(cluster: tuple[Mapping[str, Any], ...]) -> Mapping[str, Any]:
+            cluster_start: Final = min(int(s["start"]) for s in cluster)
+            cluster_end: Final = max(int(s["end"]) for s in cluster)
+            best_candidate: Final = max(
+                cluster,
+                key=lambda x: (
+                    int(x["start"]) == cluster_start and int(x["end"]) == cluster_end,
+                    float(x.get("score") or 0),
+                    int(x["end"]) - int(x["start"]),
+                ),
+            )
+            resolved: Final = MappingProxyType({
+                "entity_type": best_candidate.get("entity_type") or "UNKNOWN",
+                "start": cluster_start,
+                "end": cluster_end,
+                "score": max(float(s.get("score") or 0) for s in cluster),
+            })
+            return resolved
+
+        return tuple(_resolve_cluster(c) for c in clusters)
 
     def _finalize_presidio_anonymize_numbered_tokens(
         self,

@@ -3196,15 +3196,45 @@ def test_finalize_presidio_anonymize_numbered_tokens_identical_spans():
     assert set(re.findall(r"<[A-Z_]+_\d+>", result)) == set(pii_tokens.keys())
 
 
+def test_finalize_presidio_anonymize_numbered_tokens_nested_higher_score_span():
+    import re
+
+    from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
+
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    text = "Card: 1234-5678-9012-3456."
+    analyze_results = [
+        {"entity_type": "CREDIT_CARD", "start": 6, "end": 25, "score": 0.70},
+        {"entity_type": "US_BANK_NUMBER", "start": 6, "end": 10, "score": 0.95},
+    ]
+    request_data = {"metadata": {}}
+    masked_entity_count = {}
+    result = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=text,
+        analyze_results=analyze_results,
+        request_data=request_data,
+        masked_entity_count=masked_entity_count,
+    )
+    assert result == "Card: <CREDIT_CARD_1>."
+    pii_tokens = request_data["metadata"]["pii_tokens"]
+    assert pii_tokens["<CREDIT_CARD_1>"] == "1234-5678-9012-3456"
+    assert "<US_BANK_NUMBER_" not in pii_tokens
+    assert "-5678" not in result
+    assert set(re.findall(r"<[A-Z_]+_\d+>", result)) == set(pii_tokens.keys())
+
+
 def test_resolve_overlapping_spans_empty_and_disjoint():
     from litellm.proxy.guardrails.guardrail_hooks.presidio import _OPTIONAL_PresidioPIIMasking
 
-    assert _OPTIONAL_PresidioPIIMasking._resolve_overlapping_spans([]) == []
+    assert len(_OPTIONAL_PresidioPIIMasking._resolve_overlapping_spans([])) == 0
     disjoint = [
         {"entity_type": "PERSON", "start": 0, "end": 5, "score": 0.9},
         {"entity_type": "PHONE_NUMBER", "start": 10, "end": 20, "score": 0.8},
     ]
-    assert _OPTIONAL_PresidioPIIMasking._resolve_overlapping_spans(disjoint) == disjoint
+    resolved = _OPTIONAL_PresidioPIIMasking._resolve_overlapping_spans(disjoint)
+    assert len(resolved) == 2
+    assert resolved[0]["start"] == 0 and resolved[0]["end"] == 5
+    assert resolved[1]["start"] == 10 and resolved[1]["end"] == 20
 
 
 @pytest.mark.asyncio
