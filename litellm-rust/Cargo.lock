@@ -1976,11 +1976,10 @@ checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 name = "litellm-auth"
 version = "0.1.0"
 dependencies = [
- "serde",
- "subtle",
- "thiserror 2.0.19",
- "tokio",
- "veil",
+ "litellm-auth-aws",
+ "litellm-auth-azure",
+ "litellm-auth-gcp",
+ "litellm-auth-types",
 ]
 
 [[package]]
@@ -1993,7 +1992,7 @@ dependencies = [
  "aws-sigv4",
  "aws-smithy-runtime-api",
  "aws-types",
- "litellm-auth",
+ "litellm-auth-types",
  "litellm-http",
  "moka",
  "reqwest 0.12.28",
@@ -2009,7 +2008,7 @@ version = "0.1.0"
 dependencies = [
  "azure_core",
  "azure_identity",
- "litellm-auth",
+ "litellm-auth-types",
  "moka",
  "rstest",
  "serde_json",
@@ -2024,11 +2023,22 @@ name = "litellm-auth-gcp"
 version = "0.1.0"
 dependencies = [
  "gcp_auth",
- "litellm-auth",
+ "litellm-auth-types",
  "moka",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
+]
+
+[[package]]
+name = "litellm-auth-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "subtle",
+ "thiserror 2.0.19",
+ "tokio",
+ "veil",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, future::Future, path::Path, pin::Pin, sync::Arc};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
-use litellm_auth::{
+use litellm_auth_types::{
     CredentialPlacement, Error, InputSource, SecretValue, Sourced, http::apply_credential,
 };
 use moka::future::Cache;
