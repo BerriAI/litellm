@@ -34,6 +34,7 @@ from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
 from litellm.llms.searchapi.search.transformation import SearchAPIConfig
 from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
 from litellm.llms.serper.search.transformation import SerperSearchConfig
+from litellm.llms.serply.search.transformation import SerplySearchConfig
 from litellm.llms.tavily.search.transformation import TavilySearchConfig
 from litellm.llms.tinyfish.search.transformation import TinyfishSearchConfig
 from litellm.llms.you_com.search.transformation import YouComSearchConfig
@@ -44,6 +45,7 @@ ATTACKER_BASE = "https://attacker.example.com"
 # as trusted; cleared before each test so the suite is hermetic.
 _BASE_ENV_VARS = (
     "SERPER_API_BASE",
+    "SERPLY_API_BASE",
     "TAVILY_API_BASE",
     "PERPLEXITY_API_BASE",
     "APISERPENT_API_BASE",
@@ -75,6 +77,7 @@ ProviderSpec = Tuple[Type[BaseSearchConfig], Dict[str, str], str, Dict[str, str]
 
 PROVIDERS: Tuple[ProviderSpec, ...] = (
     (SerperSearchConfig, {"SERPER_API_KEY": "srv"}, "caller-key", {}),
+    (SerplySearchConfig, {"SERPLY_API_KEY": "srv"}, "caller-key", {}),
     (TavilySearchConfig, {"TAVILY_API_KEY": "srv"}, "caller-key", {}),
     (PerplexitySearchConfig, {"PERPLEXITYAI_API_KEY": "srv"}, "caller-key", {}),
     (APISerpentSearchConfig, {"APISERPENT_API_KEY": "srv"}, "caller-key", {}),
