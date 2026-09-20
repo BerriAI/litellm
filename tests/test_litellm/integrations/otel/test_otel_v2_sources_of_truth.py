@@ -1,6 +1,7 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -12,11 +13,11 @@ import litellm
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
+    HTTP,
     Error,
     GenAI,
     GenAIOperation,
     GenAIOutputType,
-    HTTP,
     LiteLLM,
     OpenTelemetryV2Config,
     Server,
@@ -29,8 +30,8 @@ from litellm.integrations.otel import (
 from litellm.integrations.otel.mappers.genai import GenAIMapper
 from litellm.integrations.otel.model import spans as spans_mod
 from litellm.integrations.otel.model.metadata import LLMCallEvent
-from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.payloads import (
+    EmbeddingOutput,
     LLMCallSpanData,
     RequestIdentity,
     _upstream_address_port,
@@ -43,6 +44,7 @@ from litellm.integrations.otel.model.spans import (
     root_roles,
     validate_registry,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 
 
 @pytest.fixture(autouse=True)
@@ -693,6 +695,180 @@ def test_content_capture_gated_off_by_default():
     data = LLMCallSpanData.from_standard_logging_payload(payload)
     assert data.messages_in == ()
     assert data.choices_out == ()
+    assert data.finish_reasons == ("stop",)
+
+
+def _embedding_payload(vectors: list[object], **overrides):
+    rows = [{"object": "embedding", "index": i, "embedding": vector} for i, vector in enumerate(vectors)]
+    return _sample_payload(
+        call_type="aembedding",
+        model="text-embedding-3-small",
+        response={"model": "text-embedding-3-small", "object": "list", "data": rows},
+        **overrides,
+    )
+
+
+def test_embedding_response_is_summarized_as_vector_count_and_width():
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _embedding_payload([[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]), capture_content=True
+    )
+
+    assert data.embedding_output == EmbeddingOutput(count=2, dimensions=3)
+    assert json.loads(data.embedding_output.as_json()) == {"count": 2, "dimensions": 3}
+    assert data.choices_out == ()
+
+
+def test_embedding_summary_follows_the_content_capture_gate():
+    assert LLMCallSpanData.from_standard_logging_payload(_embedding_payload([[0.1]])).embedding_output is None
+
+
+def test_embedding_summary_leaves_width_unknown_for_base64_vectors():
+    data = LLMCallSpanData.from_standard_logging_payload(_embedding_payload(["AAAA"]), capture_content=True)
+
+    assert data.embedding_output == EmbeddingOutput(count=1, dimensions=None)
+
+
+def test_embedding_summary_is_absent_without_vectors_and_for_chat_data_lists():
+    empty = LLMCallSpanData.from_standard_logging_payload(_embedding_payload([]), capture_content=True)
+    chat = LLMCallSpanData.from_standard_logging_payload(
+        _sample_payload(response={"data": [{"embedding": [0.1]}]}), capture_content=True
+    )
+
+    assert empty.embedding_output is None
+    assert chat.embedding_output is None
+
+
+def _responses_payload(output: list[object], status: str = "completed", **response_fields: object):
+    return _sample_payload(
+        call_type="aresponses",
+        model="gpt-5.4-nano",
+        response={"id": "resp_1", "object": "response", "status": status, "output": output, **response_fields},
+    )
+
+
+_RESPONSES_TEXT_ITEM = {
+    "type": "message",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "po", "annotations": []}, {"type": "output_text", "text": "ng"}],
+}
+
+
+def test_responses_output_text_becomes_one_assistant_choice_with_stop():
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload([{"type": "reasoning", "summary": []}, _RESPONSES_TEXT_ITEM]), capture_content=True
+    )
+
+    assert json.loads(json.dumps(data.choices_out)) == [
+        {
+            "message": {"role": "assistant", "content": "pong", "refusal": None, "tool_calls": None},
+            "finish_reason": "stop",
+        }
+    ]
+    assert data.finish_reasons == ("stop",)
+    assert data.response_id == "resp_1"
+
+
+def test_responses_tool_calls_fold_into_the_assistant_message_with_tool_calls_finish_reason():
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload(
+            [
+                _RESPONSES_TEXT_ITEM,
+                {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "sf"}'},
+                {"type": "custom_tool_call", "call_id": "call_2", "name": "grep", "input": "-r TODO"},
+            ]
+        ),
+        capture_content=True,
+    )
+
+    assert len(data.choices_out) == 1
+    message = data.choices_out[0]["message"]
+    assert message["content"] == "pong"
+    assert json.loads(json.dumps(message["tool_calls"])) == [
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "sf"}'}},
+        {"id": "call_2", "type": "function", "function": {"name": "grep", "arguments": "-r TODO"}},
+    ]
+    assert data.finish_reasons == ("tool_calls",)
+
+
+def test_responses_tool_call_only_output_has_no_content():
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload([{"type": "function_call", "id": "fc_1", "name": "get_weather", "arguments": "{}"}]),
+        capture_content=True,
+    )
+
+    assert data.choices_out[0]["message"]["content"] is None
+    assert data.choices_out[0]["message"]["tool_calls"][0]["id"] == "fc_1"
+
+
+@pytest.mark.parametrize(
+    ("status", "response_fields", "expected"),
+    [
+        ("incomplete", {"incomplete_details": {"reason": "max_output_tokens"}}, ("length",)),
+        ("incomplete", {"incomplete_details": {"reason": "content_filter"}}, ("content_filter",)),
+        ("incomplete", {}, ("length",)),
+        ("failed", {}, ()),
+    ],
+)
+def test_responses_status_maps_to_finish_reasons(status, response_fields, expected):
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload([_RESPONSES_TEXT_ITEM], status=status, **response_fields), capture_content=True
+    )
+
+    assert data.finish_reasons == expected
+    assert data.choices_out[0]["message"]["content"] == "pong"
+
+
+def test_responses_output_follows_the_content_capture_gate_but_finish_reasons_do_not():
+    data = LLMCallSpanData.from_standard_logging_payload(_responses_payload([_RESPONSES_TEXT_ITEM]))
+
+    assert data.choices_out == ()
+    assert data.finish_reasons == ("stop",)
+
+
+def test_responses_content_only_reads_output_text_parts():
+    item = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "refusal", "refusal": "no", "text": "not output"}, {"type": "output_text", "text": "ok"}],
+    }
+    data = LLMCallSpanData.from_standard_logging_payload(_responses_payload([item]), capture_content=True)
+
+    assert data.choices_out[0]["message"]["content"] == "ok"
+    assert data.choices_out[0]["message"]["refusal"] == "no"
+
+
+def test_responses_refusal_only_output_keeps_the_refusal_text():
+    item = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "refusal", "refusal": "I can't "}, {"type": "refusal", "refusal": "help with that."}],
+    }
+    data = LLMCallSpanData.from_standard_logging_payload(_responses_payload([item]), capture_content=True)
+
+    assert json.loads(json.dumps(data.choices_out)) == [
+        {
+            "message": {"role": "assistant", "content": None, "refusal": "I can't help with that.", "tool_calls": None},
+            "finish_reason": "stop",
+        }
+    ]
+
+
+def test_responses_output_without_messages_or_tool_calls_stays_empty():
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _responses_payload([{"type": "reasoning", "summary": []}]), capture_content=True
+    )
+
+    assert data.choices_out == ()
+    assert data.finish_reasons == ()
+
+
+def test_chat_choices_win_over_a_responses_output_list():
+    payload = _sample_payload(response={"choices": [{"finish_reason": "stop", "message": {"content": "chat"}}]})
+    payload["response"]["output"] = [_RESPONSES_TEXT_ITEM]
+    data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
+
+    assert data.choices_out[0]["message"]["content"] == "chat"
     assert data.finish_reasons == ("stop",)
 
 

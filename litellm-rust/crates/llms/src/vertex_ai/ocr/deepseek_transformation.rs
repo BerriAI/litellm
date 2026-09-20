@@ -1,25 +1,30 @@
-use litellm_auth_gcp::{self as vertex, VertexConfig};
+use litellm_auth_gcp as vertex;
 use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::transformation::VertexAiOcrConfig;
-use crate::{
-    base_llm::ocr::{
-        error::Error,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions,
-            OcrPageImage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-            credential_env, decode_and_normalize_response, decode_response_value,
-        },
+use super::{common_utils::vertex_config, transformation::VertexAiOcrConfig};
+use crate::base_llm::ocr::{
+    error::Error,
+    handler::OcrClient,
+    transformation::{
+        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage,
+        OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        decode_and_normalize_response, decode_response_value,
     },
-    custom_httpx::llm_http_handler::OcrClient,
 };
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
 const MODEL_PREFIX: &str = "deepseek-ai/";
 const DEFAULT_LOCATION: &str = "us-central1";
 const DEEPSEEK_OCR_PARAMS: &[&str] = &["stream", "temperature", "max_tokens", "top_p", "n", "stop"];
+
+/// DeepSeek-OCR is a transcription model: at the endpoint's default sampling temperature it
+/// hallucinates extra text, so requests are greedy unless the caller sets a temperature.
+const DEFAULT_TEMPERATURE: f64 = 0.0;
+/// Greedy decoding on dense screenshots falls into repetition loops that run to the token limit;
+/// a mild penalty breaks them without changing clean-document output.
+const DEFAULT_REPETITION_PENALTY: f64 = 1.05;
 
 pub type DeepSeekOcrParams = OpaqueParams;
 
@@ -124,12 +129,10 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         _params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, Error> {
-        let config = VertexConfig::from_sourced_optional_params(
-            &request.optional_params,
-            &request.input_sources,
-        )?;
-        let location = vertex::get_vertex_ai_location(&config, &credential_env)
-            .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
+        let config = vertex_config(request)?;
+        let location =
+            vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
+                .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
         self.get_complete_url(
             request.connection.api_base.as_deref(),
             &environment.project_id,
@@ -175,11 +178,19 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
                     image_url: document.source().to_string(),
                 }],
             }],
-            params: optional_params
-                .iter()
-                .filter(|(name, _)| DEEPSEEK_OCR_PARAMS.contains(&name.as_str()))
-                .map(|(name, value)| (name.clone(), value.clone()))
-                .collect(),
+            params: [
+                ("temperature", DEFAULT_TEMPERATURE),
+                ("repetition_penalty", DEFAULT_REPETITION_PENALTY),
+            ]
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), Value::from(value)))
+            .chain(
+                optional_params
+                    .iter()
+                    .filter(|(name, _)| DEEPSEEK_OCR_PARAMS.contains(&name.as_str()))
+                    .map(|(name, value)| (name.clone(), value.clone())),
+            )
+            .collect(),
         })
     }
 }
@@ -486,6 +497,46 @@ mod tests {
         );
         assert_eq!(result[name], value);
         assert!(result.get("ignored").is_none());
+    }
+
+    #[test]
+    fn request_uses_greedy_defaults_unless_the_caller_overrides_them() {
+        let request = |params: DeepSeekOcrParams| {
+            serde_json::to_value(
+                VertexAIDeepSeekOCRConfig
+                    .transform_ocr_request(
+                        "deepseek-ai/deepseek-ocr-maas",
+                        document(),
+                        &params,
+                        &[],
+                    )
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let defaults = request(DeepSeekOcrParams::default());
+        assert_eq!(defaults["temperature"], 0.0);
+        assert_eq!(defaults["repetition_penalty"], 1.05);
+        assert_eq!(
+            request(serde_json::from_value(json!({"temperature":0.7})).unwrap())["temperature"],
+            0.7
+        );
+    }
+
+    #[test]
+    fn caller_temperature_argument_overrides_the_greedy_default_in_the_composed_body() {
+        let arguments = serde_json::from_value(json!({"temperature":0.7})).unwrap();
+        let body = VertexAIDeepSeekOCRConfig
+            .transform_ocr_request(
+                "deepseek-ai/deepseek-ocr-maas",
+                document(),
+                &DeepSeekOcrParams::default(),
+                &[],
+            )
+            .unwrap();
+        let composed =
+            litellm_core_utils::call_arguments::compose_body(&arguments, &body, &[]).unwrap();
+        assert_eq!(composed["temperature"], 0.7);
     }
 
     #[rstest]

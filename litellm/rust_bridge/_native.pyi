@@ -9,6 +9,8 @@ from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMe
 
 class RustBridgeDeclined(Exception): ...
 class RustUpstreamError(Exception): ...
+class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
+class ProcessReservedForForking(RuntimeError): ...
 
 def ocr(
     request: LiteLLMOcrRequest,
@@ -101,8 +103,12 @@ class TokenCounter:
     def acount_request(self, body: bytes) -> Future[dict[str, object]]: ...
 
 def gil_stats() -> dict[str, int]: ...
+def process_state_started() -> bool: ...
+def reserve_process_for_forking() -> None: ...
 
 __all__ = [
+    "ForkedAfterNativeRuntimeStarted",
+    "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
     "RustUpstreamError",
@@ -116,5 +122,7 @@ __all__ = [
     "gil_stats",
     "messages",
     "ocr",
+    "process_state_started",
+    "reserve_process_for_forking",
     "transcription",
 ]
