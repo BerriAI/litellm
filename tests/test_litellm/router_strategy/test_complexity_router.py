@@ -15035,7 +15035,9 @@ class TestHealthFallbackDispatch:
     ) -> None:
         from litellm.types.router import RouterRateLimitError
 
-        router: Final = self._router(config={"tiers": {"SIMPLE": "primary", "MEDIUM": "peer", "COMPLEX": "large"}})
+        router: Final = self._router(
+            config={"context_compaction": False, "tiers": {"SIMPLE": "primary", "MEDIUM": "peer", "COMPLEX": "large"}}
+        )
         router.add_deployment(
             Deployment(
                 model_name="large",
@@ -15112,7 +15114,9 @@ class TestHealthFallbackDispatch:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("default_fits", [True, False])
     async def test_modality_default_must_also_fit_context(self, default_fits: bool) -> None:
-        router: Final = self._router(config={"modality_routing": True, "tiers": {"SIMPLE": "primary"}})
+        router: Final = self._router(
+            config={"context_compaction": False, "modality_routing": True, "tiers": {"SIMPLE": "primary"}}
+        )
         for deployment in router.model_list:
             deployment["model_info"]["supports_vision"] = deployment["model_name"] == "fallback"
             deployment["model_info"]["max_input_tokens"] = 10000 if default_fits else 10

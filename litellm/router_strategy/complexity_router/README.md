@@ -400,6 +400,31 @@ affinity write happens upstream of the gate and stores the session's own model, 
 turn replays the original pin and the override is never pinned in its place. It does nothing
 unless `modality_routing` is also on.
 
+### Native compact-to-fit
+
+The complexity router keeps the selected answering deployment when full conversation history approaches its input limit. This is enabled by default for async `/v1/chat/completions`, `/v1/responses` and `/v1/messages`. It takes precedence over context-window escalation for those requests
+
+The router selects a native-capable compactor from its configured tier groups, checks that the older history fits, and requests Anthropic's on-demand native compaction. It inserts the returned summary as ordinary assistant text, preserving instructions, tools and the latest user turn. The answering model can be Haiku, DeepSeek, Kimi, GPT or another configured model; it does not need to support compaction itself. A larger context window alone does not make a model a native compactor
+
+Native capability comes from `supports_anthropic_compaction` in model metadata. Selection skips groups containing an unsupported, undersized or incompatibly configured deployment. No unrelated gateway model is selected automatically. To name a separate compactor or change the defaults:
+
+```yaml
+complexity_router_config:
+  context_compaction:
+    model: native-compactor
+    trigger_ratio: 0.9
+    max_tokens: 4096
+    timeout_seconds: 120
+```
+
+Omit `context_compaction` to select automatically. Set it to `false` or `null` to disable it. The compactor must be a regular configured model group. The caller must have access to it and sufficient budget; configuring it grants no additional access
+
+The input budget reserves the effective output allowance and a safety margin. Counts are estimates, so the provider remains authoritative. The router rechecks the compacted payload before sending it, attempts compaction only once per request, and reuses that attempt across answering retries. Compaction and answering are separate billed calls; output usage and therefore the final cost are not exactly knowable in advance
+
+Responses compaction supports complete text history with ordinary function calls and results. Only its older prefix is converted for the compactor; retained items stay in their original format. Stored history (`previous_response_id` or `conversation`), explicit native context management, and opaque reasoning/compaction items remain on their existing client-managed path. This feature does not convert OpenAI encrypted state or claim it can be replayed across providers. The existing `/responses/compact` endpoint remains available for native OpenAI replay
+
+A single oversized user turn, unclosed tool exchanges, unsupported Responses content, missing compactor capacity or an oversized summary produces a clear error instead of silently dropping context or changing the answerer. Fitting requests need no compaction. Models with unknown input limits retain their existing admission behavior
+
 ### Session pin retention
 
 `session_affinity_ttl_seconds` is the idle window for both the model pin selected by session affinity and the deployment pin. Every request that reuses a pin refreshes its TTL, so a session actively sending requests stays pinned. After the window passes with no pin reuse, the next request classifies again and creates a fresh pin. Omit the setting to track the default of 3600 seconds.
