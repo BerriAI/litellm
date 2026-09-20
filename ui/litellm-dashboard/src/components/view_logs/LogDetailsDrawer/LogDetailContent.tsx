@@ -658,6 +658,7 @@ function RequestResponseSection({
             <div>
               <TabsContent value="pretty">
                 <PrettyMessagesView
+                  key={logEntry.request_id}
                   request={getRawRequest()}
                   response={getFormattedResponse()}
                   metrics={{
