@@ -62,12 +62,12 @@ class FailureRow(BaseModel):
 
 
 class DailySpend(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    spend: float | None = None
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
-    api_requests: int | None = None
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+    api_requests: int
 
 
 class Rollups(BaseModel):
@@ -245,7 +245,6 @@ def register_scenario_deployment(
     *,
     response: StoredResponse | None = None,
     marker_suffix: str = "",
-    model_name: str | None = None,
 ) -> RegisteredDeployment:
     control_url: Final = os.environ["INTEGRATION_UPSTREAM_URL"].rstrip("/")
     run_marker: Final = sha256(key.encode()).hexdigest()[:12]
@@ -254,7 +253,7 @@ def register_scenario_deployment(
         case.response if response is None else response,
     )
     scenario.cleanups.callback(delete_scenario, handle)
-    registered_model_name: Final = model_name or f"cost-{marker}{marker_suffix}-{run_marker}"
+    registered_model_name: Final = f"cost-{marker}{marker_suffix}-{run_marker}"
     parameters: Final = {
         "model": case.litellm_model,
         "api_key": case.api_key,

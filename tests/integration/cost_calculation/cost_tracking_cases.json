@@ -6930,7 +6930,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "msg_$REQUEST_ID",
+          "id": "msg_$UNIQUE_ID",
           "type": "message",
           "role": "assistant",
           "model": "claude-sonnet-5",
@@ -7690,7 +7690,7 @@
         "content_type": "text/event-stream",
         "frames": [
           "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_$REQUEST_ID\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null}}",
-          "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"tool_use\", \"id\": \"toolu_$REQUEST_ID\", \"name\": \"get_weather\", \"input\": {}}}",
+          "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"tool_use\", \"id\": \"call_fixture_0001\", \"name\": \"get_weather\", \"input\": {}}}",
           "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"{\\\"city\\\": \\\"Berlin\\\", \\\"days\\\": 7, \\\"units\\\": \\\"metric\\\", \\\"notes\\\": \\\"filler filler filler filler fil\"}}",
           "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"ler filler filler filler filler filler filler filler filler filler filler filler filler fi\"}}",
           "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"ller filler filler filler filler filler filler filler filler filler filler filler filler \\\"}\"}}",
@@ -7704,8 +7704,7 @@
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
         },
-        "prompt_tokens": 49,
-        "completion_tokens": 111
+        "min_completion_tokens": 60
       }
     },
     {
@@ -12877,8 +12876,7 @@
           "input_cost_per_token": 5.2e-07,
           "output_cost_per_token": 3.12e-06
         },
-        "prompt_tokens": 46,
-        "completion_tokens": 88
+        "min_completion_tokens": 60
       }
     },
     {
@@ -20752,7 +20750,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "chatcmpl-$REQUEST_ID",
+          "id": "chatcmpl-$UNIQUE_ID",
           "object": "chat.completion",
           "created": 1789788262,
           "model": "gpt-5.6",
@@ -21610,7 +21608,7 @@
         "content_type": "text/event-stream",
         "frames": [
           "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\"}, \"finish_reason\": null}], \"usage\": null}",
-          "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"tool_calls\": [{\"index\": 0, \"id\": \"call_$REQUEST_ID\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"\"}}]}, \"finish_reason\": null}], \"usage\": null}",
+          "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"tool_calls\": [{\"index\": 0, \"id\": \"call_fixture_0001\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"\"}}]}, \"finish_reason\": null}], \"usage\": null}",
           "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"{\\\"city\\\": \\\"Berlin\\\", \\\"days\\\": 7, \\\"units\\\": \\\"metric\\\", \\\"notes\\\": \\\"filler filler filler filler fil\"}}]}, \"finish_reason\": null}], \"usage\": null}",
           "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"ler filler filler filler filler filler filler filler filler filler filler filler filler fi\"}}]}, \"finish_reason\": null}], \"usage\": null}",
           "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"ller filler filler filler filler filler filler filler filler filler filler filler filler \\\"}\"}}]}, \"finish_reason\": null}], \"usage\": null}",
@@ -21623,8 +21621,7 @@
           "input_cost_per_token": 1.75e-06,
           "output_cost_per_token": 1.4e-05
         },
-        "prompt_tokens": 44,
-        "completion_tokens": 105
+        "min_completion_tokens": 60
       }
     },
     {
