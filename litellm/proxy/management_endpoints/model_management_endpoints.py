@@ -137,7 +137,7 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
 )
-from litellm.types.utils import without_server_derived_pricing
+from litellm.types.utils import echoed_cost_map_pricing_fields, without_server_derived_pricing
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -876,7 +876,11 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
-    merged_model_info: Final[dict[str, object]] = db_model.model_info.model_dump(exclude_none=True)
+    stored_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
+    echoed_pricing: Final = echoed_cost_map_pricing_fields(stored_model_info)
+    merged_model_info: Final[dict[str, object]] = {
+        k: v for k, v in stored_model_info.items() if k not in echoed_pricing
+    }
 
     # update litellm params
     if updated_patch.litellm_params:

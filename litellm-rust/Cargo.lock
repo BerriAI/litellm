@@ -1960,6 +1960,7 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-types",
  "litellm-auth",
+ "litellm-http",
  "moka",
  "reqwest 0.12.28",
  "serde_json",
@@ -1976,6 +1977,7 @@ dependencies = [
  "azure_identity",
  "litellm-auth",
  "moka",
+ "rstest",
  "serde_json",
  "sha2 0.10.9",
  "strum",
@@ -2028,7 +2030,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-callbacks-legacy"
+name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
  "litellm-auth",
@@ -2050,8 +2052,10 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
+ "litellm-auth-gcp",
  "litellm-core-utils",
  "litellm-host",
+ "litellm-http",
  "litellm-llms",
  "litellm-types",
  "mime_guess",
@@ -2130,6 +2134,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-http"
+version = "0.1.0"
+dependencies = [
+ "http 1.4.2",
+ "hyper-util",
+ "litellm-core-utils",
+ "reqwest 0.12.28",
+ "rstest",
+ "rustls 0.23.42",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "veil",
+ "webpki-roots",
+]
+
+[[package]]
 name = "litellm-llms"
 version = "0.1.0"
 dependencies = [
@@ -2146,6 +2168,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-framing",
  "litellm-host",
+ "litellm-http",
  "litellm-types",
  "reqwest 0.12.28",
  "rstest",
@@ -2153,6 +2176,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_with",
+ "strum",
  "thiserror 2.0.19",
  "time",
  "tokio",
@@ -2167,9 +2191,12 @@ dependencies = [
  "criterion",
  "futures-util",
  "litellm-auth",
- "litellm-callbacks-legacy",
+ "litellm-auth-gcp",
+ "litellm-callbacks-legacy-python",
  "litellm-core",
+ "litellm-core-utils",
  "litellm-host-python",
+ "litellm-http",
  "litellm-llms",
  "litellm-token-counter",
  "litellm-types",
@@ -3019,7 +3046,6 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "futures-channel",
  "futures-core",
  "futures-util",
  "h2 0.4.15",

@@ -307,6 +307,7 @@ def _map_openai_exception(
             model=model,
             llm_provider=custom_llm_provider,
             response=response,
+            body=getattr(original_exception, "body", None),
         )
     elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
         raise ContextWindowExceededError(
@@ -381,6 +382,7 @@ def _map_openai_exception(
             message=f"{exception_provider} - {message}",
             model=model,
             llm_provider=custom_llm_provider,
+            body=getattr(original_exception, "body", None),
         )
     elif "Request too large" in error_str:
         raise RateLimitError(
@@ -389,6 +391,7 @@ def _map_openai_exception(
             llm_provider=custom_llm_provider,
             response=response,
             litellm_debug_info=extra_information,
+            body=getattr(original_exception, "body", None),
         )
     elif (
         "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
@@ -460,6 +463,7 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 response=response,
                 litellm_debug_info=extra_information,
+                body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 500:
             raise InternalServerError(
@@ -468,6 +472,7 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 response=response,
                 litellm_debug_info=extra_information,
+                body=getattr(original_exception, "body", None),
             )
         elif original_exception.status_code == 502:
             raise BadGatewayError(
