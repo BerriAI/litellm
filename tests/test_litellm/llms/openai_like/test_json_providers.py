@@ -546,13 +546,13 @@ class TestLLMTech:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="llmtech/unsloth/Qwen3.8-27B-NVFP4",
+            model="llmtech/nvidia/Qwen3.8-27B-NVFP4",
             custom_llm_provider=None,
             api_base=None,
             api_key=None,
         )
 
-        assert model == "unsloth/Qwen3.8-27B-NVFP4"
+        assert model == "nvidia/Qwen3.8-27B-NVFP4"
         assert provider == "llmtech"
         assert api_base == "https://api.llmtech.eu/v1"
 
@@ -560,7 +560,7 @@ class TestLLMTech:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="unsloth/Qwen3.8-27B-NVFP4",
+            model="nvidia/Qwen3.8-27B-NVFP4",
             custom_llm_provider=None,
             api_base="https://api.llmtech.eu/v1",
             api_key=None,
