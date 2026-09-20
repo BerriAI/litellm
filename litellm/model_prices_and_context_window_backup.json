@@ -67138,9 +67138,9 @@
         "supports_web_search": true
     },
     "openrouter/deepseek/deepseek-v4-flash": {
-        "input_cost_per_token": 3.696e-08,
-        "output_cost_per_token": 7.392e-08,
-        "cache_read_input_token_cost": 7.392e-09,
+        "input_cost_per_token": 3.668e-08,
+        "output_cost_per_token": 7.336e-08,
+        "cache_read_input_token_cost": 7.336e-09,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
