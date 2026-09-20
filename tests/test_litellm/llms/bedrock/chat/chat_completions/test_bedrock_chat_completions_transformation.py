@@ -4,6 +4,7 @@ import json
 
 import httpx
 import pytest
+from pydantic import BaseModel
 
 import litellm
 from litellm.llms.bedrock.chat.chat_completions.transformation import (
@@ -17,6 +18,7 @@ from litellm.llms.bedrock.common_utils import (
     BEDROCK_CONVERSE_ONLY_REQUEST_KEYS,
     BedrockModelInfo,
     bedrock_request_needs_converse,
+    bedrock_route_for_request,
     get_bedrock_chat_config,
     uses_bedrock_runtime_chat_completions,
 )
@@ -471,7 +473,7 @@ def test_converse_only_request_keys_go_to_converse(local_cost_map, fake_aws_env,
     )
 
     assert requests[0].url.raw_path.endswith(b"/model/openai.gpt-oss-20b-1%3A0/converse")
-    (key, value), = converse_only_param.items()
+    ((key, value),) = converse_only_param.items()
     assert json.loads(requests[0].content)[key] == value
 
 
@@ -620,3 +622,124 @@ def test_streaming_handler_keeps_native_reasoning_next_to_the_tagged_split():
 
     assert parsed.choices[0].delta.reasoning_content == "native tagged"
     assert parsed.choices[0].delta.content == "Hi"
+
+
+RESPONSE_FORMAT_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "answer",
+        "schema": {"type": "object", "properties": {"word": {"type": "string"}}, "required": ["word"]},
+        "strict": True,
+    },
+}
+
+
+class Answer(BaseModel):
+    word: str
+
+
+@pytest.mark.parametrize("model", ["openai.gpt-oss-20b-1:0", "bedrock/openai.gpt-oss-120b-1:0"])
+@pytest.mark.parametrize(
+    "response_format, expected_route",
+    [
+        (RESPONSE_FORMAT_JSON_SCHEMA, "converse"),
+        ({"type": "json_object"}, "converse"),
+        (Answer, "converse"),
+        ({"type": "text"}, "chat_completions"),
+        (None, "chat_completions"),
+    ],
+    ids=["json_schema", "json_object", "pydantic", "text", "none"],
+)
+def test_gpt_oss_response_format_falls_back_to_converse(local_cost_map, model, response_format, expected_route):
+    params = {"response_format": response_format}
+    assert bedrock_request_needs_converse(model, params) is (expected_route == "converse")
+    assert BedrockModelInfo.get_bedrock_route(model, params) == expected_route
+
+
+@pytest.mark.parametrize("model", ["global.openai.gpt-5.6-sol", "us.xai.grok-4.6", "bedrock/us-gov.xai.grok-4.6"])
+def test_response_format_stays_on_chat_completions_where_aws_enforces_it(local_cost_map, model):
+    params = {"response_format": RESPONSE_FORMAT_JSON_SCHEMA}
+    assert bedrock_request_needs_converse(model, params) is False
+    assert BedrockModelInfo.get_bedrock_route(model, params) == "chat_completions"
+
+
+SYNTHETIC_NATIVE_MODEL = "vendor.native-model-v1:0"
+
+
+@pytest.mark.parametrize(
+    "capability_flags, request_params, needs_converse",
+    [
+        ({}, {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"}, True),
+        ({}, {"tools": [GET_WEATHER_TOOL]}, True),
+        ({}, {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "none"}, False),
+        (
+            {"supports_bedrock_runtime_chat_completions_tools_with_reasoning": True},
+            {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"},
+            False,
+        ),
+        ({}, {"response_format": RESPONSE_FORMAT_JSON_SCHEMA}, True),
+        (
+            {"supports_bedrock_runtime_chat_completions_response_format": True},
+            {"response_format": RESPONSE_FORMAT_JSON_SCHEMA},
+            False,
+        ),
+        (
+            {"supports_bedrock_runtime_chat_completions_response_format": True},
+            {"response_format": RESPONSE_FORMAT_JSON_SCHEMA, "tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"},
+            True,
+        ),
+    ],
+)
+def test_capability_flags_are_read_from_the_cost_map(monkeypatch, capability_flags, request_params, needs_converse):
+    entry = {
+        "litellm_provider": "bedrock_converse",
+        "supports_bedrock_runtime_chat_completions": True,
+        **capability_flags,
+    }
+    monkeypatch.setattr(litellm, "model_cost", {SYNTHETIC_NATIVE_MODEL: entry})
+    assert bedrock_request_needs_converse(SYNTHETIC_NATIVE_MODEL, request_params) is needs_converse
+    route = bedrock_route_for_request(SYNTHETIC_NATIVE_MODEL, request_params, None)
+    assert (route == "chat_completions") is (not needs_converse)
+
+
+def test_route_for_request_ignores_dropped_params(local_cost_map):
+    params = {"response_format": RESPONSE_FORMAT_JSON_SCHEMA, "guardrailConfig": {"guardrailIdentifier": "gr-1"}}
+    assert bedrock_route_for_request("openai.gpt-oss-20b-1:0", params, None) == "converse"
+    assert bedrock_route_for_request("openai.gpt-oss-20b-1:0", params, ["guardrailConfig"]) == "converse"
+    assert (
+        bedrock_route_for_request("openai.gpt-oss-20b-1:0", params, ["guardrailConfig", "response_format"])
+        == "chat_completions"
+    )
+
+
+def test_gpt_oss_response_format_goes_to_converse_with_json_tool_call(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(
+        model="bedrock/openai.gpt-oss-20b-1:0",
+        messages=[{"role": "user", "content": "Reply with the single word pong."}],
+        response_format=RESPONSE_FORMAT_JSON_SCHEMA,
+        max_tokens=64,
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/openai.gpt-oss-20b-1%3A0/converse")
+    body = json.loads(requests[0].content)
+    assert body["toolConfig"]["tools"][0]["toolSpec"]["name"] == "json_tool_call"
+    assert body["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
+    assert body["inferenceConfig"]["maxTokens"] == 64
+    assert "response_format" not in body
+    assert "max_completion_tokens" not in body
+
+
+def test_gpt56_response_format_is_sent_as_is_on_chat_completions(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=_chat_completion_json('{"word": "pong"}', "global.openai.gpt-5.6-sol"))
+    response = litellm.completion(
+        model="bedrock/global.openai.gpt-5.6-sol",
+        messages=[{"role": "user", "content": "Reply with the single word pong."}],
+        response_format=RESPONSE_FORMAT_JSON_SCHEMA,
+        client=client,
+    )
+
+    assert str(requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
+    assert json.loads(requests[0].content)["response_format"] == RESPONSE_FORMAT_JSON_SCHEMA
+    assert response.choices[0].message.content == '{"word": "pong"}'

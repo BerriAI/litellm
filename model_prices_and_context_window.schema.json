@@ -74,9 +74,6 @@
             "xhigh"
           ]
         },
-        "bedrock_runtime_chat_completions_tools_require_reasoning_none": {
-          "type": "boolean"
-        },
         "cache_creation_input_audio_token_cost": {
           "type": "number",
           "minimum": 0
@@ -830,6 +827,15 @@
         "supports_audio_output": {
           "type": "boolean"
         },
+        "supports_bedrock_runtime_chat_completions": {
+          "type": "boolean"
+        },
+        "supports_bedrock_runtime_chat_completions_response_format": {
+          "type": "boolean"
+        },
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {
+          "type": "boolean"
+        },
         "supports_computer_use": {
           "type": "boolean"
         },
@@ -999,9 +1005,6 @@
           "type": "integer",
           "minimum": 0,
           "description": "Provider default tokens-per-minute limit."
-        },
-        "use_bedrock_runtime_chat_completions": {
-          "type": "boolean"
         },
         "use_openai_responses_path": {
           "type": "boolean"

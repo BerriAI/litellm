@@ -3,7 +3,7 @@ Native OpenAI Chat Completions on Amazon Bedrock Runtime.
 
 AWS serves this surface at
 ``https://bedrock-runtime.{region}.amazonaws.com/openai/v1/chat/completions``
-for the models whose price-map entry sets ``use_bedrock_runtime_chat_completions``
+for the models whose price-map entry sets ``supports_bedrock_runtime_chat_completions``
 (Grok 4.6, gpt-oss, the GPT-5.6 family): chat completions stay chat completions
 instead of being rewritten to Converse.
 
@@ -19,6 +19,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from typing_extensions import assert_never
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -72,6 +73,8 @@ class ReasoningTagSplitter:
                 return self._feed_start(self.pending + text)
             case "reasoning":
                 return self._feed_reasoning(self.pending + text)
+            case _:
+                assert_never(self.phase)
 
     def _feed_start(self, buffered: str) -> tuple["ReasoningTagSplitter", str, str]:
         if buffered.startswith(REASONING_OPEN_TAG):

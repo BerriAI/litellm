@@ -401,7 +401,7 @@ if TYPE_CHECKING:
         BaseVectorStoreFilesConfig,
     )
     from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo, BedrockRoute
+    from litellm.llms.bedrock.common_utils import BedrockRoute
     from litellm.llms.bedrock.embed.amazon_nova_transformation import (
         AmazonNovaEmbeddingConfig,
     )
@@ -3353,12 +3353,9 @@ def _should_drop_param(k, additional_drop_params) -> bool:
 def _bedrock_route_for_request(
     model: str, passed_params: Mapping[str, object], additional_drop_params: list | None
 ) -> BedrockRoute:
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.llms.bedrock.common_utils import bedrock_route_for_request
 
-    return BedrockModelInfo.get_bedrock_route(
-        model,
-        {k: v for k, v in passed_params.items() if not _should_drop_param(k, additional_drop_params)},
-    )
+    return bedrock_route_for_request(model, passed_params, additional_drop_params)
 
 
 def _get_non_default_params(passed_params: dict, default_params: dict, additional_drop_params: list | None) -> dict:

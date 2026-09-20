@@ -181,6 +181,7 @@ def _build_dispatch_context() -> _CompletionDispatchContext:
         optional_params={},
         organization=None,
         provider_config=None,
+        request_params={},
         shared_session=None,
         stream=None,
         temperature=None,

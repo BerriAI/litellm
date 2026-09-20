@@ -803,22 +803,33 @@ def _bedrock_price_map_flag(model: str, flag: str) -> bool:
 def uses_bedrock_runtime_chat_completions(model: str) -> bool:
     """Whether this Bedrock model should use runtime native Chat Completions.
 
-    Data-driven from the price-map ``use_bedrock_runtime_chat_completions`` flag
+    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions`` flag
     so onboarding a model is a JSON change. Explicit ``converse/`` still wins in
     ``get_bedrock_route`` because prefix routes are checked first, and a request
     that needs a Converse-only feature (``bedrock_request_needs_converse``) is
     served by Converse even on a flagged model.
     """
-    return _bedrock_price_map_flag(model, "use_bedrock_runtime_chat_completions")
+    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions")
 
 
-def bedrock_runtime_chat_completions_tools_require_reasoning_none(model: str) -> bool:
-    """Whether AWS's native Chat Completions only serves this model's function tools with ``reasoning_effort="none"``.
+def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:
+    """Whether AWS's native Chat Completions serves this model's function tools with any ``reasoning_effort``.
 
-    Data-driven from the price-map ``bedrock_runtime_chat_completions_tools_require_reasoning_none``
-    flag (the GPT-5.6 family). Converse serves tools with any effort, so those requests fall back to it.
+    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions_tools_with_reasoning``
+    flag (gpt-oss, Grok). Without it AWS only takes tools with ``reasoning_effort="none"``
+    (the GPT-5.6 family), and Converse serves tools with any effort, so those requests fall back to it.
     """
-    return _bedrock_price_map_flag(model, "bedrock_runtime_chat_completions_tools_require_reasoning_none")
+    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_tools_with_reasoning")
+
+
+def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> bool:
+    """Whether AWS's native Chat Completions enforces a ``response_format`` schema for this model.
+
+    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions_response_format`` flag
+    (GPT-5.6, Grok). Without it AWS accepts the field and answers with unconstrained text (gpt-oss), so
+    Converse, which emulates the schema through a forced ``json_tool_call`` tool, serves those requests.
+    """
+    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_response_format")
 
 
 BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
@@ -826,23 +837,49 @@ BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
 )
 
 
+def _response_format_constrains_output(response_format: object) -> bool:
+    if response_format is None:
+        return False
+    return not (isinstance(response_format, Mapping) and response_format.get("type") == "text")
+
+
 def bedrock_request_needs_converse(model: str, request_params: Mapping[str, object]) -> bool:
     """Whether a request on a runtime-Chat-Completions model must still be served by Converse.
 
     Converse-shaped body keys (``BEDROCK_CONVERSE_ONLY_REQUEST_KEYS``) are rejected as malformed input by
     AWS's native OpenAI surface, operator-owned request metadata is only written onto the Converse body,
-    and function tools on a ``bedrock_runtime_chat_completions_tools_require_reasoning_none`` model are
-    rejected there unless ``reasoning_effort`` is exactly ``"none"``.
+    function tools on a model without ``supports_bedrock_runtime_chat_completions_tools_with_reasoning``
+    are rejected there unless ``reasoning_effort`` is exactly ``"none"``, and a constraining
+    ``response_format`` on a model without ``supports_bedrock_runtime_chat_completions_response_format``
+    is only honored by Converse.
     """
     if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
         return True
     if bedrock_request_metadata_is_owned():
         return True
+    if _response_format_constrains_output(
+        request_params.get("response_format")
+    ) and not bedrock_runtime_chat_completions_enforces_response_format(model):
+        return True
     if not request_params.get("tools"):
         return False
     return (
-        bedrock_runtime_chat_completions_tools_require_reasoning_none(model)
+        not bedrock_runtime_chat_completions_serves_tools_with_reasoning(model)
         and request_params.get("reasoning_effort") != "none"
+    )
+
+
+def bedrock_route_for_request(
+    model: str, request_params: Mapping[str, object], additional_drop_params: Sequence[str] | None
+) -> BedrockRoute:
+    """The route for one request, decided from the caller's raw params before any provider mapping.
+
+    Param mapping and dispatch both call this with the same inputs, so a request that falls back to
+    Converse is mapped with the Converse config and sent to Converse, never one without the other.
+    """
+    dropped: Final = frozenset(additional_drop_params or ())
+    return BedrockModelInfo.get_bedrock_route(
+        model, {key: value for key, value in request_params.items() if key not in dropped}
     )
 
 
