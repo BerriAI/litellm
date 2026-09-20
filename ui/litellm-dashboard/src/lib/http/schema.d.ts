@@ -26728,10 +26728,10 @@ export interface components {
              */
             custom_auth?: string | null;
             /**
-             * Dangerously Allow Unsafe Proxy
+             * Dangerously Permit Weak Or Unset Master Key
              * @description local development only: start even when master_key is unset, empty, or a publicly known default
              */
-            dangerously_allow_unsafe_proxy?: boolean | null;
+            dangerously_permit_weak_or_unset_master_key?: boolean | null;
             /** @description custom args for instantiating dynamodb client - e.g. billing provision */
             database_args?: components["schemas"]["DynamoDBArgs"] | null;
             /**

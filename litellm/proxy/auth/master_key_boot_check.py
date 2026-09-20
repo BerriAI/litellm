@@ -10,8 +10,8 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 
-UNSAFE_PROXY_OVERRIDE_SETTING: Final = "dangerously_allow_unsafe_proxy"
-UNSAFE_PROXY_OVERRIDE_ENV_VAR: Final = "LITELLM_DANGEROUSLY_ALLOW_UNSAFE_PROXY"
+WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING: Final = "dangerously_permit_weak_or_unset_master_key"
+WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR: Final = "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY"
 MASTER_KEY_SETTING: Final = "master_key"
 MASTER_KEY_ENV_VAR: Final = "LITELLM_MASTER_KEY"
 SALT_KEY_ENV_VAR: Final = "LITELLM_SALT_KEY"
@@ -86,7 +86,7 @@ def master_key_boot_verdict(
     reason: Final = _unsafe_reason(master_key)
     if reason is None:
         return SafeMasterKey()
-    if override_env_is_on or general_settings.get(UNSAFE_PROXY_OVERRIDE_SETTING) is True:
+    if override_env_is_on or general_settings.get(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING) is True:
         return UnsafeMasterKeyAllowed(reason=reason)
     config_file_only_relays_the_environment: Final = master_key is not None and master_key == environment_master_key
     return UnsafeMasterKeyRefused(
@@ -121,7 +121,7 @@ def enforce_master_key_boot_verdict(verdict: MasterKeyBootVerdict, announce: Cal
         case UnsafeMasterKeyAllowed(reason=reason):
             verbose_proxy_logger.warning(
                 "%s is on, so the proxy is starting with %s. Never run this outside local development.",
-                UNSAFE_PROXY_OVERRIDE_SETTING,
+                WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING,
                 _UNSAFE_STATE[reason],
             )
         case UnsafeMasterKeyRefused(reason=reason):
@@ -192,8 +192,8 @@ _RESTART_TO_MIGRATE_STEP: Final = (
 )
 
 _OVERRIDE_HINT: Final = (
-    f"Local development only: set {UNSAFE_PROXY_OVERRIDE_ENV_VAR}=true, or\n"
-    f"general_settings.{UNSAFE_PROXY_OVERRIDE_SETTING}: true, to start anyway."
+    f"Local development only: set {WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR}=true, or\n"
+    f"general_settings.{WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING}: true, to start anyway."
 )
 
 
