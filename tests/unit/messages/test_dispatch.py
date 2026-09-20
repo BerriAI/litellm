@@ -29,9 +29,7 @@ RUST_RULES: Final[Rules] = (Rule(Route.MESSAGES, Rollout.RUST_REQUIRED),)
 
 
 def messages_binding(native: NativeMessages | None) -> NativeBinding[NativeMessages]:
-    binding: Final[NativeBinding[NativeMessages]] = NativeBinding(
-        "anthropic_messages_handler", validate=lambda _: None
-    )
+    binding: Final[NativeBinding[NativeMessages]] = NativeBinding("anthropic_messages_handler", validate=lambda _: None)
     binding.override(native)
     return binding
 
@@ -99,7 +97,8 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
     expected: Final = response()
 
     async def python(
-        *call_args: object, **call_kwargs: object  # kwargs-ok: records call shape
+        *call_args: object,
+        **call_kwargs: object,  # kwargs-ok: records call shape
     ) -> AnthropicMessagesResponse:
         captured.append((call_args, call_kwargs))
         return expected
@@ -217,7 +216,9 @@ def test_binding_errors_delegate_to_python(args: tuple[object, ...], kwargs: Map
     captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
     expected: Final = response()
 
-    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: records invalid call
+    def python(
+        *call_args: object, **call_kwargs: object
+    ) -> AnthropicMessagesResponse:  # kwargs-ok: records invalid call
         captured.append((call_args, call_kwargs))
         return expected
 

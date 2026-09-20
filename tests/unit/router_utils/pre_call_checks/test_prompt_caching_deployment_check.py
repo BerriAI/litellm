@@ -1,9 +1,8 @@
 import asyncio
 import copy
-from typing import List, cast
+from typing import cast
 
 import pytest
-
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -22,6 +21,15 @@ MODEL_GROUP_ALIAS = "my-claude-group"
 OPUS_4_6_MIN_TOKENS = 4096
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
 @pytest.fixture(autouse=True)
 def _local_model_cost_map_autouse(local_model_cost_map):
     """Every test here reads `prompt_cache_min_tokens`, which only the in-repo map
@@ -30,8 +38,7 @@ def _local_model_cost_map_autouse(local_model_cost_map):
     yield
 
 
-
-def _deployments(*models: str) -> List[dict]:
+def _deployments(*models: str) -> list[dict]:
     return [
         {
             "model_name": MODEL_GROUP_ALIAS,
@@ -42,9 +49,9 @@ def _deployments(*models: str) -> List[dict]:
     ]
 
 
-def _messages(word_count: int) -> List[AllMessageValues]:
+def _messages(word_count: int) -> list[AllMessageValues]:
     return cast(
-        List[AllMessageValues],
+        list[AllMessageValues],
         [
             {
                 "role": "user",
@@ -84,7 +91,9 @@ def test_write_gate_is_what_prevents_a_pin_below_the_model_minimum():
     """
     messages = _messages(word_count=1400)
 
-    token_count = token_counter(messages=messages, model="anthropic/claude-opus-4-5", use_default_image_token_count=True)
+    token_count = token_counter(
+        messages=messages, model="anthropic/claude-opus-4-5", use_default_image_token_count=True
+    )
     assert 1024 < token_count < 4096
 
     assert is_prompt_caching_valid_prompt(model="anthropic/claude-opus-4-5", messages=messages) is False
@@ -110,7 +119,9 @@ async def test_async_filter_deployments_does_not_narrow_prompt_below_model_minim
     deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
     messages = _messages(word_count=1400)
 
-    token_count = token_counter(messages=messages, model="anthropic/claude-opus-4-6", use_default_image_token_count=True)
+    token_count = token_counter(
+        messages=messages, model="anthropic/claude-opus-4-6", use_default_image_token_count=True
+    )
     assert DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT < token_count < OPUS_4_6_MIN_TOKENS
 
     await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
@@ -136,7 +147,9 @@ async def test_async_filter_deployments_narrows_prompt_above_model_minimum():
     deployments = _deployments("anthropic/claude-opus-4-6", "anthropic/claude-opus-4-6")
     messages = _messages(word_count=5000)
 
-    token_count = token_counter(messages=messages, model="anthropic/claude-opus-4-6", use_default_image_token_count=True)
+    token_count = token_counter(
+        messages=messages, model="anthropic/claude-opus-4-6", use_default_image_token_count=True
+    )
     assert token_count > OPUS_4_6_MIN_TOKENS
 
     await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=messages, tools=None)
@@ -197,10 +210,10 @@ async def test_async_filter_deployments_narrows_for_group_whose_model_minimum_is
 AUTO_CACHING_MODEL = "anthropic/claude-sonnet-4-5"
 
 
-def _auto_caching_messages() -> List[AllMessageValues]:
+def _auto_caching_messages() -> list[AllMessageValues]:
     """A prompt over the model minimum that carries no client cache_control."""
     return cast(
-        List[AllMessageValues],
+        list[AllMessageValues],
         [
             {"role": "system", "content": "word " * 3000},
             {"role": "user", "content": "hello"},
@@ -208,7 +221,7 @@ def _auto_caching_messages() -> List[AllMessageValues]:
     )
 
 
-def _affinity_messages(messages: List[AllMessageValues]) -> List[AllMessageValues]:
+def _affinity_messages(messages: list[AllMessageValues]) -> list[AllMessageValues]:
     """The messages the check keys deployment affinity on, for a group of `AUTO_CACHING_MODEL`."""
     return AnthropicCacheControlHook.messages_with_default_injections(
         messages=messages,
@@ -218,7 +231,7 @@ def _affinity_messages(messages: List[AllMessageValues]) -> List[AllMessageValue
 
 class _SentMessagesCapture(CustomLogger):
     def __init__(self):
-        self.messages: List[AllMessageValues] | None = None
+        self.messages: list[AllMessageValues] | None = None
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         standard_logging_object = kwargs.get("standard_logging_object")
@@ -338,7 +351,7 @@ async def test_claude_code_one_shot_subagent_does_not_reuse_an_auto_injected_aff
     cache = DualCache()
     check = PromptCachingDeploymentCheck(cache=cache)
     deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
-    messages = cast(List[AllMessageValues], [{"role": "user", "content": "unique " * 3000}])
+    messages = cast(list[AllMessageValues], [{"role": "user", "content": "unique " * 3000}])
     request_kwargs = {
         "system": [
             {
@@ -441,7 +454,7 @@ def test_client_supplied_cache_control_keeps_its_own_prefix_boundary(monkeypatch
     """
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
     messages = cast(
-        List[AllMessageValues],
+        list[AllMessageValues],
         [
             {
                 "role": "system",
@@ -491,7 +504,7 @@ async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
     warm_tokenizer("anthropic/claude-fable-5")
     check = PromptCachingDeploymentCheck(cache=DualCache())
     deployments = _deployments("anthropic/claude-fable-5")
-    messages = cast(List[AllMessageValues], [{"role": "user", "content": text * 100}])
+    messages = cast(list[AllMessageValues], [{"role": "user", "content": text * 100}])
 
     result, took, lags = await timed_with_loop_lags(
         lambda: check.async_filter_deployments(
@@ -516,7 +529,7 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
     cache = DualCache()
     check = PromptCachingDeploymentCheck(cache=cache)
     messages = cast(
-        List[AllMessageValues],
+        list[AllMessageValues],
         [{"role": "user", "content": [{"type": "text", "text": text * 100, "cache_control": {"type": "ephemeral"}}]}],
     )
     standard_logging_object = {
