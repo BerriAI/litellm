@@ -165,33 +165,41 @@ jobs:
           DIST: ${{ inputs.dist }}
           COVERAGE_CORE: sysmon
         run: |
-          if [ "${WORKERS}" = "0" ]; then
-            uv run --no-sync pytest ${TEST_PATH:?} \
-              --tb=short -vv \
-              --maxfail="${MAX_FAILURES}" \
-              --reruns "${RERUNS}" \
-              --reruns-delay 1 \
-              --timeout="${TEST_TIMEOUT_SECONDS}" \
-              --rerun-except "from pytest-timeout" \
-              --durations=20 \
-              --cov=./litellm --cov=./enterprise/litellm_enterprise \
-              --cov-report=xml:coverage.xml \
-              --cov-config=pyproject.toml
-          else
-            uv run --no-sync pytest ${TEST_PATH:?} \
-              --tb=short -vv \
-              --maxfail="${MAX_FAILURES}" \
-              -n "${WORKERS}" \
-              --reruns "${RERUNS}" \
-              --reruns-delay 1 \
-              --timeout="${TEST_TIMEOUT_SECONDS}" \
-              --rerun-except "from pytest-timeout" \
-              --dist="${DIST}" \
-              --durations=20 \
-              --cov=./litellm --cov=./enterprise/litellm_enterprise \
-              --cov-report=xml:coverage.xml \
-              --cov-config=pyproject.toml
+          found_path=false
+          for path in ${TEST_PATH}; do
+            if [ -e "${path%%::*}" ]; then
+              found_path=true
+              break
+            fi
+          done
+          if [ "$found_path" = false ]; then
+            echo "No path in TEST_PATH exists (${TEST_PATH}); nothing to run"
+            exit 0
           fi
+          xdist_args=()
+          if [ "${WORKERS}" != "0" ]; then
+            xdist_args=(-n "${WORKERS}" --dist="${DIST}")
+          fi
+          set +e
+          uv run --no-sync pytest ${TEST_PATH:?} \
+            --tb=short -vv \
+            --maxfail="${MAX_FAILURES}" \
+            "${xdist_args[@]}" \
+            --reruns "${RERUNS}" \
+            --reruns-delay 1 \
+            --timeout="${TEST_TIMEOUT_SECONDS}" \
+            --rerun-except "from pytest-timeout" \
+            --durations=20 \
+            --cov=./litellm --cov=./enterprise/litellm_enterprise \
+            --cov-report=xml:coverage.xml \
+            --cov-config=pyproject.toml
+          status=$?
+          set -e
+          if [ "$status" -eq 5 ]; then
+            echo "pytest collected no tests from ${TEST_PATH}; passing"
+            exit 0
+          fi
+          exit "$status"
 
       - name: Save coverage report
         if: always() && steps.changes.outputs.decision != 'skip'

@@ -9,6 +9,7 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2] / "scripts" / "budget_ratchet_check.py"
@@ -90,6 +91,36 @@ def test_graduation_never_excuses_a_raised_limit():
     regs = ratchet.regressions_for("b.json", base, {"UP006": _spec_of(7)}, graduated=("UP006",))
     assert [r.rule for r in regs] == ["UP006"]
     assert "0 -> 7" in regs[0].detail
+
+
+def test_dropped_rule_the_checker_retired_is_clean():
+    base: Final = {"TQ008": _spec_of(10993)}
+    assert ratchet.regressions_for("b.json", base, {}, retired=frozenset({"TQ008"})) == []
+
+
+def test_dropped_rule_the_checker_still_emits_is_a_regression():
+    base: Final = {"TQ001": _spec_of(5), "TQ008": _spec_of(10993)}
+    regs: Final = ratchet.regressions_for("b.json", base, {}, retired=frozenset({"TQ008"}))
+    assert [r.rule for r in regs] == ["TQ001"]
+    assert "dropped" in regs[0].detail
+
+
+def test_retirement_never_excuses_a_raised_limit():
+    base: Final = {"TQ008": _spec_of(0)}
+    regs: Final = ratchet.regressions_for("b.json", base, {"TQ008": _spec_of(7)}, retired=frozenset({"TQ008"}))
+    assert [r.rule for r in regs] == ["TQ008"]
+    assert "0 -> 7" in regs[0].detail
+
+
+def test_retired_rules_come_from_the_paired_checker():
+    base: Final = {"TQ001": _spec_of(5), "TQ008": _spec_of(10993)}
+    assert ratchet.retired_rules("test-quality-budget.json", base) == frozenset({"TQ008"})
+
+
+def test_budgets_without_a_paired_checker_never_retire():
+    base: Final = {"TQ008": _spec_of(1)}
+    for rel in ("ruff-strict-budget.json", "type-discipline-budget.json", "basedpyright-code-budget.json"):
+        assert ratchet.retired_rules(rel, base) == frozenset()
 
 
 def test_graduated_selectors_come_from_the_paired_ruff_config():
