@@ -1,3 +1,5 @@
+from copy import deepcopy
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -9,7 +11,7 @@ from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
 
 @pytest.mark.asyncio
 async def test_skip_assistant_preserves_converse_history_and_masks_user() -> None:
-    assistant = {
+    assistant: Final = {
         "role": "assistant",
         "content": [
             {"text": "old reply"},
@@ -22,7 +24,7 @@ async def test_skip_assistant_preserves_converse_history_and_masks_user() -> Non
             },
         ],
     }
-    data = {
+    data: Final = {
         "endpoint": "model/test/converse",
         "data": {
             "messages": [
@@ -31,7 +33,8 @@ async def test_skip_assistant_preserves_converse_history_and_masks_user() -> Non
             ]
         },
     }
-    guardrail = MagicMock()
+    original_assistant: Final = deepcopy(assistant)
+    guardrail: Final = MagicMock()
     guardrail.apply_guardrail = AsyncMock(return_value={"texts": ["[MASKED]"]})
     guardrail.skip_system_message_in_guardrail = False
     guardrail.skip_tool_message_in_guardrail = False
@@ -40,5 +43,5 @@ async def test_skip_assistant_preserves_converse_history_and_masks_user() -> Non
     await BedrockPassthroughGuardrailHandler().process_input_messages(data, guardrail)
 
     assert guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"] == ["private"]
-    assert data["data"]["messages"][0] == assistant
+    assert data["data"]["messages"][0] == original_assistant
     assert data["data"]["messages"][1]["content"][0]["text"] == "[MASKED]"
