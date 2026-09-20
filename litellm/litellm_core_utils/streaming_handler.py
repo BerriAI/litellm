@@ -226,6 +226,10 @@ class CustomStreamWrapper:
             dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
         )
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
+        request_strict: Final = litellm_params.strict_stream_completion
+        self.strict_stream_completion: bool = (
+            bool(litellm.strict_stream_completion) if request_strict is None else bool(request_strict)
+        )
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
         self.thinking_content = ""
@@ -1710,6 +1714,20 @@ class CustomStreamWrapper:
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason
+        elif self.strict_stream_completion:
+            # The provider never sent a terminal finish_reason or [DONE], so the
+            # stream was cut rather than finished. Synthesizing "stop" makes a
+            # truncated answer indistinguishable from a complete one, which is
+            # what stops a caller's retry from ever firing.
+            raise litellm.exceptions.IncompleteStreamError(
+                message=(
+                    "Stream ended before a terminal finish_reason or [DONE] delimiter was received. "
+                    "The response is incomplete. Set strict_stream_completion=False to accept it as "
+                    "finished instead."
+                ),
+                llm_provider=self.custom_llm_provider or "",
+                model=self.model or "",
+            )
         else:
             model_response.choices[0].finish_reason = "stop"
 

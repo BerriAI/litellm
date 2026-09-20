@@ -5658,6 +5658,7 @@ def completion(
             prompt_variables=prompt_variables,
             ssl_verify=ssl_verify,
             merge_reasoning_content_in_choices=kwargs.get("merge_reasoning_content_in_choices", None),
+            strict_stream_completion=kwargs.get("strict_stream_completion", None),
             use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
             api_version=api_version,
             azure_ad_token=kwargs.get("azure_ad_token"),
