@@ -1,7 +1,7 @@
 import atexit
 import sys
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, replace
 from enum import Enum
 from types import MappingProxyType
 from typing import Final
@@ -15,6 +15,7 @@ UNSAFE_PROXY_OVERRIDE_ENV_VAR: Final = "LITELLM_DANGEROUSLY_ALLOW_UNSAFE_PROXY"
 MASTER_KEY_SETTING: Final = "master_key"
 MASTER_KEY_ENV_VAR: Final = "LITELLM_MASTER_KEY"
 SALT_KEY_ENV_VAR: Final = "LITELLM_SALT_KEY"
+MIGRATE_FROM_MASTER_KEY_ENV_VAR: Final = "LITELLM_MIGRATE_FROM_MASTER_KEY"
 PUBLICLY_KNOWN_MASTER_KEYS: Final = frozenset({"sk-1234"})
 ROTATION_DOCS_URL: Final = "https://docs.litellm.ai/docs/proxy/master_key_rotations#proxy-refuses-to-start"
 _NEW_MASTER_KEY: Final = "sk-$(openssl rand -hex 32)"
@@ -52,11 +53,17 @@ class UnsafeMasterKeyAllowed:
 
 
 @dataclass(frozen=True, slots=True)
+class StoredSecretsMigration:
+    from_master_key: str
+    encrypted_value_count: int | None
+
+
+@dataclass(frozen=True, slots=True)
 class UnsafeMasterKeyRefused:
     reason: UnsafeMasterKeyReason
     source: MasterKeySource
     environment_variable_is_set: bool
-    stored_credentials_need_rotation: bool
+    migration: StoredSecretsMigration | None
 
 
 MasterKeyBootVerdict = SafeMasterKey | UnsafeMasterKeyAllowed | UnsafeMasterKeyRefused
@@ -90,10 +97,21 @@ def master_key_boot_verdict(
             else EnvironmentSource()
         ),
         environment_variable_is_set=environment_master_key is not None,
-        stored_credentials_need_rotation=(
-            reason is UnsafeMasterKeyReason.PUBLICLY_KNOWN and not salt_key_is_set and database_is_configured
+        migration=(
+            StoredSecretsMigration(from_master_key=master_key, encrypted_value_count=None)
+            if master_key is not None and not salt_key_is_set and database_is_configured
+            else None
         ),
     )
+
+
+async def with_stored_secrets_counted(
+    verdict: MasterKeyBootVerdict, count_values_encrypted_with: Callable[[str], Awaitable[int | None]]
+) -> MasterKeyBootVerdict:
+    if not isinstance(verdict, UnsafeMasterKeyRefused) or verdict.migration is None:
+        return verdict
+    count: Final = await count_values_encrypted_with(verdict.migration.from_master_key)
+    return replace(verdict, migration=None if count == 0 else replace(verdict.migration, encrypted_value_count=count))
 
 
 def enforce_master_key_boot_verdict(verdict: MasterKeyBootVerdict, announce: Callable[[str], object]) -> None:
@@ -129,7 +147,7 @@ def render_refusal(refusal: UnsafeMasterKeyRefused) -> str:
     return "\n\n".join(
         (
             f"LiteLLM proxy refused to start: {_REFUSAL_HEADLINE[refusal.reason]}\n{_source_line(refusal)}",
-            _ROTATE_INSTEAD_OF_REPLACING if refusal.stored_credentials_need_rotation else _fix_steps(refusal),
+            _fix_steps(refusal),
             _OVERRIDE_HINT,
         )
     )
@@ -168,12 +186,9 @@ _REPLACE_EXPORTED_KEY_STEP: Final = (
     "   already exported in the environment wins over .env."
 )
 
-_ROTATE_INSTEAD_OF_REPLACING: Final = (
-    f"Credentials stored in your database are encrypted with this master key because {SALT_KEY_ENV_VAR} is not\n"
-    "set, so replacing the key makes them undecryptable. Rotate it by following this guide, which re-encrypts them:\n"
-    f"     {ROTATION_DOCS_URL}\n"
-    "Generate the new key for it with (save it only once the guide says to):\n"
-    f"     {PRINT_NEW_MASTER_KEY_COMMAND}"
+_RESTART_TO_MIGRATE_STEP: Final = (
+    "Start the proxy again. It re-encrypts the stored values with the new key, then logs that\n"
+    f"   {MIGRATE_FROM_MASTER_KEY_ENV_VAR} can be removed. Details: {ROTATION_DOCS_URL}"
 )
 
 _OVERRIDE_HINT: Final = (
@@ -218,15 +233,59 @@ def _source_line(refusal: UnsafeMasterKeyRefused) -> str:
 
 
 def _fix_steps(refusal: UnsafeMasterKeyRefused) -> str:
-    set_key_step: Final = _REPLACE_EXPORTED_KEY_STEP if refusal.environment_variable_is_set else _SAVE_KEY_STEP
-    match refusal.source:
-        case ConfigFileSource() as source:
+    steps: Final = (*_config_steps(refusal.source), *_key_steps(refusal))
+    numbered: Final = "\n".join(f"{number}. {step}" for number, step in enumerate(steps, start=1))
+    return numbered if refusal.migration is None else f"{_migration_lead(refusal.migration)}\n{numbered}"
+
+
+def _config_steps(source: MasterKeySource) -> tuple[str, ...]:
+    match source:
+        case ConfigFileSource():
             return (
-                f"1. Make sure {_config_label(source)} reads the key from the environment:\n"
-                f"     general_settings:\n       {MASTER_KEY_SETTING}: os.environ/{MASTER_KEY_ENV_VAR}\n"
-                f"2. {set_key_step}"
+                f"Make sure {_config_label(source)} reads the key from the environment:\n"
+                f"     general_settings:\n       {MASTER_KEY_SETTING}: os.environ/{MASTER_KEY_ENV_VAR}",
             )
         case EnvironmentSource():
-            return f"1. {set_key_step}"
+            return ()
         case _:
-            assert_never(refusal.source)
+            assert_never(source)
+
+
+def _key_steps(refusal: UnsafeMasterKeyRefused) -> tuple[str, ...]:
+    if refusal.migration is None:
+        return (_REPLACE_EXPORTED_KEY_STEP if refusal.environment_variable_is_set else _SAVE_KEY_STEP,)
+    if refusal.environment_variable_is_set:
+        return (
+            f"Set the key to migrate from next to {MASTER_KEY_ENV_VAR}, wherever that is set (a shell export, your\n"
+            "   container or deployment environment, or .env):\n"
+            f"     {_migrate_from_assignment(refusal.migration)}",
+            _REPLACE_EXPORTED_KEY_STEP,
+            _RESTART_TO_MIGRATE_STEP,
+        )
+    return (
+        "Save the key to migrate from and a newly generated key to .env:\n"
+        f"     echo '{_migrate_from_assignment(refusal.migration)}' | tee -a .env\n"
+        f"     {GENERATE_MASTER_KEY_COMMAND}\n"
+        "   Not using a .env file (docker run, Kubernetes, pip install)? Pass the same two values as\n"
+        "   environment variables instead.",
+        _RESTART_TO_MIGRATE_STEP,
+    )
+
+
+def _migrate_from_assignment(migration: StoredSecretsMigration) -> str:
+    key: Final = migration.from_master_key
+    value: Final = key if key == key.strip() else f'"{key}"'
+    return f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}={value}"
+
+
+def _migration_lead(migration: StoredSecretsMigration) -> str:
+    found: Final = (
+        "could not be checked for values"
+        if migration.encrypted_value_count is None
+        else f"holds {migration.encrypted_value_count} value(s)"
+    )
+    return (
+        f"Your database {found} encrypted with this master key, which encrypts stored\n"
+        f"credentials while {SALT_KEY_ENV_VAR} is not set. Replacing the key alone makes them unreadable, so also tell\n"
+        "the proxy which key to migrate from:"
+    )
