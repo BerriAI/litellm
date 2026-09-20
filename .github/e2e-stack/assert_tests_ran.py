@@ -18,11 +18,6 @@ def main() -> int:
         return 1
     cases: Final = tuple(report.iter("testcase"))
     expected_count: Final = os.environ.get("E2E_REQUIRED_TEST_COUNT")
-    if expected_count is not None and (
-        len(cases) != int(expected_count) or any(case.find("skipped") is not None for case in cases)
-    ):
-        _ = sys.stdout.write("::error::required test count was not met or a required case was skipped\n")
-        return 1
     passed: Final = frozenset(
         case.get("file") for case in cases if all(case.find(tag) is None for tag in ("skipped", "failure", "error"))
     )
@@ -43,9 +38,10 @@ def main() -> int:
         skipped: Final = sum(case.get("file") == path and case.find("skipped") is not None for case in cases)
         _ = sys.stdout.write(f"{path}: {collected} collected, {skipped} skipped\n")
         for case in cases:
-            if case.get("file") != path or all(case.find(tag) is None for tag in ("failure", "error")):
+            if case.get("file") != path or all(case.find(tag) is None for tag in ("failure", "error", "skipped")):
                 continue
-            _ = sys.stdout.write(f"  failed: {case.get('classname', '')}::{case.get('name', '')}\n")
+            outcome = "skipped" if case.find("skipped") is not None else "failed"
+            _ = sys.stdout.write(f"  {outcome}: {case.get('classname', '')}::{case.get('name', '')}\n")
             for prop in case.findall("./properties/property"):
                 name = prop.get("name", "")
                 value = prop.get("value", "")
@@ -53,6 +49,11 @@ def main() -> int:
                     r"[A-Za-z0-9_.:<>-]{1,240}", value
                 ):
                     _ = sys.stdout.write(f"    {name}: {value}\n")
+    if expected_count is not None and (
+        len(cases) != int(expected_count) or any(case.find("skipped") is not None for case in cases)
+    ):
+        _ = sys.stdout.write("::error::required test count was not met or a required case was skipped\n")
+        return 1
     if (
         selected
         and not missing
