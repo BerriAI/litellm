@@ -299,10 +299,17 @@ class TestProcessResponse:
             )
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 class TestProcessEmbedContentResponseUsage:
     """Gemini Embedding 2 embedContent usageMetadata must drive spend.
 
     Regression for multimodal calls recording prompt_tokens=0 / spend=$0.
+
+    The dollar-value assertions read the per-image and per-second rates this
+    branch registers for gemini-embedding-2. litellm defaults to the network
+    fetched main model_cost, which now bills the modalities per token, so the
+    cost calls return 0.0 or the wrong audio-token amount without the local
+    map pinned.
     """
 
     MODEL = "gemini-embedding-2"
