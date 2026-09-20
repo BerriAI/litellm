@@ -372,6 +372,9 @@ class DBSpendUpdateWriter:
         self.daily_org_spend_update_queue = DailySpendUpdateQueue()
         self.daily_tag_spend_update_queue = DailySpendUpdateQueue()
         self.window_spend_update_queue = WindowSpendUpdateQueue()
+        # The event loop holds only weak references to tasks, so the writer keeps
+        # strong references to batch update tasks until they finish.
+        self._pending_batch_update_tasks: set[asyncio.Task[None]] = set()  # mutable-ok: strong refs to pending tasks
 
     async def update_database(
         # LiteLLM management object fields
@@ -462,8 +465,10 @@ class DBSpendUpdateWriter:
                     "disable_spend_logs=True. Skipping writing spend logs to db. Other spend updates - Key/User/Team table will still occur."
                 )
 
-            # Single task replaces 11 create_task() calls
-            asyncio.create_task(
+            # Single task replaces 11 create_task() calls. It stays referenced
+            # until it finishes, or the loop's weak reference is the only one
+            # left and a collection mid-task skips every remaining update.
+            batch_update_task: Final = asyncio.create_task(
                 self._batch_database_updates(
                     response_cost=response_cost,
                     user_id=user_id,
@@ -478,6 +483,8 @@ class DBSpendUpdateWriter:
                     request_model_access_groups=get_request_model_access_groups(kwargs),
                 )
             )
+            self._pending_batch_update_tasks.add(batch_update_task)
+            batch_update_task.add_done_callback(self._pending_batch_update_tasks.discard)
 
             self._enqueue_tool_registry_upsert(
                 kwargs=kwargs,

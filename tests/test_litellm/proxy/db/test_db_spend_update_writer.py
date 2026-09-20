@@ -131,6 +131,58 @@ async def test_update_database_attributes_router_rejected_failure_to_model_group
     assert payload["custom_llm_provider"] == "openai"
 
 
+@pytest.mark.asyncio
+async def test_update_database_holds_batch_update_task_until_it_finishes():
+    """
+    update_database returns before the batch task finishes, so the writer itself
+    must keep the task referenced. The event loop holds only weak references to
+    tasks, so an unreferenced one can be garbage-collected mid-execution and skip
+    every remaining spend-table update with nothing logged.
+    """
+    db_writer = DBSpendUpdateWriter()
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow_batch_database_updates(**kwargs):
+        started.set()
+        await release.wait()
+
+    db_writer._batch_database_updates = slow_batch_database_updates
+    db_writer._insert_spend_log_to_db = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.disable_spend_logs", True),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+        patch("litellm.proxy.proxy_server.litellm_proxy_budget_name", "test-budget"),  # test-quality-ok: update_database reads this proxy_server module global at call time; no injection seam
+    ):
+        await db_writer.update_database(
+            token="test-token",
+            user_id="test-user",
+            end_user_id=None,
+            team_id=None,
+            org_id=None,
+            kwargs={"litellm_params": {"metadata": {"user_api_key": "test-token"}}},
+            completion_response={},
+            start_time=datetime.now(timezone.utc),
+            end_time=datetime.now(timezone.utc),
+            response_cost=0.0,
+        )
+
+        # the batch task is in flight and the writer holds a reference to it
+        await asyncio.wait_for(started.wait(), timeout=2)
+        assert len(db_writer._pending_batch_update_tasks) == 1
+        in_flight_task: Final = next(iter(db_writer._pending_batch_update_tasks))
+        assert not in_flight_task.done()
+
+        release.set()
+        await asyncio.wait_for(in_flight_task, timeout=2)
+        await asyncio.sleep(0)
+
+    # the reference is dropped once the task completes, so the set cannot grow
+    assert db_writer._pending_batch_update_tasks == set()
+
+
 def _tool_call_response(*names: str) -> object:
     from types import SimpleNamespace
 
