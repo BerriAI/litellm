@@ -127,3 +127,36 @@ def test_transform_image_generation_request():
     ) == {"prompt": "a red bicycle", "quality": "high", "num_images": 2}
 
 
+@pytest.mark.parametrize(
+    "model",
+    [
+        "openai/gpt-image-2.5/flare/text-to-image",
+        "openai/gpt-image-2.5/sunburst/text-to-image",
+    ],
+)
+def test_gpt_image_25_routes_to_its_own_fal_endpoint(model):
+    config = get_fal_ai_image_generation_config(model)
+    assert isinstance(config, FalAIGPTImage2Config)
+    assert (
+        config.get_complete_url(api_base=None, api_key="k", model=model, optional_params={}, litellm_params={})
+        == f"https://fal.run/{model}"
+    )
+
+
+@pytest.mark.parametrize(
+    "model,quality,expected",
+    [
+        ("openai/gpt-image-2.5/flare/text-to-image", "xhigh", "xhigh"),
+        ("openai/gpt-image-2.5/sunburst/text-to-image", "max", "max"),
+        ("openai/gpt-image-2.5/flare/text-to-image", "hd", "high"),
+        ("openai/gpt-image-2", "xhigh", "auto"),
+        ("openai/gpt-image-2", "max", "auto"),
+    ],
+)
+def test_map_openai_params_quality_tiers_follow_model(model, quality, expected):
+    assert FalAIGPTImage2Config().map_openai_params(
+        non_default_params={"quality": quality},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    ) == {"quality": expected}
