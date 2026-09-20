@@ -3311,7 +3311,7 @@ async def test_failed_org_spend_commit_from_redis_restores_only_the_org_rows():
     mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
     restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs["db_spend_update_transactions"]
     assert restored["org_list_transactions"] == {"org-1": 0.5}
-    assert not restored["team_list_transactions"]
+    assert restored["team_list_transactions"] is None
     db_writer.pod_lock_manager.release_lock.assert_awaited_once()
 
 
@@ -3358,7 +3358,7 @@ async def test_failed_team_spend_commit_from_redis_still_commits_org_spend():
     mock_redis_update_buffer.restore_transactions_to_redis.assert_awaited_once()
     restored = mock_redis_update_buffer.restore_transactions_to_redis.call_args.kwargs["db_spend_update_transactions"]
     assert restored["team_list_transactions"] == {"team-1": 0.5}
-    assert not restored["org_list_transactions"]
+    assert restored["org_list_transactions"] is None
     db_writer.pod_lock_manager.release_lock.assert_awaited_once()
 
 
@@ -3402,6 +3402,36 @@ async def test_cache_invalidation_failure_after_commit_does_not_requeue_the_rows
 
     assert result is None
     cache.async_delete_cache.assert_awaited_once_with(key=cache_key)
+
+
+@pytest.mark.asyncio
+async def test_cache_invalidation_failure_for_one_project_does_not_skip_remaining_projects():
+    db_writer = DBSpendUpdateWriter()
+    mock_batcher = MagicMock()
+    mock_transaction = _good_tx(mock_batcher)
+    mock_prisma = _WindowSpendFakePrisma(_WindowSpendFakeDB())
+    mock_prisma.db.tx = MagicMock(return_value=mock_transaction)
+    cache = MagicMock()
+    cache.async_delete_cache = AsyncMock(side_effect=[RuntimeError("redis down"), None])
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.call_details = {"user_api_key_cache": cache}
+    proxy_logging_obj.failure_handler = AsyncMock()
+
+    result = await db_writer._commit_spend_updates_to_db_per_table(
+        prisma_client=mock_prisma,
+        n_retry_times=0,
+        proxy_logging_obj=proxy_logging_obj,
+        db_spend_update_transactions=_empty_spend_transactions(
+            project_list_transactions={"p1": 0.5, "p2": 0.5}
+        ),
+    )
+
+    assert result is None
+    assert cache.async_delete_cache.await_count == 2
+    assert cache.async_delete_cache.await_args_list == [
+        call(key=project_cache_key("p1")),
+        call(key=project_cache_key("p2")),
+    ]
 
 
 @pytest.mark.asyncio
