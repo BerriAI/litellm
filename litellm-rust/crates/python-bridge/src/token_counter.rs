@@ -3,11 +3,10 @@ use std::sync::Arc;
 #[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
 use std::{num::NonZero, thread::available_parallelism};
 
-#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
 use litellm_host_python::release_gil;
 use litellm_host_python::run_async;
 use litellm_token_counter::{
-    CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
+    CountableRequest, Error, InputTokenCount, TextCodec, TokenCounter as CoreTokenCounter,
 };
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
@@ -27,6 +26,11 @@ use crate::errors::RustBridgeDeclined;
 pub(crate) struct TokenCounter {
     inner: Arc<CoreTokenCounter>,
     encode_slots: Arc<Semaphore>,
+}
+
+#[pyclass(frozen, name = "Tokenizer")]
+pub(crate) struct Tokenizer {
+    inner: Arc<dyn TextCodec>,
 }
 
 #[pymethods]
@@ -115,6 +119,128 @@ impl TokenCounter {
     }
 }
 
+#[pymethods]
+impl Tokenizer {
+    #[staticmethod]
+    fn from_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<Self> {
+        #[cfg(feature = "tiktoken")]
+        {
+            let encoding = encoding.to_owned();
+            Self::load(py, move || {
+                litellm_token_counter::tiktoken::TiktokenTokenizer::from_name(&encoding)
+                    .map_err(Error::from)
+            })
+        }
+        #[cfg(not(feature = "tiktoken"))]
+        {
+            let _ = (py, encoding);
+            Err(RustBridgeDeclined::new_err(
+                "tokenizer backend requires the tiktoken feature",
+            ))
+        }
+    }
+
+    #[staticmethod]
+    fn from_json(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
+        #[cfg(feature = "huggingface")]
+        {
+            let tokenizer_json = tokenizer_json.to_owned();
+            Self::load(py, move || {
+                litellm_token_counter::huggingface::HuggingFaceTokenizer::from_json(&tokenizer_json)
+                    .map_err(Error::from)
+            })
+        }
+        #[cfg(not(feature = "huggingface"))]
+        {
+            let _ = (py, tokenizer_json);
+            Err(RustBridgeDeclined::new_err(
+                "tokenizer backend requires the huggingface feature",
+            ))
+        }
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (identifier, revision = "main", token = None))]
+    fn from_pretrained(
+        py: Python<'_>,
+        identifier: &str,
+        revision: &str,
+        token: Option<&str>,
+    ) -> PyResult<Self> {
+        #[cfg(feature = "huggingface")]
+        {
+            let identifier = identifier.to_owned();
+            let revision = revision.to_owned();
+            let token = token.map(str::to_owned);
+            Self::load(py, move || {
+                litellm_token_counter::huggingface::HuggingFaceTokenizer::from_pretrained(
+                    &identifier,
+                    &revision,
+                    token.as_deref(),
+                )
+                .map_err(Error::from)
+            })
+        }
+        #[cfg(not(feature = "huggingface"))]
+        {
+            let _ = (py, identifier, revision, token);
+            Err(RustBridgeDeclined::new_err(
+                "tokenizer backend requires the huggingface feature",
+            ))
+        }
+    }
+
+    fn encode(&self, py: Python<'_>, text: &str) -> PyResult<Vec<u32>> {
+        let inner = Arc::clone(&self.inner);
+        let text = text.to_owned();
+        release_gil(py, move || inner.encode(&text)).map_err(token_count_error_to_pyerr)
+    }
+
+    #[pyo3(signature = (ids, skip_special_tokens = true))]
+    fn decode(&self, py: Python<'_>, ids: Vec<u32>, skip_special_tokens: bool) -> PyResult<String> {
+        let inner = Arc::clone(&self.inner);
+        release_gil(py, move || inner.decode(&ids, skip_special_tokens))
+            .map_err(token_count_error_to_pyerr)
+    }
+
+    fn count(&self, py: Python<'_>, text: &str) -> PyResult<usize> {
+        let inner = Arc::clone(&self.inner);
+        let text = text.to_owned();
+        release_gil(py, move || inner.count_tokens(&text)).map_err(token_count_error_to_pyerr)
+    }
+
+    #[getter]
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+}
+
+impl Tokenizer {
+    #[cfg(any(feature = "huggingface", feature = "tiktoken"))]
+    fn load<T>(py: Python<'_>, load: impl FnOnce() -> Result<T, Error> + Send) -> PyResult<Self>
+    where
+        T: TextCodec + 'static,
+    {
+        let inner = release_gil(py, load).map_err(token_count_error_to_pyerr)?;
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
+    }
+}
+
+#[pyfunction]
+pub(crate) fn tiktoken_encoding_for_model(model: &str) -> Option<String> {
+    #[cfg(feature = "tiktoken")]
+    {
+        litellm_token_counter::tiktoken::encoding_for_model(model).map(str::to_owned)
+    }
+    #[cfg(not(feature = "tiktoken"))]
+    {
+        let _ = model;
+        None
+    }
+}
+
 impl TokenCounter {
     #[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
     fn load(
@@ -143,6 +269,7 @@ fn token_count_error_to_pyerr(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
         Error::Load(_)
+        | Error::Download(_)
         | Error::Ranks(_)
         | Error::UnicodeClasses
         | Error::UnsupportedTokenizer(_) => PyValueError::new_err(message),
@@ -153,6 +280,6 @@ fn token_count_error_to_pyerr(error: Error) -> PyErr {
         | Error::ArrayItems
         | Error::JsonSerialization(_)
         | Error::JsonUtf8(_) => RustBridgeDeclined::new_err(message),
-        Error::Encode(_) | Error::Task(_) => PyRuntimeError::new_err(message),
+        Error::Encode(_) | Error::Decode(_) | Error::Task(_) => PyRuntimeError::new_err(message),
     }
 }

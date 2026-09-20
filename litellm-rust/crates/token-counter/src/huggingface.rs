@@ -1,7 +1,7 @@
 use litellm_token_counter_huggingface::Error as BackendError;
 pub use litellm_token_counter_huggingface::HuggingFaceTokenizer;
 
-use crate::{Error, TokenCounter, Tokenizer};
+use crate::{Error, TextCodec, TokenCounter, Tokenizer};
 
 impl TokenCounter {
     pub fn from_json(tokenizer_json: &str) -> Result<Self, Error> {
@@ -17,11 +17,27 @@ impl Tokenizer for HuggingFaceTokenizer {
     }
 }
 
+impl TextCodec for HuggingFaceTokenizer {
+    fn encode(&self, text: &str) -> Result<Vec<u32>, Error> {
+        HuggingFaceTokenizer::encode(self, text).map_err(Error::from)
+    }
+
+    fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, Error> {
+        HuggingFaceTokenizer::decode(self, ids, skip_special_tokens).map_err(Error::from)
+    }
+
+    fn name(&self) -> &str {
+        HuggingFaceTokenizer::name(self)
+    }
+}
+
 impl From<BackendError> for Error {
     fn from(error: BackendError) -> Self {
         match error {
             BackendError::Load(source) => Self::Load(source),
+            BackendError::Download(source) => Self::Download(source.to_string()),
             BackendError::Encode(source) => Self::Encode(source),
+            BackendError::Decode(source) => Self::Decode(source.to_string()),
         }
     }
 }

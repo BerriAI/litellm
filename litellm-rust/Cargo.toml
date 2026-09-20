@@ -48,7 +48,7 @@ serde_with = { version = "=3.16.1", default-features = false, features = ["std",
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2.0"
-tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
+tokenizers = { version = "0.23.1", default-features = false, features = ["onig", "http", "rustls-tls"] }
 tiktoken-rs = "0.12.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }

@@ -29,7 +29,7 @@ mod _native {
     #[pymodule_export]
     use crate::routes::responses::ResponsesWebSocketConnection;
     #[pymodule_export]
-    use crate::token_counter::TokenCounter;
+    use crate::token_counter::{TokenCounter, Tokenizer, tiktoken_encoding_for_model};
     #[pymodule_export]
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
 }
@@ -65,6 +65,8 @@ mod tests {
                 "achat_completions",
                 "ResponsesWebSocketConnection",
                 "TokenCounter",
+                "Tokenizer",
+                "tiktoken_encoding_for_model",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",

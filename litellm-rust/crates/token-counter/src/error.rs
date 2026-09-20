@@ -8,6 +8,8 @@ pub enum Error {
     UnsupportedTokenizer(String),
     #[error("failed to load tokenizer: {0}")]
     Load(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("failed to download tokenizer: {0}")]
+    Download(String),
     #[error("failed to load tokenizer: tiktoken rank file: {0}")]
     Ranks(String),
     #[error("failed to load tokenizer: Unicode character classes are unavailable")]
@@ -32,6 +34,8 @@ pub enum Error {
     JsonUtf8(#[source] FromUtf8Error),
     #[error("tokenization failed: {0}")]
     Encode(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("token decoding failed: {0}")]
+    Decode(String),
     #[error("token counting task failed: {0}")]
     Task(String),
 }
