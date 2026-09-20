@@ -18,4 +18,5 @@ azure_core = "1.0.0"
 azure_identity = { version = "1.0.0", features = ["tokio"] }
 
 [dev-dependencies]
+rstest.workspace = true
 tokio.workspace = true

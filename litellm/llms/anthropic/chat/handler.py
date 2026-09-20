@@ -4,7 +4,8 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 
 import copy
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Union, cast
 
 import httpx
@@ -31,7 +32,6 @@ from litellm.types.llms.anthropic import (
     ContentBlockStop,
     MessageBlockDelta,
     MessageStartBlock,
-    UsageDelta,
 )
 from litellm.types.llms.openai import (
     ChatCompletionRedactedThinkingBlock,
@@ -557,6 +557,7 @@ class ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.speed = speed
+        self._cumulative_usage: Mapping[str, object] = MappingProxyType({})
         # rewritten-name -> caller's original. Built per-request from the
         # forward map in AnthropicConfig._build_request_tool_name_maps; only
         # contains entries we actually rewrote, so a tool legitimately named
@@ -631,10 +632,12 @@ class ModelResponseIterator:
             return True
         return False
 
-    def _handle_usage(self, anthropic_usage_chunk: dict | UsageDelta) -> Usage:
+    def _handle_usage(self, anthropic_usage_chunk: Mapping[str, object]) -> Usage:
+        # message_delta usage is cumulative but may omit fields reported at message_start.
+        self._cumulative_usage = MappingProxyType({**self._cumulative_usage, **anthropic_usage_chunk})
         reasoning_content: Final = "".join(self.reasoning_content_chunks) if self.reasoning_content_chunks else None
         usage: Final = AnthropicConfig().calculate_usage(
-            usage_object=cast(dict, anthropic_usage_chunk),
+            usage_object=self._cumulative_usage,
             reasoning_content=reasoning_content,
             speed=self.speed,
         )

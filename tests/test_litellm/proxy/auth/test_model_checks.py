@@ -879,3 +879,18 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
         infer_model_from_keys=False,
     )
     assert result == []
+
+
+def test_transcribe_is_a_known_provider_for_wildcard_expansion():
+    import litellm
+    from litellm.proxy.auth.model_checks import (
+        get_known_models_from_wildcard,
+        get_provider_models,
+    )
+
+    assert "transcribe" in litellm.models_by_provider
+    assert "transcribe/StartTranscriptionJob" in litellm.models_by_provider["transcribe"]
+    assert get_provider_models("transcribe") == ["transcribe/StartTranscriptionJob"]
+    assert get_known_models_from_wildcard("transcribe/*") == [
+        "transcribe/StartTranscriptionJob"
+    ]

@@ -14,5 +14,13 @@
   "url_policy": [
     "user_url_validation",
     "user_url_allowed_hosts"
+  ],
+  "provider_defaults": [
+    "vertex_project",
+    "vertex_location",
+    "enable_azure_ad_token_refresh"
+  ],
+  "secret_manager": [
+    "readable"
   ]
 }
