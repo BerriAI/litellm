@@ -156,7 +156,7 @@ def _load_script(name: str) -> ModuleType:
     return module
 
 
-def retired_rules(rel: str, base: dict) -> frozenset[str]:
+def retired_rules(rel: str, base: dict[str, object]) -> frozenset[str]:
     """Rules in the base budget that the paired checker can no longer emit, so there is no ceiling to loosen."""
     source: Final = RETIREMENT_SOURCES.get(rel)
     if source is None:
