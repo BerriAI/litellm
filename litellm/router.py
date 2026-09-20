@@ -4475,7 +4475,6 @@ class Router:
                         prompt=prompt_spec
                     )
             except Exception as e:
-                # Prompt registry resolution is best-effort; fall back to router prompt management lookup
                 verbose_router_logger.debug("Prompt registry resolution in router prompt management failed: %s", e)
 
         if not is_litellm_agent_model and (prompt_id is None or not isinstance(prompt_id, str)):
@@ -4582,7 +4581,6 @@ class Router:
                     )
                 raise e
 
-        # Model exists in router
         router_call_kwargs: Final[dict[str, Any]] = {**kwargs}  # mutable-ok: kwargs dict for router call
         for param in prompt_management_params:
             router_call_kwargs.pop(param, None)

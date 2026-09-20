@@ -299,7 +299,6 @@ class PromptManager:
             The prompt template if found, None otherwise
         """
         if version is not None:
-            # Try versioned prompt first: prompt_id.v{version} or prompt_id_v{version}
             versioned_id: Final = f"{prompt_id}.v{version}"
             if versioned_id in self.prompts:
                 return self.prompts[versioned_id]
