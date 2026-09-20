@@ -202,7 +202,24 @@ def test_explicit_key_decrypt_reads_only_values_written_under_that_key(monkeypat
     assert decrypt_value_helper(written_with_previous_key, key="t", exception_type="debug") is None
 
 
-@pytest.mark.parametrize("not_a_ciphertext", ["", "gpt-5.4-mini", "https://example.invalid/v1", "v2:gcm:", "aGVsbG8="])
+@pytest.mark.parametrize(
+    "not_a_ciphertext",
+    [
+        "",
+        "gpt-5.4-mini",
+        "https://example.invalid/v1",
+        "v2:gcm:",
+        "aGVsbG8=",
+        "*",
+        "-",
+        "_",
+        "...",
+        " ",
+        "{}",
+        "[]",
+        "=",
+    ],
+)
 def test_explicit_key_decrypt_rejects_values_that_are_not_ciphertexts(not_a_ciphertext: str):
     assert decrypt_if_encrypted_with(not_a_ciphertext, "sk-1234") is None
 

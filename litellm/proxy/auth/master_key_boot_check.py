@@ -285,7 +285,7 @@ def _migration_lead(migration: StoredSecretsMigration) -> str:
         else f"holds {migration.encrypted_value_count} value(s)"
     )
     return (
-        f"Your database {found} encrypted with this master key, which encrypts stored\n"
-        f"credentials while {SALT_KEY_ENV_VAR} is not set. Replacing the key alone makes them unreadable, so also tell\n"
-        "the proxy which key to migrate from:"
+        f"Your database {found} encrypted with this master key,\n"
+        f"which encrypts stored credentials while {SALT_KEY_ENV_VAR} is not set. Replacing the key alone makes them\n"
+        "unreadable, so also tell the proxy which key to migrate from:"
     )

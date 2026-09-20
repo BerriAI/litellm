@@ -344,7 +344,6 @@ from litellm.proxy.auth.login_throttle import (
 )
 from litellm.proxy.auth.master_key_boot_check import (
     MASTER_KEY_ENV_VAR,
-    MIGRATE_FROM_MASTER_KEY_ENV_VAR,
     SALT_KEY_ENV_VAR,
     UNSAFE_PROXY_OVERRIDE_ENV_VAR,
     announce_on_stderr_at_exit,
@@ -491,7 +490,7 @@ from litellm.proxy.db.gateway_request_tracking import (
 )
 from litellm.proxy.db.master_key_migration import (
     count_values_encrypted_with_or_none,
-    migrate_from_previous_master_key,
+    migrate_if_requested,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
@@ -1143,7 +1142,7 @@ async def _connect_to_count_stored_values() -> SupportsRawQueries:
         database_url=str(get_secret("DATABASE_URL")), proxy_logging_obj=proxy_logging_obj
     )
     await client.connect()
-    return client.db
+    return client.writer_db
 
 
 @asynccontextmanager
@@ -1263,15 +1262,12 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             user_api_key_cache=user_api_key_cache,
         )
 
-    previous_master_key: Final = os.getenv(MIGRATE_FROM_MASTER_KEY_ENV_VAR)
-    if previous_master_key is not None and master_key is not None:
-        await migrate_from_previous_master_key(
-            previous_master_key=previous_master_key,
-            master_key=master_key,
-            salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
-            database=None if prisma_client is None else prisma_client.db,
-            log=verbose_proxy_logger.warning,
-        )
+    await migrate_if_requested(
+        environ=os.environ,
+        master_key=master_key,
+        connected_database=lambda: None if prisma_client is None else prisma_client.writer_db,
+        log=verbose_proxy_logger.warning,
+    )
 
     if prisma_client is not None:
 
