@@ -50,12 +50,13 @@ async def stop_in_flight_scheduler_jobs(scheduler: StoppableScheduler, executor:
     if not scheduler.running:
         return
     in_flight: Final = executor.in_flight_jobs()
-    still_running: set[asyncio.Future[object]] = set()
     if in_flight:
         verbose_proxy_logger.info(
             "Waiting up to %ss for %d in-flight scheduled job(s) to finish", JOB_FINISH_TIMEOUT_SECONDS, len(in_flight)
         )
-        _done, still_running = await asyncio.wait(in_flight, timeout=JOB_FINISH_TIMEOUT_SECONDS)
+    still_running: Final = (
+        (await asyncio.wait(in_flight, timeout=JOB_FINISH_TIMEOUT_SECONDS))[1] if in_flight else frozenset()
+    )
     scheduler.shutdown(wait=False)
     if not still_running:
         return
