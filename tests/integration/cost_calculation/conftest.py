@@ -177,7 +177,7 @@ def poll_rollups(
         )
         if not all((key_rows, team_rows, user_rows, end_user_rows, daily_user_rows, daily_team_rows)):
             return None
-        return Rollups(
+        rollups: Final = Rollups(
             key_spend=float(key_rows[0]["spend"]),
             team_spend=float(team_rows[0]["spend"]),
             user_spend=float(user_rows[0]["spend"]),
@@ -185,6 +185,7 @@ def poll_rollups(
             daily_user=DailySpend.model_validate(daily_user_rows[0]),
             daily_team=DailySpend.model_validate(daily_team_rows[0]),
         )
+        return rollups
 
     result: Final = eventually(
         read,
