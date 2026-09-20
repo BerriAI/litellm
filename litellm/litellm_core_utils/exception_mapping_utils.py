@@ -2462,7 +2462,7 @@ def exception_type(
                 or custom_llm_provider in litellm.openai_compatible_providers
                 or custom_llm_provider == "mistral"
                 or custom_llm_provider == "runwayml"
-            ):
+            ) and (hasattr(original_exception, "request") or hasattr(original_exception, "status_code")):
                 _map_openai_exception(
                     model=model,
                     original_exception=mappable_exception,
