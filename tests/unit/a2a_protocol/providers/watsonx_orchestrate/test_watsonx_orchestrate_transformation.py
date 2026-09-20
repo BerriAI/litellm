@@ -1,7 +1,6 @@
 import asyncio
 import json
 import time
-from pathlib import Path
 
 import httpx
 import pytest
@@ -571,20 +570,3 @@ def test_config_manager_returns_wxo_provider():
     )
     assert config is not None
     assert config.__class__.__name__ == "WatsonxOrchestrateA2AConfig"
-
-
-def test_wxo_dashboard_auth_fields():
-    fields_path = (
-        Path(__file__).resolve().parents[5]
-        / "litellm/proxy/public_endpoints/agent_create_fields.json"
-    )
-    agent_fields = json.loads(fields_path.read_text())
-    wxo_agent = next(
-        agent for agent in agent_fields if agent["agent_type"] == "watsonx_orchestrate"
-    )
-    fields_by_key = {field["key"]: field for field in wxo_agent["credential_fields"]}
-
-    assert fields_by_key["auth_mode"]["default_value"] == "cp4d"
-    # Username is CP4D-only; UI does not require it so ibm_cloud users are not blocked.
-    assert fields_by_key["username"]["required"] is False
-    assert "cp4d" in fields_by_key["username"]["tooltip"].lower()

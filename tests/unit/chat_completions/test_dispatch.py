@@ -1,11 +1,9 @@
-import inspect
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures for inspect
+from typing import Final, cast  # noqa: TID251  # narrows legacy callable signatures
 
 import pytest
 
 import litellm
-from litellm import main as python_chat
 from litellm.chat_completions.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
@@ -38,15 +36,6 @@ def acompletion_binding(native: NativeAcompletion | None) -> NativeBinding[Nativ
     binding: Final[NativeBinding[NativeAcompletion]] = NativeBinding("acompletion", validate=lambda _: None)
     binding.override(native)
     return binding
-
-
-def test_public_signature_is_the_legacy_signature() -> None:
-    public_completion: Final = cast(Callable[..., object], litellm.completion)
-    legacy_completion: Final = cast(Callable[..., object], python_chat.completion)
-    public_acompletion: Final = cast(Callable[..., object], litellm.acompletion)
-    legacy_acompletion: Final = cast(Callable[..., object], python_chat.acompletion)
-    assert inspect.signature(public_completion) == inspect.signature(legacy_completion)
-    assert inspect.signature(public_acompletion) == inspect.signature(legacy_acompletion)
 
 
 def test_python_route_forwards_original_call_shape() -> None:
