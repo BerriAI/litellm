@@ -7393,18 +7393,21 @@ class TestJWTAuthUserEmail:
         assert result.user_email == "resolved@example.com"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("route", ["/mcp-rest/tools/list", "/mcp-rest/tools/call", "/v1/chat/completions"])
+    @pytest.mark.parametrize("route", ["/mcp-rest/tools/list", "/mcp-rest/tools/call", "/v1/chat/completions", "/user/info"])
     @pytest.mark.parametrize("active", [False, True, None, "false", 0])
-    async def test_jwt_auth_rejects_deactivated_user(self, route: str, active: bool | str | int | None) -> None:
+    @pytest.mark.parametrize("is_admin", [False, True])
+    async def test_jwt_auth_rejects_deactivated_user(
+        self, route: str, active: bool | str | int | None, is_admin: bool
+    ) -> None:
         from typing import Final
 
         jwt_token: Final = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
         result: Final = {
-            "is_proxy_admin": False,
+            "is_proxy_admin": is_admin,
             "team_object": None,
             "user_object": LiteLLM_UserTable(
                 user_id="jwt-human-user",
-                user_role=LitellmUserRoles.INTERNAL_USER.value,
+                user_role=LitellmUserRoles.PROXY_ADMIN.value if is_admin else LitellmUserRoles.INTERNAL_USER.value,
                 metadata={} if active is None else {"scim_active": active},
             ),
             "end_user_object": None,
