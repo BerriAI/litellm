@@ -4,7 +4,7 @@ from collections import Counter
 from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, Protocol
+from typing import Annotated, Final, Literal, Protocol, TypeAlias
 
 import httpx
 from fastapi import APIRouter, Depends
@@ -25,7 +25,7 @@ LATEST_RELEASE_CACHE_KEY: Final = "latest_release_info"
 _RELEASE_BULLET_PATTERN: Final = re.compile(r"^\*\s+(?:([A-Za-z]+)(?:\([^)]*\))?!?:\s)?\S")
 _NEW_CONTRIBUTOR_PATTERN: Final = re.compile(r"^\*\s+@\S+ made their first contribution\b")
 
-_Bucket = Literal["new_features", "bug_fixes", "other_updates"]
+_Bucket: TypeAlias = Literal["new_features", "bug_fixes", "other_updates"]
 _PREFIX_BUCKETS: Final[Mapping[str, _Bucket]] = MappingProxyType({"feat": "new_features", "fix": "bug_fixes"})
 
 
@@ -81,9 +81,9 @@ def _bucket_for(line: str) -> _Bucket | None:
     return "other_updates" if prefix is None else _PREFIX_BUCKETS.get(prefix.lower(), "other_updates")
 
 
-def count_release_bullets(body: str) -> Counter[_Bucket]:
+def count_release_bullets(body: str) -> Mapping[_Bucket, int]:
     """Bucket release-note bullets by conventional-commit type or ``other_updates``."""
-    return Counter(bucket for line in body.splitlines() if (bucket := _bucket_for(line)) is not None)
+    return MappingProxyType(Counter(bucket for line in body.splitlines() if (bucket := _bucket_for(line)) is not None))
 
 
 def parse_latest_release(response: httpx.Response) -> LatestReleaseInfo | LatestReleaseUnavailable:
@@ -96,9 +96,9 @@ def parse_latest_release(response: httpx.Response) -> LatestReleaseInfo | Latest
     counts: Final = count_release_bullets(release.body)
     return LatestReleaseInfo(
         version=release.tag_name.removeprefix("v"),
-        new_features=counts["new_features"],
-        bug_fixes=counts["bug_fixes"],
-        other_updates=counts["other_updates"],
+        new_features=counts.get("new_features", 0),
+        bug_fixes=counts.get("bug_fixes", 0),
+        other_updates=counts.get("other_updates", 0),
         release_url=release.html_url,
     )
 
