@@ -1,3 +1,4 @@
+import asyncio
 import re
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import pytest
 from litellm.proxy.auth.master_key_boot_check import (
     GENERATE_MASTER_KEY_COMMAND,
     MASTER_KEY_ENV_VAR,
+    MIGRATE_FROM_MASTER_KEY_ENV_VAR,
     PRINT_NEW_MASTER_KEY_COMMAND,
     ROTATION_DOCS_URL,
     UNSAFE_PROXY_OVERRIDE_ENV_VAR,
@@ -18,6 +20,7 @@ from litellm.proxy.auth.master_key_boot_check import (
     EnvironmentSource,
     MasterKeyBootVerdict,
     SafeMasterKey,
+    StoredSecretsMigration,
     UnsafeMasterKeyAllowed,
     UnsafeMasterKeyError,
     UnsafeMasterKeyReason,
@@ -26,6 +29,7 @@ from litellm.proxy.auth.master_key_boot_check import (
     enforce_master_key_boot_verdict,
     master_key_boot_verdict,
     render_refusal,
+    with_stored_secrets_counted,
 )
 
 
@@ -125,36 +129,84 @@ def test_environment_is_the_source_when_yaml_does_not_set_a_master_key():
 
 
 @pytest.mark.parametrize(
-    ("master_key", "salt_key_is_set", "database_is_configured", "needs_rotation"),
+    ("master_key", "salt_key_is_set", "database_is_configured", "migration"),
     [
-        ("sk-1234", False, True, True),
-        ("sk-1234", True, True, False),
-        ("sk-1234", False, False, False),
-        (None, False, True, False),
-        ("", False, True, False),
+        ("sk-1234", False, True, StoredSecretsMigration(from_master_key="sk-1234", encrypted_value_count=None)),
+        ("", False, True, StoredSecretsMigration(from_master_key="", encrypted_value_count=None)),
+        (" sk-1234\n", False, True, StoredSecretsMigration(from_master_key=" sk-1234\n", encrypted_value_count=None)),
+        ("sk-1234", True, True, None),
+        ("sk-1234", False, False, None),
+        (None, False, True, None),
     ],
 )
-def test_rotation_is_only_needed_when_the_known_key_encrypts_a_database(
-    master_key: str | None, salt_key_is_set: bool, database_is_configured: bool, needs_rotation: bool
+def test_migration_is_offered_from_the_exact_key_that_may_encrypt_a_database(
+    master_key: str | None,
+    salt_key_is_set: bool,
+    database_is_configured: bool,
+    migration: StoredSecretsMigration | None,
 ):
     verdict = _verdict(master_key, salt_key_is_set=salt_key_is_set, database_is_configured=database_is_configured)
 
     assert isinstance(verdict, UnsafeMasterKeyRefused)
-    assert verdict.stored_credentials_need_rotation is needs_rotation
+    assert verdict.migration == migration
+
+
+def _counted(verdict: MasterKeyBootVerdict, count: int | None) -> tuple[MasterKeyBootVerdict, list[str]]:
+    asked_about: list[str] = []
+
+    async def count_values_encrypted_with(signing_key: str) -> int | None:
+        asked_about.append(signing_key)
+        return count
+
+    return asyncio.run(with_stored_secrets_counted(verdict, count_values_encrypted_with)), asked_about
+
+
+def test_database_with_nothing_encrypted_needs_no_migration():
+    counted, asked_about = _counted(_verdict("sk-1234", database_is_configured=True), 0)
+
+    assert isinstance(counted, UnsafeMasterKeyRefused)
+    assert counted.migration is None
+    assert asked_about == ["sk-1234"]
+
+
+@pytest.mark.parametrize("count", [4, None])
+def test_database_with_encrypted_values_or_unreadable_keeps_the_migration(count: int | None):
+    counted, _ = _counted(_verdict("", database_is_configured=True), count)
+
+    assert isinstance(counted, UnsafeMasterKeyRefused)
+    assert counted.migration == StoredSecretsMigration(from_master_key="", encrypted_value_count=count)
+
+
+@pytest.mark.parametrize(
+    "verdict",
+    [
+        SafeMasterKey(),
+        UnsafeMasterKeyAllowed(reason=UnsafeMasterKeyReason.PUBLICLY_KNOWN),
+        _verdict("sk-1234", database_is_configured=False),
+    ],
+)
+def test_database_is_not_read_when_no_migration_is_on_the_table(verdict: MasterKeyBootVerdict):
+    counted, asked_about = _counted(verdict, 7)
+
+    assert counted == verdict
+    assert asked_about == []
 
 
 def _refusal(
     reason: UnsafeMasterKeyReason = UnsafeMasterKeyReason.PUBLICLY_KNOWN,
     source: ConfigFileSource | EnvironmentSource = EnvironmentSource(),
     environment_variable_is_set: bool = False,
-    stored_credentials_need_rotation: bool = False,
+    migration: StoredSecretsMigration | None = None,
 ) -> UnsafeMasterKeyRefused:
     return UnsafeMasterKeyRefused(
         reason=reason,
         source=source,
         environment_variable_is_set=environment_variable_is_set,
-        stored_credentials_need_rotation=stored_credentials_need_rotation,
+        migration=migration,
     )
+
+
+_MIGRATION = StoredSecretsMigration(from_master_key="sk-1234", encrypted_value_count=3)
 
 
 def test_config_refusal_names_the_file_and_tells_it_to_read_the_environment():
@@ -208,28 +260,82 @@ def test_unset_key_refusal_says_nothing_supplied_one():
     assert "Neither general_settings.master_key nor" in text
 
 
-def test_rotation_guide_appears_only_when_needed():
-    with_rotation = render_refusal(_refusal(stored_credentials_need_rotation=True))
-    without_rotation = render_refusal(_refusal(stored_credentials_need_rotation=False))
+def test_migration_steps_appear_only_when_the_database_needs_them():
+    with_migration = render_refusal(_refusal(migration=_MIGRATION))
+    without_migration = render_refusal(_refusal(migration=None))
 
-    assert ROTATION_DOCS_URL in with_rotation
-    assert ROTATION_DOCS_URL not in without_rotation
+    assert f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}=sk-1234" in with_migration
+    assert "holds 3 value(s) encrypted with this master key" in with_migration
+    assert ROTATION_DOCS_URL in with_migration
+    assert MIGRATE_FROM_MASTER_KEY_ENV_VAR not in without_migration
+    assert ROTATION_DOCS_URL not in without_migration
 
 
-@pytest.mark.parametrize("source", [EnvironmentSource(), ConfigFileSource(config_file_path="/app/config.yaml")])
-def test_refusal_never_tells_a_user_who_must_rotate_to_save_the_new_key_first(
-    source: ConfigFileSource | EnvironmentSource,
-):
-    text = render_refusal(_refusal(source=source, stored_credentials_need_rotation=True))
+def test_unreadable_database_is_reported_as_unchecked_rather_than_counted():
+    text = render_refusal(
+        _refusal(migration=StoredSecretsMigration(from_master_key="sk-1234", encrypted_value_count=None))
+    )
 
+    assert "could not be checked" in text
+    assert "value(s)" not in text
+    assert f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}=sk-1234" in text
+
+
+@pytest.mark.parametrize(
+    ("from_master_key", "assignment"),
+    [
+        ("sk-1234", f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}=sk-1234"),
+        ("", f"{MIGRATE_FROM_MASTER_KEY_ENV_VAR}="),
+        (" sk-1234", f'{MIGRATE_FROM_MASTER_KEY_ENV_VAR}=" sk-1234"'),
+    ],
+)
+def test_migrate_from_assignment_carries_the_exact_previous_key(from_master_key: str, assignment: str):
+    text = render_refusal(
+        _refusal(
+            environment_variable_is_set=True,
+            migration=StoredSecretsMigration(from_master_key=from_master_key, encrypted_value_count=1),
+        )
+    )
+
+    assert f"     {assignment}\n" in text
+
+
+def test_migration_with_an_exported_key_replaces_it_in_place_and_numbers_every_step():
+    text = render_refusal(
+        _refusal(
+            source=ConfigFileSource(config_file_path="/app/config.yaml"),
+            environment_variable_is_set=True,
+            migration=_MIGRATION,
+        )
+    )
+
+    assert "tee" not in text
     assert PRINT_NEW_MASTER_KEY_COMMAND in text
-    assert ".env" not in text
-    assert "os.environ/" not in text
+    assert [line[:2] for line in text.splitlines() if re.match(r"\d\. ", line)] == ["1.", "2.", "3.", "4."]
+    assert text.index("os.environ/") < text.index(MIGRATE_FROM_MASTER_KEY_ENV_VAR + "=") < text.index("Start the proxy")
 
 
-@pytest.mark.parametrize("stored_credentials_need_rotation", [True, False])
-def test_override_hint_is_the_last_paragraph(stored_credentials_need_rotation: bool):
-    text = render_refusal(_refusal(stored_credentials_need_rotation=stored_credentials_need_rotation))
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="the printed command shells out to openssl")
+@pytest.mark.parametrize("from_master_key", ["sk-1234", "", " sk-1234"])
+def test_printed_migration_commands_save_both_keys_to_the_env_file(tmp_path: Path, from_master_key: str):
+    from dotenv import dotenv_values
+
+    text = render_refusal(
+        _refusal(migration=StoredSecretsMigration(from_master_key=from_master_key, encrypted_value_count=1))
+    )
+    commands = [line.strip() for line in text.splitlines() if line.strip().startswith("echo ")]
+
+    subprocess.run(["bash", "-c", "\n".join(commands)], cwd=tmp_path, capture_output=True, text=True, check=True)
+
+    saved = dotenv_values(tmp_path / ".env")
+    assert saved[MIGRATE_FROM_MASTER_KEY_ENV_VAR] == from_master_key
+    assert _verdict(saved[MASTER_KEY_ENV_VAR]) == SafeMasterKey()
+    assert len(commands) == 2
+
+
+@pytest.mark.parametrize("migration", [_MIGRATION, None])
+def test_override_hint_is_the_last_paragraph(migration: StoredSecretsMigration | None):
+    text = render_refusal(_refusal(migration=migration))
     last_paragraph = text.split("\n\n")[-1]
 
     assert UNSAFE_PROXY_OVERRIDE_ENV_VAR in last_paragraph
