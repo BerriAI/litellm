@@ -5138,3 +5138,34 @@ def test_eager_input_streaming_tool_reaches_bedrock_converse_as_beta():
 
     assert data["additionalModelRequestFields"]["anthropic_beta"] == ["fine-grained-tool-streaming-2025-05-14"]
     assert data["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"] == EAGER_INPUT_SCHEMA
+
+
+def test_translate_anthropic_tools_to_openai_carries_allowed_callers_onto_function():
+    """Regression test for BerriAI/litellm#41913: `allowed_callers` is tool metadata,
+    so it lands on the OpenAI function instead of leaking into `parameters`, where
+    downstream schema filtering would silently drop it."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    input_schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
+    tools = [
+        {
+            "type": "custom",
+            "name": "search",
+            "input_schema": input_schema,
+            "allowed_callers": ["direct"],
+        }
+    ]
+
+    new_tools, _ = adapter.translate_anthropic_tools_to_openai(tools=tools)
+
+    function = new_tools[0]["function"]
+    assert function["allowed_callers"] == ["direct"]
+    assert "allowed_callers" not in function["parameters"]
+    assert input_schema == {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }

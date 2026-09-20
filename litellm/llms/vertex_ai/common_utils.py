@@ -647,6 +647,57 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
+def _json_type_for_const(value: object) -> str | None:
+    """Return the JSON Schema type name for a scalar ``const`` value."""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    return None
+
+
+def _convert_const_to_enum(schema: object, depth: int = 0) -> None:
+    """
+    Rewrite JSON Schema ``const`` as a single-value ``enum``.
+
+    Gemini's Schema has no ``const`` keyword. Without this rewrite,
+    ``add_object_type`` stamps ``type: object`` onto a const-only schema and
+    ``filter_schema_fields`` then strips ``const``, so ``{"const": "USD"}``
+    reaches the provider as ``{"type": "object"}`` and any object satisfies
+    it. A single-value enum preserves the pinned value. Non-scalar const
+    values have no enum equivalent and are left untouched.
+    See https://github.com/BerriAI/litellm/issues/41913
+    """
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return
+    if isinstance(schema, dict):
+        if "const" in schema and "enum" not in schema:
+            const_value: Final = schema["const"]
+            json_type: Final = _json_type_for_const(const_value)
+            if json_type is not None:
+                del schema["const"]
+                schema["type"] = json_type
+                schema["enum"] = [const_value]
+        for key, value in schema.items():
+            if key in ("properties", "$defs", "definitions", "dependentSchemas", "patternProperties") and isinstance(
+                value, dict
+            ):
+                for sub_schema in value.values():
+                    _convert_const_to_enum(sub_schema, depth + 1)
+            elif key in ("items", "contains", "else", "if", "then", "not", "propertyNames", "additionalProperties"):
+                _convert_const_to_enum(value, depth + 1)
+            elif key in ("allOf", "anyOf", "oneOf", "prefixItems") and isinstance(value, list):
+                for sub_schema in value:
+                    _convert_const_to_enum(sub_schema, depth + 1)
+    elif isinstance(schema, list):
+        for item in schema:
+            _convert_const_to_enum(item, depth + 1)
+
+
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
@@ -675,6 +726,8 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     #     * https://stackoverflow.com/a/58841311
     #     * https://github.com/pydantic/pydantic/discussions/4872
     convert_anyof_null_to_nullable(parameters)
+
+    _convert_const_to_enum(parameters)
 
     _convert_schema_types(parameters)
 

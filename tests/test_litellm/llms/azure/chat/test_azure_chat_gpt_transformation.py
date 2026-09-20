@@ -490,3 +490,17 @@ def test_transform_request_strips_litellm_format_from_managed_file_id():
     file_part = request["messages"][0]["content"][1]["file"]
     assert "format" not in file_part
     assert file_part["file_id"] == "assistant-xyz"
+
+
+def test_translate_developer_role_to_system_role_preserves_developer_for_azure():
+    """Regression test for BerriAI/litellm#41913: Azure OpenAI implements the OpenAI
+    API, which accepts the `developer` role directly."""
+    config = AzureOpenAIConfig()
+    messages = [
+        {"role": "developer", "content": "be terse"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    result = config.translate_developer_role_to_system_role(messages)
+
+    assert [m["role"] for m in result] == ["developer", "user"]

@@ -6,6 +6,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
 
 from litellm.llms.vertex_ai.common_utils import (
+    _build_vertex_schema,
     _get_vertex_url,
     convert_anyof_null_to_nullable,
     get_vertex_location_from_url,
@@ -1755,3 +1756,28 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
     assert get_vertex_ai_lyria_model_info(model=model) is None
 
 
+
+
+def test_build_vertex_schema_converts_const_to_single_value_enum():
+    """Regression test for BerriAI/litellm#41913: a scalar `const` must become a
+    single-value `enum` so Gemini keeps the constraint instead of forwarding
+    `{"type": "object"}`."""
+    parameters = {
+        "type": "object",
+        "properties": {
+            "amount": {"type": "number"},
+            "currency": {"const": "USD"},
+            "nested": {"type": "object", "properties": {"count": {"const": 5}}},
+        },
+        "required": ["currency", "amount"],
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    currency = result["properties"]["currency"]
+    assert "const" not in currency
+    assert currency["enum"] == ["USD"]
+    assert currency["type"] != "object"
+    nested_count = result["properties"]["nested"]["properties"]["count"]
+    assert "const" not in nested_count
+    assert nested_count["type"] == "integer"

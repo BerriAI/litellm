@@ -366,3 +366,19 @@ def test_hosted_vllm_custom_tools_use_top_level_input_schema():
     assert tools[0]["function"]["name"] == "search"
     assert tools[0]["function"]["description"] == "Search docs"
     assert tools[0]["function"]["parameters"] == input_schema
+
+
+def test_translate_developer_role_to_system_role_still_translates_for_vllm():
+    """Regression test for BerriAI/litellm#41913: vLLM has no `developer` role, so the
+    developer-to-system conversion is kept for vLLM targets."""
+    from litellm.llms.vllm.completion.transformation import VLLMConfig
+
+    messages = [
+        {"role": "developer", "content": "be terse"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    for config in (HostedVLLMChatConfig(), VLLMConfig()):
+        result = config.translate_developer_role_to_system_role(messages)
+
+        assert [m["role"] for m in result] == ["system", "user"]

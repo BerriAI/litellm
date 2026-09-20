@@ -24,10 +24,22 @@ from litellm.types.llms.openai import (
 )
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
+from ...base_llm.chat.transformation import BaseConfig
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class HostedVLLMChatConfig(OpenAIGPTConfig):
+    def translate_developer_role_to_system_role(
+        self,
+        messages: list[AllMessageValues],
+    ) -> list[AllMessageValues]:
+        """
+        vLLM has no `developer` role, so keep the base behavior of translating
+        it to `system`.
+        See https://github.com/BerriAI/litellm/issues/41913
+        """
+        return BaseConfig.translate_developer_role_to_system_role(self, messages)
+
     def _convert_custom_tools_to_function_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """
         vLLM chat completions currently accepts only OpenAI function tools.

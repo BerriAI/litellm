@@ -141,6 +141,18 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def get_config(cls):
         return super().get_config()
 
+    def translate_developer_role_to_system_role(
+        self,
+        messages: list[AllMessageValues],
+    ) -> list[AllMessageValues]:
+        """
+        The OpenAI API accepts the `developer` role directly, so it is passed
+        through unchanged. Non-OpenAI providers keep the base behavior of
+        translating it to `system`.
+        See https://github.com/BerriAI/litellm/issues/41913
+        """
+        return messages
+
     def get_supported_openai_params(self, model: str) -> list:
         base_params: Final = [
             "frequency_penalty",

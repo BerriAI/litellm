@@ -1406,3 +1406,17 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         )
 
         assert request["tools"][0] is tool
+
+
+def test_translate_developer_role_to_system_role_preserves_developer_for_openai():
+    """Regression test for BerriAI/litellm#41913: the OpenAI API accepts the
+    `developer` role directly, so OpenAI targets must not rewrite it to `system`."""
+    config = OpenAIGPTConfig()
+    messages = [
+        {"role": "developer", "content": "be terse"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    result = config.translate_developer_role_to_system_role(messages)
+
+    assert [m["role"] for m in result] == ["developer", "user"]

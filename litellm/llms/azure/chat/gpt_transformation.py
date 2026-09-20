@@ -103,6 +103,18 @@ class AzureOpenAIConfig(BaseConfig):
     def get_config(cls):
         return super().get_config()
 
+    def translate_developer_role_to_system_role(
+        self,
+        messages: list[AllMessageValues],
+    ) -> list[AllMessageValues]:
+        """
+        Azure OpenAI implements the OpenAI API, which accepts the `developer`
+        role directly, so it is passed through unchanged.
+        See https://github.com/BerriAI/litellm/issues/41913
+        """
+        return messages
+
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "temperature",
