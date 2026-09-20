@@ -115,9 +115,7 @@ async def test_streaming_trace_id_prefers_logging_trace_id():
         captured["extra_headers"] = extra_headers
         raise RuntimeError("stop")
 
-    with patch.object(
-        a2a_main, "create_a2a_client", new=AsyncMock(side_effect=_capture)
-    ):
+    with patch.object(a2a_main, "create_a2a_client", new=AsyncMock(side_effect=_capture)):
         with pytest.raises(RuntimeError, match="stop"):
             async for _ in a2a_main.asend_message_streaming(
                 request=request,
@@ -229,9 +227,7 @@ _LOWERCASE_BINDING_CARD = {
     "defaultInputModes": ["text/plain"],
     "defaultOutputModes": ["text/plain"],
     "skills": [],
-    "supportedInterfaces": [
-        {"url": "http://127.0.0.1:9/", "protocolBinding": "jsonrpc", "protocolVersion": "1.0"}
-    ],
+    "supportedInterfaces": [{"url": "http://127.0.0.1:9/", "protocolBinding": "jsonrpc", "protocolVersion": "1.0"}],
 }
 
 
@@ -289,11 +285,10 @@ async def _seed_shared_a2a_client(
 
 
 @pytest.fixture
-def isolated_client_cache():
-    previous = getattr(litellm, "in_memory_llm_clients_cache", None)
-    litellm.in_memory_llm_clients_cache = LLMClientCache()
-    yield litellm.in_memory_llm_clients_cache
-    litellm.in_memory_llm_clients_cache = previous
+def isolated_client_cache(monkeypatch):
+    cache = LLMClientCache()
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", cache)
+    return cache
 
 
 def _send_request(request_id):
