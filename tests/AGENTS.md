@@ -22,7 +22,7 @@ Rates in the test, expected computed by hand, one call, `response.text` in the a
 Assert the whole value. Iterating `expected_body.items()` (`test_responses_api_request_body.py`) cannot
 see an extra key; that is the shape of `stream_options.include_usage` (#19777, #28553)
 
-The linter catches no-assert, mock-echo, credential skips and patched internals. It cannot see an assert
+The linter catches no-assert, mock-echo and credential skips. It cannot see an assert
 behind an `if` (a poll that ends in `pytest.fail` is fine), `except Exception` around the call
 (`test_router.py`: `except Exception as e: print(f"FAILED TEST")`), or blanket `--reruns`
 
