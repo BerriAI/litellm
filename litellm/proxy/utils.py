@@ -271,7 +271,7 @@ class _RelTuplesRow(TypedDict):
 
 _VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
 _VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
-_VIEW_SETUP_GATE_TABLE: Final = "LiteLLM_SpendLogs"
+_VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
 _VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
 
 _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
@@ -6372,11 +6372,11 @@ class PrismaClient:
         try:
             if not await self._view_setup_gate_table_present():
                 verbose_proxy_logger.debug(
-                    "Waiting for table %s before creating the spend views", self._view_setup_gate_table()
+                    "Waiting for table %s before creating the spend views", _VIEW_SETUP_GATE_TABLE
                 )
                 return "table_missing"
-            await self.check_view_exists()
             await self._set_spend_logs_row_count_in_proxy_state()
+            await self.check_view_exists()
             return "ready"
         except Exception as e:
             verbose_proxy_logger.warning("Spend view setup attempt failed, retrying until the schema settles: %s", e)
@@ -6396,20 +6396,15 @@ class PrismaClient:
         verbose_proxy_logger.error(
             "Gave up creating the spend views: table %s did not appear within %ss. "
             "Run the database migrations against this database and restart the proxy.",
-            self._view_setup_gate_table(),
+            _VIEW_SETUP_GATE_TABLE,
             deadline_seconds,
         )
 
     async def _view_setup_gate_table_present(self) -> bool:
         rows: Final = _VIEW_SETUP_GATE_PROBE_ROWS.validate_python(
-            await self.db.query_raw("SELECT to_regclass($1) IS NOT NULL AS present", self._view_setup_gate_table())
+            await self.db.query_raw("SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
         )
         return rows[0]["present"]
-
-    @staticmethod
-    def _view_setup_gate_table() -> str:
-        pg_schema: Final = os.getenv("DATABASE_SCHEMA", "public")
-        return f'"{pg_schema}"."{_VIEW_SETUP_GATE_TABLE}"'
 
     async def _db_health_watchdog_loop(self) -> None:
         while True:

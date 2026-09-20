@@ -233,10 +233,7 @@ async def test_disconnect_raises_when_underlying_fails(
 
 
 @pytest.mark.asyncio
-async def test_view_setup_waits_for_the_spend_logs_table_before_creating_views(
-    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
+async def test_view_setup_waits_for_the_spend_logs_table_before_creating_views(prisma_client: PrismaClient) -> None:
     probe = AsyncMock(side_effect=[_absent(), _absent(), _present()])
     call_order = _wire_view_setup(prisma_client, probe)
 
@@ -249,13 +246,13 @@ async def test_view_setup_waits_for_the_spend_logs_table_before_creating_views(
     }
     assert actual == {
         "outcome": "ready",
-        "calls": ["probe", "probe", "probe", "views", "row_count"],
-        "probe_args": (_PROBE_SQL, '"public"."LiteLLM_SpendLogs"'),
+        "calls": ["probe", "probe", "probe", "row_count", "views"],
+        "probe_args": (_PROBE_SQL, '"LiteLLM_SpendLogs"'),
     }
 
 
 @pytest.mark.asyncio
-async def test_view_setup_probes_the_configured_database_schema(
+async def test_view_setup_probe_resolves_through_the_connection_search_path(
     prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("DATABASE_SCHEMA", "litellm_tenant")
@@ -264,7 +261,23 @@ async def test_view_setup_probes_the_configured_database_schema(
 
     await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=5)
 
-    assert probe.await_args.args == (_PROBE_SQL, '"litellm_tenant"."LiteLLM_SpendLogs"')
+    assert probe.await_args.args == (_PROBE_SQL, '"LiteLLM_SpendLogs"')
+
+
+@pytest.mark.asyncio
+async def test_view_setup_sets_the_row_count_even_when_view_creation_keeps_failing(
+    prisma_client: PrismaClient,
+) -> None:
+    _wire_view_setup(prisma_client, AsyncMock(return_value=_present()))
+    prisma_client.check_view_exists.side_effect = RuntimeError("permission denied for schema public")
+
+    outcome = await prisma_client._run_view_setup(poll_interval_seconds=0.001, deadline_seconds=0.02)
+
+    actual = {
+        "outcome": outcome,
+        "row_count_set": prisma_client._set_spend_logs_row_count_in_proxy_state.await_count >= 1,
+    }
+    assert actual == {"outcome": "timed_out", "row_count_set": True}
 
 
 @pytest.mark.asyncio
@@ -302,7 +315,7 @@ async def test_view_setup_retries_when_view_creation_fails_mid_migration(prisma_
     }
     assert actual == {
         "outcome": "ready",
-        "calls": ["probe", "views", "probe", "views", "row_count"],
+        "calls": ["probe", "row_count", "views", "probe", "row_count", "views"],
     }
 
 
@@ -319,15 +332,14 @@ async def test_view_setup_retries_when_the_table_probe_itself_fails(prisma_clien
     }
     assert actual == {
         "outcome": "ready",
-        "calls": ["probe", "probe", "views", "row_count"],
+        "calls": ["probe", "probe", "row_count", "views"],
     }
 
 
 @pytest.mark.asyncio
 async def test_run_view_setup_logs_an_error_naming_the_table_on_timeout(
-    prisma_client: PrismaClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    prisma_client: PrismaClient, caplog: pytest.LogCaptureFixture
 ) -> None:
-    monkeypatch.delenv("DATABASE_SCHEMA", raising=False)
     _wire_view_setup(prisma_client, AsyncMock(return_value=_absent()))
 
     with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
@@ -337,7 +349,7 @@ async def test_run_view_setup_logs_an_error_naming_the_table_on_timeout(
     actual = {
         "outcome": outcome,
         "error_count": len(errors),
-        "names_table": '"public"."LiteLLM_SpendLogs"' in errors[0],
+        "names_table": '"LiteLLM_SpendLogs"' in errors[0],
         "tells_operator_to_migrate": "migrations" in errors[0] and "restart" in errors[0],
     }
     assert actual == {
