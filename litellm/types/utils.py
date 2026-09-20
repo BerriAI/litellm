@@ -3527,6 +3527,10 @@ OPENAI_RESPONSE_HEADERS: Final = [
 ]
 
 
+OtelSpanScope = Literal["full", "llm_only"]
+OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: str | None
@@ -3534,6 +3538,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langfuse_secret_key: str | None
     langfuse_host: str | None
     langfuse_environment: ReadOnly[str | None]
+    langfuse_span_scope: ReadOnly[OtelSpanScope | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None
