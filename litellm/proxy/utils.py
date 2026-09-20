@@ -27,6 +27,7 @@ from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import partial
+from itertools import takewhile
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -37,6 +38,7 @@ from typing import (
     Literal,
     Optional,
     Protocol,
+    TypeAlias,
     TypeVar,
     Union,
     cast,
@@ -247,6 +249,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.db.autorouter_session_rollup import AutoRouterTurnTransaction
+    from litellm.proxy.db.baseline_accounting import BaselineAccountingRecord
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
@@ -265,6 +268,15 @@ class _ViewCountRow(TypedDict):
 
 class _RelTuplesRow(TypedDict):
     reltuples: ReadOnly[int]
+
+
+_VIEW_SETUP_POLL_INTERVAL_SECONDS: Final = 5.0
+_VIEW_SETUP_DEADLINE_SECONDS: Final = 15 * 60.0
+_VIEW_SETUP_GATE_TABLE: Final = '"LiteLLM_SpendLogs"'
+_VIEW_SETUP_GATE_PROBE_ROWS: Final = TypeAdapter(tuple[Mapping[str, bool], ...])
+
+_ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
+_ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
 
 
 class _EndUserBatchTable(Protocol):
@@ -469,11 +481,15 @@ def _record_raising_guardrail(request_data: Mapping[str, object], callback: obje
 
 
 class _UpstreamStreamBoundary(Generic[_T]):
-    __slots__ = ("_upstream", "failure")
+    __slots__ = ("_source", "_upstream", "failure")
 
     def __init__(self, upstream: AsyncIterable[_T]) -> None:
+        self._source: Final = upstream
         self._upstream: Final = upstream.__aiter__()
         self.failure: BaseException | None = None
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._source, name)
 
     def __aiter__(self) -> "_UpstreamStreamBoundary[_T]":
         return self
@@ -1009,6 +1025,7 @@ class _CallbackCapabilities:
     has_guardrail: bool = False
     has_pre_call_override: bool = False
     has_content_enforcer: bool = False
+    has_moderation_override: bool = False
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
@@ -1017,6 +1034,11 @@ class _CallbackCapabilities:
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
+
+
+def _overrides_moderation_hook(callback: CustomLogger) -> bool:
+    leaf_to_base: Final = takewhile(lambda klass: klass is not CustomLogger, type(callback).__mro__)
+    return any("async_moderation_hook" in klass.__dict__ for klass in leaf_to_base)
 
 
 class ProxyLogging:
@@ -2605,6 +2627,7 @@ class ProxyLogging:
         has_guardrail = False
         has_pre_call_override = False
         has_content_enforcer = False
+        has_moderation_override = False
         iterator_overrides: Final[list[tuple[Any, str]]] = []  # (callback, kind)
         resolved_callbacks: Final[list[CustomLogger]] = []
 
@@ -2623,6 +2646,8 @@ class ProxyLogging:
                 continue
             if isinstance(resolved, CustomGuardrail):
                 has_guardrail = True
+            elif _overrides_moderation_hook(resolved):
+                has_moderation_override = True
             # Use the same leaf-class ``__dict__`` check as the other hook
             # capabilities: only callbacks that actually override the hook
             # contribute to the flag. Setting this for every ``CustomLogger``
@@ -2667,6 +2692,7 @@ class ProxyLogging:
             has_guardrail=has_guardrail,
             has_pre_call_override=has_pre_call_override,
             has_content_enforcer=has_content_enforcer,
+            has_moderation_override=has_moderation_override,
             iterator_overrides=tuple(iterator_overrides),
             resolved_callbacks=tuple(resolved_callbacks),
         )
@@ -2728,20 +2754,27 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
     ):
-        """
-        Runs the CustomGuardrail's async_moderation_hook() in parallel
-        """
-        # Fast path: skip the entire guardrail scan when no CustomGuardrail
-        # callbacks are registered. Saves per-request iteration over
-        # ``litellm.callbacks`` plus an ``asyncio.gather([])`` round trip on
-        # deployments with no guardrails configured.
-        if not ProxyLogging._callback_capabilities().has_guardrail:
+        caps: Final = ProxyLogging._callback_capabilities()
+        if not caps.has_guardrail and not caps.has_moderation_override:
             return data
         # Step 1: Collect all guardrail tasks to run in parallel
         guardrail_tasks: Final = []
 
         for callback in litellm.callbacks:
-            if isinstance(callback, CustomGuardrail):
+            if (
+                isinstance(callback, CustomLogger)
+                and not isinstance(callback, CustomGuardrail)
+                and _overrides_moderation_hook(callback)
+                and user_api_key_dict is not None
+            ):
+                guardrail_tasks.append(
+                    callback.async_moderation_hook(
+                        data=data,
+                        user_api_key_dict=user_api_key_dict,
+                        call_type=call_type,
+                    )
+                )
+            elif isinstance(callback, CustomGuardrail):
                 ################################################################
                 # Check if guardrail should be run for GuardrailEventHooks.during_call hook
                 ################################################################
@@ -2749,7 +2782,7 @@ class ProxyLogging:
                 # V1 implementation - backwards compatibility
                 if callback.event_hook is None and hasattr(callback, "moderation_check"):
                     if callback.moderation_check == "pre_call":
-                        return
+                        continue
                 else:
                     # Main - V2 Guardrails implementation
                     from litellm.types.guardrails import GuardrailEventHooks
@@ -3017,6 +3050,10 @@ class ProxyLogging:
             - Optional[HTTPException]: If any callback returns or raises an HTTPException, the first one found is returned.
                                       Otherwise, returns None and the original exception is used.
         """
+
+        logging_obj: Final[object] = request_data.get("litellm_logging_obj")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # legacy request data is narrowed to Logging below
+        if isinstance(logging_obj, Logging) and logging_obj.baseline_cache_context is not None:
+            await logging_obj.invalidate_baseline_cache_estimate("failed_request", completed=True)
 
         ### ALERTING ###
         await self.update_request_status(litellm_call_id=request_data.get("litellm_call_id", ""), status="fail")
@@ -4170,6 +4207,10 @@ class PrismaClient:
         http_client: "HttpConfig | None" = None,
     ):
         ## init logging object
+        self.baseline_accounting_transactions: list[
+            BaselineAccountingRecord
+        ] = []  # mutable-ok: locked background queue
+        self.baseline_accounting_lock: Final = asyncio.Lock()
         self.proxy_logging_obj = proxy_logging_obj
         self.token_auth: DatabaseTokenAuth | None = resolve_database_token_auth()
         verbose_proxy_logger.debug("Creating Prisma Client..")
@@ -4266,6 +4307,7 @@ class PrismaClient:
             self.db = writer_wrapper  # Client to connect to Prisma db
         self._db_reconnect_lock = asyncio.Lock()
         self._db_health_watchdog_task: asyncio.Task | None = None
+        self._view_setup_task: asyncio.Task[_ViewSetupOutcome] | None = None
         self._db_last_reconnect_attempt_ts: float = 0.0
         self._db_reconnect_cooldown_seconds: int = max(1, int(os.getenv("PRISMA_RECONNECT_COOLDOWN_SECONDS", "15")))
         self._db_read_only_recreate_ts: float = 0.0
@@ -6313,6 +6355,71 @@ class PrismaClient:
         self._db_health_watchdog_task = None
         verbose_proxy_logger.info("Stopped Prisma DB health watchdog")
 
+    def start_view_setup_task(self) -> None:
+        if self._view_setup_task is not None:
+            return
+        self._view_setup_task = asyncio.create_task(self._run_view_setup())
+
+    async def stop_view_setup_task(self) -> None:
+        if self._view_setup_task is None:
+            return
+        self._view_setup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._view_setup_task
+        self._view_setup_task = None
+
+    async def _run_view_setup(
+        self,
+        poll_interval_seconds: float = _VIEW_SETUP_POLL_INTERVAL_SECONDS,
+        deadline_seconds: float = _VIEW_SETUP_DEADLINE_SECONDS,
+    ) -> _ViewSetupOutcome:
+        deadline: Final = time.monotonic() + deadline_seconds
+        while True:
+            if (attempt := await self._attempt_view_setup()) == "ready":
+                return "ready"
+            if time.monotonic() >= deadline:
+                self._log_view_setup_timeout(attempt, deadline_seconds)
+                return "timed_out"
+            await asyncio.sleep(poll_interval_seconds)
+
+    async def _attempt_view_setup(self) -> _ViewSetupAttempt:
+        try:
+            if not await self._view_setup_gate_table_present():
+                verbose_proxy_logger.debug(
+                    "Waiting for table %s before creating the spend views", _VIEW_SETUP_GATE_TABLE
+                )
+                return "table_missing"
+            await self._set_spend_logs_row_count_in_proxy_state()
+            await self.check_view_exists()
+            return "ready"
+        except Exception as e:
+            verbose_proxy_logger.warning("Spend view setup attempt failed, retrying until the schema settles: %s", e)
+            return e
+
+    def _log_view_setup_timeout(
+        self, last_attempt: Literal["table_missing"] | Exception, deadline_seconds: float
+    ) -> None:
+        if isinstance(last_attempt, Exception):
+            verbose_proxy_logger.error(
+                "Gave up creating the spend views after %ss; the last attempt failed with: %s. "
+                "Fix that error and restart the proxy.",
+                deadline_seconds,
+                last_attempt,
+            )
+            return
+        verbose_proxy_logger.error(
+            "Gave up creating the spend views: table %s did not appear within %ss. "
+            "Run the database migrations against this database and restart the proxy.",
+            _VIEW_SETUP_GATE_TABLE,
+            deadline_seconds,
+        )
+
+    async def _view_setup_gate_table_present(self) -> bool:
+        rows: Final = _VIEW_SETUP_GATE_PROBE_ROWS.validate_python(
+            await self.db.query_raw("SELECT to_regclass($1) IS NOT NULL AS present", _VIEW_SETUP_GATE_TABLE)
+        )
+        return rows[0]["present"]
+
     async def _db_health_watchdog_loop(self) -> None:
         while True:
             try:
@@ -7139,7 +7246,15 @@ async def _total_queued_spend_transactions(prisma_client: PrismaClient) -> int:
         autorouter_queue_size: Final = len(prisma_client.autorouter_turn_transactions)
     from litellm.proxy.db.shadow_eval_funnel import pending_shadow_eval_funnel_events
 
-    return spend_queue_size + tool_queue_size + autorouter_queue_size + pending_shadow_eval_funnel_events()
+    async with prisma_client.baseline_accounting_lock:
+        baseline_queue_size: Final = len(prisma_client.baseline_accounting_transactions)
+    return (
+        spend_queue_size
+        + tool_queue_size
+        + autorouter_queue_size
+        + baseline_queue_size
+        + pending_shadow_eval_funnel_events()
+    )
 
 
 async def update_daily_tag_spend(
@@ -7204,7 +7319,10 @@ async def update_spend_logs_job(
     # Atomically pop batch from queue. The tool usage queue counts toward the
     # emptiness check: a spend-log write failure aborts a run before the tool
     # drain below, and those entries must not strand once the spend queue drains.
+    from litellm.proxy.db.baseline_accounting import flush_baseline_accounting
+
     if await _total_queued_spend_transactions(prisma_client) == 0:
+        await flush_baseline_accounting(prisma_client)
         return
 
     logs_to_process: Final = await dequeue_spend_logs(prisma_client, MAX_LOGS_PER_INTERVAL)
@@ -7260,6 +7378,8 @@ async def update_spend_logs_job(
             len(tool_usage_to_process),
             tool_tracking_err,
         )
+
+    await flush_baseline_accounting(prisma_client)
 
     async with prisma_client._autorouter_turn_transactions_lock:
         autorouter_turns_to_process: Final = prisma_client.autorouter_turn_transactions[:MAX_LOGS_PER_INTERVAL]
@@ -7383,7 +7503,9 @@ async def _monitor_spend_logs_queue(
                     proxy_logging_obj=proxy_logging_obj,
                 )
             else:
-                # Exponential backoff when no logs to process
+                from litellm.proxy.db.baseline_accounting import flush_baseline_accounting
+
+                await flush_baseline_accounting(prisma_client)
                 current_interval = min(current_interval * backoff_multiplier, max_backoff)
 
             if await _wait_for_spend_log_flush_request(flush_requested, current_interval):
