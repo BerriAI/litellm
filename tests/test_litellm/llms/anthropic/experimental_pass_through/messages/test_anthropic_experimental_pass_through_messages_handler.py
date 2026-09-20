@@ -1438,3 +1438,111 @@ async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
         )
 
     assert "Traceback" not in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthropic():
+    """Regression test for LIT-8232. Claude Code auto mode sends a `safeguards` body
+    field paired with a beta value the gateway has never seen. Both must reach
+    api.anthropic.com unchanged or the session falls back to billed classifier calls."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    safeguards = {"auto_mode": {"enabled": True, "version": "2026-09-01"}}
+    client_betas = "safeguards-2026-09-01,interleaved-thinking-2025-05-14"
+    captured: dict[str, object] = {}
+
+    def upstream_records_the_request(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        captured["anthropic-beta"] = request.headers.get("anthropic-beta")
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-4-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "safeguard_results": {"verdict": "allow"},
+            },
+            request=request,
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_records_the_request))
+
+    response = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="anthropic/claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        api_key="sk-test",
+        client=upstream,
+        safeguards=safeguards,
+        extra_headers={"anthropic-beta": client_betas},
+    )
+
+    assert captured["body"]["safeguards"] == safeguards
+    assert set(captured["anthropic-beta"].split(",")) == set(client_betas.split(","))
+    assert response["safeguard_results"] == {"verdict": "allow"}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_streaming_forwards_safeguards_and_keeps_safeguard_results():
+    """Streaming sibling of the LIT-8232 regression: the request must still carry
+    `safeguards` and the `safeguard_results` Anthropic emits on `message_start` and
+    `message_delta` must reach the client byte for byte."""
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    safeguards = {"auto_mode": {"enabled": True, "version": "2026-09-01"}}
+    safeguard_results = {"verdict": "allow", "checks": ["shell_command"]}
+    captured: dict[str, object] = {}
+    message_start = {
+        "type": "message_start",
+        "message": {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-4-5",
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 0},
+            "safeguard_results": safeguard_results,
+        },
+    }
+    message_delta = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "end_turn", "stop_sequence": None, "safeguard_results": safeguard_results},
+        "usage": {"output_tokens": 1},
+    }
+    sse = "".join(
+        f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+        for event in (message_start, message_delta, {"type": "message_stop"})
+    )
+
+    def upstream_streams_safeguard_results(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=sse.encode(), request=request)
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_streams_safeguard_results))
+
+    stream = await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        model="anthropic/claude-haiku-4-5",
+        custom_llm_provider="anthropic",
+        api_key="sk-test",
+        client=upstream,
+        stream=True,
+        safeguards=safeguards,
+    )
+    raw = b"".join([chunk async for chunk in stream]).decode()
+    events = [json.loads(line[len("data: ") :]) for line in raw.splitlines() if line.startswith("data: ")]
+
+    assert captured["body"]["safeguards"] == safeguards
+    assert events[0]["message"]["safeguard_results"] == safeguard_results
+    assert [e for e in events if e["type"] == "message_delta"][0]["delta"]["safeguard_results"] == safeguard_results
