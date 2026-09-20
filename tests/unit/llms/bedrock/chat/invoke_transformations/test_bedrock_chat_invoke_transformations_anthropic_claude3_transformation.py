@@ -86,11 +86,8 @@ def local_beta_headers_config(monkeypatch):
 
     monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
     reload_beta_headers_config()
-    try:
-        yield
-    finally:
-        monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
-        reload_beta_headers_config()
+    yield
+    reload_beta_headers_config()
 
 
 def test_get_supported_params_thinking():
