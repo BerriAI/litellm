@@ -2376,3 +2376,58 @@ async def test_v3_an_allowed_conversation_is_not_remembered():
             logging_obj=_logging_obj(),
         )
     assert g.async_handler.post.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_v3_the_block_memory_is_scoped_by_principal_when_there_is_no_session_and_off_without_either():
+    """Without a session the memory keys on the principal, so one user's block never answers
+    another user's request; with neither, nothing is remembered and every request is scored."""
+    image_only = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]}
+    ]
+
+    def sessionless(user):
+        data = _v3_request_data(
+            messages=image_only,
+            metadata={"user_api_key_user_email": user, "user_api_key_user_id": user} if user else {},
+        )
+        data.pop("user", None)
+        data["proxy_server_request"] = {"headers": {}}
+        return data
+
+    g = _make_guardrail(api_key=V3_KEY)
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_BLOCK)
+    with pytest.raises(GuardrailRaisedException):
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]},
+            request_data=sessionless("alice.chen@example.com"),
+            input_type="request",
+            logging_obj=_logging_obj(),
+        )
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    with pytest.raises(GuardrailRaisedException):
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]},
+            request_data=sessionless("alice.chen@example.com"),
+            input_type="request",
+            logging_obj=_logging_obj(),
+        )
+    assert g.async_handler.post.await_count == 1
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]},
+        request_data=sessionless("tom.becker@example.com"),
+        input_type="request",
+        logging_obj=_logging_obj(),
+    )
+    assert g.async_handler.post.await_count == 2
+
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_BLOCK)
+    for _ in range(2):
+        with pytest.raises(GuardrailRaisedException):
+            await g.apply_guardrail(
+                inputs={"texts": ["x"]},
+                request_data=sessionless(None),
+                input_type="request",
+                logging_obj=_logging_obj(),
+            )
+    assert g.async_handler.post.await_count == 4

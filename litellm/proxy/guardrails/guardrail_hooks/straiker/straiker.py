@@ -1199,8 +1199,10 @@ class StraikerGuardrail(CustomGuardrail):
             payload: Final = _v3_payload(envelope, inputs, request_data, input_type)
             headers: Final = _v3_headers(request_data, self.agent_ref, self.client, self.format_hint)
             request_body: Final = _v3_request_body(request_data)
-            session: Final = _v3_session_id(envelope, request_data, request_body) or ""
-            prefixes: Final = _v3_conversation_prefixes(request_body)
+            # The memory is scoped by the session, else by the principal; a request that has
+            # neither is never remembered, so no two callers can share a block.
+            scope: Final = _v3_session_id(envelope, request_data, request_body) or _v3_user(envelope) or ""
+            prefixes: Final = _v3_conversation_prefixes(request_body) if scope else ()
         except (ValidationError, TypeError, ValueError) as error:
             return self._fail(
                 inputs=inputs,
@@ -1210,7 +1212,7 @@ class StraikerGuardrail(CustomGuardrail):
                 is_unreachable=False,
             )
 
-        replayed: Final = self._v3_replayed_block(session, prefixes) if input_type == "request" else None
+        replayed: Final = self._v3_replayed_block(scope, prefixes) if input_type == "request" else None
         if replayed is not None:
             self._block(request_data=request_data, input_type=input_type, message=replayed, blocked_content=True)
 
@@ -1227,19 +1229,19 @@ class StraikerGuardrail(CustomGuardrail):
         if parsed.action == "BLOCKED":
             message: Final = parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE
             if prefixes:
-                self._v3_blocked_turns.set_cache(f"{session}\0{prefixes[-1]}", message)
+                self._v3_blocked_turns.set_cache(f"{scope}\0{prefixes[-1]}", message)
             self._block(request_data=request_data, input_type=input_type, message=message, blocked_content=True)
         return inputs
 
-    def _v3_replayed_block(self, session: str, prefixes: tuple[str, ...]) -> str | None:
+    def _v3_replayed_block(self, scope: str, prefixes: tuple[str, ...]) -> str | None:
         """The block message a conversation already earned, when this request repeats or
-        extends a conversation this process blocked in the same session."""
+        extends a conversation this process blocked in the same scope (session or principal)."""
         for prefix in prefixes:
-            message: str | None = self._v3_blocked_turns.get_cache(f"{session}\0{prefix}")
+            message: str | None = self._v3_blocked_turns.get_cache(f"{scope}\0{prefix}")
             if message is not None:
                 if self.verbose:
                     verbose_proxy_logger.info(
-                        json.dumps({"event": "straiker.replay_blocked", "session_id": session, "prefix": prefix})
+                        json.dumps({"event": "straiker.replay_blocked", "scope": scope, "prefix": prefix})
                     )
                 return message
         return None
