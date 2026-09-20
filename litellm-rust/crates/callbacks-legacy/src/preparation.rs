@@ -1,9 +1,12 @@
+//! The kwargs rewrites the `@client` wrapper makes before the call: the logger is attached,
+//! a named credential's values are inherited, and the budget and retry-count limits run.
+
 use pyo3::{
     prelude::*,
     types::{PyDict, PyList},
 };
 
-use crate::python::Wrapper;
+use crate::legacy_python::Wrapper;
 
 struct CredentialEntry<'py>(Bound<'py, PyAny>);
 
@@ -17,7 +20,7 @@ impl<'py> CredentialEntry<'py> {
     }
 }
 
-pub fn prepare<'py>(
+pub(crate) fn prepare<'py>(
     py: Python<'py>,
     kwargs: &Bound<'py, PyDict>,
     logger: &crate::PythonLogger,

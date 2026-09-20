@@ -1,0 +1,6 @@
+{
+  "snapshot": [],
+  "project_response": ["response"],
+  "new_call_id": [],
+  "report": ["name", "event", "error"]
+}

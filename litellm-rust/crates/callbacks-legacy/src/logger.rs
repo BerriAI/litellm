@@ -1,3 +1,6 @@
+//! One call's `Logging` instance (the logger) and the `@client` wrapper functions that
+//! create and finish it: `function_setup`, `finalize` and the awaited deployment hooks.
+
 use pyo3::{
     exceptions::PyBaseException,
     gc::{PyTraverseError, PyVisit},
@@ -5,10 +8,10 @@ use pyo3::{
     types::{PyDict, PyTuple},
 };
 
-use crate::python::{self, Wrapper};
+use crate::legacy_python::{DeploymentHooks, Wrapper};
 
 /// The `Logging` instance one call fans out through.
-pub struct PythonLogger {
+pub(crate) struct PythonLogger {
     object: Py<PyAny>,
 }
 
@@ -21,17 +24,17 @@ impl PythonLogger {
         self.object.bind(py)
     }
 
-    pub fn clone_ref(&self, py: Python<'_>) -> Self {
+    pub(crate) fn clone_ref(&self, py: Python<'_>) -> Self {
         Self {
             object: self.object.clone_ref(py),
         }
     }
 
-    pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+    pub(crate) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.object)
     }
 
-    pub fn restore_context(&self, py: Python<'_>) -> PyResult<()> {
+    pub(crate) fn restore_context(&self, py: Python<'_>) -> PyResult<()> {
         Wrapper::RestoreContext.call(py, (self.object(py),))?;
         Ok(())
     }
@@ -45,19 +48,19 @@ impl FromPyObject<'_, '_> for PythonLogger {
     }
 }
 
-pub struct SetupResult<'py>(Bound<'py, PyAny>);
+pub(crate) struct SetupResult<'py>(Bound<'py, PyAny>);
 
 impl SetupResult<'_> {
-    pub fn logger(&self) -> PyResult<PythonLogger> {
+    pub(crate) fn logger(&self) -> PyResult<PythonLogger> {
         Ok(PythonLogger::new(self.0.getattr("logger")?.unbind()))
     }
 
-    pub fn kwargs(&self) -> PyResult<Py<PyDict>> {
+    pub(crate) fn kwargs(&self) -> PyResult<Py<PyDict>> {
         Ok(self.0.getattr("kwargs")?.extract()?)
     }
 }
 
-pub fn setup<'py>(
+pub(crate) fn setup<'py>(
     py: Python<'py>,
     call_type: &str,
     args: &Py<PyTuple>,
@@ -70,7 +73,7 @@ pub fn setup<'py>(
         .map(SetupResult)
 }
 
-pub fn finalize(
+pub(crate) fn finalize(
     py: Python<'_>,
     response: &Option<Py<PyAny>>,
     logger: &PythonLogger,
@@ -82,40 +85,36 @@ pub fn finalize(
     Ok(())
 }
 
-pub struct DeploymentHooks;
+pub(crate) fn before_deployment_call(
+    py: Python<'_>,
+    kwargs: &Py<PyDict>,
+    call_type: &str,
+) -> PyResult<Py<PyAny>> {
+    DeploymentHooks::BeforeDeploymentCall
+        .call(py, (kwargs, call_type))
+        .map(Bound::unbind)
+}
 
-impl DeploymentHooks {
-    pub fn before_call(
-        py: Python<'_>,
-        kwargs: &Py<PyDict>,
-        call_type: &str,
-    ) -> PyResult<Py<PyAny>> {
-        python::DeploymentHooks::BeforeDeploymentCall
-            .call(py, (kwargs, call_type))
-            .map(Bound::unbind)
-    }
+pub(crate) fn after_deployment_success(
+    py: Python<'_>,
+    kwargs: &Py<PyDict>,
+    response: &Option<Py<PyAny>>,
+    call_type: &str,
+) -> PyResult<Py<PyAny>> {
+    DeploymentHooks::AfterDeploymentSuccess
+        .call(py, (kwargs, response, call_type))
+        .map(Bound::unbind)
+}
 
-    pub fn after_success(
-        py: Python<'_>,
-        kwargs: &Py<PyDict>,
-        response: &Option<Py<PyAny>>,
-        call_type: &str,
-    ) -> PyResult<Py<PyAny>> {
-        python::DeploymentHooks::AfterDeploymentSuccess
-            .call(py, (kwargs, response, call_type))
-            .map(Bound::unbind)
-    }
-
-    pub fn after_failure(
-        py: Python<'_>,
-        kwargs: &Py<PyDict>,
-        error: &Py<PyBaseException>,
-        call_type: &str,
-    ) -> PyResult<Py<PyAny>> {
-        python::DeploymentHooks::AfterDeploymentFailure
-            .call(py, (kwargs, error, call_type))
-            .map(Bound::unbind)
-    }
+pub(crate) fn after_deployment_failure(
+    py: Python<'_>,
+    kwargs: &Py<PyDict>,
+    error: &Py<PyBaseException>,
+    call_type: &str,
+) -> PyResult<Py<PyAny>> {
+    DeploymentHooks::AfterDeploymentFailure
+        .call(py, (kwargs, error, call_type))
+        .map(Bound::unbind)
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 
-use super::LegacyLogging;
+use super::LegacyPythonLifecycle;
 use crate::PythonLogger;
 use crate::test_support::{legacy_call, local, namespace, run};
 
@@ -77,7 +77,7 @@ fn before_send_bound(
             locals.set_item(name, to_py(py, value).unwrap()).unwrap();
         }
         run(py, &locals, script);
-        let mut logging = LegacyLogging {
+        let mut logging = LegacyPythonLifecycle {
             logger: Some(PythonLogger::new(local(&locals, "logger").unbind())),
             ..legacy_call(py, &locals, false)
         };

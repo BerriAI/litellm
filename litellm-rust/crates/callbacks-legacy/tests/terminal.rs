@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use rstest::rstest;
 
-use super::LegacyLogging;
+use super::LegacyPythonLifecycle;
 use crate::PythonLogger;
 use crate::test_support::{legacy_call, local, namespace, run};
 
@@ -17,8 +17,8 @@ const TIMING: Timing = Timing {
     end_time: 1.0,
 };
 
-fn logged(py: Python<'_>, locals: &Bound<'_, PyDict>, asynchronous: bool) -> LegacyLogging {
-    LegacyLogging {
+fn logged(py: Python<'_>, locals: &Bound<'_, PyDict>, asynchronous: bool) -> LegacyPythonLifecycle {
+    LegacyPythonLifecycle {
         logger: Some(PythonLogger::new(local(locals, "logger").unbind())),
         ..legacy_call(py, locals, asynchronous)
     }
@@ -27,7 +27,7 @@ fn logged(py: Python<'_>, locals: &Bound<'_, PyDict>, asynchronous: bool) -> Leg
 fn succeed(
     py: Python<'_>,
     locals: &Bound<'_, PyDict>,
-    logging: &mut LegacyLogging,
+    logging: &mut LegacyPythonLifecycle,
 ) -> LifecycleStep {
     let response = local(locals, "response").unbind();
     logging
@@ -41,7 +41,11 @@ fn succeed(
         .unwrap()
 }
 
-fn fail(py: Python<'_>, locals: &Bound<'_, PyDict>, logging: &mut LegacyLogging) -> LifecycleStep {
+fn fail(
+    py: Python<'_>,
+    locals: &Bound<'_, PyDict>,
+    logging: &mut LegacyPythonLifecycle,
+) -> LifecycleStep {
     let failure = PyErr::from_value(local(locals, "failure"));
     logging
         .emit(
@@ -105,7 +109,7 @@ fn internal_calls_skip_failure_callbacks_only_when_asynchronous(
     Python::initialize();
     Python::attach(|py| {
         let locals = namespace(py, c"failure = ValueError('provider')");
-        let mut logging = LegacyLogging {
+        let mut logging = LegacyPythonLifecycle {
             internal: true,
             ..logged(py, &locals, asynchronous)
         };
@@ -127,7 +131,7 @@ fn internal_async_calls_skip_the_async_success_fan_out() {
     Python::initialize();
     Python::attach(|py| {
         let locals = namespace(py, c"response = object()");
-        let mut logging = LegacyLogging {
+        let mut logging = LegacyPythonLifecycle {
             internal: true,
             ..logged(py, &locals, true)
         };

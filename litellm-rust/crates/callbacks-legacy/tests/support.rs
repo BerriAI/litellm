@@ -3,14 +3,14 @@ use std::ffi::CStr;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
-use crate::{LegacyLogging, LegacySurface, PublicCall};
+use crate::{LegacyPythonLifecycle, LegacyPythonSurface, PublicCall};
 
-/// The parameters of every `callbacks_legacy_python` function, as the real module declares them.
-/// `tests/test_litellm/rust_bridge/test_callbacks_legacy_python.py` pins this file to the Python
+/// The parameters of every `legacy_callbacks` function, as the real module declares them.
+/// `tests/test_litellm/rust_bridge/test_legacy_callbacks.py` pins this file to the Python
 /// signatures, and [`namespace`] binds every fake call against it.
 pub(crate) const PYTHON_CONTRACT: &str = include_str!("../python_contract.json");
 
-/// Stand-ins for `callbacks_legacy_python`, the only Python module the crate calls. Tests
+/// Stand-ins for `legacy_callbacks`, the only Python module the crate calls. Tests
 /// share one interpreter and run concurrently, so each fake is installed idempotently and
 /// forwards to the per-test `StubLogger` it is handed (directly, or as `kwargs['logger']`).
 /// Every fake is bound against the contract first, so a call the real module would reject
@@ -23,10 +23,10 @@ import sys
 import traceback
 import types
 
-for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.callbacks_legacy_python'):
+for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.legacy_callbacks'):
     sys.modules.setdefault(name, types.ModuleType(name))
 
-legacy = sys.modules['litellm.rust_bridge.callbacks_legacy_python']
+legacy = sys.modules['litellm.rust_bridge.legacy_callbacks']
 CONTRACT = json.loads(python_contract)
 
 
@@ -181,7 +181,7 @@ pub(crate) fn legacy_call(
     py: Python<'_>,
     locals: &Bound<'_, PyDict>,
     asynchronous: bool,
-) -> LegacyLogging {
+) -> LegacyPythonLifecycle {
     let request = locals
         .get_item("request")
         .unwrap()
@@ -192,12 +192,13 @@ pub(crate) fn legacy_call(
         .map(|kwargs| kwargs.cast_into::<PyDict>().unwrap())
         .unwrap_or_else(|| PyDict::new(py));
     let call = PublicCall::capture(&request, &PyTuple::empty(py), &kwargs).unwrap();
-    LegacyLogging::new(
+    LegacyPythonLifecycle::new(
         py,
-        LegacySurface {
+        LegacyPythonSurface {
             call_type: "test",
             input_description: "test input",
             stream: None,
+            updates_logging_before_preparation: false,
         },
         call,
         asynchronous,

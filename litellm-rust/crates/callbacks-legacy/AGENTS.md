@@ -1,10 +1,20 @@
 - Target invariants, not completion claims
 - Keep this crate the legacy `@client` wrapper as the native call sees it, and nothing else: the `Logging` contract (`function_setup`, the deployment hooks, `pre_call`/`post_call`, the sync and async success and failure fan-out, the deferred proxy release, the argument sharing those callbacks rely on) plus the kwargs rewrites the wrapper makes on the way in (credential-name inheritance, the budget and retry-count limits)
   - The driver in `litellm-host-python`, the routes and core see one `PythonLifecycle`; they never learn which Python objects consume a call
-- Rust drives the call; every litellm Python internal it still borrows is a variant of `LegacyPython`, grouped by subsystem (`Wrapper`, `Logging`, `DeploymentHooks`)
+- Terms (lifecycle terms are in `host-python/AGENTS.md`)
+  - `Logging`: litellm's Python class; logger: the one `Logging` instance of this call (`PythonLogger`), reused from `litellm_logging_obj` or built by `function_setup`
+  - Borrowed function: a litellm Python internal Rust still calls, one variant of `LegacyPython`; a user's own callback is never one
+  - Fan-out: `Logging` dispatching to every registered callback; family: the sync or the async set of success and failure handlers
+  - Deployment hooks: the awaited pre-call, post-call and failure hooks on each callback; async calls only, as in `@client`
+  - Re-aliasing: replacing body values with the caller's equal objects before `pre_call`, so a callback mutates what the caller holds
+  - Deferred release: the proxy holds back async success logging until it accepts the response (`PendingLogging.release`)
+  - Internal call: a proxy-internal call; when it is async, the async success dispatch and both failure families are skipped, and the sync success handlers still run
+  - Pass-through billing (`PassThroughStream`): end-of-stream cost logging from the delivered chunks; a failure after the stream opened bills them as partial usage, and a sync call falls back to the plain failure handler
+  - Redaction here is `****`, matching what the Python path logs; `[REDACTED]` belongs to the v1 contract
+- Rust drives the call; every litellm Python internal it still borrows is a variant of `LegacyPython`, grouped by subsystem (`Wrapper`, `Logging`, `DeploymentHooks`, `Streaming`)
   - The enum only shrinks: when Rust owns a subsystem, delete its group rather than adding a Rust path beside it
   - Calling a user's own callback directly is permanent Python surface and gets its own type outside `LegacyPython`
-  - `PublicCall` is the caller's call as `Logging` sees it: the positional arguments, the keyword view as the legacy path rewrites it (setup, deployment hook, prepare) and the bound request object whose attributes back keywords the caller omitted; routes hand it over through `run_legacy_call` and keep no copy
+  - `PublicCall` is the caller's call as `Logging` sees it: the positional arguments, the keyword view as the legacy path rewrites it (setup, deployment hook, prepare) and the bound request object whose attributes back keywords the caller omitted; routes capture it and the bridge's `run_python_call` hands it to `LegacyPythonLifecycle::new`, keeping no copy
 - `setup` reuses a `Logging` the caller passed as `litellm_logging_obj` (the proxy and Router are the live cases) and otherwise builds one through `function_setup`, as `@client` does
   - Either way every phase calls the same `Logging` method the Python path calls; which callbacks run is `Logging`'s decision, never this crate's
 - Callbacks receive the caller's own objects and may mutate them; this crate alone carries that obligation
