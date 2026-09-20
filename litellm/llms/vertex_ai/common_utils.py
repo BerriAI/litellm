@@ -659,23 +659,23 @@ def _convert_const_to_enum(schema: object, depth: int = 0) -> None:
             continue
 
         if "const" in current_schema and "enum" not in current_schema:
-            const_value: Final = current_schema["const"]
+            const_value = current_schema["const"]
             if not isinstance(const_value, str):
                 raise ValueError("Gemini function declarations only support string const values.")
             del current_schema["const"]
             current_schema["type"] = "string"
             current_schema["enum"] = [const_value]  # mutable-ok: JSON Schema enum values must be an array
 
-        next_depth: Final = current_depth + 1
-        properties: Final = current_schema.get("properties")
+        next_depth = current_depth + 1
+        properties = current_schema.get("properties")
         if isinstance(properties, dict):
             pending.extend((value, next_depth) for value in properties.values())
 
-        items: Final = current_schema.get("items")
+        items = current_schema.get("items")
         if items is not None:
             pending.append((items, next_depth))
 
-        any_of: Final = current_schema.get("anyOf")
+        any_of = current_schema.get("anyOf")
         if isinstance(any_of, list):
             pending.extend((value, next_depth) for value in any_of)
 
