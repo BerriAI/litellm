@@ -2272,9 +2272,9 @@ class TestRunServerDbSetup:
     )
     @patch("subprocess.run")
     @patch("atexit.register")
-    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
-    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
-    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
     def test_migration_resolver_selection(
         self,
         mock_should_update_schema,
