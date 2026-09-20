@@ -16966,3 +16966,81 @@ def test_router_fallback_to_standard_model_uses_unrendered_messages(
     system_messages: Final = [m for m in standard_call_messages if m.get("role") == "system"]
     assert len(system_messages) == 0
     assert standard_call_messages == [{"role": "user", "content": "direct query"}]
+
+
+def test_router_fallback_with_dict_target_custom_messages_preserves_custom_messages(
+    prompt_version_clean_registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    spec: Final = PromptSpec(
+        prompt_id="primary_prompt_custom.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="primary_prompt_custom",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Primary Prompt\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec)
+
+    calls: list[dict] = []
+
+    async def mock_failover_custom_acompletion(*args, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs.get("model") == "gpt-4o-primary":
+            raise litellm.RateLimitError(
+                message="Rate limit reached",
+                response=httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+                llm_provider="openai",
+                model="gpt-4o-primary",
+            )
+        return litellm.ModelResponse(
+            choices=[litellm.utils.Choices(message=litellm.utils.Message(content="dict fallback reply", role="assistant"))]
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", mock_failover_custom_acompletion)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o-primary",
+                    "prompt_id": "primary_prompt_custom",
+                    "prompt_version": 1,
+                },
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-fallback",
+                },
+            },
+        ],
+        fallbacks=[
+            {
+                "primary-model": [
+                    {
+                        "model": "fallback-model",
+                        "messages": [{"role": "user", "content": "custom fallback message"}],
+                    }
+                ]
+            }
+        ],
+    )
+
+    response: Final = asyncio.run(
+        router.acompletion(
+            model="primary-model",
+            messages=[{"role": "user", "content": "original user message"}],
+        )
+    )
+
+    assert response.choices[0].message.content == "dict fallback reply"
+    assert len(calls) == 2
+    fallback_call_messages: Final = calls[1]["messages"]
+    assert fallback_call_messages == [{"role": "user", "content": "custom fallback message"}]
+
