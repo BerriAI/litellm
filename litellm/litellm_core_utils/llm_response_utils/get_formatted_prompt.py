@@ -30,7 +30,7 @@ def get_formatted_prompt(
                         if c["type"] == "text":
                             prompt += c["text"]
             if "tool_calls" in message:
-                for tool_call in message["tool_calls"]:
+                for tool_call in message["tool_calls"] or ():
                     if "function" in tool_call:
                         function_arguments = tool_call["function"]["arguments"]
                         prompt += function_arguments

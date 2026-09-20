@@ -1,6 +1,5 @@
-use litellm_llms::{
-    base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse},
-    custom_httpx::llm_http_handler::OcrClient,
+use litellm_llms::base_llm::ocr::{
+    error::Error, handler::OcrClient, transformation::LiteLLMOcrResponse,
 };
 
 use crate::ocr::{
@@ -13,8 +12,4 @@ pub async fn perform(
     request: LiteLLMOcrRequest,
 ) -> Result<LiteLLMOcrResponse, Error> {
     litellm_host::run::run(ocr_machine(client.clone()), &LocalOcrHost::new(request)).await
-}
-
-pub async fn ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-    perform(&OcrClient::shared()?, request).await
 }

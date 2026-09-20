@@ -64,6 +64,7 @@ from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -5107,7 +5108,7 @@ def completion(
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
@@ -7830,6 +7831,10 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
+    uses_openai_transport: Final = custom_llm_provider in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS and not (
+        provider_config is not None and provider_config.has_native_transcription_endpoint
+    )
+
     if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -7859,7 +7864,7 @@ def transcription(
             litellm_params=litellm_params_dict,
             custom_llm_provider=custom_llm_provider,
         )
-    elif custom_llm_provider == "openai" or (custom_llm_provider in litellm.openai_compatible_providers):
+    elif uses_openai_transport:
         api_base = (
             api_base
             or litellm.api_base
@@ -8754,6 +8759,39 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
         setattr(usage, "cost", computed_cost)
 
 
+_NON_TEXT_DELTA_FIELDS: Final = (
+    "tool_calls",
+    "function_call",
+    "reasoning_content",
+    "thinking_blocks",
+    "annotations",
+    "audio",
+    "images",
+    "provider_specific_fields",
+)
+
+
+def _stream_choice_delta(choice: object) -> Mapping[str, object]:
+    delta: Final = choice.get("delta", {}) if isinstance(choice, dict) else getattr(choice, "delta", {})
+    if isinstance(delta, Mapping):
+        return delta
+    if isinstance(delta, BaseModel):
+        return delta.model_dump()
+    return {}
+
+
+def _delta_carries_more_than_text(delta: Mapping[str, object]) -> bool:
+    return any(delta.get(field) is not None for field in _NON_TEXT_DELTA_FIELDS)
+
+
+def _simple_text_part(choices: Sequence[object]) -> str | None:
+    deltas: Final = tuple(_stream_choice_delta(choice) for choice in choices)
+    if any(_delta_carries_more_than_text(delta) for delta in deltas):
+        return None
+    content: Final = deltas[0].get("content")
+    return content if isinstance(content, str) else ""
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: Sequence | None = None,
@@ -8798,31 +8836,11 @@ def stream_chunk_builder(
             if not chunk.get("choices"):
                 continue
 
-            choice = chunk["choices"][0]
-            delta_obj = choice.get("delta", {}) if isinstance(choice, dict) else getattr(choice, "delta", {})
-            if isinstance(delta_obj, dict):
-                delta = delta_obj
-            elif hasattr(delta_obj, "model_dump"):
-                delta = cast(dict[str, Any], delta_obj.model_dump())
-            else:
-                delta = {}
-
-            if (
-                delta.get("tool_calls") is not None
-                or delta.get("function_call") is not None
-                or delta.get("reasoning_content") is not None
-                or delta.get("thinking_blocks") is not None
-                or delta.get("annotations") is not None
-                or delta.get("audio") is not None
-                or delta.get("images") is not None
-                or delta.get("provider_specific_fields") is not None
-            ):
+            if (part := _simple_text_part(chunk["choices"])) is None:
                 is_simple_text_stream = False
                 break
-
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                simple_content_parts.append(content)
+            if part:
+                simple_content_parts.append(part)
 
         if is_simple_text_stream:
             if simple_content_parts:
@@ -8859,9 +8877,10 @@ def stream_chunk_builder(
         tool_call_chunks: Final = [
             chunk
             for chunk in chunks
-            if chunk.get("choices")
-            and "tool_calls" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["tool_calls"] is not None
+            if any(
+                "tool_calls" in choice["delta"] and choice["delta"]["tool_calls"] is not None
+                for choice in chunk.get("choices") or ()
+            )
         ]
 
         if len(tool_call_chunks) > 0:

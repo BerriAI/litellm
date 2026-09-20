@@ -44,7 +44,8 @@ _EXTRA_SENSITIVE_CALLBACK_KEYS: Final = {"gcs_path_service_account"}
 # Sentinel prefix on encrypted callback_var values. Lets us detect
 # already-encrypted input cheaply (no decrypt-attempt round trip) and
 # avoid double-encrypting if `LITELLM_SALT_KEY` is rotated between writes.
-_CALLBACK_VAR_ENCRYPTED_PREFIX: Final = "litellm_enc::"
+CALLBACK_VAR_ENCRYPTED_PREFIX: Final = "litellm_enc::"
+_CALLBACK_VAR_ENCRYPTED_PREFIX: Final = CALLBACK_VAR_ENCRYPTED_PREFIX
 # Metadata slots that hold operator-configured callback and secret-manager setup
 # (and therefore integration credentials). Resolved from UserAPIKeyAuth during
 # pre-call setup, never read back off the copies stamped into request metadata.

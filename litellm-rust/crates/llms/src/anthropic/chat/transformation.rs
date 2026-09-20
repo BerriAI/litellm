@@ -16,7 +16,7 @@ use crate::{
         },
     },
     base_llm::chat::transformation::{
-        BaseConfig, ChatCompletionsAuth, Error, ProviderChatRequestData, ProviderChatResponseData,
+        BaseConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth,
         Unsupported, unsupported_message, unsupported_param,
     },
 };
@@ -137,8 +137,8 @@ impl BaseConfig for AnthropicConfig {
         _model: &str,
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ChatCompletionsAuth, Error> {
-        Ok(ChatCompletionsAuth::Header {
+    ) -> Result<RequestAuth, Error> {
+        Ok(RequestAuth::Header {
             name: "x-api-key",
             value: resolve_anthropic_api_key(api_key, env_lookup)?,
         })

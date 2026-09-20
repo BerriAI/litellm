@@ -7,10 +7,10 @@ import logging
 import os
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Final, List, Optional
 
 import pytest
 from fastapi import HTTPException
@@ -21,10 +21,12 @@ from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
     RateLimitDescriptor,
+    RateLimitResponse,
     RequestRateLimiterStash,
     _request_stash,
     get_or_create_request_stash,
@@ -6911,3 +6913,51 @@ def test_success_tpm_accounting_skips_team_model_pool_when_key_owns_model_tpm_li
     assert handler.create_rate_limit_keys("model_per_key", f"{hash_token('sk-pool')}:test-model", "tokens") in charged_keys
     team_pool_key = handler.create_rate_limit_keys("model_per_team", "t:test-model", "tokens")
     assert (team_pool_key in charged_keys) is charges_team_model_pool
+
+
+@pytest.fixture(params=["Europe/Paris", "Asia/Kolkata", "America/Los_Angeles"])
+def process_timezone(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    monkeypatch.setenv("TZ", request.param)
+    time.tzset()
+    yield request.param
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="switching the process timezone needs time.tzset()")
+def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_timezone: str) -> None:
+    now: Final = datetime(2026, 9, 4, 21, 53, 21, tzinfo=timezone.utc)
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), time_provider=lambda: now
+    )
+    expected_reset: Final = (now + timedelta(seconds=handler.window_size)).strftime("%Y-%m-%d %H:%M:%S UTC")
+    over_limit: Final[RateLimitResponse] = {
+        "overall_code": "OVER_LIMIT",
+        "statuses": [
+            {
+                "code": "OVER_LIMIT",
+                "descriptor_key": "api_key",
+                "limit_remaining": 0,
+                "rate_limit_type": "requests",
+                "current_limit": 2,
+            }
+        ],
+    }
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        handler._handle_rate_limit_error(
+            response=over_limit,
+            descriptors=[{"key": "api_key", "value": "sk-test", "rate_limit": None}],
+            requested_model="gpt-4o-mini",
+        )
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.headers == {
+        "retry-after": str(handler.window_size),
+        "rate_limit_type": "requests",
+        "reset_at": expected_reset,
+    }
+    assert exc_info.value.detail == (
+        "Rate limit exceeded for api_key: sk-test. Limit type: requests. "
+        f"Current limit: 2, Remaining: 0. Limit resets at: {expected_reset}"
+    )

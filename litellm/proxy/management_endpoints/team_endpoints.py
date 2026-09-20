@@ -1784,7 +1784,10 @@ async def new_team(
         )
 
         if is_audit_logging_enabled():
-            _updated_values = complete_team_data.json(exclude_none=True)
+            created_team_snapshot: Final = complete_team_data.model_copy(
+                update={"members_with_roles": list(team_row.members_with_roles)}
+            )
+            _updated_values = created_team_snapshot.json(exclude_none=True)
 
             _updated_values = json.dumps(_updated_values, default=str)
 
@@ -3050,6 +3053,38 @@ async def _add_team_members_to_team(
     return updated_team, updated_users, updated_team_memberships
 
 
+async def _update_team_member_role(
+    tx: "Prisma",
+    prisma_client: PrismaClient,
+    team_id: str,
+    user_id: str,
+    role: Literal["admin", "user"],
+    user_email: str | None,
+) -> tuple[tuple[Member, ...], tuple[Member, ...]]:
+    """Rewrite one member's role from the roster read under the team lock; returns (before, after)."""
+    await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+
+    locked_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
+    if locked_members is None:
+        raise HTTPException(status_code=404, detail={"error": f"Team id={team_id} does not exist in db"})
+
+    before: Final = tuple(locked_members)
+    if all(member.user_id != user_id for member in before):
+        raise HTTPException(status_code=404, detail={"error": f"User {user_id} is not a member of team {team_id}"})
+
+    after: Final = tuple(
+        Member(user_id=member.user_id, role=role, user_email=user_email or member.user_email)
+        if member.user_id == user_id
+        else member
+        for member in before
+    )
+    await _team_tx_db(tx).update(
+        where={"team_id": team_id},
+        data={"members_with_roles": json.dumps([m.model_dump() for m in after])},
+    )
+    return before, after
+
+
 def _emit_team_members_metric(team: LiteLLM_TeamTable) -> None:
     """Update the Prometheus team members gauge after a membership change.
 
@@ -3147,7 +3182,7 @@ def _validate_member_user_id_provisioning(
     )
 
 
-def _members_audit_value(members: Sequence[Member]) -> str:
+def _members_audit_value(team_alias: str | None, members: Sequence[Member]) -> str:
     """Serialize a team's member list for an audit-log value.
 
     The audit-log columns hold a JSON object, so the member list is nested
@@ -3155,13 +3190,45 @@ def _members_audit_value(members: Sequence[Member]) -> str:
     """
     return safe_dumps(
         {  # mutable-ok: the audit-log JSON column rejects a top-level array, so this value must be an object
-            "members_with_roles": tuple(member.model_dump() for member in members)
+            "team_alias": team_alias,
+            "members_with_roles": tuple(member.model_dump() for member in members),
         }
     )
 
 
-async def _create_team_member_add_audit_logs(
+def _schedule_team_membership_audit_log(
     team_id: str,
+    team_alias: str | None,
+    before_members: Sequence[Member],
+    after_members: Sequence[Member],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_proxy_admin_name: str,
+) -> None:
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_object_audit_log,
+        is_audit_logging_enabled,
+    )
+
+    if not is_audit_logging_enabled() or tuple(before_members) == tuple(after_members):
+        return
+
+    asyncio.create_task(
+        create_object_audit_log(
+            object_id=team_id,
+            action="updated",
+            litellm_changed_by=None,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
+            table_name=LitellmTableNames.TEAM_TABLE_NAME,
+            before_value=_members_audit_value(team_alias, before_members),
+            after_value=_members_audit_value(team_alias, after_members),
+        )
+    )
+
+
+def _schedule_team_member_add_audit_logs(
+    team_id: str,
+    team_alias: str | None,
     updated_users: Sequence[LiteLLM_UserTable],
     existing_user_ids: frozenset[str],
     before_members: Sequence[Member],
@@ -3169,40 +3236,39 @@ async def _create_team_member_add_audit_logs(
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
 ) -> None:
-    """Record the membership change, and any user row it created, in the audit log.
-
-    The entries are written concurrently so a request adding many members does
-    not pay for them one after another.
-    """
-    from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
-
-    created_user_entries: Final = tuple(
-        create_object_audit_log(
-            object_id=user.user_id,
-            action="created",
-            litellm_changed_by=None,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            table_name=LitellmTableNames.USER_TABLE_NAME,
-            before_value=None,
-            after_value=safe_dumps(user.model_dump(exclude_none=True)),
-        )
-        for user in updated_users
-        if user.user_id is not None and user.user_id not in existing_user_ids
+    """Record the membership change, and any user row it created, in the audit log."""
+    from litellm.proxy.management_helpers.audit_logs import (
+        create_object_audit_log,
+        is_audit_logging_enabled,
     )
 
-    membership_entry: Final = create_object_audit_log(
-        object_id=team_id,
-        action="updated",
-        litellm_changed_by=None,
+    if not is_audit_logging_enabled():
+        return
+
+    for user in updated_users:
+        if user.user_id in existing_user_ids:
+            continue
+        asyncio.create_task(
+            create_object_audit_log(
+                object_id=user.user_id,
+                action="created",
+                litellm_changed_by=None,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                table_name=LitellmTableNames.USER_TABLE_NAME,
+                before_value=None,
+                after_value=safe_dumps(user.model_dump(exclude_none=True)),
+            )
+        )
+
+    _schedule_team_membership_audit_log(
+        team_id=team_id,
+        team_alias=team_alias,
+        before_members=before_members,
+        after_members=after_members,
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
-        table_name=LitellmTableNames.TEAM_TABLE_NAME,
-        before_value=_members_audit_value(before_members),
-        after_value=_members_audit_value(after_members),
     )
-
-    await asyncio.gather(*created_user_entries, membership_entry)
 
 
 async def _validate_and_populate_member_user_info(
@@ -3335,6 +3401,7 @@ async def team_member_add(
 
     ```
     """
+    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         premium_user,
@@ -3429,6 +3496,10 @@ async def team_member_add(
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
 
+    await evict_and_broadcast(
+        cache_keys=tuple(sorted(user.user_id for user in updated_users)),
+        user_api_key_cache=user_api_key_cache,
+    )
     await _evict_created_membership_caches(
         user_ids=(tm.user_id for tm in updated_team_memberships),
         team_id=data.team_id,
@@ -3437,8 +3508,9 @@ async def team_member_add(
 
     _emit_team_members_metric(complete_team_data)
 
-    await _create_team_member_add_audit_logs(
+    _schedule_team_member_add_audit_logs(
         team_id=data.team_id,
+        team_alias=complete_team_data.team_alias,
         updated_users=updated_users,
         existing_user_ids=pre_existing_user_ids,
         before_members=members_before_add,
@@ -3508,7 +3580,33 @@ async def team_member_delete(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+    existing_team_row, before_members, after_members = await _team_member_delete(
+        data=data, user_api_key_dict=user_api_key_dict
+    )
+
+    _schedule_team_membership_audit_log(
+        team_id=existing_team_row.team_id,
+        team_alias=existing_team_row.team_alias,
+        before_members=before_members,
+        after_members=after_members,
+        user_api_key_dict=user_api_key_dict,
+        litellm_proxy_admin_name=litellm_proxy_admin_name,
+    )
+
+    return existing_team_row
+
+
+async def _team_member_delete(
+    data: TeamMemberDeleteRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple[LiteLLM_TeamTable, tuple[Member, ...], tuple[Member, ...]]:
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3672,7 +3770,7 @@ async def team_member_delete(
 
     _emit_team_members_metric(existing_team_row)
 
-    return existing_team_row
+    return existing_team_row, tuple(fresh_members), tuple(new_team_members)
 
 
 @router.post(
@@ -3692,7 +3790,12 @@ async def team_member_update(
 
     Update team member budgets and team member role
     """
-    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import (
+        litellm_proxy_admin_name,
+        premium_user,
+        prisma_client,
+        user_api_key_cache,
+    )
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
@@ -3782,6 +3885,18 @@ async def team_member_update(
     ### upsert new budget
     budget_patch: Final = member_budget_patch(data)
     async with prisma_client.tx() as tx:
+        role_change: Final = (
+            await _update_team_member_role(
+                tx=tx,
+                prisma_client=prisma_client,
+                team_id=data.team_id,
+                user_id=received_user_id,
+                role=data.role,
+                user_email=data.user_email,
+            )
+            if data.role is not None
+            else None
+        )
         await _upsert_budget_and_membership(
             tx=tx,
             team_id=data.team_id,
@@ -3798,27 +3913,16 @@ async def team_member_update(
             user_api_key_cache=user_api_key_cache,
         )
 
-    ### update team member role
-    if data.role is not None:
-        team_members: Final[list[Member]] = []
-        for member in team_table.members_with_roles:
-            if member.user_id == received_user_id:
-                team_members.append(
-                    Member(
-                        user_id=member.user_id,
-                        role=data.role,
-                        user_email=data.user_email or member.user_email,
-                    )
-                )
-            else:
-                team_members.append(member)
-
-        team_table.members_with_roles = team_members
-
-        _db_team_members: Final[list[dict]] = [m.model_dump() for m in team_members]
-        await _team_db(prisma_client).update(
-            where={"team_id": data.team_id},
-            data={"members_with_roles": json.dumps(_db_team_members)},
+    if role_change is not None:
+        members_before_role_update, team_members = role_change
+        team_table.members_with_roles = list(team_members)
+        _schedule_team_membership_audit_log(
+            team_id=data.team_id,
+            team_alias=team_table.team_alias,
+            before_members=members_before_role_update,
+            after_members=team_members,
+            user_api_key_dict=user_api_key_dict,
+            litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
 
     return TeamMemberUpdateResponse(
@@ -4298,7 +4402,7 @@ async def delete_team(
         tasks = []
         for team_member in team_members:
             tasks.append(
-                team_member_delete(
+                _team_member_delete(
                     data=TeamMemberDeleteRequest(
                         team_id=team_row.team_id,
                         user_id=team_member.user_id,
