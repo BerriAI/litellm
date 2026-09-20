@@ -1208,12 +1208,12 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
                 general_settings,
             ) = await proxy_config.load_config(router=llm_router, config_file_path=worker_config)
         elif isinstance(worker_config, dict):
-            await initialize(**worker_config)
+            await initialize_from_worker_config(worker_config)
         else:
             # if not, assume it's a json string
             worker_config = json.loads(worker_config)
             if isinstance(worker_config, dict):
-                await initialize(**worker_config)
+                await initialize_from_worker_config(worker_config)
 
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
@@ -8566,6 +8566,13 @@ def save_worker_config(**data):
     import json
 
     os.environ["WORKER_CONFIG"] = json.dumps(data)
+
+
+LEGACY_WORKER_CONFIG_KEYS: Final = frozenset({"telemetry"})
+
+
+async def initialize_from_worker_config(worker_config: dict[str, object]) -> None:
+    await initialize(**{k: v for k, v in worker_config.items() if k not in LEGACY_WORKER_CONFIG_KEYS})
 
 
 async def initialize(
