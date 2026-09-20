@@ -1793,7 +1793,7 @@ def test_build_vertex_schema_rejects_const_values_gemini_cannot_enforce(value):
 
 
 def test_convert_const_to_enum_ignores_non_schema_values():
-    _convert_const_to_enum("not-a-schema")
+    assert _convert_const_to_enum("not-a-schema") is None
 
 
 def test_convert_const_to_enum_rejects_excessive_depth():
