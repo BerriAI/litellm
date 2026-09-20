@@ -216,8 +216,12 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def _is_default_reasoning_model(model: str) -> bool:
-        normalized: Final = model.lower().split("/")[-1]
-        return any(marker in normalized for marker in ("reasoner", "r1", "v4-pro", "v4-flash"))
+        try:
+            model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="deepseek")
+            return model_info.get("thinking_always_on") is True
+        except Exception as err:  # noqa: BLE001  # unmapped or dynamic model names without metadata
+            litellm.verbose_logger.debug("Could not check thinking_always_on in model info for %s: %s", model, err)
+            return False
 
     def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
         if not supports_reasoning(model=model, custom_llm_provider="deepseek"):
