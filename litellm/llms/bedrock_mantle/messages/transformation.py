@@ -1,5 +1,8 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
@@ -13,6 +16,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     resolve_mantle_region,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 from litellm.types.router import GenericLiteLLMParams
 
 _BASE_SUFFIXES_TO_STRIP: Final = (
@@ -23,6 +27,9 @@ _BASE_SUFFIXES_TO_STRIP: Final = (
     "/openai/v1",
     "/v1",
 )
+_BODY_FIELDS_MANTLE_READS_FROM_HEADERS: Final = frozenset({"anthropic_version", "anthropic_beta"})
+_ANTHROPIC_BETAS: Final = TypeAdapter(tuple[str, ...])
+_MANTLE_REQUEST: Final = TypeAdapter(dict[str, object])
 
 
 def build_mantle_native_messages_url(api_base: str | None, litellm_params: Mapping[str, object]) -> str:
@@ -39,6 +46,13 @@ def build_mantle_native_messages_url(api_base: str | None, litellm_params: Mappi
 
 
 class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleMessagesConfig):
+    _BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS: Mapping[str, str] = MappingProxyType(
+        {
+            **AmazonMantleMessagesConfig._BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS,
+            "clear_thinking_20251015": ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
+        }
+    )
+
     def __init__(self, aws_signer: BaseAWSLLM | None = None) -> None:
         AmazonMantleMessagesConfig.__init__(self)
         self._aws_signer = aws_signer or self
@@ -89,13 +103,17 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
-        request: Final = super().transform_anthropic_messages_request(
-            model=model,
-            messages=messages,
-            anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
-            litellm_params=litellm_params,
-            headers=headers,
+        request: Final = _MANTLE_REQUEST.validate_python(
+            super().transform_anthropic_messages_request(
+                model=model,
+                messages=messages,
+                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            ),
         )
-        if "anthropic_version" in anthropic_messages_optional_request_params:
-            return request
-        return {key: value for key, value in request.items() if key != "anthropic_version"}
+        betas: Final = request.get("anthropic_beta")
+        if betas is not None:
+            header_betas: Final = ",".join(_ANTHROPIC_BETAS.validate_python(betas))
+            headers["anthropic-beta"] = header_betas  # rebind-ok: the handler signs and sends this same dict
+        return {key: value for key, value in request.items() if key not in _BODY_FIELDS_MANTLE_READS_FROM_HEADERS}
