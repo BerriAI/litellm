@@ -8,7 +8,6 @@ import json
 import os
 import re
 from collections.abc import Mapping
-from itertools import takewhile
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
@@ -43,6 +42,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAudioObject,
     ChatCompletionFileObject,
     ChatCompletionImageObject,
+    ChatCompletionSystemMessage,
     ChatCompletionTextObject,
     ChatCompletionUserMessage,
 )
@@ -1406,15 +1406,13 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     return ChatCompletionUserMessage(content=".", role="user")
 
 
-def _system_message_to_part(message: AllMessageValues) -> PartType | None:
-    if message["role"] != "system":
-        return None
+def _system_message_to_part(message: ChatCompletionSystemMessage) -> PartType:
     content: Final = message["content"]
     if isinstance(content, str):
         return PartType(text=content)
     if isinstance(content, list):
         return PartType(text="".join(block.get("text") or "" for block in content))
-    return None
+    return PartType(text="")
 
 
 def _transform_system_message(
@@ -1435,9 +1433,11 @@ def _transform_system_message(
     if supports_system_message is not True:
         return None, messages
 
-    leading_system_messages: Final = tuple(takewhile(lambda message: message["role"] == "system", messages))
+    leading_count: Final = next(
+        (index for index, message in enumerate(messages) if message["role"] != "system"), len(messages)
+    )
     system_content_parts: Final = tuple(
-        part for part in map(_system_message_to_part, leading_system_messages) if part is not None
+        _system_message_to_part(message) for message in messages[:leading_count] if message["role"] == "system"
     )
     if len(system_content_parts) == 0:
         return None, messages
@@ -1446,5 +1446,5 @@ def _transform_system_message(
     # If no messages are left, add a blank user message
     # Relevant Issue - https://github.com/BerriAI/litellm/issues/13769
     #########################################################
-    remaining: Final = messages[len(leading_system_messages) :] or (_default_user_message_when_system_message_passed(),)
+    remaining: Final = messages[leading_count:] or (_default_user_message_when_system_message_passed(),)
     return SystemInstructions(parts=list(system_content_parts)), list(remaining)

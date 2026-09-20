@@ -2873,3 +2873,24 @@ def test_mid_conversation_system_after_tool_result_keeps_tool_ordering():
         if {"text": "Reminder: reply in one short sentence."} in content["parts"]
     )
     assert tool_result_index < reminder_index
+
+
+def test_leading_system_message_with_malformed_content_does_not_drop_the_conversation():
+    """A system message whose content is neither text nor a content list must not raise or swallow the user turn."""
+    body = _gemini_request_body(
+        [
+            {"role": "system", "content": None},
+            {"role": "user", "content": "hello"},
+        ]
+    )
+
+    assert body["contents"] == [{"role": "user", "parts": [{"text": "hello"}]}]
+
+
+def test_system_only_request_still_sends_a_user_turn():
+    """Gemini requires contents, so a request carrying only system messages keeps a placeholder user turn."""
+    body = _gemini_request_body([{"role": "system", "content": "You are helpful"}])
+
+    assert body["system_instruction"]["parts"] == [{"text": "You are helpful"}]
+    assert len(body["contents"]) == 1
+    assert body["contents"][0]["role"] == "user"
