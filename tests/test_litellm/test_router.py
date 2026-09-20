@@ -17073,6 +17073,7 @@ def test_router_dispatch_prompt_completion_direct(monkeypatch: pytest.MonkeyPatc
             kwargs={"model": "direct-model", "messages": [{"role": "user", "content": "hi"}]},
         )
     )
+    assert isinstance(response, litellm.ModelResponse)
     assert response.choices[0].message.content == "dispatched reply"
 
 

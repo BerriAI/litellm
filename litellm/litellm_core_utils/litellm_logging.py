@@ -1123,7 +1123,7 @@ class Logging(LiteLLMLoggingBaseClass):
         for logger in prompt_management_loggers:
             if isinstance(logger, CustomPromptManagement):
                 if prompt_version is not None and getattr(logger, "prompt_version", None) is not None:
-                    if logger.prompt_version != prompt_version:
+                    if getattr(logger, "prompt_version", None) != prompt_version:
                         continue
                 try:
                     if logger.should_run_prompt_management(
@@ -1217,7 +1217,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ):
                 continue
             if prompt_version is not None and getattr(logger, "prompt_version", None) is not None:
-                if logger.prompt_version != prompt_version:
+                if getattr(logger, "prompt_version", None) != prompt_version:
                     continue
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
             return logger
