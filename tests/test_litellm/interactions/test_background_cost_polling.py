@@ -9,6 +9,7 @@ import pytest
 from litellm.interactions.background_cost_polling import (
     _create_context,
     _poll_intervals,
+    _rebuild_logging_obj,
     BackgroundInteractionPollContext,
     InMemoryBackgroundSettlementStore,
     maybe_schedule_background_interaction_cost_polling,
@@ -268,6 +269,37 @@ async def test_schedule_creates_poll_task_for_in_progress_create():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_schedule_registers_an_agent_only_create_that_names_no_model():
+    logging_obj = LitellmLogging(
+        model=None,
+        messages=None,
+        stream=False,
+        call_type="acreate_interaction",
+        start_time=time.time(),
+        litellm_call_id="bg-agent-call-id",
+        function_id="bg-agent-fn-id",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, custom_llm_provider="gemini")
+    store = InMemoryBackgroundSettlementStore()
+
+    task = await maybe_schedule_background_interaction_cost_polling(
+        response=_response("in_progress", with_usage=False),
+        create_kwargs={"litellm_logging_obj": logging_obj},
+        custom_llm_provider="gemini",
+        store=store,
+    )
+
+    assert isinstance(task, asyncio.Task)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    pending = await store.pending("interactions/bg-abc")
+    assert pending is not None
+    assert pending.create_context.model is None
+    assert _rebuild_logging_obj(pending.create_context).model is None
 
 
 @pytest.mark.asyncio

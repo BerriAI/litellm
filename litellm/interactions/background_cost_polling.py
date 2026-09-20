@@ -83,7 +83,7 @@ class BackgroundInteractionCreateContext(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    model: str
+    model: str | None
     call_type: str
     litellm_call_id: str
     function_id: str
@@ -275,7 +275,7 @@ def _rebuild_logging_obj(create_context: BackgroundInteractionCreateContext) -> 
     from litellm.litellm_core_utils.litellm_logging import Logging
 
     logging_obj: Final = Logging(
-        model=create_context.model,
+        model=create_context.model,  # pyright: ignore[reportArgumentType]  # function_setup builds the live object with the same None for an agent-only create
         messages=None,
         stream=False,
         call_type=create_context.call_type,
