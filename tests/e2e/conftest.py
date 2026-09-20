@@ -17,6 +17,7 @@ import functools
 import os
 from collections.abc import Generator, Iterator
 from datetime import datetime, timezone
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
@@ -28,6 +29,7 @@ from e2e_config import (
     FIXTURE_DIR,
     FIXTURE_MODE_RAW,
     MANAGED_FILES_OPT_IN_ENV,
+    MCP_OAUTH_LIVE_OPT_IN_ENV,
     PROMPT_CACHING_OPT_IN_ENV,
     PROXY_BASE_URL,
     REDIS_CHAOS_OPT_IN_ENV,
@@ -56,6 +58,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "prompt_caching_stack": PROMPT_CACHING_OPT_IN_ENV,
         "redis_chaos": REDIS_CHAOS_OPT_IN_ENV,
         "cli_determinism": CLI_DETERMINISM_OPT_IN_ENV,
+        "mcp_oauth_live": MCP_OAUTH_LIVE_OPT_IN_ENV,
     }
 )
 
@@ -88,6 +91,9 @@ def jwt_identity(idp: Keycloak, resources: ResourceManager, proxy: ProxyClient) 
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    config.addinivalue_line(
+        "markers", "migration_startup: isolated container startup tests run by the migration CI workflow"
+    )
     config.addinivalue_line(
         "markers",
         "provider_live: requires actual provider timing, limits, state, or a response that echoes this"
@@ -131,6 +137,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "redis_chaos: load test that pauses the proxy's Redis outright mid-run; needs a proxy booted from "
         "gateway/redis_chaos_ci_config.yml on the same host, and is deselected unless E2E_REDIS_CHAOS is set",
+    )
+    config.addinivalue_line(
+        "markers",
+        "mcp_oauth_live: real Linear OAuth consent via a captured browser session; deselected unless "
+        "E2E_MCP_OAUTH_LIVE is set",
     )
 
 
@@ -177,6 +188,11 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = [item for item in items if not _needs_unset_opt_in(item)]
     for item in items:
         attach_result_properties(item)
+    if os.environ.get("LITELLM_MIGRATION_TESTS") != "1":
+        deselected = [item for item in items if item.get_closest_marker("migration_startup") is not None]
+        items[:] = [item for item in items if item.get_closest_marker("migration_startup") is None]
+        if deselected:
+            deselected[0].config.hook.pytest_deselected(items=deselected)
     items.sort(key=lambda item: item.get_closest_marker("load") is not None)
 
 
@@ -211,7 +227,9 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     run even when none is up. Never skip for a missing proxy. Replay mode needs
     the proxy too: only provider-bound traffic replays from the bundle."""
     LIVE_PROVIDER_REQUIRED.set(item.get_closest_marker("provider_live") is not None)
-    if item.get_closest_marker("e2e") is None:
+    if item.get_closest_marker("e2e") is None or item.get_closest_marker("migration_startup") is not None:
+        return
+    if isinstance(item, pytest.Function) and "oauth_gateway" in item.fixturenames:
         return
     reason = _proxy_fail_reason()
     if reason is not None:
@@ -224,7 +242,7 @@ def pytest_runtest_call(item: pytest.Item) -> None:
     guard before truncating the spend-log DB. Tests under `tests/e2e/` without the
     `e2e` marker (pure unit coverage for the harness itself) never hit the proxy,
     so they must not arm the destructive DB truncate."""
-    if item.get_closest_marker("e2e") is None:
+    if item.get_closest_marker("e2e") is None or item.get_closest_marker("migration_startup") is not None:
         return
     item.session.stash[_E2E_TEST_RAN] = True
 
@@ -236,6 +254,13 @@ def pytest_runtest_makereport(
     """Stash the call-phase outcome so teardown can tell a passed test from a
     failed one without re-deriving it."""
     report = yield
+    if item.get_closest_marker("mcp_oauth_live") is not None and call.excinfo is not None:
+        # Publish code locations only, never exception messages, source text or locals.
+        item.user_properties.append(("oauth_failure_phase", report.when))
+        item.user_properties.append(("oauth_exception_type", call.excinfo.type.__name__))
+        for entry in call.excinfo.traceback:
+            item.user_properties.append(("oauth_frame", f"{Path(entry.path).name}:{entry.lineno + 1}:{entry.name}"))
+        report.user_properties = list(item.user_properties)
     if report.when == "call":
         item.stash[_CALL_PASSED] = report.passed
     return report
