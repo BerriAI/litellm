@@ -1995,7 +1995,7 @@ class TestRunServerDbSetup:
             # use_prisma_db_push should be False (default), so use_migrate should be True
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
             mock_setup_database.assert_called_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
             # Reset mocks
@@ -2010,7 +2010,7 @@ class TestRunServerDbSetup:
                 standalone_mode=False,
             )
             mock_setup_database.assert_called_with(
-                use_migrate=False, use_v2_resolver=False
+                use_migrate=False, use_v2_resolver=True
             )
 
     @patch("atexit.register")
@@ -2070,7 +2070,7 @@ class TestRunServerDbSetup:
 
         assert "prisma CLI is neither on PATH" not in capsys.readouterr().out
         mock_setup_database.assert_called_once_with(
-            use_migrate=True, use_v2_resolver=False
+            use_migrate=True, use_v2_resolver=True
         )
 
     @patch("subprocess.run")
@@ -2137,7 +2137,7 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
     @patch("subprocess.run")
@@ -2204,11 +2204,11 @@ class TestRunServerDbSetup:
         mock_atexit_register,
         mock_subprocess_run,
     ):
-        """USE_V2_MIGRATION_RESOLVER must select the v2 resolver.
+        """USE_V2_MIGRATION_RESOLVER=true must select the v2 resolver.
 
         The Helm migrations Job runs `python litellm/proxy/prisma_migration.py`,
-        which calls run_server with a fixed argv, so a deployment has no way to
-        pass --use_v2_migration_resolver and an env var is the only route in.
+        which calls run_server with a fixed argv, so a deployment reaches the
+        resolver through the env var rather than a CLI flag.
         """
         from litellm.proxy.proxy_cli import run_server
 
@@ -2247,6 +2247,84 @@ class TestRunServerDbSetup:
 
         mock_setup_database.assert_called_once_with(
             use_migrate=True, use_v2_resolver=True
+        )
+
+    @pytest.mark.parametrize(
+        "argv_extra, env_extra, expected_v2",
+        [
+            ([], {}, True),
+            ([], {"USE_V2_MIGRATION_RESOLVER": "false"}, False),
+            (["--use_legacy_migration_resolver"], {}, False),
+            (
+                ["--use_legacy_migration_resolver"],
+                {"USE_V2_MIGRATION_RESOLVER": "true"},
+                False,
+            ),
+            (["--use_v2_migration_resolver"], {}, True),
+        ],
+        ids=[
+            "default-is-v2",
+            "env-false-opts-out",
+            "legacy-flag-opts-out",
+            "legacy-flag-beats-env-true",
+            "deprecated-v2-flag-still-accepted",
+        ],
+    )
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")  # test-quality-ok: run_server always wires the DB; same isolation as the sibling CLI tests above
+    def test_migration_resolver_selection(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+        argv_extra,
+        env_extra,
+        expected_v2,
+    ):
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.return_value = True
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k
+            not in ("DATABASE_URL", "DIRECT_URL", "USE_V2_MIGRATION_RESOLVER")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+        clean_env.update(env_extra)
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+        ):
+            run_server.main(
+                ["--local", "--skip_server_startup", *argv_extra],
+                standalone_mode=False,
+            )
+
+        mock_setup_database.assert_called_once_with(
+            use_migrate=True, use_v2_resolver=expected_v2
         )
 
 
