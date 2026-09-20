@@ -1549,4 +1549,4 @@ async def test_async_rpush_and_trim_runs_push_and_trim_in_one_transaction(monkey
     client.pipeline.assert_called_once_with(transaction=True)
     assert pushed_len == 4
     assert rows == ["b", "c", "d"]
-    assert [op[:2] for op in pipe.queued] == [("rpush", "ns:buf"), ("ltrim", "ns:buf")]
+    assert pipe.queued == [("rpush", "ns:buf", "c", "d"), ("ltrim", "ns:buf", "-3", "-1")]
