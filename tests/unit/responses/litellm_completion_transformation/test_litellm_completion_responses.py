@@ -5189,8 +5189,8 @@ def _replay_field(message, key, default=None):
     return getattr(message, key, default)
 
 
-def _replay_tool_call_ids(message):
-    return [_replay_field(call, "id") for call in _replay_field(message, "tool_calls") or []]
+def _replay_tool_call_ids(message) -> tuple:
+    return tuple(_replay_field(call, "id") for call in _replay_field(message, "tool_calls") or ())
 
 
 def _replay_visible_text(message):
@@ -5200,15 +5200,15 @@ def _replay_visible_text(message):
     return content if isinstance(content, str) else json.dumps(content)
 
 
-def _replay_reasoning_item(turn, summary=True, encrypted=False, content_blocks=False):
-    item: dict = {"type": "reasoning", "id": f"rs_{turn}"}
+def _replay_reasoning_item(turn, summary=True, encrypted=False, content_blocks=False) -> dict:
     text = f"{_REASONING_MARKER}-{turn}"
-    item["summary"] = [{"type": "summary_text", "text": text}] if summary else []
-    if content_blocks:
-        item["content"] = [{"type": "reasoning_text", "text": text}]
-    if encrypted:
-        item["encrypted_content"] = "gAAAAABopaque=="
-    return item
+    return {
+        "type": "reasoning",
+        "id": f"rs_{turn}",
+        "summary": [{"type": "summary_text", "text": text}] if summary else [],
+        **({"content": [{"type": "reasoning_text", "text": text}]} if content_blocks else {}),
+        **({"encrypted_content": "gAAAAABopaque=="} if encrypted else {}),
+    }
 
 
 def _replay_call_item(turn, suffix=""):
@@ -5285,27 +5285,23 @@ _REPLAY_SHAPES: Final = {
 }
 
 
-def _replay_transcript(turns, shape):
-    transcript: list = [{"role": "user", "content": "Collect vault tokens one at a time, starting at slot 1."}]
-    for turn in range(1, turns + 1):
-        transcript.extend(shape(turn))
-    return transcript
+def _replay_transcript(turns, shape) -> tuple:
+    opening = ({"role": "user", "content": "Collect vault tokens one at a time, starting at slot 1."},)
+    return opening + tuple(item for turn in range(1, turns + 1) for item in shape(turn))
 
 
-def _bridge_replay(transcript):
+def _bridge_replay(transcript) -> dict:
     return LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
         model="openai/kimi-k3",
-        input=transcript,
+        input=list(transcript),
         responses_api_request={"tools": [_REPLAY_TOOL], "max_output_tokens": 500},
         custom_llm_provider="openai",
     )
 
 
-def _expected_replay_call_ids(turns, shape_name):
-    ids = {f"call_{turn}" for turn in range(1, turns + 1)}
-    if shape_name == "parallel_calls":
-        ids |= {f"call_{turn}b" for turn in range(1, turns + 1)}
-    return ids
+def _expected_replay_call_ids(turns, shape_name) -> frozenset:
+    suffixes = ("", "b") if shape_name == "parallel_calls" else ("",)
+    return frozenset(f"call_{turn}{suffix}" for turn in range(1, turns + 1) for suffix in suffixes)
 
 
 @pytest.mark.parametrize("shape_name", sorted(_REPLAY_SHAPES))
@@ -5315,7 +5311,7 @@ class TestBridgeMultiTurnReplay:
 
     def test_every_replayed_call_reaches_the_provider_as_a_tool_call(self, shape_name, turns):
         messages = _bridge_replay(_replay_transcript(turns, _REPLAY_SHAPES[shape_name]))["messages"]
-        sent = {call_id for message in messages for call_id in _replay_tool_call_ids(message)}
+        sent = frozenset(call_id for message in messages for call_id in _replay_tool_call_ids(message))
         missing = _expected_replay_call_ids(turns, shape_name) - sent
         assert not missing, f"{sorted(missing)} were replayed but reach the provider as no tool call"
 
@@ -5331,12 +5327,15 @@ class TestBridgeMultiTurnReplay:
         assert got == expected, f"{got} user messages reach the provider, but the client sent {expected}"
 
     def test_no_tool_result_is_orphaned(self, shape_name, turns):
-        announced: set = set()
-        for message in _bridge_replay(_replay_transcript(turns, _REPLAY_SHAPES[shape_name]))["messages"]:
-            if _replay_field(message, "role") == "tool":
-                call_id = _replay_field(message, "tool_call_id")
-                assert call_id in announced, f"tool result {call_id} arrives before any message announces it"
-            announced.update(_replay_tool_call_ids(message))
+        messages = _bridge_replay(_replay_transcript(turns, _REPLAY_SHAPES[shape_name]))["messages"]
+        for index, message in enumerate(messages):
+            if _replay_field(message, "role") != "tool":
+                continue
+            call_id = _replay_field(message, "tool_call_id")
+            announced = frozenset(
+                announced_id for earlier in messages[:index] for announced_id in _replay_tool_call_ids(earlier)
+            )
+            assert call_id in announced, f"tool result {call_id} arrives before any message announces it"
 
     def test_the_tools_survive_the_whole_transcript(self, shape_name, turns):
         request = _bridge_replay(_replay_transcript(turns, _REPLAY_SHAPES[shape_name]))
