@@ -7,11 +7,11 @@ from datetime import datetime, timedelta
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-import litellm.proxy.shutdown.scheduled_jobs as scheduled_jobs
+from litellm.proxy.shutdown import scheduled_jobs
 from litellm.proxy.shutdown.scheduled_jobs import (
     AwaitableAsyncIOExecutor,
-    stop_in_flight_scheduler_jobs,
     pause_scheduled_jobs,
+    stop_in_flight_scheduler_jobs,
 )
 
 
