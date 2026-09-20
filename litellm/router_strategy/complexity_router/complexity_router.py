@@ -2161,6 +2161,30 @@ class ComplexityRouter(CustomLogger):
                 model=model,
                 cost=jev_classifier_cost(response, config.model),
             )
+            refusal_reason: Final = self._jev_route_down_refusal_reason(
+                config=config,
+                chosen_tier=tier_name,
+                strongest_tier=self.config.tier_names()[-1],
+                confidence=answer.confidence,
+            )
+            if refusal_reason is not None:
+                # A confident-enough classifier is a healthy classifier: a gate refusal is a
+                # policy decision about the verdict, not a health failure, so the breaker closes.
+                if breaker is not None and permit is not None:
+                    breaker.record_success(permit)
+                refused: Final = _with_signal(
+                    self._classifier_failure_outcome(
+                        f"jev classifier route-down refused ({refusal_reason}, verdict {tier_name}, "
+                        f"confidence {answer.confidence:.4f})",
+                        prompt,
+                        system_prompt,
+                        signal=f"jev-refused:{refusal_reason}",
+                    ),
+                    f"jev-classifier:{tier_name}",
+                )
+                # Keep the verdict and its cost on the refusal for provenance: the request paid
+                # for the Jev call, and the routing decision still logs what it answered.
+                return refused._replace(classifier_cost=verdict.cost, jev_verdict=verdict)
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
             return ClassificationOutcome(
@@ -2188,6 +2212,36 @@ class ComplexityRouter(CustomLogger):
             return self._classifier_failure_outcome(
                 f"jev classifier failed ({type(e).__name__})", prompt, system_prompt
             )
+
+    @staticmethod
+    def _jev_route_down_refusal_reason(
+        config: JevClassifierConfig,
+        chosen_tier: str,
+        strongest_tier: str,
+        confidence: float,
+        complexity_score: float | None = None,
+        complexity_confidence: float | None = None,
+    ) -> str | None:
+        """Why a Jev verdict that routes below the strongest tier must not be applied, or None.
+
+        A verdict naming the strongest tier is not a route-down and is never gated. Every
+        configured gate must pass: the verdict's own confidence, plus the complexity answer's
+        score and confidence when the protocol carries one. Missing complexity data is hard
+        (score 1.0, confidence 0.0), so a configured complexity gate refuses every route-down
+        until the wire carries a complexity answer; complexity_max=1.0 and
+        complexity_confidence_min=0.0 are the values at which missing data passes.
+        """
+        if chosen_tier == strongest_tier:
+            return None
+        if config.confidence_threshold is not None and confidence < config.confidence_threshold:
+            return "low-confidence"
+        score: Final = 1.0 if complexity_score is None else complexity_score  # unknown complexity is hard
+        if config.complexity_max is not None and score > config.complexity_max:
+            return "high-complexity"
+        verdict_confidence: Final = 0.0 if complexity_confidence is None else complexity_confidence
+        if config.complexity_confidence_min is not None and verdict_confidence < config.complexity_confidence_min:
+            return "low-complexity-confidence"
+        return None
 
     def _classifier_failure_outcome(
         self,
