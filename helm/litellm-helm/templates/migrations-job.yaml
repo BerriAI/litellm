@@ -75,8 +75,28 @@ spec:
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
             {{- else if .Values.db.deployStandalone }}
-            - name: DATABASE_URL
-              value: postgresql://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}
+            {{- /*
+              Hand the credentials over as separate variables and let the entrypoint
+              assemble DATABASE_URL, exactly as the proxy Deployment does. Building the
+              URL here instead interpolated the password raw, so any of : / ? # [ ] @ +
+              or a space in postgresql.auth.password silently reshaped the URL and the
+              Job failed to connect. Sourcing the two secret values also keeps the
+              password out of the rendered Job and the Helm release secret.
+            */}}
+            - name: DATABASE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  key: username
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "litellm.fullname" . }}-dbcredentials
+                  key: password
+            - name: DATABASE_HOST
+              value: {{ .Release.Name }}-postgresql
+            - name: DATABASE_NAME
+              value: {{ .Values.postgresql.auth.database }}
             {{- end }}
             {{- if .Values.envVars }}
             {{- range $key, $val := .Values.envVars }}
