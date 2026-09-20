@@ -318,26 +318,22 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         A tool carries its mark at the top level (Anthropic shape) or under ``function``
         (OpenAI shape). A top-level ``cache_control`` is Anthropic's automatic caching,
-        which places one breakpoint of its own on top of the explicit ones. Marks the
-        client sends through the ``extra_body`` envelope of ``request_kwargs`` reach the
-        wire too and count the same way. Callers pass only the tools whose mark reaches
-        the provider on their path.
+        which places one breakpoint of its own on top of the explicit ones. The
+        ``extra_body`` envelope of ``request_kwargs`` is merged over the request on the
+        wire, so a ``tools`` or ``cache_control`` it carries replaces the direct value
+        and is counted in its place. Callers pass only the tools whose mark reaches the
+        provider on their path.
         """
         extra_body: Final = (
             _validated_object_mapping(AnthropicCacheControlHook._request_value(request_kwargs, "extra_body")) or {}
         )
-        automatic_blocks: Final = sum(
-            1 for control in (cache_control, extra_body.get("cache_control")) if control is not None
-        )
-        tool_blocks: Final = sum(
-            1
-            for tool in (*(tools or ()), *(_validated_object_list(extra_body.get("tools")) or ()))
-            if _tool_carries_cache_breakpoint(tool)
-        )
+        wire_cache_control: Final = extra_body.get("cache_control", cache_control)
+        wire_tools: Final = _validated_object_list(extra_body["tools"]) if "tools" in extra_body else tools
+        tool_blocks: Final = sum(1 for tool in wire_tools or () if _tool_carries_cache_breakpoint(tool))
         envelope_blocks: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(
             _validated_object_list(extra_body.get("messages")) or (), extra_body.get("system")
         )
-        return automatic_blocks + tool_blocks + envelope_blocks
+        return int(wire_cache_control is not None) + tool_blocks + envelope_blocks
 
     @staticmethod
     def _blocks_reserved_outside_messages(
