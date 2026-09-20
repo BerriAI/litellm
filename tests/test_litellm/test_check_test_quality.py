@@ -7,8 +7,10 @@ produced against tests/e2e, where the assertions live in a shared helper rather 
 in the test body.
 """
 
+import ast
 import importlib.util
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -610,6 +612,19 @@ def test_a_fanned_out_run_reports_each_generated_file_exactly_once(tmp_path):
     assert len(reported) == len(paths)
     assert len({line.split(":")[0] for line in reported}) == len(paths)
     assert all(" TQ001 " in line for line in reported)
+
+
+def test_rule_codes_match_every_code_the_checker_emits():
+    source = _MODULE_PATH.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    definition = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "RULE_CODES"
+    )
+    lines = source.splitlines()
+    outside = "\n".join(lines[: definition.lineno - 1] + lines[definition.end_lineno :])
+    assert frozenset(re.findall(r'"(TQ\d{3})"', outside)) == checker.RULE_CODES
 
 
 def test_sys_executable_child_without_isolation_flag_is_flagged(tmp_path):
