@@ -508,7 +508,8 @@ class AnthropicMessagesHandler(BaseTranslation):
             chat_completion_compatible_request,
             _tool_name_mapping,
         ) = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
+            anthropic_message_request=cast(AnthropicMessagesRequest, data.copy()),
+            preserve_midturn_system=True,
         )
         return chat_completion_compatible_request
 
@@ -1240,10 +1241,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         Process output streaming response by applying guardrails to text content.
 
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
-        With ``deliver_ended_stream_rewrites``, an ended stream whose guardrail rewrote the text gets the rewrite
-        written back across the buffered chunks (full rewritten text in the first ``text_delta``, the rest blanked);
-        a rewrite on a stream that never reported a ``stop_reason`` has no write-back and is reported as
-        undeliverable, so the pipeline executor discards it and releases the original chunks.
+        With ``deliver_ended_stream_rewrites``, a stream whose guardrail rewrote the text gets the rewrite
+        written back across the buffered chunks (full rewritten text in the first ``text_delta``, the rest blanked),
+        whether or not the stream ever reported a ``stop_reason``.
         """
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
@@ -1299,7 +1299,11 @@ class AnthropicMessagesHandler(BaseTranslation):
                     and guardrailed_texts
                     and guardrailed_texts[0] != string_so_far
                 ):
-                    self._write_ended_stream_text_rewrite(responses_so_far, guardrailed_texts[0])
+                    self._write_ended_stream_text_rewrite(
+                        responses_so_far,
+                        guardrailed_texts[0],
+                        guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+                    )
                 if deliver_ended_stream_rewrites:
                     returned_tool_calls: Final = _guardrailed_inputs.get("tool_calls")
                     self._write_ended_stream_tool_call_rewrites(
@@ -1337,9 +1341,11 @@ class AnthropicMessagesHandler(BaseTranslation):
             raise
         unended_texts: Final = _guardrailed_inputs.get("texts")
         if deliver_ended_stream_rewrites and unended_texts and tuple(unended_texts) != (string_so_far,):
-            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
-            raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
+            self._write_ended_stream_text_rewrite(
+                responses_so_far,
+                unended_texts[0],
+                guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+            )
         return responses_so_far
 
     def _prepare_request_data(
@@ -1433,26 +1439,42 @@ class AnthropicMessagesHandler(BaseTranslation):
             inputs["model"] = response_model
         return inputs
 
-    @staticmethod
+    @classmethod
     def _write_ended_stream_text_rewrite(
+        cls,
         responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
         rewritten_text: str,
+        guardrail_name: str,
     ) -> None:
         """Deliver an ended-stream guardrail text rewrite by rewriting the
         buffered chunks in place: the first ``text_delta`` carries the full
         rewritten text and every later one is blanked, leaving the surrounding
-        message and content-block framing untouched."""
+        message and content-block framing untouched. A buffer with no
+        ``text_delta`` has nowhere to carry the rewrite, so the pipeline
+        executor discards it and releases the original chunks."""
+
+        def is_text_delta(event: Mapping[str, object]) -> bool:
+            delta: Final = event.get("delta")
+            return (
+                event.get("type") == "content_block_delta"
+                and isinstance(delta, Mapping)
+                and delta.get("type") == "text_delta"
+            )
+
+        if not any(is_text_delta(event) for item in responses_so_far for event in cls._iter_sse_events(item)):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(
+                guardrail_name, "the buffered stream carries no text_delta event to land the text rewrite on"
+            )
         replacements: Final = chain((rewritten_text,), repeat(""))
 
         def rewrite_text_delta(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
-            delta: Final = event.get("delta")
-            if event.get("type") != "content_block_delta" or not isinstance(delta, Mapping):
-                return None
-            if delta.get("type") != "text_delta":
+            if not is_text_delta(event):
                 return None
             return _SSEFieldRewrite("delta", "text", next(replacements))
 
-        AnthropicMessagesHandler._rewrite_ended_stream_events(responses_so_far, rewrite_text_delta)
+        cls._rewrite_ended_stream_events(responses_so_far, rewrite_text_delta)
 
     @classmethod
     def _write_ended_stream_tool_call_rewrites(
@@ -1485,7 +1507,11 @@ class AnthropicMessagesHandler(BaseTranslation):
         if len(block_indices) != len(post_guardrail_tool_calls):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
+                f"{len(block_indices)} tool_use blocks",
+            )
         rewrites_by_block: Final = MappingProxyType(
             {
                 index: after
@@ -1568,10 +1594,12 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
+        tool_use_fingerprints: Final = self._streamed_tool_use_fingerprints(responses_so_far)
         return StreamingScanKey(
             texts=(self.get_streaming_string_so_far(responses_so_far),),
-            tool_calls=self._streamed_tool_use_fingerprints(responses_so_far) if stream_ended else (),
+            tool_calls=tool_use_fingerprints if stream_ended else (),
             stream_ended=stream_ended,
+            tool_calls_in_flight=bool(tool_use_fingerprints) and not stream_ended,
         )
 
     @classmethod

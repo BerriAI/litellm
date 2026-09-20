@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Switch } from "@/components/ui/switch";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
-import { copyToClipboard } from "@/utils/dataUtils";
+import { copyToClipboard, formatPerSecondCost } from "@/utils/dataUtils";
 
 export const MODEL_ID_COLUMN_ID = "model_info_id";
 export const MODEL_NAME_COLUMN_ID = "model_name";
@@ -23,6 +23,19 @@ export const COSTS_COLUMN_ID = "input_cost";
 export const TEAM_ID_COLUMN_ID = "model_info_team_id";
 export const ACCESS_GROUPS_COLUMN_ID = "model_info_access_groups";
 export const STATUS_COLUMN_ID = "model_info_db_model";
+
+export const MODEL_TABLE_SORT_COLUMN_IDS = [
+  MODEL_NAME_COLUMN_ID,
+  CREATED_BY_COLUMN_ID,
+  UPDATED_AT_COLUMN_ID,
+  COSTS_COLUMN_ID,
+  STATUS_COLUMN_ID,
+] as const;
+
+export type ModelTableSortColumnId = (typeof MODEL_TABLE_SORT_COLUMN_IDS)[number];
+
+export const isModelTableSortColumnId = (columnId: string): columnId is ModelTableSortColumnId =>
+  (MODEL_TABLE_SORT_COLUMN_IDS as readonly string[]).includes(columnId);
 
 const COLUMN_ID_TO_SERVER_SORT_FIELD: Record<string, string> = {
   [COSTS_COLUMN_ID]: "costs",
@@ -181,30 +194,33 @@ function CreatedByCell({ model }: { model: ModelData }) {
   );
 }
 
-function CostsCell({ model }: { model: ModelData }) {
-  const { input_cost: inputCost, output_cost: outputCost } = model;
+function CostRow({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span className="text-[10px] font-semibold tracking-wider text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium tabular-nums text-foreground">{value}</span>
+    </span>
+  );
+}
 
-  if (inputCost == null && outputCost == null) {
+function CostsCell({ model }: { model: ModelData }) {
+  const { input_cost: inputCost, output_cost: outputCost, output_cost_per_second: perSecond } = model;
+  const hasPerSecond = perSecond != null;
+  const showInput = inputCost != null && (!hasPerSecond || Number(inputCost) > 0);
+  const showOutput = outputCost != null && (!hasPerSecond || Number(outputCost) > 0);
+
+  if (!showInput && !showOutput && !hasPerSecond) {
     return <span className="text-sm text-muted-foreground">-</span>;
   }
 
   return (
     <CellTooltip
-      content="Cost per 1M tokens"
+      content={hasPerSecond ? "Cost per 1M tokens; /s is cost per second of output" : "Cost per 1M tokens"}
       trigger={
         <div className="flex flex-col gap-0.5 whitespace-nowrap">
-          {inputCost != null && (
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-[10px] font-semibold tracking-wider text-muted-foreground">IN</span>
-              <span className="text-xs font-medium tabular-nums text-foreground">${inputCost}</span>
-            </span>
-          )}
-          {outputCost != null && (
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-[10px] font-semibold tracking-wider text-muted-foreground">OUT</span>
-              <span className="text-xs font-medium tabular-nums text-foreground">${outputCost}</span>
-            </span>
-          )}
+          {showInput && <CostRow label="IN" value={`$${inputCost}`} />}
+          {showOutput && <CostRow label="OUT" value={`$${outputCost}`} />}
+          {hasPerSecond && <CostRow label="OUT" value={formatPerSecondCost(perSecond)} />}
         </div>
       }
     />

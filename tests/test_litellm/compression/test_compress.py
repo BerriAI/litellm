@@ -56,11 +56,87 @@ def test_no_user_or_assistant_rows():
     assert get_protected_indices([]) == ()
 
 
+def test_rows_before_last_cache_control_breakpoint_are_protected():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "old question"},
+        {
+            "role": "assistant",
+            "content": "old answer",
+            "tool_calls": [{"id": "t1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "t1", "content": "large file body"},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "cached turn", "cache_control": {"type": "ephemeral"}}],
+        },
+        {
+            "role": "assistant",
+            "content": "ack",
+            "tool_calls": [{"id": "t2", "type": "function", "function": {"name": "Bash", "arguments": "{}"}}],
+        },
+        {"role": "tool", "tool_call_id": "t2", "content": "later tool output"},
+        {"role": "user", "content": "live instruction"},
+    ]
+
+    protected = sorted(get_protected_indices(messages))
+
+    assert protected == [0, 1, 2, 3, 4, 5, 7]
+    assert 6 not in protected
+
+
+def test_cache_control_directly_on_message_protects_prefix():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "tool", "tool_call_id": "before", "content": "large file body"},
+        {"role": "user", "content": "old question"},
+        {
+            "role": "tool",
+            "tool_call_id": "marked",
+            "content": "cached tool",
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "tool", "tool_call_id": "after", "content": "later tool output"},
+        {"role": "assistant", "content": "ack"},
+        {"role": "user", "content": "live instruction"},
+    ]
+
+    protected = sorted(get_protected_indices(messages))
+
+    assert 1 in protected
+    assert 3 in protected
+    assert 4 not in protected
+
+
+def test_no_cache_control_leaves_history_compressible():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "tool", "tool_call_id": "t1", "content": "large file body"},
+        {"role": "user", "content": "live instruction"},
+    ]
+
+    assert sorted(get_protected_indices(messages)) == [0, 2, 4]
+
+
+def test_non_mapping_content_parts_are_not_cache_control():
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": ["not", "a", "dict"]},
+        {"role": "assistant", "content": "old answer"},
+        {"role": "tool", "tool_call_id": "t1", "content": "plain string"},
+        {"role": "user", "content": "live instruction"},
+    ]
+
+    protected = sorted(get_protected_indices(messages))
+
+    assert protected == [0, 2, 4]
+    assert 1 not in protected
+    assert 3 not in protected
+
+
 def test_mid_history_cache_control_part_is_protected():
-    # A large cached tool result from a few turns back, not the last user or
-    # last assistant row -- exactly the row a provider prompt-cache pins to
-    # exact bytes. Rewriting it (even leaving the marker on) changes those
-    # bytes and turns the next request's cache read into a cache write.
     messages = [
         {"role": "user", "content": "old question"},
         {"role": "assistant", "content": "old answer"},
@@ -74,9 +150,7 @@ def test_mid_history_cache_control_part_is_protected():
         {"role": "user", "content": "live instruction"},
     ]
 
-    # index 3 = last assistant, index 4 = last user (both protected by role
-    # regardless), index 2 = the cache_control-marked row itself.
-    assert sorted(get_protected_indices(messages)) == [2, 3, 4]
+    assert sorted(get_protected_indices(messages)) == [0, 1, 2, 3, 4]
 
 
 def test_cache_control_directly_on_message_is_protected():
@@ -116,8 +190,6 @@ def test_content_that_is_not_a_list_of_mappings_is_not_treated_as_cache_control(
 
 
 def test_compress_keeps_part_level_cache_control_row_verbatim():
-    # compress() scores text-only copies of the rows, where a part-level marker
-    # is gone; protection has to read the original rows or the pinned row is stubbed.
     stale_log = {"role": "user", "content": [{"type": "text", "text": "stale log line " * 2000}]}
     pinned = {
         "role": "user",
@@ -126,9 +198,9 @@ def test_compress_keeps_part_level_cache_control_row_verbatim():
         ],
     }
     messages = [
-        stale_log,
-        {"role": "assistant", "content": "old answer"},
         pinned,
+        {"role": "assistant", "content": "old answer"},
+        stale_log,
         {"role": "assistant", "content": "ack"},
         {"role": "user", "content": "live instruction"},
     ]
@@ -142,6 +214,6 @@ def test_compress_keeps_part_level_cache_control_row_verbatim():
     )
 
     assert len(result["messages"]) == len(messages)
-    assert result["messages"][2] == pinned
-    assert result["messages"][0] != stale_log
+    assert result["messages"][0] == pinned
+    assert result["messages"][2] != stale_log
     assert len(result["cache"]) >= 1

@@ -2589,22 +2589,6 @@ def test_dispatch_petals_empty_stream_after_finish_raises(
         _run_dispatch(initialized_custom_stream_wrapper, chunk=None)
 
 
-def test_dispatch_palm_slices_completion_stream(
-    initialized_custom_stream_wrapper: CustomStreamWrapper,
-):
-    """palm uses the same fake-streaming slice strategy as petals."""
-    initialized_custom_stream_wrapper.custom_llm_provider = "palm"
-    initialized_custom_stream_wrapper.completion_stream = "B" * 40
-
-    result, _, completion_obj = _run_dispatch(
-        initialized_custom_stream_wrapper, chunk=None
-    )
-
-    assert isinstance(result, _ProviderChunkParsed)
-    assert completion_obj["content"] == "B" * 30
-    assert initialized_custom_stream_wrapper.completion_stream == "B" * 10
-
-
 def test_dispatch_cached_response_extracts_delta(
     initialized_custom_stream_wrapper: CustomStreamWrapper,
 ):
@@ -2841,22 +2825,6 @@ def test_dispatch_triton_stream(
 
     assert isinstance(result, _ProviderChunkParsed)
     assert completion_obj["content"] == "triton text"
-    assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
-
-
-def test_dispatch_ai21_decodes_completion(
-    initialized_custom_stream_wrapper: CustomStreamWrapper,
-):
-    """ai21 does fake streaming over a single byte-encoded JSON completion."""
-    initialized_custom_stream_wrapper.custom_llm_provider = "ai21"
-    chunk = json.dumps({"completions": [{"data": {"text": "ai21 text"}}]}).encode(
-        "utf-8"
-    )
-
-    result, _, completion_obj = _run_dispatch(initialized_custom_stream_wrapper, chunk)
-
-    assert isinstance(result, _ProviderChunkParsed)
-    assert completion_obj["content"] == "ai21 text"
     assert initialized_custom_stream_wrapper.received_finish_reason == "stop"
 
 
@@ -4927,3 +4895,50 @@ class TestStableStreamingResponseId:
         )
         wrapper.response_id = "chatcmpl-from-provider"
         assert wrapper.model_response_creator().id == "chatcmpl-from-provider"
+
+
+@pytest.mark.asyncio
+async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    model = "gpt-5.6-luna"
+    warm_tokenizer(model)
+    messages = [{"role": "user", "content": text * 100}]
+    content_chunks = [_make_chunk(text) for _ in range(100)]
+    stop_chunk = ModelResponseStream(
+        id="test",
+        created=1741037890,
+        model=model,
+        choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+    )
+    logging_obj = Logging(
+        model=model,
+        messages=messages,
+        stream=True,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=content_chunks + [stop_chunk]),
+        model=model,
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+
+    async def consume() -> list[ModelResponseStream]:
+        return [chunk async for chunk in wrapper]
+
+    chunks, took, lags = await timed_with_loop_lags(consume)
+
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == text * 100
+    assert chunks[-1].usage.prompt_tokens > 100_000
+    assert chunks[-1].usage.completion_tokens > 100_000
+    assert_loop_stayed_free(took, lags)

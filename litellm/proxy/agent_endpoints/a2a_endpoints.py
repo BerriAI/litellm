@@ -24,6 +24,7 @@ from pydantic import ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+from litellm.llms.a2a.common_utils import resolve_a2a_hop_auth_header
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.a2a.version_convert import (
     A2AVersion,
@@ -157,19 +158,31 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Mapping[str, 
     )
 
 
+async def _resolve_backend_auth_header(
+    litellm_params: dict[str, object],
+    custom_llm_provider: object,
+) -> Mapping[str, str] | None:
+    if litellm_params.get(DATABRICKS_OAUTH_PARAM):
+        return await resolve_databricks_app_auth_header(litellm_params)
+    return await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider)
+
+
 def _forwarding_headers(
     caller_identity: Mapping[str, str],
     request_data: Mapping[str, object],
     agent_extra_headers: Mapping[str, str] | None,
+    backend_auth_header: Mapping[str, str] | None,
 ) -> dict[str, str] | None:
+    backend_auth: Final = tuple(backend_auth_header.items()) if backend_auth_header else ()
+    minted_names: Final = frozenset(name.lower() for name, _ in backend_auth)
     passthrough: Final = tuple(
         (name, value)
         for name, value in (agent_extra_headers.items() if agent_extra_headers else ())
-        if not name.lower().startswith("x-litellm-")
+        if not name.lower().startswith("x-litellm-") and name.lower() not in minted_names
     )
     trace_id: Final = request_data.get("litellm_trace_id")
     trace: Final = (("X-LiteLLM-Trace-Id", str(trace_id)),) if trace_id else ()
-    merged: Final = dict((*passthrough, *caller_identity.items(), *trace))
+    merged: Final = dict((*passthrough, *caller_identity.items(), *trace, *backend_auth))
     return merged or None
 
 
@@ -795,25 +808,15 @@ async def invoke_agent_a2a(
                     if header_name:
                         dynamic_headers[header_name] = val
 
-        agent_extra_headers = _forwarding_headers(
+        agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,
             request_data=data,
             agent_extra_headers=merge_agent_headers(
                 dynamic_headers=dynamic_headers or None,
                 static_headers=static_headers or None,
             ),
+            backend_auth_header=await _resolve_backend_auth_header(litellm_params, custom_llm_provider),
         )
-
-        # Databricks App endpoints require a short-lived OAuth M2M token rather
-        # than a static bearer. Only agents explicitly configured with a
-        # ``databricks_oauth`` block get one; every other agent is left untouched.
-        if litellm_params.get(DATABRICKS_OAUTH_PARAM):
-            databricks_auth: Final = await resolve_databricks_app_auth_header(litellm_params)
-            if databricks_auth:
-                agent_extra_headers = {
-                    **(agent_extra_headers or {}),
-                    **databricks_auth,
-                }
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model

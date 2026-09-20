@@ -21,6 +21,15 @@ from uvicorn.importer import import_from_string
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
 
+@pytest.fixture(autouse=True)
+def fork_reservation():
+    """Reserving is irreversible: it would forbid native routes in this pytest worker for good"""
+    with patch(  # test-quality-ok: process-global native state, a real reservation would poison every later test in the worker
+        "litellm.rust_bridge.fork_guard.reserve_process_for_forking"
+    ) as reserve:
+        yield reserve
+
+
 @pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
@@ -138,6 +147,35 @@ class TestProxyInitializationHelpers:
                 "localhost", 8000, timeout_worker_healthcheck=15
             )
             assert args["timeout_worker_healthcheck"] == 15
+
+    @staticmethod
+    def _uvicorn_access_info_enabled(args: dict) -> bool:
+        import logging
+
+        loggers = tuple(logging.getLogger(n) for n in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"))
+        saved = tuple((lg, lg.handlers[:], lg.level, lg.propagate) for lg in loggers)
+        try:
+            uvicorn.Config(**args).configure_logging()
+            return logging.getLogger("uvicorn.access").isEnabledFor(logging.INFO)
+        finally:
+            for lg, handlers, level, propagate in saved:
+                lg.handlers[:] = handlers
+                lg.setLevel(level)
+                lg.propagate = propagate
+
+    def test_litellm_log_error_silences_uvicorn_info_lines(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOG", "ERROR")
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_config" not in args
+        assert self._uvicorn_access_info_enabled(args) is False
+
+    def test_unset_litellm_log_keeps_uvicorn_default_info_lines(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_LOG", raising=False)
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_level" not in args
+        assert self._uvicorn_access_info_enabled(args) is True
 
     def test_installed_uvicorn_supports_worker_flags(self):
         params = inspect.signature(uvicorn.Config.__init__).parameters
@@ -578,6 +616,15 @@ class TestProxyInitializationHelpers:
             ), f"exit_code={result.exit_code}, output={result.output}"
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
+
+            result = runner.invoke(
+                run_server, ["--local", "--skip_server_startup", "--telemetry", "False"]
+            )
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            assert "Skipping server startup" in result.output
+            assert "telemetry" not in runner.invoke(run_server, ["--help"]).output
 
             # --- normal startup ---
             mock_uvicorn_run.reset_mock()
@@ -1544,6 +1591,32 @@ class TestProxyInitializationHelpers:
 
         assert captured["options"]["max_requests"] == 1000
         assert captured["options"]["max_requests_jitter"] == 50
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_master_is_reserved_for_forking_before_it_runs(self, fork_reservation):
+        """preload forks workers from the master, so native routes are forbidden there first"""
+        pytest.importorskip("gunicorn")
+        reserved_before_run: list = []
+
+        def capture_run(self):
+            reserved_before_run.append(fork_reservation.call_args)
+
+        with (
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4012,
+                app=MagicMock(),
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+            )
+
+        assert [call.args for call in reserved_before_run] == [("the gunicorn master",)]
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     def test_gunicorn_jitter_without_base_warns(self):
