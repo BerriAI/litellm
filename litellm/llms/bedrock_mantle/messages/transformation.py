@@ -61,6 +61,9 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
     def custom_llm_provider(self) -> str | None:
         return "bedrock_mantle"
 
+    def uses_get_llm_provider_api_base(self) -> bool:
+        return True
+
     def get_complete_url(
         self,
         api_base: str | None,

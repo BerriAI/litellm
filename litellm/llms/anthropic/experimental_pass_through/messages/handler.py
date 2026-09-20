@@ -501,7 +501,6 @@ def anthropic_messages_handler(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
-    resolved_api_base: Final = dynamic_api_base if dynamic_api_base is not None else api_base
 
     # Store agentic loop params in logging object for agentic hooks
     # This provides original request context needed for follow-up calls
@@ -652,6 +651,11 @@ def anthropic_messages_handler(
                 "display": "summarized",
             }
 
+    resolved_api_base: Final = (
+        dynamic_api_base
+        if dynamic_api_base is not None and anthropic_messages_provider_config.uses_get_llm_provider_api_base()
+        else api_base
+    )
     return base_llm_http_handler.anthropic_messages_handler(
         model=model,
         messages=strip_provider_specific_fields_from_anthropic_messages(messages),

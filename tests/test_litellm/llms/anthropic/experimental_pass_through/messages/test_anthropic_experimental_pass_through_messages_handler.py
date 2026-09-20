@@ -1438,3 +1438,45 @@ async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
         )
 
     assert "Traceback" not in str(excinfo.value)
+
+
+def _recording_client(seen_urls: list[str]) -> AsyncHTTPHandler:
+    def record_and_answer(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "deepseek-chat",
+                "content": [{"type": "text", "text": "pong"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+        )
+
+    upstream = AsyncHTTPHandler()
+    upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(record_and_answer))
+    return upstream
+
+
+@pytest.mark.asyncio
+async def test_provider_messages_api_base_env_is_not_shadowed_by_the_chat_default(monkeypatch):
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    monkeypatch.delenv("DEEPSEEK_API_BASE", raising=False)
+    monkeypatch.setenv("DEEPSEEK_ANTHROPIC_API_BASE", "https://deepseek.internal.example/anthropic")
+    seen_urls: list[str] = []
+
+    await handler.anthropic_messages(
+        max_tokens=16,
+        messages=[{"role": "user", "content": "ping"}],
+        model="deepseek/deepseek-chat",
+        api_key="sk-test",
+        client=_recording_client(seen_urls),
+    )
+
+    assert seen_urls == ["https://deepseek.internal.example/anthropic/v1/messages"]
+
