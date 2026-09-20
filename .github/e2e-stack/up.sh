@@ -143,7 +143,7 @@ env "${SERVER_ENV[@]}" uv run --no-sync python migrations/run.py >"${LOGS_DIR}/m
 
 start_server() {
   local name="$1"; shift
-  env "${SERVER_ENV[@]}" "$@" >"${LOGS_DIR}/${name}.log" 2>&1 &
+  env -u AWS_ROLE_NAME "${SERVER_ENV[@]}" "$@" >"${LOGS_DIR}/${name}.log" 2>&1 &
   echo $! > "${PIDS_DIR}/${name}.pid"
 }
 
