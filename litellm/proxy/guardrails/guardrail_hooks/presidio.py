@@ -700,7 +700,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if not analyze_results:
             return ()
 
-        sorted_by_span = sorted(
+        sorted_by_span: Final = sorted(
             analyze_results,
             key=lambda x: (
                 int(x.get("start") or 0),
@@ -709,28 +709,28 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             ),
         )
 
-        merged: list[PresidioAnalyzeResponseItem] = []  # mutable-ok: required for sequential boundary merge
+        merged: Final[list[PresidioAnalyzeResponseItem]] = []  # mutable-ok: required for sequential boundary merge
         for item in sorted_by_span:
-            s = int(item.get("start") or 0)
-            e = int(item.get("end") or 0)
+            s: Final = int(item.get("start") or 0)
+            e: Final = int(item.get("end") or 0)
             if s >= e:
                 continue
             if not merged:
-                merged.append(dict(item))  # type: ignore[arg-type] # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # shallow copy
+                merged.append(dict(item))  # mutable-ok: shallow copy required for mutable boundary merge # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # shallow copy
                 continue
 
-            prev = merged[-1]
-            prev_e = int(prev.get("end") or 0)
+            prev: Final = merged[-1]
+            prev_e: Final = int(prev.get("end") or 0)
 
             if s < prev_e:
-                curr_score = float(item.get("score") or 0.0)
-                prev_score = float(prev.get("score") or 0.0)
+                curr_score: Final = float(item.get("score") or 0.0)
+                prev_score: Final = float(prev.get("score") or 0.0)
                 prev["end"] = max(prev_e, e)
                 if curr_score > prev_score:
                     prev["entity_type"] = item.get("entity_type")
                     prev["score"] = curr_score
             else:
-                merged.append(dict(item))  # type: ignore[arg-type] # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # shallow copy
+                merged.append(dict(item))  # mutable-ok: shallow copy required for mutable boundary merge # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # shallow copy
 
         return tuple(merged)
 
@@ -759,7 +759,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens: Final = request_data["metadata"]["pii_tokens"]
 
-        valid_analyze_results = self._resolve_overlapping_spans(analyze_results)
+        valid_analyze_results: Final = self._resolve_overlapping_spans(analyze_results)
 
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
