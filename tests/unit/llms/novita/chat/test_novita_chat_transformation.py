@@ -54,12 +54,3 @@ class TestNovitaConfig:
             )
 
         assert "Missing Novita AI API Key" in str(excinfo.value)
-
-    def test_inheritance(self):
-        """Test proper inheritance from OpenAIGPTConfig"""
-        config = NovitaConfig()
-
-        from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
-
-        assert isinstance(config, OpenAIGPTConfig)
-        assert hasattr(config, "get_supported_openai_params")

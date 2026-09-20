@@ -2,14 +2,9 @@
 Test MiniMax OpenAI-compatible API support
 """
 
-import os
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-
 import litellm
-from litellm import completion
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
 
 
@@ -105,97 +100,6 @@ def test_minimax_provider_config_manager():
 
     assert config is not None
     assert isinstance(config, MinimaxChatConfig)
-
-
-@pytest.mark.skip(reason="Requires actual MiniMax API key")
-def test_minimax_chat_completion_basic():
-    """Test basic chat completion with MiniMax OpenAI-compatible API"""
-    response = completion(
-        model="minimax/MiniMax-M2.1",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello, how are you?"},
-        ],
-        api_key=os.getenv("MINIMAX_API_KEY"),
-        api_base="https://api.minimax.io/v1",
-    )
-
-    assert response is not None
-    assert hasattr(response, "choices")
-    assert len(response.choices) > 0
-
-
-@pytest.mark.skip(reason="Requires actual MiniMax API key")
-def test_minimax_chat_completion_with_reasoning_split():
-    """Test completion with reasoning_split parameter (MiniMax M2.1 feature)"""
-    response = completion(
-        model="minimax/MiniMax-M2.1",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Solve this problem: 2+2=?"},
-        ],
-        api_key=os.getenv("MINIMAX_API_KEY"),
-        api_base="https://api.minimax.io/v1",
-        extra_body={"reasoning_split": True},
-    )
-
-    assert response is not None
-    # Check if reasoning_details is present in response
-    if hasattr(response.choices[0].message, "reasoning_details"):
-        assert response.choices[0].message.reasoning_details is not None
-
-
-@pytest.mark.skip(reason="Requires actual MiniMax API key")
-def test_minimax_chat_completion_with_tools():
-    """Test completion with tool calling (function calling)"""
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get the current weather in a location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        }
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-
-    response = completion(
-        model="minimax/MiniMax-M2.1",
-        messages=[{"role": "user", "content": "What's the weather in San Francisco?"}],
-        tools=tools,
-        api_key=os.getenv("MINIMAX_API_KEY"),
-        api_base="https://api.minimax.io/v1",
-    )
-
-    assert response is not None
-    assert hasattr(response, "choices")
-
-
-@pytest.mark.skip(reason="Requires actual MiniMax API key")
-def test_minimax_chat_completion_streaming():
-    """Test streaming completion"""
-    response = completion(
-        model="minimax/MiniMax-M2.1",
-        messages=[{"role": "user", "content": "Count to 5"}],
-        stream=True,
-        api_key=os.getenv("MINIMAX_API_KEY"),
-        api_base="https://api.minimax.io/v1",
-    )
-
-    chunks = []
-    for chunk in response:
-        chunks.append(chunk)
-
-    assert len(chunks) > 0
 
 
 if __name__ == "__main__":
