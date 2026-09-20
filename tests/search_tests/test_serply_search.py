@@ -39,7 +39,7 @@ MOCK_SERPLY_RESPONSE = {
 }
 
 
-def _mock_response():
+def _mock_response() -> Mock:
     response = Mock()
     response.status_code = 200
     response.headers = {}
@@ -48,7 +48,7 @@ def _mock_response():
     return response
 
 
-def _query_params(mock_get) -> dict:
+def _query_params(mock_get: Mock) -> dict[str, list[str]]:
     return parse_qs(urlsplit(mock_get.call_args.kwargs["url"]).query)
 
 
@@ -92,7 +92,6 @@ class TestSerplySearchTransformation:
         assert call_kwargs["headers"]["X-Api-Key"] == "test-api-key"
         assert call_kwargs["headers"]["User-Agent"] == "litellm"
 
-        # Serply is a GET API, so the request is carried entirely by the URL.
         assert urlsplit(call_kwargs["url"])._replace(query="").geturl() == "https://api.serply.io/v1/search"
         params = _query_params(mock_get)
         assert params["q"] == ["(serply search api) (site:serply.io) -site:spam.example"]
@@ -105,7 +104,6 @@ class TestSerplySearchTransformation:
         assert response.results[0].url == "https://serply.io/"
         assert response.results[0].snippet == "Google SERP results as JSON"
         assert response.results[0].date == "Aug 11, 2026"
-        # Second result carries no published_time, so there is no date to report.
         assert response.results[1].date is None
 
     def test_provider_specific_params_survive_to_the_wire(self):

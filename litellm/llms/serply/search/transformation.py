@@ -26,9 +26,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _SERPLY_DOCS_URL: Final = "https://serply.io/docs"
-
-# transform_search_request hands the query params to get_complete_url through the
-# request body, because Serply is a GET API and the handler only sends the URL.
 _PARAMS_KEY: Final = "_serply_params"
 
 
@@ -120,7 +117,6 @@ class SerplySearchConfig(BaseSearchConfig):
             **headers,
             "X-Api-Key": resolved_api_key,
             "Content-Type": "application/json",
-            # Serply's client-attribution header: names the calling software, nothing else.
             "User-Agent": "litellm",
         }
 
@@ -172,8 +168,6 @@ class SerplySearchConfig(BaseSearchConfig):
         unified_params: Final = self.get_supported_perplexity_optional_params()
         country: Final = optional_params.get("country")
 
-        # Spread after the derived values so an explicitly supplied `q`, `num` or `gl` wins
-        # over anything read out of the unified params.
         passthrough: Final = MappingProxyType(
             {param: value for param, value in optional_params.items() if param not in unified_params}
         )

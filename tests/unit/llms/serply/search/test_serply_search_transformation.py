@@ -11,7 +11,7 @@ def _config() -> SerplySearchConfig:
     return SerplySearchConfig()
 
 
-def _resp(payload, status_code: int = 200):
+def _resp(payload: object, status_code: int = 200) -> Mock:
     r = Mock()
     r.status_code = status_code
     r.headers = {}
@@ -19,8 +19,8 @@ def _resp(payload, status_code: int = 200):
     return r
 
 
-def _result(**overrides):
-    base = {
+def _result(**overrides: object) -> dict[str, object]:
+    base: dict[str, object] = {
         "title": "Test Title",
         "link": "https://example.com",
         "description": "Test description",
@@ -32,7 +32,7 @@ def _result(**overrides):
     return {**base, **overrides}
 
 
-def _params(query, optional_params=None):
+def _params(query: str | list[str], optional_params: dict[str, object] | None = None) -> dict[str, list[str]]:
     """The query string transform_search_request + get_complete_url actually produce."""
     config = _config()
     data = config.transform_search_request(query, optional_params or {})
@@ -108,7 +108,7 @@ def test_get_complete_url_encodes_the_transformed_params():
 
 
 @pytest.mark.parametrize("data", [None, {}, {"q": "not-wrapped"}, [{"_serply_params": {"q": "x"}}]])
-def test_get_complete_url_without_usable_params_returns_a_bare_endpoint(data):
+def test_get_complete_url_without_usable_params_returns_a_bare_endpoint(data: object):
     """A malformed body must not produce a URL with a stray query string."""
     assert _config().get_complete_url(None, {}, data=data) == "https://api.serply.io/v1/search"
 
@@ -171,7 +171,7 @@ def test_transform_search_request_mixes_include_and_exclude_domains():
 
 
 @pytest.mark.parametrize("domains", ["arxiv.org", [], ["-"], 7, None])
-def test_transform_search_request_leaves_query_alone_for_unusable_domain_filter(domains):
+def test_transform_search_request_leaves_query_alone_for_unusable_domain_filter(domains: object):
     """The filter only ever narrows an otherwise valid search, so it must not raise."""
     assert _params("q", {"search_domain_filter": domains})["q"] == ["q"]
 
@@ -194,7 +194,7 @@ def test_transform_search_response_reads_published_time(published_time: str):
 
 
 @pytest.mark.parametrize("metadata", [{}, "not-a-dict", None])
-def test_transform_search_response_date_is_none_without_published_time(metadata):
+def test_transform_search_response_date_is_none_without_published_time(metadata: object):
     resp = _config().transform_search_response(_resp({"results": [_result(metadata=metadata)]}), logging_obj=Mock())
     assert resp.results[0].date is None
 
