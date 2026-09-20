@@ -7841,7 +7841,7 @@ def handle_exception_on_proxy(e: Exception, litellm_call_id: str | None = None) 
     elif isinstance(e, ProxyException):
         return with_litellm_call_id(e, litellm_call_id)
     _status_code: Final = getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR)
-    if _status_code == status.HTTP_500_INTERNAL_SERVER_ERROR and bug_report_enabled():
+    if _status_code == status.HTTP_500_INTERNAL_SERVER_ERROR and bug_report_enabled() and isinstance(e, BaseException):
         verbose_proxy_logger.error(bug_report_notice(build_bug_report(e, surface="proxy")))
     return ProxyException(
         message=str(e),
