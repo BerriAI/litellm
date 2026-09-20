@@ -200,7 +200,10 @@ class TestTextFormatConversion:
             ), "schema should have confidence property"
 
             # Validate other request parameters
-            assert captured_request["input"] == "What is the capital of France?"
+            # string input is normalized to the canonical list before dispatch
+            assert captured_request["input"] == [
+                {"role": "user", "content": "What is the capital of France?"}
+            ]
 
             # Validate the response
             print("Response:", json.dumps(response, indent=4, default=str))
