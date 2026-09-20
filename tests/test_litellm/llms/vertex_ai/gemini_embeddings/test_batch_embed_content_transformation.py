@@ -299,10 +299,17 @@ class TestProcessResponse:
             )
 
 
+@pytest.mark.usefixtures("local_model_cost_map")
 class TestProcessEmbedContentResponseUsage:
     """Gemini Embedding 2 embedContent usageMetadata must drive spend.
 
     Regression for multimodal calls recording prompt_tokens=0 / spend=$0.
+
+    The cost assertions pin per-image and per-second rates from this branch's
+    model_prices_and_context_window.json; without local_model_cost_map, tests
+    resolve against the network-fetched main copy, whose gemini-embedding-2
+    entry bills these modalities per-token instead and drops these lines to $0
+    or the per-token audio rate.
     """
 
     MODEL = "gemini-embedding-2"
