@@ -18,7 +18,7 @@ from typing import Final, Literal, TypeAlias
 
 from litellm.callbacks_v1.builtin import anthropic_cache_control, generic_api, openmeter
 
-Kind: TypeAlias = Literal["sink", "interceptor"]
+Kind: TypeAlias = Literal["sink", "exporter", "interceptor"]
 GapKind: TypeAlias = Literal["fact", "event", "capability"]
 
 # exploring: the port exists and its payload tests pass.

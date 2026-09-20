@@ -29,7 +29,7 @@ from litellm.callbacks_v1 import (
     WirePatchV1,
 )
 from litellm.callbacks_v1.builtin.outbox import Outbox
-from litellm.callbacks_v1.builtin.port import CallRecord, Delivery, InterceptorPort, SinkPort
+from litellm.callbacks_v1.builtin.port import CallRecord, Delivery, ExporterPort, InterceptorPort, SinkPort
 
 R = TypeVar("R")  # rebind-ok: a TypeVar must bind to a bare name to be recognised as one
 
@@ -135,6 +135,34 @@ class Sink(Observer, Generic[R]):
         record: Final = self._port.payload(call, self._clock())
         if record is not None:
             self.outbox.put(record)
+
+    def open_calls(self) -> int:
+        return self._calls.open_calls()
+
+
+class Exporter(Observer):
+    """The subscriber of every `ExporterPort`: the join and the outbox, and nothing else.
+
+    A `Sink` hands its port's `Delivery` values to a `Transport`; an exporter's port sends
+    them itself, on that same outbox thread and under the same batching. Everything else --
+    when the handler runs, what it is given, that it never blocks the call -- is what a sink
+    gets, which is the point: the two shapes differ in what a port returns, not in how the
+    host runs it.
+    """
+
+    def __init__(self, name: str, port: ExporterPort) -> None:
+        self.name = name
+        self.events = JOINED_EVENTS
+        self._port: Final = port
+        self._calls: Final = CallJoin()
+        self.outbox: Final[Outbox[CallRecord]] = Outbox(
+            name, port.export, batch_size=port.batching.size, flush_interval=port.batching.interval
+        )
+
+    def on_event(self, event: EnvelopeV1) -> None:
+        call: Final = self._calls.accept(event)
+        if call is not None:
+            self.outbox.put(call)
 
     def open_calls(self) -> int:
         return self._calls.open_calls()

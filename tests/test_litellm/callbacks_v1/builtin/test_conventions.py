@@ -14,11 +14,18 @@ import pytest
 from litellm import callbacks_v1
 from litellm.callbacks_v1.builtin import port as port_vocabulary
 from litellm.callbacks_v1.builtin.manifest import PORTS, Entry, Gap, ledger
-from litellm.callbacks_v1.builtin.port import InterceptorPort, SinkPort
-from litellm.callbacks_v1.builtin.runtime import Sink
+from litellm.callbacks_v1.builtin.port import ExporterPort, InterceptorPort, SinkPort
+from litellm.callbacks_v1.builtin.runtime import Exporter, Sink
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.custom_logger import CustomLogger
 from tests.test_litellm.callbacks_v1.builtin.support import EXAMPLES, SUBSCRIBERS, FakeTransport, golden_call
+
+# The two kinds that observe calls. They differ in what a port returns -- `Delivery` values
+# for the host to send, or nothing because the port sent them itself -- and in nothing else:
+# same events, same join, same outbox, same legacy hooks their twins may override.
+OBSERVING: Final = frozenset({"sink", "exporter"})
+PROTOCOLS: Final = {"sink": SinkPort, "exporter": ExporterPort, "interceptor": InterceptorPort}
+SUBSCRIBER_CLASSES: Final = {"sink": Sink, "exporter": Exporter}
 
 # The legacy hooks a v1 sink can stand in for. A legacy twin overriding any other
 # CustomLogger hook does something the v1 contract has no place for.
@@ -39,10 +46,12 @@ PUBLIC_HOOKS: Final = frozenset(
     if callable(value) and (name.startswith(("log_", "async_")) or name.endswith("_hook"))
 )
 
-# What a port may import. A port is values and pure methods, the shape a sandboxed custom
-# callback is confined to; anything that can reach a socket, a thread, the environment or the
-# rest of litellm belongs to `runtime.py`, which a port may not import at all. A new pure
-# stdlib module is a reviewed line here.
+# What a port of the pure shapes may import. `SinkPort` and `InterceptorPort` hand values
+# back and let the host act, so their modules need nothing that can act, and holding them to
+# that is what keeps them governable at the egress and portable out of Python. An
+# `ExporterPort` reaches its vendor itself and needs its client, so this list is not its rule.
+# No port may import `runtime.py`, whatever its shape: wiring is the host's.
+# A new pure stdlib module is a reviewed line here.
 PURE_MODULES: Final = frozenset(
     {
         "base64",
@@ -101,10 +110,16 @@ def _impure_imports(source: str) -> tuple[str, ...]:
     return (*(name for name in plain if name not in PURE_MODULES), *froms)
 
 
-def test_a_port_imports_nothing_that_can_act(entry: Entry) -> None:
-    for module in (entry.module, port_vocabulary):
-        source = Path(str(module.__file__)).read_text()  # rebind-ok: one source per checked module
-        assert _impure_imports(source) == (), f"{module.__name__} imports outside the pure allow-list"
+def test_a_port_imports_nothing_it_is_not_allowed_to_act_with(entry: Entry) -> None:
+    """`port.py` is every port's one import and is held to the list whatever they are. A port
+    of a pure shape is held to it too; an exporter needs its vendor's client, so it is held
+    only to the rule every shape shares -- wiring is the host's and no port reaches for it."""
+    assert _impure_imports(Path(str(port_vocabulary.__file__)).read_text()) == ()
+
+    source: Final = Path(str(entry.module.__file__)).read_text()
+    assert "litellm.callbacks_v1.builtin.runtime" not in source, f"{entry.name} reaches for the host's wiring"
+    if entry.kind != "exporter":
+        assert _impure_imports(source) == (), f"{entry.module.__name__} imports outside the pure allow-list"
 
 
 def test_a_port_is_a_frozen_class_over_a_frozen_config(entry: Entry) -> None:
@@ -119,9 +134,9 @@ def test_a_port_declares_the_protocol_of_its_kind_and_nothing_of_the_contract(en
     """A port names its protocol as a base, so the type checker holds it to the shape at the
     class. This is the same claim at runtime, for a port whose module a type checker never saw."""
     declared: Final = type(EXAMPLES[entry.name]).__mro__
-    expected: Final = SinkPort if entry.kind == "sink" else InterceptorPort
+    expected: Final = PROTOCOLS[entry.kind]
     assert expected in declared, f"{entry.name} is a {entry.kind}; it should declare {expected.__name__} as its base"
-    assert (SinkPort in declared) == (entry.kind == "sink")
+    assert {kind for kind, protocol in PROTOCOLS.items() if protocol in declared} == {entry.kind}
 
     example: Final = EXAMPLES[entry.name]
     carried: Final = {member for member in NOT_A_PORTS if hasattr(example, member)}
@@ -135,29 +150,32 @@ def test_a_port_registers_under_its_manifest_name_with_the_handlers_of_its_kind(
     assert subscriber.name == entry.name
     observes: Final = subscriber.on_event is not None or subscriber.async_on_event is not None
     intercepts: Final = subscriber.before_send is not None or subscriber.async_before_send is not None
-    assert (observes, intercepts) == ((True, False) if entry.kind == "sink" else (False, True))
-    # A sink's handler only enqueues, so the sync one serves async calls too.
+    assert (observes, intercepts) == ((True, False) if entry.kind in OBSERVING else (False, True))
+    # An observing handler only joins and enqueues, so the sync one serves async calls too.
     assert subscriber.async_on_event is None
 
 
-def test_a_sink_handler_does_no_io_and_keeps_no_finished_call(entry: Entry) -> None:
-    if entry.kind != "sink":
+def test_an_observing_handler_does_no_io_and_keeps_no_finished_call(entry: Entry) -> None:
+    """Whichever shape the port declares, its handler joins and enqueues and the outbox does
+    the rest; only where the vendor is reached from differs, and never that it is off the call."""
+    if entry.kind not in OBSERVING:
         pytest.skip("interceptors have no outbox")
     transport: Final = FakeTransport()
     callback: Final = SUBSCRIBERS[entry.name](transport)
-    assert isinstance(callback, Sink), "a sink port supplies pure methods; `runtime.Sink` is its only subscriber"
+    expected: Final = SUBSCRIBER_CLASSES[entry.kind]
+    assert isinstance(callback, expected), f"a {entry.kind} port's only subscriber is `runtime.{expected.__name__}`"
 
     for envelope in golden_call("call.succeeded", user_api_key_user_id="user-1"):
         callback.on_event(envelope)
 
     assert callback.outbox.flush()
-    assert len(transport.deliveries) == 1
+    assert len(transport.deliveries) == (1 if entry.kind == "sink" else 0)
     assert callback.open_calls() == 0
 
 
-def test_the_legacy_twin_resolves_and_a_sink_twin_is_only_a_sink(entry: Entry) -> None:
+def test_the_legacy_twin_resolves_and_an_observing_twin_only_observes(entry: Entry) -> None:
     legacy: Final = _legacy(entry)
-    if entry.kind != "sink":
+    if entry.kind not in OBSERVING:
         return
     overridden: Final = {
         name
