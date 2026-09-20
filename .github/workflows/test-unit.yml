@@ -51,7 +51,7 @@ jobs:
         include:
           - shard: mcp-integration
             artifact-name: mcp-integration
-            test-path: "tests/mcp_tests"
+            test-path: "tests/unit"
             workers: 2
             reruns: 0
             timeout-minutes: 20
