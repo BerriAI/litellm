@@ -81,9 +81,12 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
                 stored = provider_fields.get("reasoning_content")
                 if stored:
                     patched["reasoning_content"] = stored
-                    cleaned = dict(provider_fields)
+                    cleaned: Final = dict(provider_fields)
                     cleaned.pop("reasoning_content", None)
-                    patched["provider_specific_fields"] = cleaned
+                    if cleaned:
+                        patched["provider_specific_fields"] = cleaned
+                    else:
+                        patched.pop("provider_specific_fields", None)
                 else:
                     litellm.verbose_logger.warning(
                         "DeepSeek thinking mode: assistant message is missing "
@@ -211,18 +214,34 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         }
         return cast(AllMessageValues, forwarded)  # cast-ok: TypedDict spread narrows to dict
 
+    @staticmethod
+    def _is_default_reasoning_model(model: str) -> bool:
+        try:
+            model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="deepseek")
+            if model_info.get("thinking_always_on") is True:
+                return True
+        except Exception as err:  # noqa: BLE001  # unmapped or dynamic model names fall back to marker checks
+            litellm.verbose_logger.debug("Could not check thinking_always_on in model info for %s: %s", model, err)
+        normalized: Final = model.lower().split("/")[-1]
+        return any(marker in normalized for marker in ("reasoner", "r1", "v4-pro", "v4-flash"))
+
     def _thinking_mode_active(self, model: str, optional_params: dict) -> bool:
-        """
-        Returns True only when thinking mode is actually active for this request:
-          - model supports reasoning (capability check)
-          - user explicitly passed thinking={"type": "enabled"} (opt-in check)
-        """
+        if not supports_reasoning(model=model, custom_llm_provider="deepseek"):
+            return False
+
         thinking: Final = optional_params.get("thinking")
-        return (
-            supports_reasoning(model=model, custom_llm_provider="deepseek")
-            and isinstance(thinking, dict)
-            and thinking.get("type") == "enabled"
-        )
+        if isinstance(thinking, dict):
+            thinking_type: Final = thinking.get("type")
+            if thinking_type == "enabled":
+                return True
+            if thinking_type == "disabled":
+                return False
+            return False
+
+        if thinking is not None:
+            return False
+
+        return self._is_default_reasoning_model(model)
 
     @staticmethod
     def _drop_unsupported_tools(optional_params: dict) -> dict:
