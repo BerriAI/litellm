@@ -24,7 +24,7 @@ from .streaming_iterator import A2AModelResponseIterator
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
 
 _REGISTRY_PARAMS_KEPT_OUT_OF_OPTIONAL_PARAMS: Final = (

@@ -22,7 +22,7 @@ from litellm.types.llms.openai import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
     from litellm.types.utils import ModelResponse
 
 from ..base_utils import (

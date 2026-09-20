@@ -28,6 +28,6 @@ def o200k_base_rank_file() -> str:
     return Path(filename, O200K_BASE_RANK_FILE).read_text(encoding="ascii")
 
 
-from litellm.rust_bridge._native import Tokenizer
+from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
 encoding: Final = Tokenizer.from_tiktoken("cl100k_base")

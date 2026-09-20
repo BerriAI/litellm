@@ -10,8 +10,8 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
     from litellm import LiteLLMLoggingObj, ModelResponse
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
     from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
-    from litellm.rust_bridge._native import Tokenizer
     from litellm.types.llms.openai import AllMessageValues
 
 

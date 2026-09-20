@@ -81,7 +81,7 @@ from .llms.openai import (
 from .rerank import RerankResponse as RerankResponse
 
 if TYPE_CHECKING:
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import Tokenizer
 
     from .vector_stores import VectorStoreSearchResponse
 else:

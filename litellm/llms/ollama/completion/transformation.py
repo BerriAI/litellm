@@ -36,7 +36,7 @@ from ..common_utils import OllamaError, OllamaModelInfo, _convert_image
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -331,7 +331,7 @@ class OllamaConfig(BaseConfig):
         tokenizer: Final = encoding if encoding is not None else litellm.encoding
         prompt_tokens: Final = response_json.get(
             "prompt_eval_count",
-            len(tokenizer.encode(_prompt)),
+            len(tokenizer.encode(_prompt, disallowed_special=())),
         )
         completion_tokens: Final = response_json.get(
             "eval_count", len(response_json.get("message", dict()).get("content", ""))

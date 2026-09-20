@@ -20,7 +20,7 @@ from ..common_utils import ReplicateError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:

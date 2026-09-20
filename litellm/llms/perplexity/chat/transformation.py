@@ -15,7 +15,7 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionAnnotation
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 
 if TYPE_CHECKING:
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
 
 class PerplexityChatConfig(OpenAIGPTConfig):

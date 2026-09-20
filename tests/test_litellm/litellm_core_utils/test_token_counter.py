@@ -181,14 +181,14 @@ class _SlowEncoder:
         self.in_flight = 0
         self.peak_in_flight = 0
 
-    def count(self, text: str) -> int:
+    def encode_batch_fast(self, texts: list[str]) -> list[list[int]]:
         with self._lock:
             self.in_flight += 1
             self.peak_in_flight = max(self.peak_in_flight, self.in_flight)
         time.sleep(0.1)
         with self._lock:
             self.in_flight -= 1
-        return len(text)
+        return [[0] * len(text) for text in texts]
 
 
 @pytest.mark.asyncio

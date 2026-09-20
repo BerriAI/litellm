@@ -6,6 +6,7 @@ mod marshal;
 mod python_settings;
 mod routes;
 mod token_counter;
+mod tokenizer;
 
 #[pymodule(gil_used = true)]
 mod _native {
@@ -29,7 +30,12 @@ mod _native {
     #[pymodule_export]
     use crate::routes::responses::ResponsesWebSocketConnection;
     #[pymodule_export]
-    use crate::token_counter::{TokenCounter, Tokenizer, tiktoken_encoding_for_model};
+    use crate::token_counter::TokenCounter;
+    #[cfg(feature = "huggingface")]
+    #[pymodule_export]
+    use crate::tokenizer::HuggingFaceEncoding;
+    #[pymodule_export]
+    use crate::tokenizer::{Tokenizer, tiktoken_encoding_for_model};
     #[pymodule_export]
     use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
 }
@@ -71,6 +77,8 @@ mod tests {
                 "process_state_started",
                 "reserve_process_for_forking",
             ];
+            #[cfg(feature = "huggingface")]
+            expected.push("HuggingFaceEncoding");
             expected.sort_unstable();
 
             let mut public_names: Vec<String> = native_module(py)

@@ -46,7 +46,7 @@ from ..common_utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
 
 def _map_reasoning_effort(value: object) -> object:

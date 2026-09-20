@@ -196,11 +196,11 @@ if TYPE_CHECKING:
 
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
     from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-    from litellm.rust_bridge._native import Tokenizer
     from litellm.types.llms.openai_evals import (
         CancelEvalResponse,
         CancelRunResponse,

@@ -2,6 +2,8 @@
 
 mod error;
 
+use std::collections::HashSet;
+
 pub use error::UnsupportedTokenizer;
 
 pub struct TiktokenTokenizer {
@@ -35,8 +37,33 @@ impl TiktokenTokenizer {
         self.encoder.encode_ordinary(text)
     }
 
+    pub fn encode_special(&self, text: &str, allowed: &[String]) -> Result<Vec<u32>, String> {
+        let allowed = allowed.iter().map(String::as_str).collect();
+        self.encoder
+            .encode(text, &allowed)
+            .map(|(ids, _)| ids)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn special_tokens(&self) -> HashSet<String> {
+        self.encoder
+            .special_tokens()
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    pub fn decode_bytes(&self, ids: &[u32]) -> Result<Vec<u8>, String> {
+        self.encoder
+            .decode_bytes(ids)
+            .map_err(|error| error.to_string())
+    }
+
     pub fn decode(&self, ids: &[u32]) -> Result<String, String> {
-        self.encoder.decode(ids).map_err(|error| error.to_string())
+        self.encoder
+            .decode_bytes(ids)
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .map_err(|error| error.to_string())
     }
 
     pub fn name(&self) -> &str {
@@ -126,6 +153,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn decoding_token_prefixes_replaces_incomplete_utf8() {
+        let tokenizer = TiktokenTokenizer::from_name("cl100k_base").unwrap();
+        let reference = tiktoken_rs::cl100k_base_singleton();
+        let ids = tokenizer.encode("🙂漢字");
+        for end in 1..=ids.len() {
+            let bytes = reference.decode_bytes(&ids[..end]).unwrap();
+            assert_eq!(
+                tokenizer.decode(&ids[..end]).unwrap(),
+                String::from_utf8_lossy(&bytes),
+            );
+        }
+        assert!(tokenizer.decode(&[u32::MAX]).is_err());
     }
 
     #[test]

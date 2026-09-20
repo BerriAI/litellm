@@ -25,7 +25,7 @@ from litellm.types.utils import (
 from .amazon_llama_transformation import AmazonLlamaConfig
 
 if TYPE_CHECKING:
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
 
 class AmazonDeepSeekR1Config(AmazonLlamaConfig):

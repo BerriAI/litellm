@@ -61,8 +61,8 @@ from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
     from litellm.llms.base_llm.base_utils import BaseTokenCounter
-    from litellm.rust_bridge._native import Tokenizer
     from litellm.types.llms.openai import ChatCompletionToolParam
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj

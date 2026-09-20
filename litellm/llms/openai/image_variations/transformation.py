@@ -12,7 +12,7 @@ from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ..common_utils import OpenAIError
 
 if TYPE_CHECKING:
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
 
 class OpenAIImageVariationConfig(BaseImageVariationConfig):

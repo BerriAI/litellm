@@ -99,6 +99,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
@@ -113,7 +114,6 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_model_route,
 )
 from litellm.realtime_api.main import _realtime_health_check
-from litellm.rust_bridge._native import Tokenizer
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
     _CompletionDispatchContext,

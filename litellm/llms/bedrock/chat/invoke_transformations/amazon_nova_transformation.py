@@ -28,7 +28,7 @@ from ..converse_transformation import AmazonConverseConfig
 from .base_invoke_transformation import AmazonInvokeConfig
 
 if TYPE_CHECKING:
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
 _CachePointCarrier = TypeVar("_CachePointCarrier", SystemContentBlock, ContentBlock)
 _INJECTION_POINTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])

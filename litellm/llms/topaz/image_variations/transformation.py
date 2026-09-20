@@ -23,7 +23,7 @@ from ...base_llm.image_variations.transformation import BaseImageVariationConfig
 from ..common_utils import TopazException, TopazModelInfo
 
 if TYPE_CHECKING:
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
 
 class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):

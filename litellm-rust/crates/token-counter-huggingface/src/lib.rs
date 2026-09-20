@@ -5,6 +5,7 @@ mod error;
 use std::collections::HashSet;
 
 pub use error::Error;
+pub use tokenizers::{EncodeInput, Encoding, InputSequence};
 
 pub struct HuggingFaceTokenizer {
     tokenizer: Box<tokenizers::Tokenizer>,
@@ -16,23 +17,6 @@ impl HuggingFaceTokenizer {
         json.parse::<tokenizers::Tokenizer>()
             .map(Self::new)
             .map_err(Error::Load)
-    }
-
-    pub fn from_pretrained(
-        identifier: &str,
-        revision: &str,
-        token: Option<&str>,
-    ) -> Result<Self, Error> {
-        tokenizers::Tokenizer::from_pretrained(
-            identifier,
-            Some(tokenizers::FromPretrainedParameters {
-                revision: revision.to_owned(),
-                token: token.map(str::to_owned),
-                ..Default::default()
-            }),
-        )
-        .map(Self::new)
-        .map_err(Error::Download)
     }
 
     fn new(tokenizer: tokenizers::Tokenizer) -> Self {
@@ -59,6 +43,44 @@ impl HuggingFaceTokenizer {
             .encode_fast(text, true)
             .map(|encoding| encoding.get_ids().to_vec())
             .map_err(Error::Encode)
+    }
+
+    pub fn encode_result<'a>(
+        &self,
+        input: EncodeInput<'a>,
+        add_special_tokens: bool,
+        fast: bool,
+    ) -> Result<Encoding, Error> {
+        if fast {
+            return self
+                .tokenizer
+                .encode_fast(input, add_special_tokens)
+                .map_err(Error::Encode);
+        }
+        self.tokenizer
+            .encode_char_offsets(input, add_special_tokens)
+            .map_err(Error::Encode)
+    }
+
+    pub fn encode_batch_result<'a>(
+        &self,
+        inputs: Vec<EncodeInput<'a>>,
+        add_special_tokens: bool,
+        fast: bool,
+    ) -> Result<Vec<Encoding>, Error> {
+        if fast {
+            return self
+                .tokenizer
+                .encode_batch_fast(inputs, add_special_tokens)
+                .map_err(Error::Encode);
+        }
+        self.tokenizer
+            .encode_batch_char_offsets(inputs, add_special_tokens)
+            .map_err(Error::Encode)
+    }
+
+    pub fn to_json(&self, pretty: bool) -> Result<String, Error> {
+        self.tokenizer.to_string(pretty).map_err(Error::Load)
     }
 
     pub fn decode(&self, ids: &[u32], skip_special_tokens: bool) -> Result<String, Error> {

@@ -59,7 +59,7 @@ from ._lazy_imports_registry import (
 if TYPE_CHECKING:
     import httpx
 
-    from litellm.rust_bridge._native import Tokenizer
+    from litellm.litellm_core_utils.tokenizer import OpenAIEncoding as Tokenizer
 
 
 def get_litellm_globals() -> dict[str, object]:

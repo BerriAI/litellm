@@ -84,7 +84,8 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
-from litellm.rust_bridge._native import Tokenizer
+from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer as Tokenizer
+from litellm.litellm_core_utils.tokenizer import OpenAIEncoding, strip_special_tokens
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -2327,7 +2328,13 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
         enc: The encoded text.
     """
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
-    return tokenizer_json["tokenizer"].encode(text)
+    if tokenizer_json["type"] == "openai_tokenizer":
+        openai_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
+            OpenAIEncoding, tokenizer_json["tokenizer"]
+        )
+        return openai_tokenizer.encode(text, disallowed_special=())
+    encoded: Final = tokenizer_json["tokenizer"].encode(text)
+    return encoded.ids if hasattr(encoded, "ids") else encoded
 
 
 def decode(
@@ -2346,7 +2353,11 @@ def decode(
     """
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
     if tokenizer_json["type"] == "huggingface_tokenizer":
-        return tokenizer_json["tokenizer"].decode(tokens, skip_special_tokens=skip_special_tokens)
+        ids: Final = strip_special_tokens(tokenizer_json["tokenizer"], tokens) if skip_special_tokens else tokens
+        hf_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
+            Tokenizer, tokenizer_json["tokenizer"]
+        )
+        return hf_tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
     return tokenizer_json["tokenizer"].decode(tokens)
 
 
