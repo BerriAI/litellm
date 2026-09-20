@@ -50,6 +50,17 @@ def check_completion() -> str:
     return "mock completion round-trips"
 
 
+def check_mcp_install_guidance() -> str:
+    try:
+        import litellm.experimental_mcp_client
+    except ImportError as error:
+        _require("pip install 'litellm[mcp]'" in str(error), f"missing MCP installation guidance: {error}")
+        _require(isinstance(error.__cause__, ModuleNotFoundError), "original missing-dependency cause was lost")
+        _require(error.__cause__.name == "mcp", f"unexpected missing dependency: {error.__cause__}")
+        return "optional MCP client explains how to install litellm[mcp]"
+    raise AssertionError("MCP client imported without the MCP extra")
+
+
 def check_embedding() -> str:
     import litellm
 
@@ -109,6 +120,7 @@ def check_bedrock_credential_resolution() -> str:
 CHECKS: tuple[tuple[str, Callable[[], str]], ...] = (
     ("environment is base-only", check_environment_is_base_only),
     ("import litellm", check_import),
+    ("optional MCP installation guidance", check_mcp_install_guidance),
     ("chat completion", check_completion),
     ("embedding", check_embedding),
     ("bundled model metadata", check_bundled_model_metadata),

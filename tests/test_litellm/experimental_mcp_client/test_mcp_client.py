@@ -1,10 +1,12 @@
 import asyncio
 import base64
+import importlib
 import json
 import os
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -2160,3 +2162,38 @@ async def test_404_before_session_initialization_preserves_method_not_found() ->
             )
     assert caught.value.error.code == METHOD_NOT_FOUND
     assert caught.value.error.message == "Not Found"
+
+
+@pytest.mark.parametrize("missing_module", ("mcp", "httpx2", "mcp.types", "openai.types.chat"))
+def test_public_mcp_import_missing_dependency(missing_module: str) -> None:
+    with patch.dict(sys.modules):
+        for name in tuple(sys.modules):
+            if name.startswith(("litellm.experimental_mcp_client", "mcp.", "mcp_types.")) or name == "mcp":
+                del sys.modules[name]
+        with patch.dict(sys.modules, {missing_module: None}):
+            with pytest.raises(ImportError) as caught:
+                importlib.import_module("litellm.experimental_mcp_client.client")
+
+    if missing_module in ("mcp", "httpx2"):
+        assert "pip install 'litellm[mcp]'" in str(caught.value)
+        assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+        assert caught.value.__cause__.name == missing_module
+    else:
+        assert isinstance(caught.value, ModuleNotFoundError)
+        assert caught.value.name == missing_module
+        assert caught.value.__cause__ is None
+        assert "litellm[mcp]" not in str(caught.value)
+
+
+def test_public_mcp_import_preserves_incompatible_sdk_error() -> None:
+    with patch.dict(sys.modules):
+        for name in tuple(sys.modules):
+            if name.startswith("litellm.experimental_mcp_client"):
+                del sys.modules[name]
+        with patch.dict(sys.modules, {"mcp": ModuleType("mcp")}):
+            with pytest.raises(ImportError, match="cannot import name 'ClientSession'") as caught:
+                importlib.import_module("litellm.experimental_mcp_client.client")
+
+    assert not isinstance(caught.value, ModuleNotFoundError)
+    assert caught.value.__cause__ is None
+    assert "litellm[mcp]" not in str(caught.value)
