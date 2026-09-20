@@ -5570,12 +5570,30 @@ class TestMCPServerManager:
         assert manager._get_mcp_server_from_tool_name("lazy_map-add") is None
         assert manager.server_owning_tool_name_prefix("lazy_map-add") is server
         assert manager.server_owning_tool_name_prefix("someone_else-add") is None
-        assert manager.has_listed_tools(server) is False
 
         manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
 
-        assert manager.has_listed_tools(server) is True
         assert manager._get_mcp_server_from_tool_name("lazy_map-add") is server
+
+    def test_server_exposes_tool_is_per_tool_not_per_server(self):
+        """A tool listed for the server does not make its unlisted siblings look exposed."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="lazy-map-2",
+            name="lazy_map",
+            server_name="lazy_map",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+        )
+        manager.registry = {server.server_id: server}
+
+        assert manager.server_exposes_tool(server, "add") is False
+
+        manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+
+        assert manager.server_exposes_tool(server, "add") is True
+        assert manager.server_exposes_tool(server, "lazy_map-add") is True
+        assert manager.server_exposes_tool(server, "multiply") is False
 
     def test_known_prefix_to_server_keeps_the_first_registered_owner_of_a_shared_prefix(self):
         manager = MCPServerManager()

@@ -7571,6 +7571,30 @@ async def test_execute_mcp_tool_does_not_relist_a_server_this_worker_already_lis
 
 
 @pytest.mark.asyncio
+async def test_execute_mcp_tool_lists_a_tool_this_worker_has_not_yet_seen_on_a_listed_server():
+    """A worker that already holds one of the server's tools must still list when a caller asks
+    for a different tool it has not cached, so callers with wider upstream catalogs are not 404ed."""
+    from mcp.types import Tool as MCPTool
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    server = _never_listed_passthrough_server()
+    with _worker_that_never_listed(server, upstream_tools=("add", "multiply")) as worker:
+        mcp_module.global_mcp_server_manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+        await mcp_module.execute_mcp_tool(
+            name="lazy_map-multiply",
+            arguments={"a": 1, "b": 2},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            mcp_auth_header="Bearer caller-token",
+        )
+
+    assert worker.fetch_tools.await_count == 1
+    assert worker.dispatched["server_name"] == "lazy_map"
+    assert worker.dispatched["name"] == "multiply"
+
+
+@pytest.mark.asyncio
 async def test_execute_mcp_tool_never_lists_a_server_the_caller_cannot_access():
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
