@@ -1313,25 +1313,29 @@ _FOUNDRY_FUNCTION_TOOL: Final = ({"type": "function", "function": {"name": "get_
 
 
 @pytest.mark.parametrize(
-    "api_base, reasoning_effort",
+    "model_name, api_base, reasoning_effort",
     [
-        pytest.param(_FOUNDRY_API_BASE, None, id="foundry-host-unset-effort"),
-        pytest.param(_FOUNDRY_API_BASE, "low", id="foundry-host-explicit-effort"),
-        pytest.param("https://myresource.openai.azure.com", None, id="azure-openai-host-unset-effort"),
+        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, None, id="gpt-6-unset-effort"),
+        pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "low", id="gpt-6-explicit-effort"),
+        pytest.param("gpt-6-astra", "https://myresource.openai.azure.com", None, id="gpt-6-azure-openai-host"),
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "low", id="gpt-5.6-explicit-effort"),
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, {"effort": "high"}, id="gpt-5.6-explicit-effort-dict"),
     ],
 )
-def test_responses_api_bridge_check_azure_ai_foundry_gpt_5_4_plus_tools_routes_to_responses(api_base, reasoning_effort):
+def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_responses(
+    model_name, api_base, reasoning_effort
+):
     from litellm.main import responses_api_bridge_check
 
     model_info, model = responses_api_bridge_check(
-        model="gpt-6-astra",
+        model=model_name,
         custom_llm_provider="azure_ai",
         tools=_FOUNDRY_FUNCTION_TOOL,
         reasoning_effort=reasoning_effort,
         api_base=api_base,
     )
 
-    assert model == "gpt-6-astra"
+    assert model == model_name
     assert model_info.get("mode") == "responses"
 
 
@@ -1339,6 +1343,11 @@ def test_responses_api_bridge_check_azure_ai_foundry_gpt_5_4_plus_tools_routes_t
     "model_name, api_base, reasoning_effort",
     [
         pytest.param("gpt-6-astra", _FOUNDRY_API_BASE, "none", id="explicit-none-stays-chat"),
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, None, id="gpt-5.6-unset-effort-stays-chat"),
+        pytest.param("gpt-5.6-sol", _FOUNDRY_API_BASE, "none", id="gpt-5.6-explicit-none-stays-chat"),
+        pytest.param("gpt-5.5", _FOUNDRY_API_BASE, "high", id="gpt-5.5-explicit-effort-stays-chat"),
+        pytest.param("gpt-5.4-mini", _FOUNDRY_API_BASE, None, id="gpt-5.4-mini-unset-effort-stays-chat"),
+        pytest.param("gpt-5.4-mini", _FOUNDRY_API_BASE, "low", id="gpt-5.4-mini-explicit-effort-stays-chat"),
         pytest.param("gpt-6-astra", "https://myproject.models.ai.azure.com", None, id="serverless-host-stays-chat"),
         pytest.param("Mistral-large-2411", _FOUNDRY_API_BASE, None, id="non-gpt-5-model-stays-chat"),
         pytest.param("claude-opus-4-1", _FOUNDRY_API_BASE, None, id="claude-on-foundry-stays-chat"),
