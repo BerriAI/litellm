@@ -98,6 +98,8 @@ class TestCountTokensLocationResolution:
         self, counter, monkeypatch
     ):
         """Claude models without any location should default to us-east5."""
+        monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("VERTEX_LOCATION", raising=False)
         captured = {}
 
         async def fake_ensure_access_token(

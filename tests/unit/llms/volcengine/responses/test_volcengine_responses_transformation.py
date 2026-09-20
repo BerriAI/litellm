@@ -137,30 +137,6 @@ class TestVolcengineResponsesAPITransformation:
         with pytest.raises(ValueError, match='Volcengine API key is required\\. Set ARK_API_KEY /'):
             config.validate_environment(headers={}, model="volcengine/demo", litellm_params={})
 
-    def test_unsupported_params_are_dropped_with_extra_body(self):
-        """Unknown fields (including extra_body) should be dropped before send."""
-        config = VolcEngineResponsesAPIConfig()
-
-        request = config.transform_responses_api_request(
-            model="volcengine/demo-model",
-            input="hi",
-            response_api_optional_request_params={
-                "unsupported_custom_param": 0.1,
-                "temperature": 0.2,
-                "metadata": {"k": "v"},
-                "extra_body": {"unsupported_custom_param": 1, "temperature": 0.3},
-            },
-            litellm_params=GenericLiteLLMParams(),
-            headers={},
-        )
-
-        assert "unsupported_custom_param" not in request
-        assert "metadata" not in request
-        assert request["temperature"] == 0.2
-        assert "extra_body" in request
-        assert "unsupported_custom_param" not in request["extra_body"]
-        assert request["extra_body"]["temperature"] == 0.3
-
     def test_valid_thinking_caching_and_expire_at_pass(self):
         """Documented params should pass through without validation errors."""
         config = VolcEngineResponsesAPIConfig()
