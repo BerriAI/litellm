@@ -1377,3 +1377,92 @@ def test_get_model_ids_for_a_group_does_not_reach_team_scoped_deployments():
     assert router.get_model_ids(model_name="shared-model") == ["shared-1"]
     # the team deployments are still routable under their own names
     assert router.get_model_ids(model_name="shared-model_team-a_uuid") == ["team-a-1"]
+
+
+def test_resolve_to_deployment_model_names_covers_alias_group_and_plain_names():
+    """
+    `_resolve_to_deployment_model_names` is what lookups keyed by a served name
+    go through, so each of its three documented branches is pinned here: an
+    alias resolves to its target, a routing group resolves to its member
+    `model_name`s, and anything else resolves to itself.
+    """
+    router = _build_router(
+        routing_groups=[
+            {
+                "group_name": "quality",
+                "models": ["filtered-model", "other-model"],
+                "routing_strategy": "simple-shuffle",
+            }
+        ],
+    )
+    router.model_group_alias = {"quality-alias": "quality", "plain-alias": "other-model"}
+
+    # a group resolves to its members, in the order the group declares them
+    assert router._resolve_to_deployment_model_names(model="quality") == (
+        "filtered-model",
+        "other-model",
+    )
+    # an alias onto a group composes: alias -> group -> members
+    assert router._resolve_to_deployment_model_names(model="quality-alias") == (
+        "filtered-model",
+        "other-model",
+    )
+    # an alias onto a plain deployment resolves to that deployment's name
+    assert router._resolve_to_deployment_model_names(model="plain-alias") == (
+        "other-model",
+    )
+    # a plain `model_name` resolves to itself
+    assert router._resolve_to_deployment_model_names(model="filtered-model") == (
+        "filtered-model",
+    )
+    # an unknown name is passed through rather than dropped, so the caller's
+    # own lookup decides it misses
+    assert router._resolve_to_deployment_model_names(model="no-such-model") == (
+        "no-such-model",
+    )
+
+
+def test_resolve_to_deployment_model_names_keeps_team_deployments_on_their_own_name():
+    """
+    The team-scoped counterpart of the above. A team deployment is indexed under
+    its internal `model_name`, so resolving a group never yields it, and it is
+    reached only when that internal name is requested.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "sk-test-1",
+                    "api_base": "https://example.invalid",
+                },
+                "model_info": {"id": "shared-1"},
+            },
+            {
+                "model_name": "shared-model_team-a_uuid",
+                "litellm_params": {
+                    "model": "openai/gpt-4o",
+                    "api_key": "sk-test-2",
+                    "api_base": "https://example.invalid",
+                },
+                "model_info": {
+                    "id": "team-a-1",
+                    "team_id": "team-a",
+                    "team_public_model_name": "shared-model",
+                },
+            },
+        ],
+        routing_groups=[
+            {
+                "group_name": "quality",
+                "models": ["shared-model"],
+                "routing_strategy": "simple-shuffle",
+            }
+        ],
+    )
+
+    assert router._resolve_to_deployment_model_names(model="quality") == ("shared-model",)
+    assert router._resolve_to_deployment_model_names(model="shared-model_team-a_uuid") == (
+        "shared-model_team-a_uuid",
+    )
