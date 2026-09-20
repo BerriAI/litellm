@@ -647,57 +647,33 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
-def _json_type_for_const(value: object) -> str | None:
-    """Return the JSON Schema type name for a scalar ``const`` value."""
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, int):
-        return "integer"
-    if isinstance(value, float):
-        return "number"
-    return None
-
-
 def _convert_const_to_enum(schema: object, depth: int = 0) -> None:
-    """
-    Rewrite scalar JSON Schema ``const`` as a single-value ``enum``.
-
-    Gemini's Schema has no ``const`` keyword. Without this rewrite,
-    ``add_object_type`` stamps ``type: object`` onto a const-only schema and
-    ``filter_schema_fields`` then strips ``const``, so ``{"const": "USD"}``
-    reaches the provider as ``{"type": "object"}`` and any object satisfies
-    it. A single-value enum preserves the pinned value for strings. For
-    numeric and boolean consts the enum values are later stripped because
-    Gemini only accepts string enums, but the correct ``type`` survives,
-    which is strictly better than ``type: object``. Null and non-scalar
-    const values have no Gemini representation and are left untouched.
-    """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
+    if not isinstance(schema, dict):
         return
-    if isinstance(schema, dict):
-        if "const" in schema and "enum" not in schema:
-            const_value: Final = schema["const"]
-            json_type: Final = _json_type_for_const(const_value)
-            if json_type is not None:
-                del schema["const"]
-                schema["type"] = json_type
-                schema["enum"] = [const_value]
-        for key, value in schema.items():
-            if key in ("properties", "$defs", "definitions", "dependentSchemas", "patternProperties") and isinstance(
-                value, dict
-            ):
-                for sub_schema in value.values():
-                    _convert_const_to_enum(sub_schema, depth + 1)
-            elif key in ("items", "contains", "else", "if", "then", "not", "propertyNames", "additionalProperties"):
-                _convert_const_to_enum(value, depth + 1)
-            elif key in ("allOf", "anyOf", "oneOf", "prefixItems") and isinstance(value, list):
-                for sub_schema in value:
-                    _convert_const_to_enum(sub_schema, depth + 1)
-    elif isinstance(schema, list):
-        for item in schema:
-            _convert_const_to_enum(item, depth + 1)
+
+    if "const" in schema and "enum" not in schema:
+        const_value: Final = schema["const"]
+        if not isinstance(const_value, str):
+            raise ValueError("Gemini function declarations only support string const values.")
+        del schema["const"]
+        schema["type"] = "string"
+        schema["enum"] = [const_value]
+
+    properties: Final = schema.get("properties")
+    if isinstance(properties, dict):
+        for value in properties.values():
+            _convert_const_to_enum(value, depth + 1)
+
+    items: Final = schema.get("items")
+    if items is not None:
+        _convert_const_to_enum(items, depth + 1)
+
+    any_of: Final = schema.get("anyOf")
+    if isinstance(any_of, list):
+        for value in any_of:
+            _convert_const_to_enum(value, depth + 1)
 
 
 def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):

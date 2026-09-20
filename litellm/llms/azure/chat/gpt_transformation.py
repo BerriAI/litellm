@@ -107,9 +107,7 @@ class AzureOpenAIConfig(BaseConfig):
         self,
         messages: list[AllMessageValues],
     ) -> list[AllMessageValues]:
-        """Azure OpenAI supports the `developer` role."""
         return messages
-
 
     def get_supported_openai_params(self, model: str) -> list[str]:
         return [

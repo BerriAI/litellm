@@ -3,8 +3,6 @@ from unittest.mock import patch
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-
-
 from litellm.llms.vertex_ai.common_utils import (
     _build_vertex_schema,
     _get_vertex_url,
@@ -1756,13 +1754,7 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
     assert get_vertex_ai_lyria_model_info(model=model) is None
 
 
-
-
-def test_build_vertex_schema_converts_const_to_single_value_enum():
-    """A string `const` must become a single-value `enum` so Gemini keeps the
-    constraint instead of forwarding `{"type": "object"}`. Numeric and boolean
-    consts keep their correct `type` (Gemini strips non-string enums, so the
-    pinned value itself has no representation there)."""
+def test_build_vertex_schema_converts_string_const_to_single_value_enum():
     parameters = {
         "type": "object",
         "properties": {
@@ -1770,7 +1762,12 @@ def test_build_vertex_schema_converts_const_to_single_value_enum():
             "currency": {"const": "USD"},
             "nested": {
                 "type": "object",
-                "properties": {"count": {"const": 5}, "flag": {"const": True}},
+                "properties": {
+                    "choices": {
+                        "type": "array",
+                        "items": {"anyOf": [{"const": "fixed"}, {"type": "string"}]},
+                    }
+                },
             },
         },
         "required": ["currency", "amount"],
@@ -1782,8 +1779,13 @@ def test_build_vertex_schema_converts_const_to_single_value_enum():
     assert "const" not in currency
     assert currency["enum"] == ["USD"]
     assert currency["type"] == "string"
-    nested = result["properties"]["nested"]["properties"]
-    assert nested["count"]["type"] == "integer"
-    assert "const" not in nested["count"]
-    assert nested["flag"]["type"] == "boolean"
-    assert "const" not in nested["flag"]
+    choices = result["properties"]["nested"]["properties"]["choices"]
+    assert choices["items"]["anyOf"][0] == {"type": "string", "enum": ["fixed"]}
+
+
+@pytest.mark.parametrize("value", [5, 1.5, True, None, ["USD"], {"code": "USD"}])
+def test_build_vertex_schema_rejects_const_values_gemini_cannot_enforce(value):
+    parameters = {"type": "object", "properties": {"currency": {"const": value}}}
+
+    with pytest.raises(ValueError, match="only support string const values"):
+        _build_vertex_schema(parameters)
