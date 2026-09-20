@@ -8123,7 +8123,7 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "openai" or (
+    if custom_llm_provider in ("openai", "openrouter") or (
         custom_llm_provider in litellm.openai_compatible_providers
         and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS
     ):
@@ -8133,20 +8133,36 @@ def speech(
                 model=model,
                 llm_provider=custom_llm_provider,
             )
-        api_base = (
-            api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
-            or litellm.api_base
-            or get_secret("OPENAI_BASE_URL")
-            or get_secret("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
-        )
-        # set API KEY
-        api_key = (
-            api_key
-            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-            or litellm.openai_key
-            or get_secret("OPENAI_API_KEY")
-        )
+        if custom_llm_provider == "openrouter":
+            api_base = (  # rebind-ok: resolve openrouter speech api_base
+                api_base
+                or litellm.api_base
+                or get_secret_str("OPENROUTER_API_BASE")
+                or "https://openrouter.ai/api/v1"
+            )
+            api_key = (  # rebind-ok: resolve openrouter speech api_key
+                api_key
+                or dynamic_api_key
+                or litellm.api_key
+                or litellm.openrouter_key
+                or get_secret_str("OPENROUTER_API_KEY")
+                or get_secret_str("OR_API_KEY")
+            )
+        else:
+            api_base = (
+                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
+                or litellm.api_base
+                or get_secret("OPENAI_BASE_URL")
+                or get_secret("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )
+            # set API KEY
+            api_key = (
+                api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+                or litellm.openai_key
+                or get_secret("OPENAI_API_KEY")
+            )
 
         organization = (
             organization
