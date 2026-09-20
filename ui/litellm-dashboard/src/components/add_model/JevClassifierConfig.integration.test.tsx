@@ -12,7 +12,7 @@ import {
 } from "../edit_auto_router/edit_auto_router_modal";
 import { applyTierSetAction } from "./tier_set_actions";
 import { testAutoRouterRouting } from "../networking";
-import { buildSavedJevConnectionTestRequest } from "./build_auto_router_routing_test_request";
+import { JEV_CONNECTION_TEST_PROMPT } from "./build_auto_router_routing_test_request";
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(() => ({
@@ -81,8 +81,11 @@ function Form() {
       </button>
       <button
         onClick={() => {
-          const request = buildSavedJevConnectionTestRequest(buildUpdatedComplexityRouterConfig({}, value));
-          if (request) void testAutoRouterRouting("token", request);
+          const request = {
+            prompt: JEV_CONNECTION_TEST_PROMPT,
+            complexity_router_config: buildUpdatedComplexityRouterConfig({}, value),
+          };
+          void testAutoRouterRouting("token", request);
         }}
       >
         Probe current config
