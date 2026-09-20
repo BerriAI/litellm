@@ -1408,15 +1408,21 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         assert request["tools"][0] is tool
 
 
-def test_translate_developer_role_to_system_role_preserves_developer_for_openai():
-    """Regression test for BerriAI/litellm#41913: the OpenAI API accepts the
-    `developer` role directly, so OpenAI targets must not rewrite it to `system`."""
-    config = OpenAIGPTConfig()
+def test_translate_developer_role_to_system_role_still_translates_for_openai_config():
+    """OpenAIGPTConfig must keep the base developer-to-system translation.
+
+    The OpenAI provider passthrough now lives behind a provider check in
+    litellm.main, because this class is subclassed by ~50 third-party
+    providers that must not inherit an OpenAI-only passthrough.
+    """
+    from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
+
     messages = [
         {"role": "developer", "content": "be terse"},
         {"role": "user", "content": "hi"},
     ]
 
-    result = config.translate_developer_role_to_system_role(messages)
+    for config in (OpenAIGPTConfig(), CohereV2ChatConfig()):
+        result = config.translate_developer_role_to_system_role(messages)
 
-    assert [m["role"] for m in result] == ["developer", "user"]
+        assert [m["role"] for m in result] == ["system", "user"]

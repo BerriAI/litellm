@@ -820,13 +820,13 @@ class LiteLLMAnthropicMessagesAdapter:
                 function_chunk["description"] = tool["description"]
             if "strict" in tool:
                 function_chunk["strict"] = bool(tool["strict"])
-            if "allowed_callers" in tool:
-                function_chunk["allowed_callers"] = tool["allowed_callers"]
 
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
             tool_param = _chat_tool_param(function_chunk, tool)
+            if "allowed_callers" in tool and tool["allowed_callers"] is not None:
+                tool_param["allowed_callers"] = tool["allowed_callers"]
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)
 

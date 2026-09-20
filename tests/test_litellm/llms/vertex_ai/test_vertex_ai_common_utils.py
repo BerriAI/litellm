@@ -1759,15 +1759,19 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
 
 
 def test_build_vertex_schema_converts_const_to_single_value_enum():
-    """Regression test for BerriAI/litellm#41913: a scalar `const` must become a
-    single-value `enum` so Gemini keeps the constraint instead of forwarding
-    `{"type": "object"}`."""
+    """A string `const` must become a single-value `enum` so Gemini keeps the
+    constraint instead of forwarding `{"type": "object"}`. Numeric and boolean
+    consts keep their correct `type` (Gemini strips non-string enums, so the
+    pinned value itself has no representation there)."""
     parameters = {
         "type": "object",
         "properties": {
             "amount": {"type": "number"},
             "currency": {"const": "USD"},
-            "nested": {"type": "object", "properties": {"count": {"const": 5}}},
+            "nested": {
+                "type": "object",
+                "properties": {"count": {"const": 5}, "flag": {"const": True}},
+            },
         },
         "required": ["currency", "amount"],
     }
@@ -1777,7 +1781,9 @@ def test_build_vertex_schema_converts_const_to_single_value_enum():
     currency = result["properties"]["currency"]
     assert "const" not in currency
     assert currency["enum"] == ["USD"]
-    assert currency["type"] != "object"
-    nested_count = result["properties"]["nested"]["properties"]["count"]
-    assert "const" not in nested_count
-    assert nested_count["type"] == "integer"
+    assert currency["type"] == "string"
+    nested = result["properties"]["nested"]["properties"]
+    assert nested["count"]["type"] == "integer"
+    assert "const" not in nested["count"]
+    assert nested["flag"]["type"] == "boolean"
+    assert "const" not in nested["flag"]

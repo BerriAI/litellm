@@ -107,11 +107,7 @@ class AzureOpenAIConfig(BaseConfig):
         self,
         messages: list[AllMessageValues],
     ) -> list[AllMessageValues]:
-        """
-        Azure OpenAI implements the OpenAI API, which accepts the `developer`
-        role directly, so it is passed through unchanged.
-        See https://github.com/BerriAI/litellm/issues/41913
-        """
+        """Azure OpenAI supports the `developer` role."""
         return messages
 
 

@@ -662,15 +662,17 @@ def _json_type_for_const(value: object) -> str | None:
 
 def _convert_const_to_enum(schema: object, depth: int = 0) -> None:
     """
-    Rewrite JSON Schema ``const`` as a single-value ``enum``.
+    Rewrite scalar JSON Schema ``const`` as a single-value ``enum``.
 
     Gemini's Schema has no ``const`` keyword. Without this rewrite,
     ``add_object_type`` stamps ``type: object`` onto a const-only schema and
     ``filter_schema_fields`` then strips ``const``, so ``{"const": "USD"}``
     reaches the provider as ``{"type": "object"}`` and any object satisfies
-    it. A single-value enum preserves the pinned value. Non-scalar const
-    values have no enum equivalent and are left untouched.
-    See https://github.com/BerriAI/litellm/issues/41913
+    it. A single-value enum preserves the pinned value for strings. For
+    numeric and boolean consts the enum values are later stripped because
+    Gemini only accepts string enums, but the correct ``type`` survives,
+    which is strictly better than ``type: object``. Null and non-scalar
+    const values have no Gemini representation and are left untouched.
     """
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         return
