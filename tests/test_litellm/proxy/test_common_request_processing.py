@@ -14,7 +14,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
-from litellm.litellm_core_utils.bug_report import DISABLE_ENV_VAR, ISSUE_URL_BASE
+from litellm.litellm_core_utils.bug_report import (
+    DISABLE_ENV_VAR,
+    ISSUE_URL_BASE,
+    bug_report_notice,
+    build_bug_report,
+)
 from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_LITELLM_CALL_ID_LENGTH,
@@ -4258,6 +4263,21 @@ class TestHandleLLMApiExceptionRetryAfter:
     async def test_handle_llm_api_exception_no_retry_after_for_plain_exception(self):
         proxy_exc = await self._invoke(ValueError("some other failure"))
         assert "retry-after" not in proxy_exc.headers
+
+    async def test_handle_llm_api_exception_strips_bug_report_notice_from_client_message(self, caplog):
+        report = build_bug_report(RuntimeError("boom"), surface="sdk")
+        notice = bug_report_notice(report)
+        exc = litellm.APIConnectionError(
+            message=f"boom\n{notice}",
+            model="gpt-4o",
+            llm_provider="openai",
+        )
+
+        with caplog.at_level("ERROR"):
+            proxy_exc = await self._invoke(exc)
+
+        assert ISSUE_URL_BASE not in proxy_exc.message
+        assert ISSUE_URL_BASE in caplog.text
 
     async def test_handle_llm_api_exception_retry_after_survives_callback_headers(self):
         from litellm.types.router import RouterRateLimitError

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import os
 import platform
 import traceback
@@ -15,8 +16,10 @@ from litellm._version import version as litellm_version
 ISSUE_URL_BASE: Final = "https://github.com/BerriAI/litellm/issues/new"
 MAX_URL_LENGTH: Final = 6000
 MAX_MESSAGE_CHARS: Final = 600
+MAX_CONTEXT_CHARS: Final = 200
 MAX_FRAMES: Final = 12
 DISABLE_ENV_VAR: Final = "LITELLM_DISABLE_BUG_REPORT_LINK"
+NOTICE_PREFIX: Final = "This looks like a bug in LiteLLM rather than in your request."
 _SHORTENED_MESSAGE_LENGTHS: Final = (480, 360, 240, 120, 0)
 
 Surface = Literal["sdk", "proxy"]
@@ -66,7 +69,7 @@ def _get_litellm_frames(exc: BaseException) -> tuple[str, ...]:
 def _redact_context(value: str | None) -> str | None:
     if value is None:
         return None
-    return redact_secrets(value)[:MAX_MESSAGE_CHARS]
+    return redact_secrets(value)[:MAX_CONTEXT_CHARS]
 
 
 def build_bug_report(
@@ -142,11 +145,19 @@ def bug_report_issue_url(report: BugReport) -> str:
         *(_issue_url(report, message, frames[index:]) for index in range(len(frames) + 1)),
         *(_issue_url(report, message[:length], ()) for length in _SHORTENED_MESSAGE_LENGTHS if length < len(message)),
     )
-    return next((candidate for candidate in candidates if len(candidate) <= MAX_URL_LENGTH), _issue_url(report, "", ()))
+    return next(
+        (candidate for candidate in candidates if len(candidate) <= MAX_URL_LENGTH),
+        _issue_url(dataclasses.replace(report, call_type=None, model=None, custom_llm_provider=None), "", ()),
+    )
+
+
+def strip_bug_report_notice(message: str) -> str:
+    index: Final = message.find(NOTICE_PREFIX)
+    return message if index == -1 else message[:index].rstrip()
 
 
 def bug_report_notice(report: BugReport) -> str:
     return (
-        "This looks like a bug in LiteLLM rather than in your request. File it with one click "
+        f"{NOTICE_PREFIX} File it with one click "
         f"(prefilled and redacted, review before submitting): {bug_report_issue_url(report)}"
     )

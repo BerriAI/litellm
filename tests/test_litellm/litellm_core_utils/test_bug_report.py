@@ -13,7 +13,9 @@ from litellm.litellm_core_utils.bug_report import (
     MAX_URL_LENGTH,
     bug_report_enabled,
     bug_report_issue_url,
+    bug_report_notice,
     build_bug_report,
+    strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
@@ -54,6 +56,18 @@ def test_issue_url_is_bounded_for_long_messages():
     assert "RuntimeError" in query["description"][0]
 
 
+def test_issue_url_is_bounded_for_long_non_ascii_context():
+    report = build_bug_report(
+        ValueError("故障" * 10_000),
+        surface="sdk",
+        model="模型" * 300,
+        custom_llm_provider="供給" * 300,
+        call_type="呼出" * 300,
+    )
+
+    assert len(bug_report_issue_url(report)) <= MAX_URL_LENGTH
+
+
 def test_issue_url_builds_without_a_traceback():
     exc = RuntimeError("no traceback")
     assert exc.__traceback__ is None
@@ -80,3 +94,11 @@ def test_proxy_provider_uses_translation_domain():
     query = parse_qs(urlparse(bug_report_issue_url(report)).query)
 
     assert query["domain"] == ["LLM translation: a specific provider's request or response"]
+
+
+def test_strip_bug_report_notice():
+    report = build_bug_report(RuntimeError("boom"), surface="sdk")
+    notice = bug_report_notice(report)
+
+    assert strip_bug_report_notice(f"boom\n{notice}") == "boom"
+    assert strip_bug_report_notice("boom") == "boom"

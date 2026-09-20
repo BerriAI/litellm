@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_enabled,
     bug_report_notice,
     build_bug_report,
+    strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
@@ -3681,8 +3682,11 @@ class ProxyBaseLLMRequestProcessing:
                         )
                     )
                 )
+        client_message: Final = getattr(e, "message", error_msg)
         raise ProxyException(
-            message=redact_internal_details_from_client_message(getattr(e, "message", error_msg)),
+            message=redact_internal_details_from_client_message(
+                strip_bug_report_notice(client_message) if isinstance(client_message, str) else error_msg
+            ),
             type=openai_error_type(e, _code),
             param=openai_error_param(e),
             openai_code=getattr(e, "code", None),
