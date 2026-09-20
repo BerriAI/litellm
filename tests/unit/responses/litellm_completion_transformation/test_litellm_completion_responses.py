@@ -5172,3 +5172,172 @@ async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool
         )
     assert exc_info.value.status_code == 400
     assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)
+
+
+_REPLAY_TOOL: Final = {
+    "type": "function",
+    "name": "vault_token",
+    "parameters": {"type": "object", "properties": {"slot": {"type": "integer"}}, "required": ["slot"]},
+}
+_REASONING_MARKER: Final = "SECRET-CHAIN-OF-THOUGHT"
+_REPLAY_TURNS: Final = [1, 2, 5, 8]
+
+
+def _replay_field(message, key, default=None):
+    if isinstance(message, dict):
+        return message.get(key, default)
+    return getattr(message, key, default)
+
+
+def _replay_tool_call_ids(message):
+    return [_replay_field(call, "id") for call in _replay_field(message, "tool_calls") or []]
+
+
+def _replay_visible_text(message):
+    content = _replay_field(message, "content")
+    if content is None:
+        return ""
+    return content if isinstance(content, str) else json.dumps(content)
+
+
+def _replay_reasoning_item(turn, summary=True, encrypted=False, content_blocks=False):
+    item: dict = {"type": "reasoning", "id": f"rs_{turn}"}
+    text = f"{_REASONING_MARKER}-{turn}"
+    item["summary"] = [{"type": "summary_text", "text": text}] if summary else []
+    if content_blocks:
+        item["content"] = [{"type": "reasoning_text", "text": text}]
+    if encrypted:
+        item["encrypted_content"] = "gAAAAABopaque=="
+    return item
+
+
+def _replay_call_item(turn, suffix=""):
+    return {
+        "type": "function_call",
+        "id": f"fc_{turn}{suffix}",
+        "call_id": f"call_{turn}{suffix}",
+        "name": "vault_token",
+        "arguments": json.dumps({"slot": turn}),
+        "status": "completed",
+    }
+
+
+def _replay_call_output_item(turn, suffix=""):
+    return {"type": "function_call_output", "call_id": f"call_{turn}{suffix}", "output": f"tok-{turn}{suffix}"}
+
+
+def _replay_assistant_text_item(turn):
+    return {
+        "type": "message",
+        "id": f"msg_{turn}",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": f"Fetching slot {turn}.", "annotations": []}],
+    }
+
+
+_REPLAY_SHAPES: Final = {
+    "reasoning_summary": lambda t: [
+        _replay_reasoning_item(t),
+        _replay_call_item(t),
+        _replay_call_output_item(t),
+    ],
+    "reasoning_empty_summary": lambda t: [
+        _replay_reasoning_item(t, summary=False),
+        _replay_call_item(t),
+        _replay_call_output_item(t),
+    ],
+    "reasoning_encrypted_only": lambda t: [
+        _replay_reasoning_item(t, summary=False, encrypted=True),
+        _replay_call_item(t),
+        _replay_call_output_item(t),
+    ],
+    "reasoning_content_blocks": lambda t: [
+        _replay_reasoning_item(t, summary=False, content_blocks=True),
+        _replay_call_item(t),
+        _replay_call_output_item(t),
+    ],
+    "assistant_text_beside_the_call": lambda t: [
+        _replay_assistant_text_item(t),
+        _replay_call_item(t),
+        _replay_call_output_item(t),
+    ],
+    "reasoning_and_assistant_text": lambda t: [
+        _replay_reasoning_item(t),
+        _replay_assistant_text_item(t),
+        _replay_call_item(t),
+        _replay_call_output_item(t),
+    ],
+    "no_reasoning_item": lambda t: [_replay_call_item(t), _replay_call_output_item(t)],
+    "user_speaks_again_each_turn": lambda t: [
+        _replay_reasoning_item(t),
+        _replay_call_item(t),
+        _replay_call_output_item(t),
+        {"role": "user", "content": f"Now do slot {t + 1}."},
+    ],
+    "parallel_calls": lambda t: [
+        _replay_reasoning_item(t),
+        _replay_call_item(t),
+        _replay_call_item(t, "b"),
+        _replay_call_output_item(t),
+        _replay_call_output_item(t, "b"),
+    ],
+}
+
+
+def _replay_transcript(turns, shape):
+    transcript: list = [{"role": "user", "content": "Collect vault tokens one at a time, starting at slot 1."}]
+    for turn in range(1, turns + 1):
+        transcript.extend(shape(turn))
+    return transcript
+
+
+def _bridge_replay(transcript):
+    return LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="openai/kimi-k3",
+        input=transcript,
+        responses_api_request={"tools": [_REPLAY_TOOL], "max_output_tokens": 500},
+        custom_llm_provider="openai",
+    )
+
+
+def _expected_replay_call_ids(turns, shape_name):
+    ids = {f"call_{turn}" for turn in range(1, turns + 1)}
+    if shape_name == "parallel_calls":
+        ids |= {f"call_{turn}b" for turn in range(1, turns + 1)}
+    return ids
+
+
+@pytest.mark.parametrize("shape_name", sorted(_REPLAY_SHAPES))
+@pytest.mark.parametrize("turns", _REPLAY_TURNS)
+class TestBridgeMultiTurnReplay:
+    """A stateless client appends the bridge's own output back onto input every turn"""
+
+    def test_every_replayed_call_reaches_the_provider_as_a_tool_call(self, shape_name, turns):
+        messages = _bridge_replay(_replay_transcript(turns, _REPLAY_SHAPES[shape_name]))["messages"]
+        sent = {call_id for message in messages for call_id in _replay_tool_call_ids(message)}
+        missing = _expected_replay_call_ids(turns, shape_name) - sent
+        assert not missing, f"{sorted(missing)} were replayed but reach the provider as no tool call"
+
+    def test_reasoning_never_becomes_visible_content(self, shape_name, turns):
+        for message in _bridge_replay(_replay_transcript(turns, _REPLAY_SHAPES[shape_name]))["messages"]:
+            role = _replay_field(message, "role")
+            assert _REASONING_MARKER not in _replay_visible_text(message), f"reasoning is visible {role} content"
+
+    def test_the_provider_sees_exactly_the_user_turns_the_client_sent(self, shape_name, turns):
+        transcript = _replay_transcript(turns, _REPLAY_SHAPES[shape_name])
+        expected = sum(1 for item in transcript if item.get("role") == "user")
+        got = sum(1 for m in _bridge_replay(transcript)["messages"] if _replay_field(m, "role") == "user")
+        assert got == expected, f"{got} user messages reach the provider, but the client sent {expected}"
+
+    def test_no_tool_result_is_orphaned(self, shape_name, turns):
+        announced: set = set()
+        for message in _bridge_replay(_replay_transcript(turns, _REPLAY_SHAPES[shape_name]))["messages"]:
+            if _replay_field(message, "role") == "tool":
+                call_id = _replay_field(message, "tool_call_id")
+                assert call_id in announced, f"tool result {call_id} arrives before any message announces it"
+            announced.update(_replay_tool_call_ids(message))
+
+    def test_the_tools_survive_the_whole_transcript(self, shape_name, turns):
+        request = _bridge_replay(_replay_transcript(turns, _REPLAY_SHAPES[shape_name]))
+        assert len(request.get("tools") or []) == 1, "the tool definition is gone from the request"
