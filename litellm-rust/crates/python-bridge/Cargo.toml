@@ -10,7 +10,7 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [features]
-default = ["abi3", "huggingface", "tiktoken"]
+default = ["abi3", "fast"]
 abi3 = ["pyo3/abi3-py310"]
 extension-module = ["pyo3/extension-module"]
 panic-test = []

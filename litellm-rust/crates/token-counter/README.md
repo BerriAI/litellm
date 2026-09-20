@@ -8,7 +8,7 @@ The `huggingface` feature provides `huggingface::HuggingFaceTokenizer` through t
 
 The `tiktoken` feature provides `tiktoken::TiktokenTokenizer` through `tiktoken-rs`. Select an encoding with `TokenCounter::from_tiktoken`. The supported names are `cl100k_base`, `o200k_base`, `o200k_harmony`, `p50k_base`, `p50k_edit`, `r50k_base`, and `gpt2`
 
-The Hugging Face and tiktoken backends are enabled by default. The hand-written fast backend is opt-in. With `default-features = false`, callers can supply their own `Tokenizer` to `TokenCounter::new` without compiling a built-in backend
+The Hugging Face and tiktoken backends are enabled by default. The hand-written fast backend is opt-in. The Python extension builds with `fast` only, which keeps the wheel at the size it had before the split. With `default-features = false`, callers can supply their own `Tokenizer` to `TokenCounter::new` without compiling a built-in backend
 
 Budget checks, cost calculation, and the `max_tokens` adjustment policy belong to `litellm-core-utils`. The counter does not own prices, budgets, or request limits
 
