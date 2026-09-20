@@ -11927,6 +11927,19 @@
               "description": "Enable hallucination detection to detect factual inaccuracies.",
               "title": "Hallucinations Check"
             },
+            "implicit_cache_frozen_messages": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Leading message count held back from compression when the target model caches on an exact request prefix (no cache_control markers in the request). Unset freezes the whole conversation so every turn stays an append-only prefix of the next; an explicit count trades cache hits above that row for compression; 0 disables the protection.",
+              "title": "Implicit Cache Frozen Messages"
+            },
             "include_evidence": {
               "anyOf": [
                 {

@@ -26,6 +26,11 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
             "forwards the request uncompressed instead of blocking it."
         ),
     )
+    implicit_cache_frozen_messages: int | None = Field(
+        default=None,
+        ge=0,
+        description="Leading message count held back from compression when the target model caches on an exact request prefix (no cache_control markers in the request). Unset freezes the whole conversation so every turn stays an append-only prefix of the next; an explicit count trades cache hits above that row for compression; 0 disables the protection.",
+    )
     ccr_retrieval: bool = Field(
         default=True,
         description="Inject the Headroom retrieval tool for hashes declared by the compression service.",

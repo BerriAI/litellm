@@ -87,6 +87,9 @@ def _make_guardrail(**kwargs) -> HeadroomGuardrail:
         api_key=FAKE_API_KEY,
         guardrail_name="headroom",
         default_on=True,
+        # These tests exercise compression mechanics on caching-capable model
+        # names; the implicit-prefix freeze is opted into explicitly in its own tests.
+        implicit_cache_frozen_messages=0,
     )
     defaults.update(kwargs)
     return HeadroomGuardrail(**defaults)
@@ -3014,3 +3017,162 @@ def test_unusable_timeout_falls_back_to_the_default(configured: float):
 
     assert guardrail.timeout.read == 60.0
     assert guardrail.timeout.connect == 5.0
+
+
+class _StubRouter:
+    """Resolves a model alias to a deployment without touching proxy_server."""
+
+    def __init__(self, deployment_model: str):
+        self._deployment_model = deployment_model
+
+    def deployments_for_request(self, alias, request_kwargs):
+        return [{"litellm_params": {"model": self._deployment_model}}]
+
+
+def _rewrite_every_row(**kwargs):
+    """Fake /v1/compress that rewrites every row it is handed to a marker."""
+    sent = kwargs["json"]["messages"]
+    rewritten = [{**m, "content": "COMPRESSED"} for m in sent]
+    return _make_compress_response(rewritten)
+
+
+def _agentic_request(n_exchanges: int) -> list:
+    """An agentic request that is a strict prefix of _agentic_request(n+1)."""
+    messages = [{"role": "system", "content": "You are an agent."}]
+    for i in range(1, n_exchanges + 1):
+        messages.append({"role": "user", "content": f"step {i}"})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": f"call_{i}", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}
+                ],
+            }
+        )
+        messages.append({"role": "tool", "tool_call_id": f"call_{i}", "content": "log body " + "x" * 2000})
+    messages.append({"role": "user", "content": f"step {n_exchanges + 1}"})
+    return messages
+
+
+async def _apply_two_turns(guardrail: HeadroomGuardrail, turn1: list, turn2: list, model: str):
+    posts = []
+
+    def _record(**kwargs):
+        posts.append(kwargs["json"]["messages"])
+        return _rewrite_every_row(**kwargs)
+
+    results = []
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_record):
+        for messages in (turn1, turn2):
+            results.append(
+                await guardrail.apply_guardrail(
+                    inputs=GenericGuardrailAPIInputs(
+                        texts=["x"], structured_messages=json.loads(json.dumps(messages))
+                    ),
+                    request_data={"model": model, "messages": json.loads(json.dumps(messages))},
+                    input_type="request",
+                )
+            )
+    return results, posts
+
+
+@pytest.mark.asyncio
+async def test_implicit_cache_model_freezes_whole_conversation_by_default():
+    """LIT-8202: an implicit-caching model keys its cache on the exact request
+    prefix, so with no explicit freeze count the whole history must be held
+    back and turn 2 stays a byte-identical append of turn 1's outbound body."""
+    guardrail = _make_guardrail(
+        implicit_cache_frozen_messages=None,
+        llm_router_getter=lambda: _StubRouter("openai/gpt-5.6"),
+    )
+    turn1 = _agentic_request(2)
+    turn2 = _agentic_request(3)
+
+    results, posts = await _apply_two_turns(guardrail, turn1, turn2, model="gpt")
+
+    assert posts == []
+    out1 = results[0]["structured_messages"]
+    out2 = results[1]["structured_messages"]
+    assert out1 == turn1
+    assert json.dumps(out2[: len(out1)]) == json.dumps(out1)
+
+
+@pytest.mark.asyncio
+async def test_implicit_cache_frozen_messages_count_freezes_exact_prefix():
+    """An explicit count freezes only that many leading rows; later rows are
+    still handed to the compression service and come back rewritten."""
+    guardrail = _make_guardrail(
+        implicit_cache_frozen_messages=2,
+        llm_router_getter=lambda: _StubRouter("openai/gpt-5.6"),
+    )
+    turn1 = _agentic_request(2)
+    turn2 = _agentic_request(3)
+
+    results, posts = await _apply_two_turns(guardrail, turn1, turn2, model="gpt")
+
+    assert posts
+    out1 = results[0]["structured_messages"]
+    out2 = results[1]["structured_messages"]
+    assert out1[:2] == turn1[:2]
+    assert out2[:2] == turn2[:2]
+    assert json.dumps(out2[:2]) == json.dumps(out1[:2])
+    assert out1[3]["content"] == "COMPRESSED"
+    assert [m["role"] for m in posts[0]] == ["tool", "user"]
+
+
+@pytest.mark.asyncio
+async def test_implicit_cache_protection_skipped_when_request_carries_cache_control():
+    """A request that pins its own breakpoints keeps the existing cache_control
+    protection path; the frozen-prefix default must not take over."""
+    guardrail = _make_guardrail(
+        implicit_cache_frozen_messages=None,
+        llm_router_getter=lambda: _StubRouter("openai/gpt-5.6"),
+    )
+    turn1 = _agentic_request(2)
+    turn1[1]["cache_control"] = {"type": "ephemeral"}
+
+    request_data = {"model": "gpt", "messages": json.loads(json.dumps(turn1))}
+    posts = []
+
+    def _record(**kwargs):
+        posts.append(kwargs["json"]["messages"])
+        return _rewrite_every_row(**kwargs)
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_record):
+        result = await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["x"], structured_messages=json.loads(json.dumps(turn1))),
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert posts
+    assert result["structured_messages"][0] == turn1[0]
+    assert result["structured_messages"][1] == turn1[1]
+    assert result["structured_messages"][-1] == turn1[-1]
+    assert result["structured_messages"][3]["content"] == "COMPRESSED"
+
+
+@pytest.mark.asyncio
+async def test_model_unknown_to_the_cost_map_keeps_compressing_history():
+    guardrail = _make_guardrail(
+        implicit_cache_frozen_messages=None,
+        llm_router_getter=lambda: _StubRouter("openai/model-not-in-cost-map"),
+    )
+    messages = _agentic_request(2)
+
+    posts = []
+
+    def _record(**kwargs):
+        posts.append(kwargs["json"]["messages"])
+        return _rewrite_every_row(**kwargs)
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_record):
+        result = await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=["x"], structured_messages=json.loads(json.dumps(messages))),
+            request_data={"model": "unknown", "messages": json.loads(json.dumps(messages))},
+            input_type="request",
+        )
+
+    assert posts
+    assert result["structured_messages"][3]["content"] == "COMPRESSED"

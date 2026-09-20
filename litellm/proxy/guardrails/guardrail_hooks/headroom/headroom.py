@@ -5,7 +5,7 @@ import math
 import re
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeGuard
 
@@ -16,7 +16,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.compression.compress import get_protected_indices
+from litellm.compression.compress import get_protected_indices, has_cache_control_breakpoint
 from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -50,6 +50,7 @@ from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.router import Router
     from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
@@ -67,6 +68,29 @@ _HASH_CACHE_TTL_SECONDS: Final = 15 * 60
 # untranslated messages can be read with concrete types (values pass through by
 # reference, so this is a shallow top-level reconstruction).
 _REQUEST_DATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+
+
+def _default_llm_router() -> Router | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    return llm_router
+
+
+def _caches_on_request_prefix(model: str | None, messages: Sequence[Mapping[str, object]]) -> bool:
+    """True when the deployment caches implicitly on the exact request prefix.
+
+    A request that already carries cache_control breakpoints pins its cache
+    explicitly, so implicit-prefix protection is skipped for it. Models the
+    model-cost map does not know are treated as non-caching rather than
+    freezing every conversation forever.
+    """
+    if model is None or has_cache_control_breakpoint(messages):
+        return False
+    try:
+        return litellm.utils.supports_prompt_caching(model)
+    except Exception:
+        verbose_proxy_logger.debug("Headroom: supports_prompt_caching lookup failed for model %s", model)
+        return False
 
 
 def _is_str_object_dict(value: object) -> TypeGuard[dict[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
@@ -229,7 +253,9 @@ def _retrieval_result_indices(
 
 
 def _protected_indices(
-    messages: Sequence[Mapping[str, object]], extra_retrieve_call_ids: frozenset[str] = frozenset()
+    messages: Sequence[Mapping[str, object]],
+    extra_retrieve_call_ids: frozenset[str] = frozenset(),
+    frozen_prefix_count: int = 0,
 ) -> frozenset[int]:
     """Indices headroom must not send to the compression service.
 
@@ -247,7 +273,7 @@ def _protected_indices(
     so the model's own earlier tables came back rewritten and it imitated the
     shape. The tool results those turns asked for stay compressible.
     """
-    protected: Final = frozenset(get_protected_indices(messages)) | _retrieval_result_indices(
+    protected: Final = frozenset(get_protected_indices(messages, frozen_prefix_count)) | _retrieval_result_indices(
         messages, extra_retrieve_call_ids
     )
     return (
@@ -495,6 +521,8 @@ class HeadroomGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         ccr_retrieval: bool = True,
+        implicit_cache_frozen_messages: int | None = None,
+        llm_router_getter: Callable[[], Router | None] | None = None,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -509,6 +537,8 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
         self.ccr_retrieval = ccr_retrieval
+        self.implicit_cache_frozen_messages = implicit_cache_frozen_messages
+        self._llm_router_getter: Final = llm_router_getter or _default_llm_router
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -519,6 +549,21 @@ class HeadroomGuardrail(CustomGuardrail):
             default_on=default_on,
             supported_event_hooks=list(self.get_supported_event_hooks()),
         )
+
+    def _frozen_prefix_count(self, request_data: dict, messages: Sequence[Mapping[str, object]]) -> int:
+        router: Final = self._llm_router_getter()
+        alias: Final = request_data.get("model")
+        model: str | None = alias if isinstance(alias, str) else None
+        if router is not None and isinstance(alias, str):
+            deployments: Final = router.deployments_for_request(alias, request_data)
+            deployment_model: Final = deployments[0]["litellm_params"].get("model") if deployments else None
+            if isinstance(deployment_model, str):
+                model = deployment_model
+        if not _caches_on_request_prefix(model, messages):
+            return 0
+        if self.implicit_cache_frozen_messages is None:
+            return len(messages)
+        return self.implicit_cache_frozen_messages
 
     def _should_bypass(self, request_data: dict) -> bool:
         psr: Final = request_data.get("proxy_server_request")
@@ -803,7 +848,11 @@ class HeadroomGuardrail(CustomGuardrail):
         # reading the untranslated messages so long tool names can be recovered.
         raw_messages: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data).get("messages")
         raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
-        protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids)
+        protected_indices: Final = _protected_indices(
+            messages,
+            raw_retrieve_call_ids,
+            self._frozen_prefix_count(request_data, messages),
+        )
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
             return inputs

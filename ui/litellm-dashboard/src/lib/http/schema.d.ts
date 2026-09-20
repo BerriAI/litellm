@@ -32280,6 +32280,11 @@ export interface components {
              */
             hallucinations_check?: boolean | null;
             /**
+             * Implicit Cache Frozen Messages
+             * @description Leading message count held back from compression when the target model caches on an exact request prefix (no cache_control markers in the request). Unset freezes the whole conversation so every turn stays an append-only prefix of the next; an explicit count trades cache hits above that row for compression; 0 disables the protection.
+             */
+            implicit_cache_frozen_messages?: number | null;
+            /**
              * Include Evidence
              * @description Include detailed evidence payloads in responses (sets `plr_evidence` header).
              * @default true
