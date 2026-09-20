@@ -170,7 +170,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> Any:
+    ) -> dict[str, object]:
         if model.startswith("lemonade/"):
             model = model.split("/", 1)[1]
 
