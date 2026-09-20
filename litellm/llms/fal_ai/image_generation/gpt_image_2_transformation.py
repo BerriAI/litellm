@@ -23,7 +23,6 @@ SUPPORTED_OPENAI_PARAMS: Final[tuple[OpenAIImageGenerationOptionalParams, ...]] 
     "response_format",
     "size",
 )
-SUPPORTED_QUALITIES: Final[frozenset[str]] = frozenset({"auto", "low", "medium", "high"})
 OPENAI_QUALITY_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"hd": "high", "standard": "medium"})
 
 
@@ -38,23 +37,33 @@ def map_gpt_image_size(size: object) -> object:
     return image_size
 
 
-def supported_gpt_image_qualities(model: str) -> frozenset[str]:
-    suffix: Final = f"/{model}"
-    keyed: Final = frozenset(
-        key.removeprefix("fal_ai/").split("/")[0]
-        for key in litellm.model_cost
-        if key.startswith("fal_ai/")
-        and key.endswith(suffix)
-        and key.removeprefix("fal_ai/").removesuffix(suffix).count("/") == 1
+def supported_gpt_image_qualities(
+    model: str, model_cost: Mapping[str, Mapping[str, object]] | None = None
+) -> frozenset[str]:
+    costs: Final = litellm.model_cost if model_cost is None else model_cost
+    endpoint: Final[str] = model.removeprefix("fal_ai/")
+    qualified_endpoint: Final[str] = endpoint if endpoint.startswith("openai/") else f"openai/{endpoint}"
+    qualities: Final[frozenset[str]] = frozenset(
+        parts[1]
+        for key in costs
+        if (parts := key.split("/"))[0] == "fal_ai"
+        and len(parts) > 3
+        and "-x-" in parts[2]
+        and "/".join(parts[3:]) == qualified_endpoint
     )
-    return keyed | frozenset(("auto",)) if keyed else SUPPORTED_QUALITIES
+    return qualities | {"auto"} if qualities else frozenset()
 
 
-def map_gpt_image_quality(quality: object, model: str) -> object:
+def map_gpt_image_quality(
+    quality: object, model: str, model_cost: Mapping[str, Mapping[str, object]] | None = None
+) -> object:
     if not isinstance(quality, str):
         return quality
     normalized: Final[str] = OPENAI_QUALITY_ALIASES.get(quality, quality)
-    return normalized if normalized in supported_gpt_image_qualities(model) else "auto"
+    supported: Final[frozenset[str]] = supported_gpt_image_qualities(model, model_cost)
+    if not supported:
+        return normalized
+    return normalized if normalized in supported else "auto"
 
 
 class FalAIGPTImage2Config(FalAIBaseConfig):

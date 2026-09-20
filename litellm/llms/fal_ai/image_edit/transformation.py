@@ -37,36 +37,28 @@ PARAM_TRANSLATION: Final[Mapping[str, str]] = MappingProxyType(
 
 
 @runtime_checkable
-class _Readable(Protocol):
-    def read(self) -> bytes: ...
-
-
-@runtime_checkable
-class _Tellable(Protocol):
+class _SeekableBinaryReader(Protocol):
     def tell(self) -> int: ...
 
+    def seek(self, offset: int) -> int: ...
 
-@runtime_checkable
-class _Seekable(Protocol):
-    def seek(self, position: int) -> int: ...
+    def read(self) -> bytes: ...
 
 
 def _read_image_bytes(image: object) -> bytes:
     if isinstance(image, bytes):
         return image
-    if isinstance(image, tuple) and len(image) >= 2:
+    if isinstance(image, tuple):
         return _read_image_bytes(image[1])
     if isinstance(image, os.PathLike):
         return Path(image).read_bytes()
-    if isinstance(image, str) or not isinstance(image, _Readable):
-        raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
-    position: Final = image.tell() if isinstance(image, _Tellable) else 0
-    if isinstance(image, _Seekable):
+    if isinstance(image, _SeekableBinaryReader):
+        position: Final = image.tell()
         image.seek(0)
-    data: Final = image.read()
-    if isinstance(image, _Seekable):
+        data: Final = image.read()
         image.seek(position)
-    return data
+        return data
+    raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
 
 
 def _to_data_url(image: object) -> str:

@@ -7,7 +7,10 @@ from litellm.llms.fal_ai.image_generation import (
     FalAINanoBananaConfig,
     get_fal_ai_image_generation_config,
 )
-from litellm.llms.fal_ai.image_generation.gpt_image_2_transformation import map_gpt_image_quality
+from litellm.llms.fal_ai.image_generation.gpt_image_2_transformation import (
+    map_gpt_image_quality,
+    supported_gpt_image_qualities,
+)
 from litellm.types.utils import ImageObject, ImageResponse
 
 
@@ -163,8 +166,22 @@ def test_map_openai_params_quality_tiers_follow_model(model, quality, expected):
     ) == {"quality": expected}
 
 
-def test_map_gpt_image_quality_derives_supported_tiers_from_pricing_metadata():
-    assert map_gpt_image_quality("xhigh", "openai/gpt-image-2.5/flare/text-to-image") == "xhigh"
-    assert map_gpt_image_quality("xhigh", "openai/gpt-image-2") == "auto"
-    assert map_gpt_image_quality("xhigh", "openai/unknown-model") == "auto"
-    assert map_gpt_image_quality("high", "openai/unknown-model") == "high"
+@pytest.mark.parametrize(
+    "model",
+    [
+        "some-new-model",
+        "openai/some-new-model",
+        "fal_ai/openai/some-new-model",
+    ],
+)
+def test_supported_qualities_derived_from_pricing_rows(model):
+    model_cost = {
+        "fal_ai/xhigh/1024-x-1024/openai/some-new-model": {},
+        "fal_ai/low/1024-x-1024/openai/some-new-model": {},
+        "fal_ai/max/1024-x-1024/openai/other-model": {},
+    }
+    assert supported_gpt_image_qualities(model, model_cost) == {"xhigh", "low", "auto"}
+
+
+def test_map_gpt_image_quality_passes_through_when_no_pricing_rows():
+    assert map_gpt_image_quality("xhigh", "some-new-model", {}) == "xhigh"
