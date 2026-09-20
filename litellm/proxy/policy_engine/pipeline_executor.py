@@ -51,12 +51,15 @@ except ImportError:
 
 class UndeliverableStreamRewrite(Exception):
     def __init__(self, guardrail_name: str, reason: str) -> None:
-        super().__init__(
-            f"Guardrail '{guardrail_name}' rewrote the streamed response but the rewrite cannot be written "
-            f"back to the stream: {reason}"
-        )
+        super().__init__(guardrail_name, reason)
         self.guardrail_name: Final = guardrail_name
         self.reason: Final = reason
+
+    def __str__(self) -> str:
+        return (
+            f"Guardrail '{self.guardrail_name}' rewrote the streamed response but the rewrite cannot be written "
+            f"back to the stream: {self.reason}"
+        )
 
 
 def _tool_call_shape(tool_call: object) -> tuple[object, object]:
