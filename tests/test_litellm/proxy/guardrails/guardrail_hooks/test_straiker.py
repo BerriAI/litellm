@@ -1252,19 +1252,15 @@ async def test_v3_request_phase_relays_the_provider_body_and_nothing_else():
 
     assert g.async_handler.post.call_args.args[0] == "https://test.straiker.ai/api/v3/detect"
     payload = _posted_payload(g)
-    # provider body, relayed
     assert payload["messages"] == data["messages"]
     assert payload["tools"] == data["tools"]
     assert payload["model"] == "claude-haiku-4-5-20251001"
-    # the body is the provider body and nothing pre-digested: Straiker parses it itself
     for flat in ("prompt", "app_response", "source", "user_name", "straiker_phase"):
         assert flat not in payload, flat
-    # identity and session, the way the unified Kong plugin sends them
     assert payload["original"] == {"processed": {"Meta": {"user": "alice.chen@example.com"}}}
     assert payload["metadata"] == {"user_api_key_end_user_id": "alice.chen@example.com"}
     # the client's Claude Code session header outranks LiteLLM's own session id (Kong precedence)
     assert payload["session_id"] == "cc-sess-9"
-    # nothing the proxy added
     serialized = json.dumps(payload)
     for leaked in (
         "deployment",
@@ -1519,12 +1515,9 @@ def test_v3_session_follows_kong_precedence():
         )
 
     data = _v3_request_data()
-    # 1. the client's own Claude Code session header wins
     assert _v3_session_id(envelope_with("meta-sess"), data, _v3_request_body(data)) == "cc-sess-9"
-    # 2. then LiteLLM's resolved session
     data["proxy_server_request"] = {"headers": {}}
     assert _v3_session_id(envelope_with("meta-sess"), data, _v3_request_body(data)) == "meta-sess"
-    # 3. then a hash of system + first message, stable across the conversation's replays
     a = _v3_session_id(envelope_with(None), data, _v3_request_body(data))
     data2 = _v3_request_data()
     data2["proxy_server_request"] = {"headers": {}}
@@ -1534,7 +1527,6 @@ def test_v3_session_follows_kong_precedence():
     ]
     b = _v3_session_id(envelope_with(None), data2, _v3_request_body(data2))
     assert a == b and a.startswith("litellm-") and len(a) == len("litellm-") + 32
-    # 4. nothing to hash: no session
     assert _v3_session_id(envelope_with(None), {"proxy_server_request": {"headers": {}}}, {}) is None
 
 

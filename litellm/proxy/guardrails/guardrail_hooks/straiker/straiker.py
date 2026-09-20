@@ -72,14 +72,10 @@ V3_DERIVED_SESSION_PREFIX: Final = "litellm-"
 V3_AGENT_HEADER: Final = "x-s6r-agent"
 V3_RESPONSE_PHASE: Final = "response-sync"
 V3_BLOCK_DECISIONS: Final = frozenset({"block", "deny"})
-# Provider body fields, for every surface the proxy fronts. An allowlist rather than a
-# denylist: the hook sees the client body merged with proxy state (`deployment` carries
-# the resolved credential, `proxy_server_request` the client's Authorization header), and
-# a field this list does not know is not relayed. Detection reads messages, system, tools,
-# input and instructions; the rest travels so Straiker records the turn as the client sent it.
+# An allowlist: the hook's request dict merges the client body with proxy state (`deployment`
+# carries the resolved credential), so only fields named here are relayed.
 _V3_PROVIDER_BODY_KEYS: Final = frozenset(
     {
-        # OpenAI chat completions
         "model",
         "messages",
         "tools",
@@ -110,12 +106,10 @@ _V3_PROVIDER_BODY_KEYS: Final = frozenset(
         "store",
         "service_tier",
         "web_search_options",
-        # OpenAI text completions
         "prompt",
         "suffix",
         "echo",
         "best_of",
-        # Anthropic messages
         "system",
         "stop_sequences",
         "top_k",
@@ -124,7 +118,6 @@ _V3_PROVIDER_BODY_KEYS: Final = frozenset(
         "mcp_servers",
         "context_management",
         "output_format",
-        # OpenAI responses
         "input",
         "instructions",
         "previous_response_id",
@@ -135,19 +128,14 @@ _V3_PROVIDER_BODY_KEYS: Final = frozenset(
         "max_output_tokens",
         "background",
         "conversation",
-        # Conversation grouping a client may state itself
         "session_id",
     }
 )
-# Fields on a `tools` or `mcp_servers` entry that carry a credential for the model's own remote
-# calls (an OpenAI `mcp` tool's `headers` and `authorization`, Anthropic's `authorization_token`).
-# Detection reads tool names, descriptions and schemas, never these. They sit directly on the
-# entry, so the scrub is one level deep on purpose: a function schema that defines a `token` or
-# `headers` property lives under `function.parameters` and is relayed exactly as sent.
+# The scrub of these is one level deep on purpose: a function schema that defines a `token` or
+# `headers` property lives under `function.parameters` and must be relayed as sent.
 _V3_CREDENTIAL_FIELDS: Final = frozenset({"authorization_token", "authorization", "headers"})
 _V3_REDACTED_VALUE: Final = "[redacted]"
 _V3_REDACTED_KEYS: Final = frozenset({"tools", "mcp_servers"})
-# The identity fields Straiker's LiteLLM adapter reads from `metadata`, most specific first.
 _V3_IDENTITY_METADATA_KEYS: Final = (
     "user_api_key_end_user_id",
     "user_api_key_user_email",
@@ -672,7 +660,7 @@ def _v3_session_id(
     if conversation == "\0":
         return None
     seed: Final = f"{_v3_user(envelope) or ''}\0{conversation}"
-    return V3_DERIVED_SESSION_PREFIX + hashlib.md5(seed.encode("utf-8"), usedforsecurity=False).hexdigest()
+    return V3_DERIVED_SESSION_PREFIX + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
 
 _V3_PREAMBLE_ROLES: Final = frozenset({"system", "developer"})
