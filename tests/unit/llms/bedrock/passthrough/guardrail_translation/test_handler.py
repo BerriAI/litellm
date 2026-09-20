@@ -1072,7 +1072,8 @@ class TestDeAnonymizeConverseStream:
 
     @pytest.mark.asyncio
     async def test_reasoning_text_delta_de_anonymized(self):
-        """Reasoning deltas carry model output; their text must be guardrailed while the reasoning signature is left untouched."""
+        """Reasoning deltas carry model output; their text must be guardrailed while the
+        reasoning signature is left untouched."""
         stream_bytes = (
             _build_event_stream_frame("messageStart", {"role": "assistant"})
             + _build_event_stream_frame(
@@ -1105,7 +1106,8 @@ class TestDeAnonymizeConverseStream:
 
     @pytest.mark.asyncio
     async def test_tool_use_input_delta_de_anonymized(self):
-        """toolUse.input deltas carry model-generated tool arguments and must be guardrailed instead of being forwarded raw."""
+        """toolUse.input deltas carry model-generated tool arguments and must be
+        guardrailed instead of being forwarded raw."""
         stream_bytes = _build_event_stream_frame(
             "contentBlockDelta",
             {"contentBlockIndex": 0, "delta": {"toolUse": {"input": '{"q":"<PERSON_1>"}'}}},
@@ -1154,7 +1156,8 @@ class TestDeAnonymizeConverseStream:
 
     @pytest.mark.asyncio
     async def test_text_and_reasoning_deltas_de_anonymized_independently(self):
-        """Distinct delta kinds must each be guardrailed and written back into their own field without bleeding the de-anonymized text across kinds."""
+        """Distinct delta kinds must each be guardrailed and written back into their own
+        field without bleeding the de-anonymized text across kinds."""
         captured = {}
 
         async def mock_hook(data, user_api_key_dict, response):
@@ -1192,7 +1195,8 @@ class TestDeAnonymizeConverseStream:
 
     @pytest.mark.asyncio
     async def test_reasoning_signature_only_frame_left_unmodified(self):
-        """A reasoning delta carrying only a signature has no guardrailable text; it must be forwarded untouched and the guardrail must not run."""
+        """A reasoning delta carrying only a signature has no guardrailable text; it must
+        be forwarded untouched and the guardrail must not run."""
         stream_bytes = _build_event_stream_frame(
             "contentBlockDelta",
             {"contentBlockIndex": 0, "delta": {"reasoningContent": {"signature": "sig"}}},
