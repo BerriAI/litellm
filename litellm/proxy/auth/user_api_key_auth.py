@@ -1730,6 +1730,16 @@ async def _user_api_key_auth_builder(
                             )
                         return JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
 
+                    if (
+                        user_object is not None
+                        and isinstance(user_object.metadata, dict)
+                        and user_object.metadata.get("scim_active") is False
+                    ):
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail=f"User={user_id} has been deactivated via SCIM. Keys owned by this user cannot be used.",
+                        )
+
                     valid_token = JWTAuthManager.user_api_key_auth_from_result(result, parent_otel_span)
 
                     # AUTO_REGISTER deferred from _resolve_jwt_to_virtual_key.
