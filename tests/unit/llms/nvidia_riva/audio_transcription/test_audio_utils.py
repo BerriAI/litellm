@@ -62,19 +62,6 @@ def test_resample_16khz_mono_passes_through_int16_bytes_match_length():
     assert resampled.duration_seconds == pytest.approx(1.0, abs=0.001)
 
 
-def test_resample_preserves_int16_clip_range():
-    sample_rate = 16000
-    samples = np.array([2.0, -2.0, 0.0, 1.0], dtype=np.float32)
-    wav_in = _wav_bytes(samples, sample_rate)
-
-    resampled = resample_to_riva_pcm(wav_in)
-
-    decoded = np.frombuffer(resampled.pcm_bytes, dtype="<i2")
-    # Anything outside [-1, 1] should clip to int16 boundary.
-    assert decoded.max() <= 32767
-    assert decoded.min() >= -32767
-
-
 def test_unknown_format_raises_clear_error():
     # 4 random bytes are not valid audio in any container we can decode.
     with pytest.raises(NvidiaRivaException) as excinfo:

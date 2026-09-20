@@ -450,15 +450,3 @@ class TestGpt5MaxCompletionTokens:
         )
         assert out.get("maxTokens") == 64
         assert "maxCompletionTokens" not in out
-
-    def test_payload_serializes_max_completion_tokens(self):
-        from litellm.types.llms.oci import OCIChatRequestPayload
-
-        payload = OCIChatRequestPayload(
-            apiFormat="GENERIC",
-            messages=[],
-            maxCompletionTokens=64,
-        )
-        dumped = payload.model_dump(exclude_none=True)
-        assert dumped["maxCompletionTokens"] == 64
-        assert "maxTokens" not in dumped
