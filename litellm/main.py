@@ -1117,7 +1117,11 @@ def responses_api_bridge_check(
     # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
     has_function_tool: Final = any(
-        (tool.get("type") == "function" if isinstance(tool, dict) else getattr(tool, "type", None) == "function")
+        (
+            tool.get("type") == "function" and (isinstance(tool.get("function"), dict) or "name" in tool)
+            if isinstance(tool, dict)
+            else getattr(tool, "type", None) == "function"
+        )
         for tool in (tools or ())
     )
     if isinstance(reasoning_effort, dict):

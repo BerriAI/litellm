@@ -1049,6 +1049,35 @@ def test_responses_api_bridge_check_gpt_5_4_flat_function_tool_routes_to_respons
     assert model_info.get("mode") == "responses"
 
 
+@pytest.mark.parametrize(
+    "custom_llm_provider, model_name, api_base",
+    [
+        pytest.param("openai", "gpt-5.6", None, id="openai"),
+        pytest.param("azure_ai", "gpt-6-astra", "https://myproject.services.ai.azure.com", id="azure-ai-foundry"),
+    ],
+)
+def test_responses_api_bridge_check_function_tool_without_body_stays_chat(
+    monkeypatch, custom_llm_provider, model_name, api_base
+):
+    import litellm
+    from litellm.main import responses_api_bridge_check
+
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "api_base", None)
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider=custom_llm_provider,
+        tools=[{"type": "function"}],
+        reasoning_effort=None,
+        api_base=api_base,
+    )
+
+    assert model == model_name
+    assert model_info.get("mode") != "responses"
+
+
 def test_responses_api_bridge_check_dict_effort_none_stays_chat():
     """The escape hatch must honor litellm's dict form: {"effort": "none"} means reasoning off."""
     from litellm.main import responses_api_bridge_check
