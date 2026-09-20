@@ -7,7 +7,7 @@ apply to a given request based on team alias, key alias, and model.
 Policies are matched via policy_attachments which define WHERE each policy applies.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
@@ -139,7 +139,7 @@ class PolicyMatcher:
         """Predicate telling whether a policy exists and its condition matches the context."""
         return lambda policy_name: bool(
             PolicyMatcher.get_policies_with_matching_conditions(
-                policy_names=[policy_name],  # mutable-ok: the matcher takes a list
+                policy_names=(policy_name,),
                 context=context,
                 policies=policies,
             )
@@ -147,7 +147,7 @@ class PolicyMatcher:
 
     @staticmethod
     def get_policies_with_matching_conditions(
-        policy_names: list[str],
+        policy_names: Sequence[str],
         context: PolicyMatchContext,
         policies: dict[str, Policy] | None = None,
     ) -> list[str]:
