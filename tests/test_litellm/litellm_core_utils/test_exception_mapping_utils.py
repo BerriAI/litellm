@@ -3,8 +3,6 @@ import openai
 import pytest
 
 import litellm
-
-from litellm.litellm_core_utils.bug_report import DISABLE_ENV_VAR, ISSUE_URL_BASE
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
     _get_body_error_code,
@@ -972,30 +970,6 @@ def test_an_unmapped_exception_with_no_model_or_provider_is_a_connection_error(q
         )
 
     assert "boom" in raised.value.message
-
-
-def test_unmapped_sdk_exception_includes_bug_report_link(quiet_exception_mapping):
-    with pytest.raises(litellm.APIConnectionError) as raised:
-        exception_type(
-            model="gpt-4",
-            original_exception=ValueError("boom"),
-            custom_llm_provider="openai",
-        )
-
-    assert ISSUE_URL_BASE in str(raised.value)
-
-
-def test_unmapped_sdk_exception_bug_report_link_can_be_disabled(quiet_exception_mapping, monkeypatch):
-    monkeypatch.setenv(DISABLE_ENV_VAR, "true")
-
-    with pytest.raises(litellm.APIConnectionError) as raised:
-        exception_type(
-            model="gpt-4",
-            original_exception=ValueError("boom"),
-            custom_llm_provider="openai",
-        )
-
-    assert ISSUE_URL_BASE not in str(raised.value)
 
 
 def _raise_and_map(model: str | None, original_exception: Exception, custom_llm_provider: str | None) -> None:

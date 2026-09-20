@@ -11,10 +11,9 @@ from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
     ISSUE_URL_BASE,
     MAX_URL_LENGTH,
-    BugReport,
-    build_bug_report,
     bug_report_enabled,
     bug_report_issue_url,
+    build_bug_report,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 

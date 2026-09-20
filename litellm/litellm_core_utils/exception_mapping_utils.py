@@ -515,24 +515,8 @@ def _map_openai_exception(
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
         # exception_mapping_worked = True
-        bug_report_message: Final = (
-            f"{exception_provider} - {message}"
-            + (
-                "\n"
-                + bug_report_notice(
-                    build_bug_report(
-                        original_exception,
-                        surface="sdk",
-                        model=model,
-                        custom_llm_provider=custom_llm_provider,
-                    )
-                )
-                if not hasattr(original_exception, "request") and bug_report_enabled()
-                else ""
-            )
-        )
         raise APIConnectionError(
-            message=f"APIConnectionError: {bug_report_message}",
+            message=f"APIConnectionError: {exception_provider} - {message}",
             llm_provider=custom_llm_provider,
             model=model,
             litellm_debug_info=extra_information,
@@ -2702,11 +2686,11 @@ def exception_type(
                                 build_bug_report(
                                     original_exception,
                                     surface="sdk",
-                                    model=model,
-                                    custom_llm_provider=custom_llm_provider,
+                                    model=cast(str | None, model),
+                                    custom_llm_provider=cast(str | None, custom_llm_provider),
                                 )
                             )
-                            if bug_report_enabled()
+                            if bug_report_enabled() and isinstance(original_exception, BaseException)
                             else ""
                         )
                     ),

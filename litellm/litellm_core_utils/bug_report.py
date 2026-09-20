@@ -17,6 +17,7 @@ MAX_URL_LENGTH: Final = 6000
 MAX_MESSAGE_CHARS: Final = 600
 MAX_FRAMES: Final = 12
 DISABLE_ENV_VAR: Final = "LITELLM_DISABLE_BUG_REPORT_LINK"
+_SHORTENED_MESSAGE_LENGTHS: Final = (480, 360, 240, 120, 0)
 
 Surface = Literal["sdk", "proxy"]
 
@@ -51,7 +52,7 @@ def _format_frame(frame: traceback.FrameSummary, package_dir: Path, package_pare
 
 def _get_litellm_frames(exc: BaseException) -> tuple[str, ...]:
     package_file: Final = getattr(litellm, "__file__", None)
-    if package_file is None or exc.__traceback__ is None:
+    if not isinstance(package_file, str) or exc.__traceback__ is None:
         return ()
     package_dir: Final = Path(package_file).resolve().parent
     package_parent: Final = package_dir.parent
@@ -116,7 +117,7 @@ def _description(report: BugReport, message: str, frames: tuple[str, ...]) -> st
 
 
 def _issue_url(report: BugReport, message: str, frames: tuple[str, ...]) -> str:
-    deployment: tuple[tuple[str, str], ...] = (
+    deployment: Final[tuple[tuple[str, str], ...]] = (
         (("deployment", "pip / Python SDK"),)
         if report.surface == "sdk"
         else (("deployment", "Docker"),)
@@ -135,33 +136,17 @@ def _issue_url(report: BugReport, message: str, frames: tuple[str, ...]) -> str:
 
 
 def bug_report_issue_url(report: BugReport) -> str:
-    frame_candidates: Final = tuple(report.litellm_frames[index:] for index in range(len(report.litellm_frames) + 1))
-    message_lengths: Final = (
-        len(report.exception_message),
-        480,
-        360,
-        240,
-        120,
-        0,
+    frames: Final = report.litellm_frames
+    message: Final = report.exception_message
+    candidates: Final = (
+        *(_issue_url(report, message, frames[index:]) for index in range(len(frames) + 1)),
+        *(
+            _issue_url(report, message[:length], ())
+            for length in _SHORTENED_MESSAGE_LENGTHS
+            if length < len(message)
+        ),
     )
-    frame_candidates_with_full_message: Final = (
-        _issue_url(report, report.exception_message[:message_length], frames)
-        for frames in frame_candidates
-        for message_length in (len(report.exception_message),)
-    )
-    shortest_candidate: Final = _issue_url(report, "", ())
-    full_message_candidate: Final = next(
-        (candidate for candidate in frame_candidates_with_full_message if len(candidate) <= MAX_URL_LENGTH),
-        None,
-    )
-    if full_message_candidate is not None:
-        return full_message_candidate
-    shortened_candidates: Final = (
-        _issue_url(report, report.exception_message[:message_length], ())
-        for message_length in message_lengths
-        if message_length <= len(report.exception_message)
-    )
-    return next((candidate for candidate in shortened_candidates if len(candidate) <= MAX_URL_LENGTH), shortest_candidate)
+    return next((candidate for candidate in candidates if len(candidate) <= MAX_URL_LENGTH), _issue_url(report, "", ()))
 
 
 def bug_report_notice(report: BugReport) -> str:
