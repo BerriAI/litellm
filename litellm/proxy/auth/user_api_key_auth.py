@@ -2084,9 +2084,6 @@ async def _user_api_key_auth_builder(
 
         ## Check DB
 
-        # No database is connected, so the master key is the only valid
-        # credential. A key that does not match it is an authentication
-        # failure, not a database connectivity problem.
         if prisma_client is None:
             raise ProxyException(
                 message="Authentication Error, Invalid proxy server token passed. "
