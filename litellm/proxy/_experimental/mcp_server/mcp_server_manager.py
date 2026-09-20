@@ -2875,6 +2875,27 @@ class MCPServerManager:
         )
         return any(owner is not None and normalize_server_name(owner) in owned for owner in mapped_owners)
 
+    def has_listed_tools(self, server: MCPServer) -> bool:
+        """True once this worker holds at least one tool row for ``server``."""
+        owned: Final = self._owned_mapping_values(server)
+        return any(
+            normalize_server_name(owner) in owned for owner in self.tool_name_to_mcp_server_name_mapping.values()
+        )
+
+    def _known_prefix_to_server(self) -> Mapping[str, MCPServer]:
+        """Every prefix form a tool name may carry, keyed to its server; a form two servers share
+        stays with the one registered first."""
+        return {
+            normalize_server_name(known_prefix): server
+            for server in reversed(tuple(self.get_registry().values()))
+            for known_prefix in iter_known_server_prefixes(server)
+        }
+
+    def server_owning_tool_name_prefix(self, tool_name: str) -> MCPServer | None:
+        prefix_to_server: Final = self._known_prefix_to_server()
+        matched: Final = match_known_server_prefix(tool_name, prefix_to_server.keys())
+        return None if matched is None else prefix_to_server.get(matched[0])
+
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
         Remove a server from the registry
@@ -6475,15 +6496,7 @@ class MCPServerManager:
             MCPServer if found, None otherwise
         """
         registry_servers: Final = list(self.get_registry().values())
-
-        # Build prefix → server lookup covering every known form a tool name
-        # may take (alias / server_name / server_id / short ID).  This is what
-        # makes the short-prefix mode work without breaking historical names.
-        prefix_to_server: Final[dict[str, MCPServer]] = {}
-        for server in registry_servers:
-            for known_prefix in iter_known_server_prefixes(server):
-                normalised = normalize_server_name(known_prefix)
-                prefix_to_server.setdefault(normalised, server)
+        prefix_to_server: Final = self._known_prefix_to_server()
 
         # First try with the original tool name
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
