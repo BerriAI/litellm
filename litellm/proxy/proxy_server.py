@@ -8571,8 +8571,9 @@ def save_worker_config(**data):
 LEGACY_WORKER_CONFIG_KEYS: Final = frozenset({"telemetry"})
 
 
-async def initialize_from_worker_config(worker_config: dict[str, object]) -> None:
-    await initialize(**{k: v for k, v in worker_config.items() if k not in LEGACY_WORKER_CONFIG_KEYS})
+async def initialize_from_worker_config(worker_config: Mapping[str, object]) -> None:
+    supported: Final = MappingProxyType({k: v for k, v in worker_config.items() if k not in LEGACY_WORKER_CONFIG_KEYS})
+    await initialize(**supported)
 
 
 async def initialize(
