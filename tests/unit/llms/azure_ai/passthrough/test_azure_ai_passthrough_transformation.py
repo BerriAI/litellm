@@ -256,13 +256,13 @@ def test_serverless_host_gets_a_bearer_token():
     assert "api-key" not in headers
 
 
-def test_entra_token_is_used_when_the_deployment_has_no_api_key():
+def test_entra_token_is_used_when_the_deployment_has_no_api_key(no_ambient_azure_credentials):
     headers = _auth_headers(api_key=None, api_base=FOUNDRY_BASE, litellm_params={"azure_ad_token": "entra-token"})
 
     assert headers["Authorization"] == "Bearer entra-token"
 
 
-def test_no_credentials_at_all_raises():
+def test_no_credentials_at_all_raises(no_ambient_azure_credentials):
     with pytest.raises(ValueError, match="Missing Azure AI credentials"):
         _auth_headers(api_key=None, api_base=FOUNDRY_BASE)
 

@@ -707,7 +707,7 @@ async def test_realtime_health_check_uses_bearer_token_when_no_api_key(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch):
+async def test_arealtime_forwards_deployment_azure_ad_token(monkeypatch, no_ambient_azure_credentials):
     """
     The router binds a deployment's `azure_ad_token` to `_arealtime`'s named parameter rather than
     **kwargs, so it must still reach the handler.

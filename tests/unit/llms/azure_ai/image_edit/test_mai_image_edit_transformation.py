@@ -174,7 +174,7 @@ class TestAzureMAIImageEdit:
         assert image_response.usage.total_tokens == 1024
 
 
-def test_mai_validate_environment_with_entra_token(monkeypatch):
+def test_mai_validate_environment_with_entra_token(monkeypatch, no_ambient_azure_credentials):
     monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
     monkeypatch.setattr(litellm, "api_key", None)
 

@@ -12,6 +12,14 @@ import litellm.router as litellm_router_module  # noqa: E402  # same import-time
 import litellm.utils as litellm_utils_module  # noqa: E402  # same import-time dependency
 
 LOOPBACK_HOSTS: Final = ["127.0.0.1", "::1"]
+AMBIENT_AZURE_CREDENTIAL_ENV_VARS: Final = (
+    "AZURE_AD_TOKEN",
+    "AZURE_TENANT_ID",
+    "AZURE_CLIENT_ID",
+    "AZURE_CLIENT_SECRET",
+    "AZURE_USERNAME",
+    "AZURE_PASSWORD",
+)
 
 
 def _allow_loopback_only() -> None:
@@ -51,6 +59,12 @@ def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def no_ambient_azure_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in AMBIENT_AZURE_CREDENTIAL_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
 
 
 def pytest_sessionfinish() -> None:
