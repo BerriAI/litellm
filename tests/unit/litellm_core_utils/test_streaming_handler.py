@@ -5040,3 +5040,24 @@ def test_falsy_environment_values_do_not_enable_strict_mode(value, monkeypatch):
 def test_incomplete_stream_error_is_reachable_from_the_package_root():
     """A caller writes `except litellm.IncompleteStreamError`, not the submodule path"""
     assert litellm.IncompleteStreamError is litellm.exceptions.IncompleteStreamError
+
+
+def test_an_ordinary_content_chunk_does_not_mark_the_stream_finished():
+    """The nlp_cloud branch set the flag for every parsed chunk, not only a terminal one"""
+    wrapper = _strict_wrapper(strict=True)
+    wrapper.custom_llm_provider = "nlp_cloud"
+
+    assert wrapper.stream_reported_finished is False
+    wrapper.received_finish_reason = None
+    assert wrapper.stream_reported_finished is False
+
+    with pytest.raises(litellm.exceptions.IncompleteStreamError):
+        wrapper.finish_reason_handler()
+
+
+def test_an_empty_finish_reason_still_marks_the_stream_finished():
+    wrapper = _strict_wrapper(strict=True)
+    wrapper.received_finish_reason = ""
+
+    assert wrapper.stream_reported_finished is True
+    assert wrapper.finish_reason_handler().choices[0].finish_reason == "stop"
