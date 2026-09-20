@@ -2036,15 +2036,15 @@ def get_model_from_request(
         if vertex_match:
             model = vertex_match.group(1)
 
-    # If still not found, read the Watsonx body key. Watsonx generation and
-    # chat requests carry the model under "model_id" (the native Watsonx ML
-    # API shape, and the key litellm's own Watsonx client writes), so without
-    # this branch the model resolves to None and the key's model allowlist is
-    # never checked on /watsonx routes.
-    if model is None and route.lower().startswith("/watsonx"):
+    # Watsonx routes carry the deployment name under "model_id" (the native
+    # Watsonx ML API shape). The generic "model" body key can also be set by
+    # the caller, but Watsonx executes model_id; both must be authorized,
+    # so model_id is checked whenever present on a /watsonx route,
+    # regardless of whether "model" already resolved.
+    if route.lower().startswith("/watsonx"):
         watsonx_model: Final = request_data.get("model_id")
         if isinstance(watsonx_model, str) and watsonx_model:
-            model = watsonx_model
+            return watsonx_model
 
     if route.lower().startswith("/bedrock"):
         bedrock_model: Final = _model_from_bedrock_route(route)
