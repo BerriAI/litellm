@@ -60,11 +60,12 @@ def _recording_request_root_span() -> Span | None:
 
 
 class TraceCorrelationMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, state: "_TraceCorrelationState") -> None:
         self.app = app
+        self.state = state
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
+        if scope["type"] != "http" or not self.state.enabled:
             await self.app(scope, receive, send)
             return
 
@@ -80,6 +81,11 @@ class TraceCorrelationMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_trace_correlation)
+
+
+class _TraceCorrelationState:
+    def __init__(self) -> None:
+        self.enabled = False
 
 
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
@@ -149,8 +155,6 @@ def instrument_fastapi_app(app: Any) -> None:
         if not is_otel_v2_enabled():
             return
 
-        app.add_middleware(TraceCorrelationMiddleware)
-
         # Lazy: only the V2-enabled path needs the optional
         # ``opentelemetry-instrumentation-fastapi`` package, which is not part of the
         # base ``litellm[proxy]`` install. Importing it at module top would make
@@ -163,6 +167,8 @@ def instrument_fastapi_app(app: Any) -> None:
             if "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS" in os.environ
             else _DEFAULT_EXCLUDED_URLS
         )
+        correlation_state: Final = _TraceCorrelationState()
+        app.add_middleware(TraceCorrelationMiddleware, state=correlation_state)
         FastAPIInstrumentor.instrument_app(
             app,
             excluded_urls=excluded_urls,
@@ -172,5 +178,6 @@ def instrument_fastapi_app(app: Any) -> None:
             # template in their name, which can't be rewritten from a hook.
             exclude_spans=["receive", "send"],
         )
+        correlation_state.enabled = True
     except Exception as e:
         verbose_logger.debug("Skipping OTel V2 FastAPI instrumentation: %s", e)

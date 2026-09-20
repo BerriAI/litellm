@@ -4,7 +4,6 @@
 surface and the server-span + shared-provider behavior it produces.
 """
 
-
 from datetime import datetime, timezone
 
 import pytest
@@ -111,9 +110,7 @@ def test_instrumented_app_emits_server_span():
 
     TestClient(app).get("/ping")
 
-    server_spans = [
-        s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
-    ]
+    server_spans = [s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER]
     assert server_spans, "FastAPI instrumentor should emit a SERVER span per request"
     attrs = server_spans[0].attributes or {}
     assert any("route" in k or "method" in k for k in attrs)
@@ -199,6 +196,36 @@ def test_proxy_response_omits_trace_id_without_a_recording_span(monkeypatch):
     assert LITELLM_TRACE_ID_HEADER not in response.headers
 
 
+def test_failed_instrumentation_leaves_trace_correlation_inactive(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    app = fastapi.FastAPI()
+
+    @app.get("/ping")
+    async def ping():
+        return fastapi.Response(headers={"x-litellm-call-id": "unrelated-call"})
+
+    monkeypatch.setattr(
+        FastAPIInstrumentor,
+        "instrument_app",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("instrumentation unavailable")),
+    )
+    instrument_fastapi_app(app)
+
+    unrelated_span = TracerProvider().get_tracer("unrelated").start_span("unrelated")
+
+    @app.middleware("http")
+    async def unrelated_tracing_middleware(request, call_next):
+        with trace.use_span(unrelated_span, end_on_exit=False):
+            return await call_next(request)
+
+    response = TestClient(app).get("/ping")
+
+    assert LITELLM_TRACE_ID_HEADER not in response.headers
+    assert "litellm.call_id" not in (unrelated_span.attributes or {})
+    unrelated_span.end()
+
+
 def test_proxy_websocket_bypasses_trace_correlation(monkeypatch):
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     is_otel_v2_enabled.cache_clear()
@@ -226,9 +253,7 @@ def test_logger_and_instrumentor_share_provider():
 def test_passthrough_hook_renames_catch_all_span():
     """A passthrough route gets its span renamed to the real request path."""
     span = _FakeSpan()
-    _passthrough_span_name_hook(
-        span, {"path": "/openai/v1/chat/completions", "method": "POST"}
-    )
+    _passthrough_span_name_hook(span, {"path": "/openai/v1/chat/completions", "method": "POST"})
     assert span.name == "POST /openai/v1/chat/completions"
     assert span.attributes["http.route"] == "/openai/v1/chat/completions"
 
@@ -243,9 +268,7 @@ def test_passthrough_hook_leaves_non_passthrough_route_unchanged():
 
 def test_passthrough_hook_ignores_non_recording_span():
     span = _FakeSpan(recording=False)
-    _passthrough_span_name_hook(
-        span, {"path": "/openai/v1/chat/completions", "method": "POST"}
-    )
+    _passthrough_span_name_hook(span, {"path": "/openai/v1/chat/completions", "method": "POST"})
     assert span.name is None
 
 
@@ -287,9 +310,7 @@ def test_llm_span_route_is_read_off_the_server_span(monkeypatch):
     client.post("/engines/gpt-4o-mini/chat/completions")
     client.post("/openai/v1/responses/resp_abc123")
 
-    routes = {
-        (s.attributes or {})["http.route"] for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
-    }
+    routes = {(s.attributes or {})["http.route"] for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER}
     # a parameterized route keeps its template; the passthrough hook rewrote the
     # catch-all to the literal path, and both spans have to follow their own span
     assert routes == {"/engines/{model:path}/chat/completions", "/openai/v1/responses/resp_abc123"}
