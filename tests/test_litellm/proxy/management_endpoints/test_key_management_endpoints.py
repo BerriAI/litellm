@@ -8156,7 +8156,7 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     counter without also advancing reset_at is not durable either: the very
     next request would re-sum the unchanged historical spend and put the
     counter right back above the window's max_budget, so
-    _virtual_key_multi_budget_check kept raising BudgetExceededError (429) on
+    _virtual_key_multi_budget_check kept raising BudgetExceededError (422) on
     every request even though the key's own reported spend read $0.
     """
     mock_prisma_client = MagicMock()
@@ -16593,7 +16593,7 @@ async def test_info_key_fn_reads_the_configured_budget_model_key(monkeypatch):
 
     It used to probe a second, provider-stripped key because the counter was
     written under the request model instead, which is what let a key report zero
-    usage while being blocked at 429.
+    usage while being blocked at 422.
     """
     from unittest.mock import AsyncMock, MagicMock
 
