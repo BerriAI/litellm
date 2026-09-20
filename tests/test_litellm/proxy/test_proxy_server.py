@@ -1635,7 +1635,7 @@ def _boot_with_general_settings(monkeypatch, tmp_path, general_settings):
     config_path.write_text(yaml.dump({"general_settings": general_settings}))
     for name in (
         "LITELLM_MASTER_KEY",
-        "LITELLM_DANGEROUSLY_ALLOW_UNSAFE_PROXY",
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY",
         "LITELLM_MIGRATE_FROM_MASTER_KEY",
         "LITELLM_SALT_KEY",
         "WORKER_CONFIG",
@@ -1796,11 +1796,11 @@ async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monke
 
     general_settings = {
         "master_key": "sk-1234",
-        **({"dangerously_allow_unsafe_proxy": True} if override == "yaml" else {}),
+        **({"dangerously_permit_weak_or_unset_master_key": True} if override == "yaml" else {}),
     }
     _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
     if override == "env":
-        monkeypatch.setenv("LITELLM_DANGEROUSLY_ALLOW_UNSAFE_PROXY", "true")
+        monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
 
     async with proxy_startup_event(FastAPI()):
         from litellm.proxy.proxy_server import master_key

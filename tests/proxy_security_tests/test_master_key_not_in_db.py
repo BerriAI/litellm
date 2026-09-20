@@ -21,7 +21,7 @@ def override_env_settings(monkeypatch):
 def test_client():
     """Starting the test client triggers FastAPI startup, where Prisma connects to the DB."""
     with pytest.MonkeyPatch.context() as boot_env:
-        boot_env.setenv("LITELLM_DANGEROUSLY_ALLOW_UNSAFE_PROXY", "true")
+        boot_env.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
         with TestClient(app) as client:
             yield client
 

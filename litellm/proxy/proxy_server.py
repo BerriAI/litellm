@@ -345,7 +345,7 @@ from litellm.proxy.auth.login_throttle import (
 from litellm.proxy.auth.master_key_boot_check import (
     MASTER_KEY_ENV_VAR,
     SALT_KEY_ENV_VAR,
-    UNSAFE_PROXY_OVERRIDE_ENV_VAR,
+    WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR,
     announce_on_stderr_at_exit,
     enforce_master_key_boot_verdict,
     master_key_boot_verdict,
@@ -1244,7 +1244,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
                 environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
                 general_settings=general_settings,
                 config_file_path=user_config_file_path,
-                override_env_is_on=get_secret_bool(UNSAFE_PROXY_OVERRIDE_ENV_VAR) is True,
+                override_env_is_on=get_secret_bool(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR) is True,
                 salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
                 database_is_configured=prisma_client is not None or get_secret("DATABASE_URL", None) is not None,
             ),

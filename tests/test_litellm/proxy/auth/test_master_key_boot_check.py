@@ -14,8 +14,8 @@ from litellm.proxy.auth.master_key_boot_check import (
     MIGRATE_FROM_MASTER_KEY_ENV_VAR,
     PRINT_NEW_MASTER_KEY_COMMAND,
     ROTATION_DOCS_URL,
-    UNSAFE_PROXY_OVERRIDE_ENV_VAR,
-    UNSAFE_PROXY_OVERRIDE_SETTING,
+    WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR,
+    WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING,
     ConfigFileSource,
     EnvironmentSource,
     MasterKeyBootVerdict,
@@ -79,14 +79,14 @@ def test_keys_that_only_resemble_the_known_default_are_safe(master_key: str):
 @pytest.mark.parametrize("master_key", [None, "", "sk-1234"])
 def test_either_override_lets_an_unsafe_key_through(master_key: str | None):
     from_env = _verdict(master_key, override_env_is_on=True)
-    from_yaml = _verdict(master_key, {UNSAFE_PROXY_OVERRIDE_SETTING: True})
+    from_yaml = _verdict(master_key, {WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING: True})
 
     assert isinstance(from_env, UnsafeMasterKeyAllowed)
     assert from_env == from_yaml
 
 
 def test_override_switched_off_in_yaml_still_refuses():
-    assert isinstance(_verdict("sk-1234", {UNSAFE_PROXY_OVERRIDE_SETTING: False}), UnsafeMasterKeyRefused)
+    assert isinstance(_verdict("sk-1234", {WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING: False}), UnsafeMasterKeyRefused)
 
 
 def test_yaml_master_key_is_the_source_even_when_it_resolved_to_nothing():
@@ -364,8 +364,8 @@ def test_override_hint_is_the_last_paragraph(migration: StoredSecretsMigration |
     text = render_refusal(_refusal(migration=migration))
     last_paragraph = text.split("\n\n")[-1]
 
-    assert UNSAFE_PROXY_OVERRIDE_ENV_VAR in last_paragraph
-    assert f"general_settings.{UNSAFE_PROXY_OVERRIDE_SETTING}" in last_paragraph
+    assert WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR in last_paragraph
+    assert f"general_settings.{WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_SETTING}" in last_paragraph
 
 
 @pytest.mark.skipif(shutil.which("openssl") is None, reason="the printed command shells out to openssl")
