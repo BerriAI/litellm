@@ -10872,7 +10872,7 @@ async def test_realtime_session_rejected_in_pre_call_releases_the_budget_reserva
     """A rate-limit or guardrail rejection happens before route_request, so the
     relay never runs and no success log can own the reservation. The endpoint
     must release it on that exit too, or the key stays pinned at the reserved
-    amount and its next requests 429 with budget_exceeded while /key/info shows
+    amount and its next requests 422 with budget_exceeded while /key/info shows
     spend 0 (reproduced live with rpm_limit=1). The client still gets the
     pre-call error event and the 1011 close it got before."""
     reservation: Final = {"reserved_cost": 0.55, "input_cost": 0.0, "finalized": False, "entries": []}
