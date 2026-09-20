@@ -1628,6 +1628,188 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         assert master_key == test_resolved_key
 
 
+def _boot_with_general_settings(monkeypatch, tmp_path, general_settings):
+    import yaml
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"general_settings": general_settings}))
+    for name in (
+        "LITELLM_MASTER_KEY",
+        "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY",
+        "LITELLM_MIGRATE_FROM_MASTER_KEY",
+        "LITELLM_SALT_KEY",
+        "WORKER_CONFIG",
+        "DATABASE_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
+    scheduler_left_on_a_closed_event_loop_by_an_earlier_test = "litellm.proxy.proxy_server.scheduler"
+    monkeypatch.setattr(scheduler_left_on_a_closed_event_loop_by_an_earlier_test, None)
+    announced = []
+    monkeypatch.setattr("litellm.proxy.proxy_server.announce_on_stderr_at_exit", announced.append)
+    return config_path, announced
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "general_settings",
+    [{"master_key": "sk-1234"}, {"master_key": ""}, {"master_key": None}, {}],
+    ids=["publicly-known", "empty", "yaml-null", "no-general-settings"],
+)
+async def test_proxy_startup_refuses_an_unsafe_master_key_even_when_the_database_is_unreachable(
+    monkeypatch, tmp_path, general_settings
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    async def unreachable():
+        raise ConnectionError("database is down")
+
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
+    monkeypatch.setattr("litellm.proxy.proxy_server._connect_to_count_stored_values", unreachable)
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert len(announced) == 1
+    assert "sk-$(openssl rand -hex 32)" in announced[0]
+    key_can_have_encrypted_the_database = general_settings.get("master_key") is not None
+    assert ("could not be checked" in announced[0]) == key_can_have_encrypted_the_database
+
+
+class _DatabaseWithOneStoredCredential:
+    def __init__(self, ciphertext):
+        self._ciphertext = ciphertext
+
+    async def query_raw(self, query, *args):
+        if "information_schema.columns" in query:
+            return [{"table_name": "LiteLLM_CredentialsTable", "column_name": "credential_values"}]
+        return [{"credential_id": "cred-1", "credential_values": {"api_key": self._ciphertext}}]
+
+    async def execute_raw(self, query, *args):
+        raise AssertionError("a refused boot must not write to the database")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("encrypted_with, asks_to_migrate", [("sk-1234", True), ("sk-some-other-key", False)])
+async def test_proxy_startup_asks_to_migrate_only_when_the_database_holds_values_under_the_unsafe_key(
+    monkeypatch, tmp_path, encrypted_with, asks_to_migrate
+):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    database = _DatabaseWithOneStoredCredential(encrypt_value_helper("sk-provider", new_encryption_key=encrypted_with))
+
+    async def connected():
+        return database
+
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-1234"})
+    monkeypatch.setenv("DATABASE_URL", "postgresql://nobody:nothing@127.0.0.1:1/unreachable")
+    monkeypatch.setattr("litellm.proxy.proxy_server._connect_to_count_stored_values", connected)
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert ("LITELLM_MIGRATE_FROM_MASTER_KEY=sk-1234" in announced[0]) == asks_to_migrate
+    assert ("holds 1 value(s) encrypted with this master key" in announced[0]) == asks_to_migrate
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_says_a_lingering_migrate_from_variable_can_be_deleted(monkeypatch, tmp_path, caplog):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
+    assert len(notices) == 1
+    assert "you may now delete LITELLM_MIGRATE_FROM_MASTER_KEY" in notices[0]
+
+
+class _PrismaClientWhoseDatabaseRejectsQueries:
+    class _Database:
+        async def query_raw(self, query, *args):
+            raise RuntimeError("permission denied for table LiteLLM_CredentialsTable")
+
+    writer_db = _Database()
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_stops_when_the_requested_migration_fails(monkeypatch, tmp_path, caplog):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-a-safe-master-key"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _PrismaClientWhoseDatabaseRejectsQueries())
+    monkeypatch.setenv("LITELLM_MIGRATE_FROM_MASTER_KEY", "sk-1234")
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"),
+        pytest.raises(RuntimeError, match="permission denied"),
+    ):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    notices = [record.getMessage() for record in caplog.records if "LITELLM_MIGRATE_FROM_MASTER_KEY" in record.message]
+    assert len(notices) == 1
+    assert "Could not migrate stored values" in notices[0]
+
+
+@pytest.mark.asyncio
+async def test_proxy_startup_names_the_config_file_that_set_the_unsafe_key(monkeypatch, tmp_path):
+    from fastapi import FastAPI
+
+    from litellm.proxy.auth.master_key_boot_check import UnsafeMasterKeyError
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    config_path, announced = _boot_with_general_settings(monkeypatch, tmp_path, {"master_key": "sk-1234"})
+
+    with pytest.raises(UnsafeMasterKeyError):
+        async with proxy_startup_event(FastAPI()):
+            pass
+
+    assert str(config_path) in announced[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("override", ["yaml", "env"])
+async def test_proxy_startup_boots_an_unsafe_master_key_under_the_override(monkeypatch, tmp_path, override):
+    from fastapi import FastAPI
+
+    from litellm.proxy.proxy_server import proxy_startup_event
+
+    general_settings = {
+        "master_key": "sk-1234",
+        **({"dangerously_permit_weak_or_unset_master_key": True} if override == "yaml" else {}),
+    }
+    _, announced = _boot_with_general_settings(monkeypatch, tmp_path, general_settings)
+    if override == "env":
+        monkeypatch.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
+
+    async with proxy_startup_event(FastAPI()):
+        from litellm.proxy.proxy_server import master_key
+
+        assert master_key == "sk-1234"
+
+    assert announced == []
+
+
 def test_team_info_masking():
     """
     Test that sensitive team information is properly masked
