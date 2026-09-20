@@ -3054,6 +3054,7 @@ async def _add_team_members_to_team(
 
 
 async def _update_team_member_role(
+    tx: "Prisma",
     prisma_client: PrismaClient,
     team_id: str,
     user_id: str,
@@ -3061,27 +3062,26 @@ async def _update_team_member_role(
     user_email: str | None,
 ) -> tuple[tuple[Member, ...], tuple[Member, ...]]:
     """Rewrite one member's role from the roster read under the team lock; returns (before, after)."""
-    async with prisma_client.tx() as tx:
-        await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
+    await tx.query_raw(TEAM_ADVISORY_LOCK_SQL, team_id)
 
-        locked_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
-        if locked_members is None:
-            raise HTTPException(status_code=404, detail={"error": f"Team id={team_id} does not exist in db"})
+    locked_members: Final = await TeamRepository(prisma_client).get_members_with_roles_locked(tx, team_id)
+    if locked_members is None:
+        raise HTTPException(status_code=404, detail={"error": f"Team id={team_id} does not exist in db"})
 
-        before: Final = tuple(locked_members)
-        if all(member.user_id != user_id for member in before):
-            raise HTTPException(status_code=404, detail={"error": f"User {user_id} is not a member of team {team_id}"})
+    before: Final = tuple(locked_members)
+    if all(member.user_id != user_id for member in before):
+        raise HTTPException(status_code=404, detail={"error": f"User {user_id} is not a member of team {team_id}"})
 
-        after: Final = tuple(
-            Member(user_id=member.user_id, role=role, user_email=user_email or member.user_email)
-            if member.user_id == user_id
-            else member
-            for member in before
-        )
-        await _team_tx_db(tx).update(
-            where={"team_id": team_id},
-            data={"members_with_roles": json.dumps([m.model_dump() for m in after])},
-        )
+    after: Final = tuple(
+        Member(user_id=member.user_id, role=role, user_email=user_email or member.user_email)
+        if member.user_id == user_id
+        else member
+        for member in before
+    )
+    await _team_tx_db(tx).update(
+        where={"team_id": team_id},
+        data={"members_with_roles": json.dumps([m.model_dump() for m in after])},
+    )
     return before, after
 
 
@@ -3885,6 +3885,18 @@ async def team_member_update(
     ### upsert new budget
     budget_patch: Final = member_budget_patch(data)
     async with prisma_client.tx() as tx:
+        role_change: Final = (
+            await _update_team_member_role(
+                tx=tx,
+                prisma_client=prisma_client,
+                team_id=data.team_id,
+                user_id=received_user_id,
+                role=data.role,
+                user_email=data.user_email,
+            )
+            if data.role is not None
+            else None
+        )
         await _upsert_budget_and_membership(
             tx=tx,
             team_id=data.team_id,
@@ -3901,15 +3913,8 @@ async def team_member_update(
             user_api_key_cache=user_api_key_cache,
         )
 
-    ### update team member role
-    if data.role is not None:
-        members_before_role_update, team_members = await _update_team_member_role(
-            prisma_client=prisma_client,
-            team_id=data.team_id,
-            user_id=received_user_id,
-            role=data.role,
-            user_email=data.user_email,
-        )
+    if role_change is not None:
+        members_before_role_update, team_members = role_change
         team_table.members_with_roles = list(team_members)
         _schedule_team_membership_audit_log(
             team_id=data.team_id,

@@ -13698,9 +13698,11 @@ async def test_team_member_update_role_change_404s_when_the_member_left_before_t
     _wire_member_delete_tx(mock_prisma_client)
 
     team_info_patch, upsert_patch = _member_update_patches(snapshot)
-    with team_info_patch, upsert_patch, pytest.raises(HTTPException) as exc_info:
+    with team_info_patch, upsert_patch as upsert_budget, pytest.raises(HTTPException) as exc_info:
         await team_member_update(
-            data=TeamMemberUpdateRequest(team_id="team-member-gone-race", user_id="bob", role="admin"),
+            data=TeamMemberUpdateRequest(
+                team_id="team-member-gone-race", user_id="bob", role="admin", max_budget_in_team=5.0
+            ),
             http_request=MagicMock(),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
@@ -13710,6 +13712,7 @@ async def test_team_member_update_role_change_404s_when_the_member_left_before_t
     assert exc_info.value.status_code == 404
     assert "bob" in str(exc_info.value.detail)
     mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
+    upsert_budget.assert_not_awaited()
     await _settle_audit_log_tasks()
     assert audit_logger.payloads == []
 
