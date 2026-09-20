@@ -4495,3 +4495,31 @@ def test_chunk_parser_unrelated_item_done_leaves_message_buffer_intact():
         }
     )
     assert result.choices[0].delta.content == "tail text"
+
+
+def test_chunk_parser_accepts_pydantic_base_model_chunk():
+    """A pydantic BaseModel chunk is dispatched through the same event path."""
+    from pydantic import BaseModel
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    class _DeltaChunk(BaseModel):
+        type: str
+        delta: str
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    result = iterator.chunk_parser(_DeltaChunk(type="response.output_text.delta", delta="hi"))
+    assert result.choices[0].delta.content == "hi"
+
+
+def test_chunk_parser_falls_back_to_static_translation_for_unsupported_chunks():
+    """Chunks that are neither dict nor BaseModel reach the stateless translator."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    with pytest.raises(ValueError):
+        iterator.chunk_parser("not a structured chunk")
