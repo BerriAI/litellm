@@ -9,12 +9,9 @@ this preset registers a custom exporter (``kind="agentops"``) that mints the JWT
 worker thread, off any event loop — and caches it for the process lifetime.
 """
 
-from collections.abc import Sequence
 from typing import Any, Final
 
 import httpx
-from opentelemetry.sdk.trace import ReadableSpan
-from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -74,7 +71,7 @@ def agentops_preset(
     )
 
 
-def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
+def _build_agentops_exporter(spec: ExporterSpec) -> Any:
     """Factory for the ``agentops`` exporter kind: a lazy-auth OTLP/HTTP exporter."""
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
         OTLPSpanExporter,
@@ -109,7 +106,7 @@ def _build_agentops_exporter(spec: ExporterSpec) -> SpanExporter:
             except Exception as e:
                 verbose_logger.debug("AgentOps JWT fetch failed: %s", e)
 
-        def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        def export(self, spans: Any) -> Any:
             self._ensure_authenticated()
             return super().export(spans)
 
