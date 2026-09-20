@@ -179,6 +179,7 @@ from litellm.router_utils.cooldown_handlers import (
     _get_cooldown_deployments,
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
+    is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -8137,11 +8138,18 @@ class Router:
                 )
                 return False
 
-            exception_status: Final = getattr(exception, "status_code", "")
-
             # Cache litellm_params to avoid repeated dict lookups
             litellm_params: Final = kwargs.get("litellm_params", {})
             _model_info: Final = litellm_params.get("model_info", {})
+
+            if is_background_response_cost_poll_not_found(exception, litellm_params):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Provider 404 came from the background response cost poll, not the deployment's health."
+                )
+                return False
+
+            exception_status: Final = getattr(exception, "status_code", "")
 
             if is_caller_timeout_408(kwargs, exception_status):
                 verbose_router_logger.debug(
