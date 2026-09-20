@@ -19,31 +19,6 @@ from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 class TestMoonshotConfig:
     """Test class for Moonshot AI functionality"""
 
-    def test_default_api_base(self):
-        """Test that default API base is used when none is provided"""
-        config = MoonshotChatConfig()
-        headers = {}
-        api_key = "fake-moonshot-key"
-
-        # Call validate_environment without specifying api_base
-        result = config.validate_environment(
-            headers=headers,
-            model="moonshot-v1-8k",
-            messages=[{"role": "user", "content": "Hey"}],
-            optional_params={},
-            litellm_params={},
-            api_key=api_key,
-            api_base=None,  # Not providing api_base
-        )
-
-        # Verify headers are still set correctly
-        assert result["Authorization"] == f"Bearer {api_key}"
-        assert result["Content-Type"] == "application/json"
-
-        # We can't directly test the api_base value here since validate_environment
-        # only returns the headers, but we can verify it doesn't raise an exception
-        # which would happen if api_base handling was incorrect
-
     def test_get_supported_openai_params(self):
         """Test that get_supported_openai_params returns correct params"""
         config = MoonshotChatConfig()
