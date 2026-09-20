@@ -2,7 +2,7 @@
  * Helper utilities for Claude Code Marketplace
  */
 
-import { PluginSource, MarketplacePluginEntry } from "./types";
+import { PluginSource } from "./types";
 
 export interface SkillSourcePreview {
   parsed: PluginSource;
@@ -23,16 +23,39 @@ const GITHUB_HOST = "github.com";
 
 const SKILL_FILE_EXTENSION_REGEX = /\.(md|markdown|txt|json|ya?ml|toml)$/i;
 
-// WHATWG normalizes obfuscated IPv4 (e.g. 2130706433, 0x7f.0.0.1) to dotted-decimal, so this
-// catches every IPv4 form; bracketed IPv6 is rejected separately.
+const ZIP_ARCHIVE_REGEX = /\.zip$/i;
+
+export const SHA256_REGEX = /^[0-9a-fA-F]{64}$/;
+
+export const isValidSha256 = (digest: string): boolean => digest.trim() === "" || SHA256_REGEX.test(digest.trim());
+
+// WHATWG normalizes obfuscated IPv4 (e.g. 2130706433, 0x7f.0.0.1) to dotted-decimal on https, so
+// this catches every IPv4 form there; on a non-special scheme like ssh it catches the dotted form
+// only. Bracketed IPv6 is rejected separately.
 const IPV4_HOST_REGEX = /^\d{1,3}(\.\d{1,3}){3}$/;
 
 const GITHUB_ORG_REGEX = /^[A-Za-z0-9-]+$/;
 const GITHUB_REPO_REGEX = /^[A-Za-z0-9._-]+$/;
 
+const BROWSABLE_URL_REGEX = /^https?:\/\//i;
+const SSH_SCHEME = "ssh://";
+const SSH_SCP_REGEX = /^([a-z0-9._-]+)@([^:/@]+):(?!\/)(.+)$/i;
+
 const buildRepoUrl = (url: URL): string => `${url.protocol}//${url.host}${url.pathname.replace(/\/+$/, "")}`;
 
 const pathSegments = (url: URL): string[] => url.pathname.split("/").filter((seg) => seg !== "");
+
+const toUrl = (candidate: string): URL | null => {
+  try {
+    return new URL(candidate);
+  } catch {
+    return null;
+  }
+};
+
+/** One host rule for every scheme, so an ssh remote is neither more nor less trusted than its https twin. */
+const isSafeHost = (url: URL): boolean =>
+  url.hostname.includes(".") && !url.hostname.startsWith("[") && !IPV4_HOST_REGEX.test(url.hostname);
 
 /**
  * Validate and normalize a repository URL into a parsed URL, or null. Enforces https (rejects
@@ -46,20 +69,8 @@ const parseRepoUrl = (raw: string): URL | null => {
     return null;
   }
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  let url: URL;
-  try {
-    url = new URL(withScheme);
-  } catch {
-    return null;
-  }
-  if (
-    url.protocol !== "https:" ||
-    url.username !== "" ||
-    url.password !== "" ||
-    !url.hostname.includes(".") ||
-    url.hostname.startsWith("[") ||
-    IPV4_HOST_REGEX.test(url.hostname)
-  ) {
+  const url = toUrl(withScheme);
+  if (!url || url.protocol !== "https:" || url.username !== "" || url.password !== "" || !isSafeHost(url)) {
     return null;
   }
   return url;
@@ -134,13 +145,12 @@ const parseGitHubSource = (url: URL, subPath?: string): SkillSourcePreview | nul
   return repoPreview;
 };
 
-const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | null => {
-  if (pathSegments(url).length < 2) {
-    return null;
-  }
-
-  const repoUrl = buildRepoUrl(url);
-
+const buildGitSourcePreview = (
+  kind: "Git" | "SSH",
+  repoUrl: string,
+  repoName: string,
+  subPath?: string,
+): SkillSourcePreview | null => {
   const normalized = normalizeSubPath(subPath ?? "");
   if (normalized !== "") {
     if (!SUBDIR_PATH_REGEX.test(normalized)) {
@@ -148,27 +158,75 @@ const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | nul
     }
     return {
       parsed: { source: "git-subdir", url: repoUrl, path: normalized },
-      label: `Git subdir — ${repoUrl} @ ${normalized}`,
+      label: `${kind} subdir — ${repoUrl} @ ${normalized}`,
       suggestedName: toKebabCase(lastSegment(normalized)),
     };
   }
 
   return {
     parsed: { source: "url", url: repoUrl },
-    label: `Git repo — ${repoUrl}`,
-    suggestedName: toKebabCase(lastSegment(url.pathname).replace(/\.git$/, "")),
+    label: `${kind} repo — ${repoUrl}`,
+    suggestedName: toKebabCase(repoName),
   };
 };
 
+const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | null => {
+  if (pathSegments(url).length < 2) {
+    return null;
+  }
+  const repoName = lastSegment(url.pathname).replace(/\.git$/, "");
+  return buildGitSourcePreview("Git", buildRepoUrl(url), repoName, subPath);
+};
+
 /**
- * Parse any git-accessible repository URL into a registerable skill source.
- * GitHub URLs keep their `github`/`git-subdir` shorthand; every other host is
- * treated as a raw repo URL, with an optional subfolder turning it into git-subdir.
+ * Parse an scp-style `git@host:org/repo` or `ssh://git@host/org/repo` clone URL, registering it
+ * exactly as typed: git treats the `.git` suffix as optional, and forcing one on breaks hosts whose
+ * paths are not `org/repo`, like Azure DevOps `v3/...` and CodeCommit `v1/repos/...`. The scp form is
+ * rewritten to `ssh://` only to reuse the https host and credential rules, and only a URL that
+ * survives that round trip unchanged is accepted, which keeps traversal segments off the feed.
+ */
+const parseSshSource = (raw: string, subPath?: string): SkillSourcePreview | null => {
+  const trimmed = raw.trim();
+  const scp = SSH_SCP_REGEX.exec(trimmed);
+  const candidate = scp ? `${SSH_SCHEME}${scp[1]}@${scp[2]}/${scp[3]}` : trimmed;
+  if (!candidate.toLowerCase().startsWith(SSH_SCHEME)) {
+    return null;
+  }
+  const url = toUrl(candidate);
+  if (!url || url.username === "" || url.password !== "" || !isSafeHost(url)) {
+    return null;
+  }
+  const pathStart = candidate.indexOf("/", SSH_SCHEME.length);
+  if (pathStart === -1 || url.pathname !== candidate.slice(pathStart) || pathSegments(url).length < 2) {
+    return null;
+  }
+  return buildGitSourcePreview("SSH", trimmed, lastSegment(url.pathname).replace(/\.git$/i, ""), subPath);
+};
+
+const parseArchiveSource = (url: URL): SkillSourcePreview => ({
+  parsed: { source: "archive", url: url.href },
+  label: `Zip archive — ${url.host}${url.pathname}`,
+  suggestedName: toKebabCase(lastSegment(url.pathname).replace(ZIP_ARCHIVE_REGEX, "")),
+});
+
+/**
+ * Parse any git-accessible repository URL or https zip archive URL into a registerable skill
+ * source. A `.zip` path is an `archive` source (S3, Artifactory, any static host). GitHub URLs
+ * keep their `github`/`git-subdir` shorthand; ssh clone URLs stay ssh so a private host
+ * authenticates with the user's own key; every other host is treated as a raw repo URL,
+ * with an optional subfolder turning it into git-subdir.
  */
 export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourcePreview | null => {
+  const ssh = parseSshSource(rawUrl, subPath);
+  if (ssh) {
+    return ssh;
+  }
   const url = parseRepoUrl(rawUrl);
   if (!url) {
     return null;
+  }
+  if (ZIP_ARCHIVE_REGEX.test(url.pathname)) {
+    return parseArchiveSource(url);
   }
   if (url.hostname.replace(/^www\./, "") === GITHUB_HOST) {
     return parseGitHubSource(url, subPath);
@@ -205,25 +263,6 @@ export const buildMarketplaceSettingsSnippet = (proxyOrigin: string): string =>
 export const formatInstallCommand = (plugin: { name: string }): string => `/plugin install ${plugin.name}@litellm`;
 
 /**
- * Extract unique categories from plugins list
- * Returns array with "All" first, then sorted categories, then "Other"
- */
-export const extractCategories = (plugins: Array<{ category?: string }>): string[] => {
-  const categories = new Set<string>();
-
-  plugins.forEach((p) => {
-    if (p.category && p.category.trim() !== "") {
-      categories.add(p.category);
-    }
-  });
-
-  const sortedCategories = Array.from(categories).sort();
-
-  // Return: All, sorted categories, Other
-  return ["All", ...sortedCategories, "Other"];
-};
-
-/**
  * Validate plugin name format (kebab-case)
  * Must be lowercase letters, numbers, and hyphens only
  */
@@ -245,23 +284,21 @@ export const getSourceDisplayText = (source: PluginSource): string => {
   if (source.source === "git-subdir" && source.url && source.path) {
     return `${source.url} @ ${source.path}`;
   }
-  if (source.source === "url" && source.url) {
+  if ((source.source === "url" || source.source === "archive") && source.url) {
     return source.url;
   }
   return "Unknown source";
 };
 
 /**
- * Get clickable link for plugin source
+ * Get clickable link for plugin source. Ssh clone urls are not browsable, so they yield null.
  */
 export const getSourceLink = (source: PluginSource): string | null => {
   if (source.source === "github" && source.repo) {
     return `https://github.com/${source.repo}`;
   }
-  if ((source.source === "url" || source.source === "git-subdir") && source.url) {
-    return source.url;
-  }
-  return null;
+  const linksToUrl = source.source === "url" || source.source === "git-subdir" || source.source === "archive";
+  return linksToUrl && source.url && BROWSABLE_URL_REGEX.test(source.url) ? source.url : null;
 };
 
 /**
@@ -291,77 +328,6 @@ export const getCategoryBadgeColor = (
   }
 
   return "gray";
-};
-
-/**
- * Format date to readable string
- */
-export const formatDateString = (dateString?: string): string => {
-  if (!dateString) {
-    return "N/A";
-  }
-
-  try {
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch (error) {
-    return "Invalid date";
-  }
-};
-
-/**
- * Truncate text with ellipsis
- */
-export const truncateText = (text: string, maxLength: number): string => {
-  if (!text || text.length <= maxLength) {
-    return text;
-  }
-  return text.substring(0, maxLength) + "...";
-};
-
-/**
- * Filter plugins by search term
- * Searches in: name, description, keywords
- */
-export const filterPluginsBySearch = (
-  plugins: MarketplacePluginEntry[],
-  searchTerm: string,
-): MarketplacePluginEntry[] => {
-  if (!searchTerm || searchTerm.trim() === "") {
-    return plugins;
-  }
-
-  const term = searchTerm.toLowerCase().trim();
-
-  return plugins.filter((plugin) => {
-    const nameMatch = plugin.name.toLowerCase().includes(term);
-    const descriptionMatch = plugin.description?.toLowerCase().includes(term) || false;
-    const keywordsMatch = plugin.keywords?.some((keyword) => keyword.toLowerCase().includes(term)) || false;
-
-    return nameMatch || descriptionMatch || keywordsMatch;
-  });
-};
-
-/**
- * Filter plugins by category
- */
-export const filterPluginsByCategory = (
-  plugins: MarketplacePluginEntry[],
-  category: string,
-): MarketplacePluginEntry[] => {
-  if (category === "All") {
-    return plugins;
-  }
-
-  if (category === "Other") {
-    return plugins.filter((p) => !p.category || p.category.trim() === "");
-  }
-
-  return plugins.filter((p) => p.category === category);
 };
 
 /**
@@ -417,15 +383,4 @@ export const parseKeywords = (keywordsString: string): string[] => {
     .split(",")
     .map((kw) => kw.trim())
     .filter((kw) => kw !== "");
-};
-
-/**
- * Format keywords array to comma-separated string
- */
-export const formatKeywords = (keywords?: string[]): string => {
-  if (!keywords || keywords.length === 0) {
-    return "";
-  }
-
-  return keywords.join(", ");
 };

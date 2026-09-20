@@ -2,10 +2,10 @@
 Unit tests for SensitiveDataMasker - List Preservation
 """
 
+from functools import reduce
+from typing import Final
 
 import pytest
-
-# Add the parent directory to the system path
 
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
@@ -152,9 +152,7 @@ def test_mask_short_values_false_keeps_short_values_readable():
     chars of an exception and only masks longer tails), while longer values are still
     partially masked.
     """
-    masker = SensitiveDataMasker(
-        visible_prefix=50, visible_suffix=0, mask_short_values=False
-    )
+    masker = SensitiveDataMasker(visible_prefix=50, visible_suffix=0, mask_short_values=False)
 
     short = "Test exception for structure validation"
     assert masker._mask_value(short) == short
@@ -202,9 +200,7 @@ def test_mask_sensitive_structure_passes_through_plain_topology_names():
     from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 
     assert mask_sensitive_structure(["gpt-4", "claude-3-haiku"]) == ["gpt-4", "claude-3-haiku"]
-    assert mask_sensitive_structure([{"gpt-3.5-turbo": ["claude-3-haiku"]}]) == [
-        {"gpt-3.5-turbo": ["claude-3-haiku"]}
-    ]
+    assert mask_sensitive_structure([{"gpt-3.5-turbo": ["claude-3-haiku"]}]) == [{"gpt-3.5-turbo": ["claude-3-haiku"]}]
     assert mask_sensitive_structure(None) is None
 
 
@@ -233,9 +229,7 @@ def test_mask_sensitive_structure_masks_credentials_nested_in_config_shape():
     from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 
     secret = "sk-NESTEDINLINESECRET0987654321"
-    masked = mask_sensitive_structure(
-        [{"primary-group": [{"model": "gpt-4o", "api_key": secret}]}]
-    )
+    masked = mask_sensitive_structure([{"primary-group": [{"model": "gpt-4o", "api_key": secret}]}])
     assert secret not in str(masked)
 
 
@@ -282,10 +276,7 @@ def test_mask_credentials_in_payload_masks_inside_pydantic_models():
     auth_dict = result["user_api_key_auth"]
     assert isinstance(auth_dict, dict)
     assert auth_dict["team_alias"] == "acme"
-    assert (
-        auth_dict["token"]
-        != "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
-    )
+    assert auth_dict["token"] != "1b01552f6e52e0d41963dd6a185bd6b074624e330999534ca7ff5adfdf622dfc"
     assert "*" in auth_dict["token"]
 
 
@@ -312,6 +303,159 @@ def test_mask_credentials_in_payload_masks_only_sensitive_string_leaves():
     assert masked != plaintext
     assert masked.startswith(plaintext[:4])
     assert masked.endswith(plaintext[-4:])
+
+
+def _unique_dict_ids(node: object) -> frozenset[int]:
+    if isinstance(node, dict):
+        return frozenset((id(node),)).union(*(_unique_dict_ids(value) for value in node.values()))
+    if isinstance(node, list):
+        return frozenset().union(*(_unique_dict_ids(value) for value in node))
+    return frozenset()
+
+
+def _nested_under_levels(leaf: object, levels: int) -> object:
+    return reduce(lambda inner, level: {f"l{level}": inner}, range(levels, 0, -1), leaf)
+
+
+def test_mask_credentials_in_payload_keeps_a_shared_dict_shared():
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    shared: Final = {"api_key": "sk-shared-1234567890abcdef", "model": "gpt-4o-mini"}
+    result: Final = mask_credentials_in_payload({"first": shared, "second": shared})
+
+    assert result["first"] is result["second"]
+    assert result["first"]["model"] == "gpt-4o-mini"
+    assert result["first"]["api_key"] != "sk-shared-1234567890abcdef"
+
+
+def test_mask_credentials_in_payload_walks_each_dag_node_once():
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    root: Final = reduce(
+        lambda inner, _: {"a": inner, "b": inner, "c": inner}, range(8), {"api_key": "sk-leaf-1234567890abcdef"}
+    )
+
+    result: Final = mask_credentials_in_payload(root)
+
+    assert len(_unique_dict_ids(root)) == 9
+    assert len(_unique_dict_ids(result)) == 9
+    assert "sk-leaf-1234567890abcdef" not in str(result)
+
+
+def test_mask_credentials_in_payload_cuts_a_cycle_at_its_first_back_edge():
+    from litellm.litellm_core_utils.secret_redaction import REDACTED
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    node: Final[dict[str, object]] = {"api_key": "sk-cycle-1234567890abcdef"}
+    node["kids"] = [node] * 3
+
+    result: Final = mask_credentials_in_payload(node)
+
+    assert result["kids"] == [REDACTED, REDACTED, REDACTED]
+    assert result["api_key"] != "sk-cycle-1234567890abcdef"
+    assert len(_unique_dict_ids(result)) == 1
+
+
+def test_mask_credentials_in_payload_masks_a_shared_list_only_under_a_sensitive_key():
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    shared: Final = ["sk-list-1234567890abcdef"]
+
+    plain_first: Final = mask_credentials_in_payload({"tags": shared, "api_key": shared})
+    assert plain_first["tags"] == ["sk-list-1234567890abcdef"]
+    assert plain_first["api_key"] != ["sk-list-1234567890abcdef"]
+
+    sensitive_first: Final = mask_credentials_in_payload({"api_key": shared, "tags": shared})
+    assert sensitive_first["api_key"] != ["sk-list-1234567890abcdef"]
+    assert sensitive_first["tags"] == ["sk-list-1234567890abcdef"]
+
+
+def test_mask_credentials_in_payload_masks_a_shared_root_model_list_only_under_a_sensitive_key():
+    from pydantic import RootModel
+
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    shared: Final = RootModel[list[str]](["sk-root-1234567890abcdef"])
+
+    plain_first: Final = mask_credentials_in_payload({"tags": shared, "api_key": shared})
+    assert plain_first["tags"] == ["sk-root-1234567890abcdef"]
+    assert plain_first["api_key"] != ["sk-root-1234567890abcdef"]
+
+    sensitive_first: Final = mask_credentials_in_payload({"api_key": shared, "tags": shared})
+    assert sensitive_first["api_key"] != ["sk-root-1234567890abcdef"]
+    assert sensitive_first["tags"] == ["sk-root-1234567890abcdef"]
+
+
+def test_mask_credentials_in_payload_masks_a_root_model_string_as_one_string():
+    from pydantic import RootModel
+
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    result: Final = mask_credentials_in_payload(
+        {"api_key": RootModel[str]("sk-root-1234567890abcdef"), "model": RootModel[str]("gpt-5.4-mini")}
+    )
+
+    assert result["model"] == "gpt-5.4-mini"
+    assert result["api_key"] != "sk-root-1234567890abcdef"
+    assert result["api_key"].startswith("sk-r")
+
+
+def test_mask_credentials_in_payload_hides_containers_past_the_depth_cap():
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+    from litellm.litellm_core_utils.secret_redaction import REDACTED
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    secret: Final = "sk-deep-1234567890abcdef"
+    cap: Final = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+
+    result: Final = mask_credentials_in_payload(_nested_under_levels({"api_key": secret}, cap))
+
+    assert secret not in str(result)
+    at_cap: Final = reduce(lambda node, level: node[f"l{level}"], range(1, cap), result)
+    assert at_cap == {f"l{cap}": REDACTED}
+
+
+def test_mask_credentials_in_payload_treats_strings_at_the_depth_cap_per_key():
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    secret: Final = "sk-deep-1234567890abcdef"
+    cap: Final = DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+
+    strings_at_cap: Final = reduce(
+        lambda node, level: node[f"l{level}"],
+        range(1, cap),
+        mask_credentials_in_payload(_nested_under_levels({"api_key": secret, "model": "gpt-5.4-mini"}, cap - 1)),
+    )
+    assert strings_at_cap["model"] == "gpt-5.4-mini"
+    assert strings_at_cap["api_key"] != secret
+    assert strings_at_cap["api_key"].startswith("sk-d")
+
+
+def test_mask_credentials_in_payload_keeps_sibling_models_apart():
+    """CPython reuses a freed temporary's id, so an id-keyed memo has to pin what it keys."""
+    from pydantic import BaseModel
+
+    from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
+
+    class Inner(BaseModel):
+        label: str
+        api_key: str
+
+    class Outer(BaseModel):
+        inner: Inner
+
+    result: Final = mask_credentials_in_payload(
+        {
+            "first": Outer(inner=Inner(label="one", api_key="sk-first-1234567890abcdef")),
+            "second": Outer(inner=Inner(label="two", api_key="sk-second-1234567890abcdef")),
+        }
+    )
+
+    assert result["first"]["inner"]["label"] == "one"
+    assert result["second"]["inner"]["label"] == "two"
+    assert "sk-second-1234567890abcdef" not in str(result)
+    assert result["second"]["inner"]["api_key"].startswith("sk-s")
 
 
 def test_extra_sensitive_patterns_add_to_the_defaults():
@@ -344,6 +488,7 @@ def test_the_second_positional_argument_is_still_the_override_set():
     assert masker.is_sensitive_key("session_token") is False
     assert masker.is_sensitive_key("auth_token") is True
 
+
 def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
     """A payload rendered straight to stdout cannot afford the partial reveal
     mask_credentials_in_payload leaves, so every credential-named value is replaced
@@ -358,7 +503,12 @@ def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
             "azure_ad_token": fake_token,
             "aws_secret_access_key": "fake-aws-secret-0000",
             "vertex_credentials": {"private_key": "fake-pem"},
-            "extra_headers": {"Authorization": "Bearer fake-bearer-0000", "x-request-id": "abc123"},
+            "extra_headers": {
+                "Authorization": "Bearer fake-bearer-0000",
+                "Cookie": "session=fake-session",
+                "Set-Cookie": "session=fake-session; HttpOnly",
+                "x-request-id": "abc123",
+            },
             "model": "gpt-4o-mini",
             "max_tokens": 17,
             "temperature": 0.25,
@@ -373,6 +523,8 @@ def test_redact_credentials_in_payload_leaves_no_fragment_of_the_secret():
     assert "fake-bearer-0000" not in str(result)
     assert result["api_key"] == "REDACTED"
     assert result["extra_headers"]["Authorization"] == "REDACTED"
+    assert result["extra_headers"]["Cookie"] == "REDACTED"
+    assert result["extra_headers"]["Set-Cookie"] == "REDACTED"
     assert result["extra_headers"]["x-request-id"] == "abc123"
     assert result["model"] == "gpt-4o-mini"
     assert result["max_tokens"] == 17

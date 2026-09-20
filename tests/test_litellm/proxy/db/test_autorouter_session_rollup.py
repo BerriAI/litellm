@@ -59,7 +59,8 @@ class TestBuildTransaction:
     def test_successful_auto_routed_turn_builds_every_field(self):
         transaction = _build(
             metadata=_metadata(
-                usage_object={"prompt_tokens": 90, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 7}
+                routing_decision={**ROUTING_DECISION, "savings_baseline_model": "anthropic/claude-opus-5"},
+                usage_object={"prompt_tokens": 90, "cache_read_input_tokens": 5, "cache_creation_input_tokens": 7},
             )
         )
         assert transaction == AutoRouterTurnTransaction(
@@ -77,6 +78,7 @@ class TestBuildTransaction:
             cache_hit=True,
             cache_ttl_seconds=300,
             cache_touched=True,
+            baseline_model="anthropic/claude-opus-5",
         )
 
     @pytest.mark.parametrize(
@@ -108,6 +110,17 @@ class TestBuildTransaction:
     def test_a_decision_that_never_mentions_tier_records_no_tier(self):
         transaction = _build()
         assert transaction is not None and transaction.tier is None
+
+    def test_the_baseline_the_turn_was_priced_against_travels_with_the_turn(self):
+        decision = {**ROUTING_DECISION, "savings_baseline_model": "anthropic/claude-opus-5"}
+        transaction = _build(metadata=_metadata(routing_decision=decision))
+        assert transaction is not None and transaction.baseline_model == "anthropic/claude-opus-5"
+
+    @pytest.mark.parametrize("baseline", [None, "", 3])
+    def test_a_decision_without_a_usable_baseline_records_none(self, baseline: object):
+        decision = {**ROUTING_DECISION, "savings_baseline_model": baseline}
+        transaction = _build(metadata=_metadata(routing_decision=decision))
+        assert transaction is not None and transaction.baseline_model is None
 
     def test_a_priced_classifier_rides_the_turns_spend(self):
         """The classifier row is excluded from the rollup, so its charge lands here,
@@ -215,6 +228,7 @@ def _transaction(
     session_id: str = "s1",
     at: datetime = datetime(2026, 8, 1, 12, 0, 0),
     tier: str | None = "medium",
+    baseline_model: str | None = "anthropic/claude-opus-5",
 ) -> AutoRouterTurnTransaction:
     return AutoRouterTurnTransaction(
         api_key="k1",
@@ -232,6 +246,7 @@ def _transaction(
         cache_ttl_seconds=None,
         cache_touched=False,
         tier=tier,
+        baseline_model=baseline_model,
     )
 
 
@@ -265,6 +280,10 @@ class TestFlush:
             None,
             0,
             "medium",
+            "anthropic/claude-opus-5",
+            0,
+            0.0,
+            0.0,
         )
 
     def test_a_connect_error_retries_the_same_statement(self):
@@ -291,7 +310,20 @@ class TestFlush:
 class TestEnqueueSeam:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("classifier_cost", [0.005, 0.0, None])
-    async def test_update_database_seam_enqueues_only_auto_routed_success(self, classifier_cost: float | None):
+    @pytest.mark.parametrize("estimate, covered, saved", [
+        ({"version": 1, "status": "estimated"}, 1, -0.003),
+        ({"version": 1, "status": "estimated"}, 1, 0.0),
+        ({"version": 2, "status": "estimated"}, 1, 0.0),
+        ({"version": 3, "status": "estimated"}, 1, -0.003),
+        ({"version": 1, "status": "unknown"}, 0, 0.0),
+        ({"version": 0, "status": "estimated"}, 0, 0.0),
+        ({"version": 4, "status": "estimated"}, 0, 0.0),
+        ({"version": True, "status": "estimated"}, 0, 0.0),
+        (None, 0, -0.003),
+    ])
+    async def test_update_database_seam_enqueues_only_auto_routed_success(
+        self, classifier_cost: float | None, estimate: dict[str, object] | None, covered: int, saved: float,
+    ) -> None:
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
         writer: Final = DBSpendUpdateWriter()
@@ -299,7 +331,8 @@ class TestEnqueueSeam:
             _autorouter_turn_transactions_lock=asyncio.Lock(), autorouter_turn_transactions=[]
         )
         metadata: Final = _metadata(
-            routing_decision={**ROUTING_DECISION, "classifier_cost": classifier_cost}, autorouter_savings=-0.003
+            routing_decision={**ROUTING_DECISION, "classifier_cost": classifier_cost},
+            autorouter_savings=saved if covered else -0.003, autorouter_savings_estimate=estimate,
         )
         for payload in (
             _payload(metadata=json.dumps(metadata)),
@@ -314,7 +347,10 @@ class TestEnqueueSeam:
         assert transaction.router_name == "live-auto"
         assert transaction.spend == pytest.approx(0.01 + (classifier_cost or 0.0))
         assert transaction.classifier_cost == (classifier_cost or 0.0)
-        assert transaction.saved_spend == -0.003
+        assert transaction.saved_spend == saved
+        assert transaction.savings_estimated_turns == covered
+        assert transaction.savings_estimated_actual_spend == pytest.approx(transaction.spend if covered else 0.0)
+        assert transaction.savings_estimated_saved_spend == (saved if covered else 0.0)
 
 
 def test_every_drain_trigger_reads_the_one_queue_census_owner():

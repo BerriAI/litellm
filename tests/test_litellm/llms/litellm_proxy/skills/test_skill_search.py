@@ -420,7 +420,7 @@ class TestHandleSkillSearchMCP:
         result = await handle_skill_search(
             query="language translation", top_k=10_000, user_api_key_dict=UserAPIKeyAuth(user_id="u")
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert len(json.loads(result.content[0].text)) == MAX_SKILL_SEARCH_TOP_K
 
     @pytest.mark.asyncio
@@ -432,5 +432,5 @@ class TestHandleSkillSearchMCP:
         result = await handle_skill_search(
             query="language translation", top_k=0, user_api_key_dict=UserAPIKeyAuth(user_id="u")
         )
-        assert result.isError is False
+        assert result.is_error is False
         assert len(json.loads(result.content[0].text)) == 1

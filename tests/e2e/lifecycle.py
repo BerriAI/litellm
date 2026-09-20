@@ -8,8 +8,9 @@ ResourceManager; the test registers a cleanup for every resource it creates, and
 the fixture's teardown releases them all even when the test body raises.
 """
 
+from builtins import ExceptionGroup
 from dataclasses import dataclass, field
-from typing import Callable, List, Protocol, runtime_checkable
+from typing import Callable, Final, List, Protocol, runtime_checkable
 
 from proxy_client import ProxyClient
 from models import KeyGenerateBody
@@ -52,6 +53,7 @@ class ResourceManager:
     """
 
     client: ResourceClient
+    strict_cleanup: bool = False
     _cleanups: List[Callable[[], object]] = field(
         default_factory=list
     )  # mutable-ok: append-only teardown registry
@@ -82,8 +84,17 @@ class ResourceManager:
         return customer_id
 
     def teardown(self) -> None:
-        for cleanup in reversed(self._cleanups):
-            try:
-                cleanup()
-            except Exception:
-                pass  # best-effort: a failed cleanup must not block the rest
+        failures: Final = tuple(
+            failure for cleanup in reversed(self._cleanups)
+            if (failure := _run_cleanup(cleanup)) is not None
+        )
+        if failures and self.strict_cleanup:
+            raise ExceptionGroup("Resource cleanup failed", failures)
+
+
+def _run_cleanup(cleanup: Callable[[], object]) -> Exception | None:
+    try:
+        cleanup()
+    except Exception as exc:
+        return exc
+    return None

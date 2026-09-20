@@ -6,7 +6,7 @@ import time
 from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Final, Optional
 
 import pytest
 
@@ -33,6 +33,14 @@ DB_ENV_KEYS = (
 )
 
 _db_env_snapshot_key = pytest.StashKey[dict[str, Optional[str]]]()
+
+
+def _is_zombie(pid: int) -> bool:
+    try:
+        stat: Final = Path(f"/proc/{pid}/stat").read_text()
+    except OSError:
+        return False
+    return stat.rpartition(")")[2].split()[0] == "Z"
 
 
 def _db_env_snapshot() -> dict[str, Optional[str]]:
@@ -122,11 +130,21 @@ class FakePrismaCli:
         return [json.loads(line) for line in self.calls_file.read_text().splitlines()]
 
     def grandchild_is_gone(self, within_seconds: float) -> bool:
-        deadline = time.monotonic() + within_seconds
+        pid: Final = int(self.grandchild_pidfile.read_text())
+        deadline: Final = time.monotonic() + within_seconds
         while time.monotonic() < deadline:
+            if os.name != "nt":
+                try:
+                    reaped_pid, _ = os.waitpid(pid, os.WNOHANG)
+                    if reaped_pid == pid:
+                        return True
+                except ChildProcessError:
+                    pass
             try:
-                os.kill(int(self.grandchild_pidfile.read_text()), 0)
+                os.kill(pid, 0)
             except ProcessLookupError:
+                return True
+            if _is_zombie(pid):
                 return True
             time.sleep(0.05)
         return False
@@ -154,3 +172,4 @@ def fake_prisma_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generato
             os.kill(int(cli.grandchild_pidfile.read_text()), signal.SIGKILL)
         except ProcessLookupError:
             pass
+        assert cli.grandchild_is_gone(within_seconds=5)

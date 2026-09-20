@@ -95,6 +95,18 @@ class BaseSearchConfig:
         """
         return "Unknown Search Provider"
 
+    def supports_rich_search_input(self) -> bool:
+        """
+        Whether this provider's search API accepts a natural-language
+        objective plus multiple keyword queries in one request.
+
+        Integrations that collect the richer shape (e.g. websearch
+        interception) forward ``query`` as a list plus an ``objective``
+        optional param to providers that return True; every other provider
+        keeps receiving the single query string.
+        """
+        return False
+
     def get_http_method(self) -> Literal["GET", "POST"]:
         """
         Get HTTP method for search requests.
@@ -263,6 +275,13 @@ class BaseSearchConfig:
         Override in provider-specific implementations.
         """
         raise NotImplementedError("transform_search_response must be implemented by provider")
+
+    def get_http_error_class(self, error: httpx.HTTPStatusError) -> Exception:
+        return self.get_error_class(
+            error_message=error.response.text,
+            status_code=error.response.status_code,
+            headers=dict(error.response.headers),  # mutable-ok: provider error factories require dict headers
+        )
 
     def get_error_class(
         self,

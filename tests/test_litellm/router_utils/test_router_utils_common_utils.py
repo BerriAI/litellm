@@ -12,6 +12,7 @@ from litellm.router_utils.common_utils import (
     add_model_file_id_mappings,
     filter_team_based_models,
     filter_web_search_deployments,
+    provider_for_generic_call,
     resolve_model_group_alias,
     truncate_fallback_error_detail,
     PROVIDER_SCOPED_CREDENTIAL_PARAMS,
@@ -756,3 +757,20 @@ class TestWarnOnProviderCredentialMismatch:
             )
             is None
         )
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "expected"),
+    [
+        ({"model": "azure_ai/gpt-5.4-mini", "custom_llm_provider": "azure"}, "azure"),
+        ({"model": "azure_ai/gpt-5.4-mini", "api_base": "https://my-resource.openai.azure.com"}, "azure_ai"),
+        ({"model": "cohere/command-r"}, "cohere"),
+        ({"model": "gpt-5.4-mini"}, "openai"),
+        ({"model": "no-provider-knows-this-model"}, None),
+        ({"api_base": "https://my-resource.openai.azure.com"}, None),
+    ],
+    ids=["declared_wins", "prefix_beats_host_flip", "prefix_beats_cohere_chat_flip", "unprefixed_inferred", "unknown", "no_model"],
+)
+def test_provider_for_generic_call(litellm_params, expected, monkeypatch):
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://unrelated.openai.azure.com")
+    assert provider_for_generic_call(litellm_params) == expected

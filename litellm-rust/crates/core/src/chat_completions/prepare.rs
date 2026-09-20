@@ -1,20 +1,21 @@
+use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_http::request::has_header;
+use litellm_llms::base_llm::chat::transformation::{BaseConfig, RequestAuth};
+use litellm_types::llms::openai::ChatMessage;
 use serde_json::Value;
 
-use crate::error::Error;
-use crate::http_utils::has_header;
-use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
-
-use super::common_utils::{chat_completions_provider_config, string_headers};
-use super::transformation::{ChatCompletionsAuth, ChatCompletionsProviderConfig};
-use super::types::{
-    ChatCompletionsRequest, ChatMessage, ProviderChatCompletionsRequest,
-    ResolvedChatCompletionsRequest,
+use super::{
+    Error,
+    common_utils::{chat_completions_provider_config, string_headers},
+};
+use crate::chat_completions::types::{
+    ChatCompletionsRequest, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
 
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
-) -> Result<(String, &'static dyn ChatCompletionsProviderConfig), Error> {
+) -> Result<(String, &'static dyn BaseConfig), Error> {
     let provider_info = get_custom_llm_provider(model, custom_llm_provider)
         .or_else(|| {
             custom_llm_provider.map(|provider| CustomLlmProvider {
@@ -62,12 +63,11 @@ pub(super) fn resolve_request(
     })
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
 fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
-    config: &dyn ChatCompletionsProviderConfig,
-) -> Result<(Vec<(String, String)>, ChatCompletionsAuth), Error> {
+    config: &dyn BaseConfig,
+) -> Result<(Vec<(String, String)>, RequestAuth), Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers(request.extra_headers.clone())?;
     let auth = config.auth(
@@ -77,7 +77,7 @@ fn validate_environment(
         &env_lookup,
     )?;
     match &auth {
-        ChatCompletionsAuth::Header { name, value } => {
+        RequestAuth::Header { name, value } => {
             // The deployment's credential replaces whatever the caller forwarded
             // under the same name, mirroring Python's
             // `{**headers, **anthropic_headers}`: letting a request header win
@@ -92,7 +92,7 @@ fn validate_environment(
                 headers.push(((*name).to_string(), value.clone()));
             }
         }
-        ChatCompletionsAuth::Bearer { token } => {
+        RequestAuth::Bearer { token } => {
             // Bedrock's `get_request_headers` assigns `headers["Authorization"]`
             // unconditionally once a bearer token resolves, so the deployment's
             // identity outranks whatever the caller forwarded. Keeping the
@@ -105,7 +105,7 @@ fn validate_environment(
             headers.push(("authorization".to_string(), format!("Bearer {token}")));
         }
         // SigV4 signs the serialized body, so the handler adds its headers.
-        ChatCompletionsAuth::AwsSigV4 { .. } => {}
+        RequestAuth::AwsSigV4 { .. } => {}
     }
 
     for (name, value) in config.default_headers() {
@@ -123,7 +123,7 @@ pub(super) fn prepare_provider_request(
     let model = request.model;
     let config = request.config;
     let env_lookup = |key: &str| std::env::var(key).ok();
-    let url = config.complete_url(
+    let url = config.get_complete_url(
         request.api_base,
         &model,
         &request.optional_params,

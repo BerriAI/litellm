@@ -1,6 +1,7 @@
 import logging
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
@@ -122,3 +123,26 @@ def test_drop_params_flags_and_strings_log_nothing(value, caplog):
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         GenericLiteLLMParams(drop_params=value)
     assert caplog.text == ""
+
+
+def test_aws_session_tags_round_trip_as_sts_shaped_pairs():
+    """The deployment field keeps the exact Key/Value shape STS AssumeRole expects."""
+    params = LiteLLM_Params(
+        model="bedrock/anthropic.claude-opus-5",
+        aws_session_tags=[{"Key": "team", "Value": "genai"}, {"Key": "env", "Value": "prod"}],
+    )
+
+    assert params.model_dump(exclude_none=True)["aws_session_tags"] == [
+        {"Key": "team", "Value": "genai"},
+        {"Key": "env", "Value": "prod"},
+    ]
+
+
+@pytest.mark.parametrize(
+    "aws_session_tags",
+    ["team=genai", {"team": "genai"}, [{"key": "team", "value": "genai"}], [{"Key": "team"}]],
+    ids=["string", "flat-dict", "lowercase-keys", "missing-value"],
+)
+def test_aws_session_tags_reject_shapes_sts_would_refuse(aws_session_tags):
+    with pytest.raises(ValidationError, match="aws_session_tags"):
+        LiteLLM_Params(model="bedrock/anthropic.claude-opus-5", aws_session_tags=aws_session_tags)

@@ -6,6 +6,7 @@ import re
 from base64 import urlsafe_b64encode
 from datetime import datetime, timedelta, timezone
 from http.cookies import SimpleCookie
+from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -14,12 +15,18 @@ from starlette.requests import Request
 from litellm.caching.caching import DualCache
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     _AUTH_CODE_DEBUG_KEY,
+    ACCESS_TOKEN_TOKEN_TYPE,
     CONNECT_FLOW_COOKIE_PREFIX,
     GATEWAY_AUTH_CODE_PREFIX,
     GATEWAY_AUTH_CODE_TTL_SECONDS,
     MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS,
+    MAX_CLIENT_ID_LENGTH,
+    SUBJECT_TOKEN_TYPES,
+    TOKEN_EXCHANGE_GRANT_TYPE,
     ConsentTeam,
     MintedProxyCredential,
+    SubjectIdentity,
+    SubjectTokenRefusal,
     _GatewayAuthCode,
     _open_sealed,
     _seal,
@@ -53,6 +60,13 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
 
 MASTER_KEY = "sk-gateway-dcr-flow-tests"
 REDIRECT_URI = "https://claude.ai/api/mcp/auth_callback"
+VSCODE_REDIRECT_URIS: Final = (
+    "https://insiders.vscode.dev/redirect",
+    "https://vscode.dev/redirect",
+    "http://127.0.0.1/",
+    "http://127.0.0.1:33418/",
+)
+MAX_LENGTH_REDIRECT_URIS: Final = tuple(f"https://client.example/{index}/".ljust(256, "a") for index in range(4))
 CODE_VERIFIER = "verifier-" + "v" * 43
 CODE_CHALLENGE = urlsafe_b64encode(hashlib.sha256(CODE_VERIFIER.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
 
@@ -81,9 +95,11 @@ def _request(path="/authorize", query="", cookies=None, method="GET"):
     )
 
 
-async def _register(redirect_uris) -> dict:
+async def _register(redirect_uris, token_exchange_available=True) -> dict:
     response = await register_aggregate_client(
-        request=_request(path="/register", method="POST"), request_body={"redirect_uris": redirect_uris}
+        request=_request(path="/register", method="POST"),
+        request_body={"redirect_uris": redirect_uris},
+        token_exchange_available=token_exchange_available,
     )
     return json.loads(response.body)
 
@@ -96,12 +112,74 @@ async def _reload_user_active(user_id: str):
 async def test_register_mints_stateless_public_client():
     body = await _register([REDIRECT_URI])
     assert body["token_endpoint_auth_method"] == "none"
+    assert body["grant_types"] == ["authorization_code", "refresh_token", TOKEN_EXCHANGE_GRANT_TYPE]
     assert "client_secret" not in body
     assert body["redirect_uris"] == [REDIRECT_URI]
     assert is_gateway_dcr_client_id(body["client_id"])
     record = open_gateway_dcr_client(body["client_id"])
     assert record is not None
     assert record.redirect_uris == (REDIRECT_URI,)
+
+
+@pytest.mark.asyncio
+async def test_register_omits_the_exchange_grant_where_the_gateway_cannot_serve_it():
+    body = await _register([REDIRECT_URI], token_exchange_available=False)
+    assert body["grant_types"] == ["authorization_code", "refresh_token"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redirect_uris", [VSCODE_REDIRECT_URIS, MAX_LENGTH_REDIRECT_URIS])
+async def test_register_four_callbacks_preserves_metadata(redirect_uris: tuple[str, ...]) -> None:
+    response: Final = await register_aggregate_client(
+        request=_request(path="/register", method="POST"),
+        token_exchange_available=True,
+        request_body={
+            "client_name": "Visual Studio Code",
+            "client_uri": "https://code.visualstudio.com",
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "redirect_uris": list(redirect_uris),
+            "token_endpoint_auth_method": "none",
+            "application_type": "native",
+        },
+    )
+    assert response.status_code == 201
+    body: Final = json.loads(response.body)
+    assert body["redirect_uris"] == list(redirect_uris)
+    assert body["token_endpoint_auth_method"] == "none"
+    assert "client_secret" not in body
+    assert len(body["client_id"]) <= MAX_CLIENT_ID_LENGTH
+    record: Final = open_gateway_dcr_client(body["client_id"])
+    assert record is not None
+    assert record.redirect_uris == redirect_uris
+
+
+@pytest.mark.asyncio
+async def test_register_rejects_five_valid_callbacks() -> None:
+    response: Final = await register_aggregate_client(
+        request=_request(path="/register", method="POST"),
+        token_exchange_available=True,
+        request_body={"redirect_uris": [*VSCODE_REDIRECT_URIS, "http://127.0.0.1:33419/"]},
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_redirect_uri",
+        "error_description": "redirect_uris must be a list of 1 to 4 URIs",
+    }
+
+
+@pytest.mark.asyncio
+async def test_register_four_callbacks_preserves_encoded_size_guard() -> None:
+    response: Final = await register_aggregate_client(
+        request=_request(path="/register", method="POST"),
+        token_exchange_available=True,
+        request_body={"redirect_uris": [f"https://client.example/{index}/".ljust(256, "é") for index in range(4)]},
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "error": "invalid_client_metadata",
+        "error_description": "registered metadata is too large",
+    }
 
 
 @pytest.mark.asyncio
@@ -147,6 +225,7 @@ async def test_register_rejects_userinfo_spoofed_origin():
     response = await register_aggregate_client(
         request=_request(path="/register", method="POST"),
         request_body={"redirect_uris": ["https://claude.ai@attacker.example/callback"]},
+        token_exchange_available=True,
     )
     assert response.status_code == 400
     assert json.loads(response.body)["error"] == "invalid_redirect_uri"
@@ -162,13 +241,14 @@ async def test_register_rejects_userinfo_spoofed_origin():
         ["https://claude.ai/cb#fragment"],
         ["ftp://claude.ai/cb"],
         ["https://a.example.com/" + "p" * 300],
-        ["https://a.example.com/1", "https://a.example.com/2", "https://a.example.com/3", "https://a.example.com/4"],
         [12345],
     ],
 )
 async def test_register_rejects_bad_redirect_uris(redirect_uris):
     response = await register_aggregate_client(
-        request=_request(path="/register", method="POST"), request_body={"redirect_uris": redirect_uris}
+        request=_request(path="/register", method="POST"),
+        request_body={"redirect_uris": redirect_uris},
+        token_exchange_available=True,
     )
     assert response.status_code == 400
     assert json.loads(response.body)["error"] in ("invalid_redirect_uri", "invalid_client_metadata")
@@ -248,12 +328,14 @@ def _flow_cookie_from(response) -> tuple:
 
 
 @pytest.mark.asyncio
-async def test_full_walk_register_authorize_complete_token_and_replay():
+@pytest.mark.parametrize("redirect_uris", [(REDIRECT_URI,), VSCODE_REDIRECT_URIS, MAX_LENGTH_REDIRECT_URIS])
+async def test_full_walk_register_authorize_complete_token_and_replay(redirect_uris: tuple[str, ...]):
     """The whole front door on one deterministic walk: register -> authorize ->
     complete -> token, then the security edges on the same artifacts (user mismatch,
     PKCE mismatch, single-use replay, refresh rotation, cross-client refresh)."""
-    client_id = (await _register([REDIRECT_URI]))["client_id"]
-    authorize_response = _authorize(client_id, session_user_id="u1")
+    redirect_uri: Final = redirect_uris[-1]
+    client_id = (await _register(list(redirect_uris)))["client_id"]
+    authorize_response = _authorize(client_id, session_user_id="u1", redirect_uri=redirect_uri)
     handle, cookies = _flow_cookie_from(authorize_response)
 
     denied = await complete_connect_flow(
@@ -280,7 +362,7 @@ async def test_full_walk_register_authorize_complete_token_and_replay():
     )
     assert completed.status_code == 303
     redirect = urlparse(completed.headers["location"])
-    assert f"{redirect.scheme}://{redirect.netloc}{redirect.path}" == REDIRECT_URI
+    assert f"{redirect.scheme}://{redirect.netloc}{redirect.path}" == redirect_uri
     params = parse_qs(redirect.query)
     assert params["state"] == ["client-state-123"]
     code = params["code"][0]
@@ -293,7 +375,7 @@ async def test_full_walk_register_authorize_complete_token_and_replay():
             "request": _request("/token", method="POST"),
             "grant_type": "authorization_code",
             "code": code,
-            "redirect_uri": REDIRECT_URI,
+            "redirect_uri": redirect_uri,
             "client_id": client_id,
             "code_verifier": CODE_VERIFIER,
             "refresh_token": None,
@@ -833,7 +915,7 @@ async def test_manual_delivery_page_renders_the_url_as_data_never_as_a_shell_com
     assert 'value="' in body
 
 
-def _scoped_mcp_server(name="github", **kw):
+def _scoped_mcp_server(name="github", auth_type="oauth2", **kw):
     from litellm.types.mcp import MCPAuth
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -844,7 +926,7 @@ def _scoped_mcp_server(name="github", **kw):
         alias=name,
         url="https://upstream.example/mcp",
         transport="http",
-        auth_type=MCPAuth.oauth2,
+        auth_type=MCPAuth(auth_type) if auth_type is not None else None,
         **kw,
     )
 
@@ -1886,7 +1968,7 @@ async def test_revoke_refuses_unknown_clients_and_a_missing_master_key():
 
 
 def test_native_client_auth_contract_points_every_endpoint_at_this_proxy():
-    assert json.loads(json.dumps(native_client_auth_contract(_request("/.well-known/litellm-cli-auth")))) == {
+    assert json.loads(json.dumps(native_client_auth_contract(_request("/.well-known/litellm-cli-auth"), True))) == {
         "contract_version": 1,
         "issuer": "https://llm.example.com",
         "authorization_endpoint": "https://llm.example.com/authorize",
@@ -1895,11 +1977,20 @@ def test_native_client_auth_contract_points_every_endpoint_at_this_proxy():
         "revocation_endpoint": "https://llm.example.com/revoke",
         "resource": "https://llm.example.com",
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "grant_types_supported": [
+            "authorization_code",
+            "refresh_token",
+            "urn:ietf:params:oauth:grant-type:token-exchange",
+        ],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["none"],
         "revocation_endpoint_auth_methods_supported": ["none"],
     }
+
+
+def test_native_client_auth_contract_omits_the_exchange_grant_where_the_gateway_cannot_serve_it():
+    contract = native_client_auth_contract(_request("/.well-known/litellm-cli-auth"), False)
+    assert list(contract["grant_types_supported"]) == ["authorization_code", "refresh_token"]
 
 
 @pytest.mark.parametrize(
@@ -2044,3 +2135,222 @@ async def test_introspect_fails_closed_on_dead_user_and_503s_on_outage():
 
     status, body = await _introspect(minted.token.get_secret_value(), master_key=None)
     assert (status, body["error"]) == (500, "server_error")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "auth_type", [None, "none", "api_key", "bearer_token", "basic", "authorization", "token", "aws_sigv4"]
+)
+@pytest.mark.parametrize("resource", ["https://llm.example.com/mcp/github", "https://llm.example.com/github/mcp"])
+async def test_gateway_owned_resource_stays_scoped_through_consent_and_refresh(auth_type, resource):
+    from unittest.mock import patch
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    server = _scoped_mcp_server(auth_type=auth_type)
+    vendor = _VendorCredential("absent")
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = server
+        response = _scoped_authorize(client_id, resource)
+    described = await _describe_page(response, scoped_server=server, vendor=vendor)
+    assert json.loads(described.body) == {
+        "state": "m2m",
+        "client_origin": "https://claude.ai",
+        "server_id": "github-id",
+        "server_name": "github",
+        "connected": True,
+    }
+    unreachable = await _complete_page(response, scoped_server=server, reachable=_ServerReachability(False))
+    assert unreachable.status_code == 400
+    cache = DualCache()
+    completed = await _complete_page(response, scoped_server=server, vendor=vendor, cache=cache)
+    assert completed.status_code == 303
+    assert vendor.calls == []
+    code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_name.return_value = server
+        redeemed = await _redeem(code, client_id, cache=cache, resource=resource)
+    assert redeemed.status_code == 200
+    payload = json.loads(redeemed.body)
+    assert _opened_principal(payload).resource_server_id == "github-id"
+    renewed = await _redeem(
+        None, client_id, cache=cache, grant_type="refresh_token", refresh_token=payload["refresh_token"]
+    )
+    assert renewed.status_code == 200
+    assert _opened_principal(json.loads(renewed.body)).resource_server_id == "github-id"
+
+
+JWT_SUBJECT_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:jwt"
+IDP_TOKEN = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.idp-signature"
+
+
+class _Exchanger:
+    def __init__(self, result=None):
+        self.calls = []
+        self.result = result
+
+    async def __call__(self, subject_token, request):
+        self.calls.append((subject_token, request.url.path))
+        if self.result is not None:
+            return self.result
+        return SubjectIdentity(user_id="u1", team_id="team-b")
+
+
+async def _exchange_native(client_id, minter, exchanger, cache=None, **overrides):
+    arguments = {
+        "grant_type": TOKEN_EXCHANGE_GRANT_TYPE,
+        "subject_token": IDP_TOKEN,
+        "subject_token_type": JWT_SUBJECT_TOKEN_TYPE,
+        "exchange_subject_token": exchanger,
+    }
+    return await _redeem_native(None, client_id, minter, cache=cache, **{**arguments, **overrides})
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_mints_the_proxy_credential_for_the_idp_subject():
+    """RFC 8693: a registered native client trades the IdP token it already holds for the
+    same credential the consent flow mints, attributed to the user and team the gateway's
+    JWT auth resolved, with a rotating refresh token bound to that team and the client.
+    The exchange can be repeated while the IdP token lives; nothing is burned."""
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    minter, exchanger, cache = _Minter(), _Exchanger(), DualCache()
+    response = await _exchange_native(client_id, minter, exchanger, cache=cache)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    body = json.loads(response.body)
+    assert exchanger.calls == [(IDP_TOKEN, "/token")]
+    assert minter.calls == [("u1", "team-b")]
+    assert body["issued_token_type"] == ACCESS_TOKEN_TOKEN_TYPE
+    assert body["access_token"] == "sk-cli-u1"
+    assert body["token_type"] == "Bearer"
+    assert body["expires_in"] == 3600
+    assert (body["user_id"], body["team_id"]) == ("u1", "team-b")
+    principal = _opened_refresh(body["refresh_token"], client_id)
+    assert (principal.user_id, principal.client_id, principal.audience, principal.team_id) == (
+        "u1",
+        client_id,
+        "proxy_api",
+        "team-b",
+    )
+    again = await _exchange_native(client_id, minter, exchanger, cache=cache)
+    assert again.status_code == 200
+    assert json.loads(again.body)["refresh_token"] != body["refresh_token"]
+    assert minter.calls == [("u1", "team-b"), ("u1", "team-b")]
+
+
+@pytest.mark.asyncio
+async def test_exchanged_credential_refreshes_and_rotates_like_a_consented_one():
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    minter, cache = _Minter(), DualCache()
+    exchanged = json.loads((await _exchange_native(client_id, minter, _Exchanger(), cache=cache)).body)
+    refreshed = await _refresh_native(exchanged["refresh_token"], client_id, minter, cache)
+    assert refreshed.status_code == 200
+    body = json.loads(refreshed.body)
+    assert "issued_token_type" not in body
+    assert (body["access_token"], body["user_id"], body["team_id"]) == ("sk-cli-u1", "u1", "team-b")
+    assert body["refresh_token"] != exchanged["refresh_token"]
+    assert minter.calls == [("u1", "team-b"), ("u1", "team-b")]
+    replay = await _refresh_native(exchanged["refresh_token"], client_id, minter, cache)
+    assert replay.status_code == 400
+    assert json.loads(replay.body)["error"] == "invalid_grant"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_for_a_teamless_subject_mints_a_teamless_credential():
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    minter = _Minter()
+    response = await _exchange_native(client_id, minter, _Exchanger(SubjectIdentity(user_id="u2")))
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert minter.calls == [("u2", None)]
+    assert (body["user_id"], body["team_id"]) == ("u2", None)
+    assert _opened_refresh(body["refresh_token"], client_id).team_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("subject_token_type", sorted(SUBJECT_TOKEN_TYPES))
+async def test_token_exchange_accepts_every_advertised_subject_token_type(subject_token_type):
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    response = await _exchange_native(client_id, _Minter(), _Exchanger(), subject_token_type=subject_token_type)
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_without_an_idp_exchanger_is_unsupported():
+    """A gateway that wires no IdP verifier into the endpoint answers the way it always
+    answered an unknown grant, and never reaches the minter."""
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    minter = _Minter()
+    response = await _redeem_native(
+        None,
+        client_id,
+        minter,
+        grant_type=TOKEN_EXCHANGE_GRANT_TYPE,
+        subject_token=IDP_TOKEN,
+        subject_token_type=JWT_SUBJECT_TOKEN_TYPE,
+    )
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"] == "unsupported_grant_type"
+    assert minter.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides, status, error",
+    [
+        ({"subject_token": None}, 400, "invalid_request"),
+        ({"subject_token": ""}, 400, "invalid_request"),
+        ({"subject_token_type": None}, 400, "invalid_request"),
+        ({"subject_token_type": "urn:ietf:params:oauth:token-type:saml2"}, 400, "invalid_request"),
+        ({"requested_token_type": "urn:ietf:params:oauth:token-type:refresh_token"}, 400, "invalid_request"),
+        ({"resource": "https://other.example.com"}, 400, "invalid_target"),
+        ({"resource": "https://llm.example.com/mcp"}, 400, "invalid_target"),
+        ({"client_id": "llm_dcrc_forged"}, 401, "invalid_client"),
+        ({"client_id": "not-a-gateway-client"}, 401, "invalid_client"),
+    ],
+)
+async def test_token_exchange_refuses_a_malformed_request_before_touching_the_idp_token(overrides, status, error):
+    registered = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    minter, exchanger = _Minter(), _Exchanger()
+    response = await _exchange_native(
+        overrides.get("client_id", registered),
+        minter,
+        exchanger,
+        **{name: value for name, value in overrides.items() if name != "client_id"},
+    )
+    assert response.status_code == status
+    assert json.loads(response.body)["error"] == error
+    assert exchanger.calls == []
+    assert minter.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error, status",
+    [("unsupported_grant_type", 400), ("invalid_request", 400), ("temporarily_unavailable", 503)],
+)
+async def test_token_exchange_relays_the_idp_refusal_and_never_mints(error, status):
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    minter = _Minter()
+    exchanger = _Exchanger(SubjectTokenRefusal(error=error, description="subject_token was rejected: bad signature"))
+    response = await _exchange_native(client_id, minter, exchanger)
+    assert response.status_code == status
+    body = json.loads(response.body)
+    assert (body["error"], body["error_description"]) == (error, "subject_token was rejected: bad signature")
+    assert minter.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure, status, error",
+    [
+        ("not_a_member", 400, "invalid_grant"),
+        ("team_required", 400, "invalid_grant"),
+        ("no_active_key", 400, "invalid_grant"),
+        ("unavailable", 503, "temporarily_unavailable"),
+    ],
+)
+async def test_token_exchange_relays_a_mint_refusal(failure, status, error):
+    client_id = (await _register([LOOPBACK_REDIRECT_URI]))["client_id"]
+    response = await _exchange_native(client_id, _Minter(failure), _Exchanger())
+    assert response.status_code == status
+    assert json.loads(response.body)["error"] == error

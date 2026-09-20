@@ -37,10 +37,15 @@ class MockPrismaClient:
         self.daily_user_spend_transactions = {}
         self.tool_usage_transactions = []
         self.autorouter_turn_transactions = []
+        self.baseline_accounting_transactions = []
+        self.baseline_accounting_lock = asyncio.Lock()
+        self.spend_log_flush_requested = None
+        self.db.tx = MagicMock()
+        self.db.tx.return_value.__aenter__ = AsyncMock(return_value=self.db)
+        self.db.tx.return_value.__aexit__ = AsyncMock(return_value=None)
+        self.db.query_raw.return_value = []
 
         # Add locks for the transaction queues (matches real PrismaClient)
-        import asyncio
-
         self._spend_log_transactions_lock = asyncio.Lock()
         self._tool_usage_transactions_lock = asyncio.Lock()
         self._autorouter_turn_transactions_lock = asyncio.Lock()

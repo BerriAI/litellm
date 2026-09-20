@@ -6,6 +6,7 @@ regardless of the routing strategy being used.
 """
 
 import asyncio
+from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -13,9 +14,27 @@ import pytest
 import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
+
+TPM_DEPLOYMENT = {
+    "tpm": 1000,
+    "litellm_params": {"model": "gpt-4"},
+    "model_info": {"id": "replica-test-id"},
+    "model_name": "test-model",
+}
+
+
+def _dual_cache_with_local_tpm(local_tpm: int, redis_cache: MagicMock | None) -> DualCache:
+    dual_cache = DualCache(redis_cache=redis_cache)
+    check = ModelRateLimitingCheck(dual_cache=dual_cache)
+    now = litellm.utils.get_utc_datetime()
+    for minute in (now, now + timedelta(minutes=1)):
+        tpm_key, _ = check._get_cache_keys(TPM_DEPLOYMENT, minute.strftime("%H-%M"))
+        dual_cache.set_cache(key=tpm_key, value=local_tpm, local_only=True)
+    return dual_cache
 
 
 class TestModelRateLimitingCheck:
@@ -144,6 +163,50 @@ class TestModelRateLimitingCheck:
         assert "TPM limit=1000" in str(exc_info.value)
         assert "current usage=1000" in str(exc_info.value)
 
+    def test_pre_call_check_rejects_when_shared_tpm_is_over_limit_but_local_is_under(self):
+        redis_cache = MagicMock()
+        redis_cache.get_cache.return_value = 1000
+        check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            check.pre_call_check(TPM_DEPLOYMENT)
+
+        assert "current usage=1000" in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        "redis_get", [MagicMock(return_value=None), MagicMock(side_effect=RedisCircuitBreakerOpenError())]
+    )
+    def test_pre_call_check_keeps_rejecting_on_local_usage_when_redis_read_fails(self, redis_get):
+        redis_cache = MagicMock()
+        redis_cache.get_cache = redis_get
+        check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(1000, redis_cache))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            check.pre_call_check(TPM_DEPLOYMENT)
+
+        assert "current usage=1000" in str(exc_info.value)
+
+    def test_pre_call_check_falls_back_to_local_tpm_and_still_checks_rpm_when_redis_circuit_is_open(self):
+        redis_cache = MagicMock()
+        redis_cache.get_cache.side_effect = RedisCircuitBreakerOpenError()
+        redis_cache.increment_cache.return_value = 2
+        check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            check.pre_call_check({**TPM_DEPLOYMENT, "rpm": 1})
+
+        assert "RPM limit=1" in str(exc_info.value)
+
+    def test_pre_call_check_without_redis_enforces_local_tpm_and_rpm(self):
+        check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, None))
+        deployment = {**TPM_DEPLOYMENT, "rpm": 1}
+
+        assert check.pre_call_check(deployment) == deployment
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            check.pre_call_check(deployment)
+
+        assert "RPM limit=1" in str(exc_info.value)
+
     def test_log_success_event_increments_cache(self):
         """Test that log_success_event correctly increments the cache."""
         mock_cache = MagicMock()
@@ -244,6 +307,56 @@ class TestModelRateLimitingCheckAsync:
             await check.async_pre_call_check(deployment)
 
         assert "TPM limit=1000" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_rejects_when_shared_tpm_is_over_limit_but_local_is_under(self):
+        redis_cache = MagicMock()
+        redis_cache.async_get_cache = AsyncMock(return_value=1000)
+        check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await check.async_pre_call_check(TPM_DEPLOYMENT)
+
+        assert "current usage=1000" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "redis_get", [AsyncMock(return_value=None), AsyncMock(side_effect=RedisCircuitBreakerOpenError())]
+    )
+    async def test_async_pre_call_check_keeps_rejecting_on_local_usage_when_redis_read_fails(self, redis_get):
+        redis_cache = MagicMock()
+        redis_cache.async_get_cache = redis_get
+        check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(1000, redis_cache))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await check.async_pre_call_check(TPM_DEPLOYMENT)
+
+        assert "current usage=1000" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_falls_back_to_local_tpm_and_still_checks_rpm_when_redis_circuit_is_open(
+        self,
+    ):
+        redis_cache = MagicMock()
+        redis_cache.async_get_cache = AsyncMock(side_effect=RedisCircuitBreakerOpenError())
+        redis_cache.async_increment = AsyncMock(return_value=2)
+        check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, redis_cache))
+
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await check.async_pre_call_check({**TPM_DEPLOYMENT, "rpm": 1})
+
+        assert "RPM limit=1" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_async_pre_call_check_without_redis_enforces_local_tpm_and_rpm(self):
+        check = ModelRateLimitingCheck(dual_cache=_dual_cache_with_local_tpm(5, None))
+        deployment = {**TPM_DEPLOYMENT, "rpm": 1}
+
+        assert await check.async_pre_call_check(deployment) == deployment
+        with pytest.raises(litellm.RateLimitError) as exc_info:
+            await check.async_pre_call_check(deployment)
+
+        assert "RPM limit=1" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_async_log_success_event_increments_cache(self):
