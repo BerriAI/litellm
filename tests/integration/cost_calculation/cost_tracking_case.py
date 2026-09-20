@@ -5,7 +5,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 CASES_PATH: Final = Path(__file__).resolve().parent / "cost_tracking_cases.json"
 
@@ -44,6 +44,8 @@ class CostMapEntry(BaseModel):
     supports_function_calling: bool | None = None
     input_cost_per_token: float | None = None
     output_cost_per_token: float | None = None
+    input_cost_per_token_batches: float | None = None
+    output_cost_per_token_batches: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
     cache_read_input_token_cost: float | None = None
@@ -54,6 +56,7 @@ class CostMapEntry(BaseModel):
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     input_cost_per_token_above_200k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
+    cache_read_input_audio_token_cost: float | None = None
     tiered_pricing: tuple[TieredPrice, ...] | None = None
     output_cost_per_reasoning_token: float | None = None
     input_cost_per_audio_token: float | None = None
@@ -141,8 +144,31 @@ class BinaryResponse(BaseModel):
     length: int
 
 
+class TextResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    content_type: Literal["application/jsonl"]
+    body: str
+    status: int = 200
+
+
+class RoutedResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    content_type: Literal["application/x-routed"]
+    routes: dict[str, JsonResponse | TextResponse]
+
+
+class RealtimeResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    content_type: Literal["application/x-realtime"]
+    events: tuple[dict[str, JsonValue], ...]
+    session_model: str | None = None
+
+
 StoredResponse: TypeAlias = Annotated[
-    JsonResponse | SseResponse | EventStreamResponse | BinaryResponse,
+    JsonResponse | SseResponse | EventStreamResponse | BinaryResponse | RoutedResponse | RealtimeResponse,
     Field(discriminator="content_type"),
 ]
 
@@ -283,11 +309,156 @@ class CostTrackingTestCase(BaseModel):
         return isinstance(usage, dict) and isinstance(usage.get("cost"), (int, float))
 
 
+class BatchOutputLine(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status_code: int
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cached_tokens: int | None = None
+
+    @field_validator("status_code")
+    @classmethod
+    def validate_status_code(cls, value: int) -> int:
+        if value != 200 and not 400 <= value <= 499:
+            raise ValueError("status_code must be 200 or a 4xx status")
+        return value
+
+    def render(self, index: int, model: str, request_id: str) -> dict[str, JsonValue]:
+        if self.status_code != 200:
+            return {
+                "id": f"batch_req_{index}",
+                "custom_id": f"r{index}",
+                "response": None,
+                "error": {"code": "bad_request", "message": "failed"},
+            }
+        assert self.prompt_tokens is not None
+        assert self.completion_tokens is not None
+        usage: dict[str, JsonValue] = {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.prompt_tokens + self.completion_tokens,
+        }
+        if self.cached_tokens is not None:
+            usage["prompt_tokens_details"] = {"cached_tokens": self.cached_tokens}
+        return {
+            "id": f"batch_req_{index}",
+            "custom_id": f"r{index}",
+            "response": {
+                "status_code": 200,
+                "request_id": f"{request_id}-{index}",
+                "body": {
+                    "id": f"chatcmpl-{request_id}-{index}",
+                    "object": "chat.completion",
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "ok"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": usage,
+                },
+            },
+            "error": None,
+        }
+
+
+class BatchCostCase(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    covers: str
+    model: str
+    litellm_model: str
+    output_lines: tuple[BatchOutputLine, ...]
+    expected: ExactExpected
+
+    @property
+    def request_count(self) -> int:
+        return len(self.output_lines) or 2
+
+    @property
+    def completed_count(self) -> int:
+        return sum(line.status_code == 200 for line in self.output_lines)
+
+    @property
+    def failed_count(self) -> int:
+        return self.request_count - self.completed_count
+
+
+class RealtimeTurn(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    input_tokens: int
+    output_tokens: int
+    input_text_tokens: int
+    input_audio_tokens: int
+    input_cached_tokens: int
+    output_text_tokens: int
+    output_audio_tokens: int
+
+    @model_validator(mode="after")
+    def validate_token_totals(self) -> RealtimeTurn:
+        if self.input_text_tokens + self.input_audio_tokens != self.input_tokens:
+            raise ValueError("input text and audio tokens must equal input_tokens")
+        if self.output_text_tokens + self.output_audio_tokens != self.output_tokens:
+            raise ValueError("output text and audio tokens must equal output_tokens")
+        if self.input_cached_tokens > self.input_text_tokens:
+            raise ValueError("input_cached_tokens must not exceed input_text_tokens")
+        return self
+
+    def render(self, index: int, request_id: str) -> dict[str, JsonValue]:
+        return {
+            "type": "response.done",
+            "event_id": f"evt_{request_id}_{index}",
+            "response": {
+                "id": f"resp_{request_id}_{index}",
+                "object": "realtime.response",
+                "status": "completed",
+                "output": [],
+                "usage": {
+                    "total_tokens": self.input_tokens + self.output_tokens,
+                    "input_tokens": self.input_tokens,
+                    "output_tokens": self.output_tokens,
+                    "input_token_details": {
+                        "text_tokens": self.input_text_tokens,
+                        "audio_tokens": self.input_audio_tokens,
+                        "cached_tokens": self.input_cached_tokens,
+                        "cached_tokens_details": {
+                            "text_tokens": self.input_cached_tokens,
+                            "audio_tokens": 0,
+                        },
+                    },
+                    "output_token_details": {
+                        "text_tokens": self.output_text_tokens,
+                        "audio_tokens": self.output_audio_tokens,
+                    },
+                },
+            },
+        }
+
+
+class RealtimeCostCase(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    covers: str
+    model: str
+    litellm_model: str
+    turns: tuple[RealtimeTurn, ...] = Field(min_length=1)
+    session_model: str | None = None
+    expected: ExactExpected
+
+
 class _CasesFile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     cost_map: dict[str, CostMapEntry]
     cases: tuple[CostTrackingTestCase, ...]
+    batch_cases: tuple[BatchCostCase, ...] = ()
+    realtime_cases: tuple[RealtimeCostCase, ...] = ()
 
 
 _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
@@ -357,18 +528,25 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
 _LOADED: Final = _CasesFile.model_validate_json(CASES_PATH.read_bytes())
 COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(dict(_LOADED.cost_map))
 CASES: Final[tuple[CostTrackingTestCase, ...]] = _LOADED.cases
-_LITELLM_MODELS: Final = tuple(case.litellm_model for case in CASES)
+BATCH_CASES: Final[tuple[BatchCostCase, ...]] = _LOADED.batch_cases
+REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = _LOADED.realtime_cases
+_ALL_CASES: Final = CASES + BATCH_CASES + REALTIME_CASES
+_LITELLM_MODELS: Final = tuple(case.litellm_model for case in _ALL_CASES)
 
 
 def data_errors() -> tuple[str, ...]:
-    case_models: Final = frozenset(case.model for case in CASES)
-    unknown_models: Final = sorted(case.model for case in CASES if case.model not in COST_MAP)
+    case_models: Final = frozenset(case.model for case in _ALL_CASES) | frozenset(
+        case.session_model for case in REALTIME_CASES if case.session_model is not None
+    )
+    unknown_models: Final = sorted(model for model in case_models if model not in COST_MAP)
     missing_cases: Final = sorted(model for model in COST_MAP if model not in case_models)
     duplicate_names: Final = sorted(
-        name for name in {case.name for case in CASES} if sum(case.name == name for case in CASES) > 1
+        name for name in {case.name for case in _ALL_CASES} if sum(case.name == name for case in _ALL_CASES) > 1
     )
     input_rates: Final = tuple(
-        (entry.input_cost_per_token, model) for model, entry in COST_MAP.items()
+        (entry.input_cost_per_token, model)
+        for model, entry in COST_MAP.items()
+        if entry.mode != "realtime"
     )
     shared_input_rates: Final = sorted(
         f"{rate}: {tuple(model for value, model in input_rates if value == rate)}"

@@ -622,6 +622,35 @@
       "litellm_provider": "openai",
       "mode": "embedding",
       "input_cost_per_token": 1.3e-07
+    },
+    "gpt-5.4": {
+      "litellm_provider": "openai",
+      "mode": "chat",
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1.5e-05,
+      "cache_read_input_token_cost": 2.5e-07,
+      "input_cost_per_token_batches": 1.25e-06,
+      "output_cost_per_token_batches": 7.5e-06
+    },
+    "gpt-realtime-mini-2025-12-15": {
+      "litellm_provider": "openai",
+      "mode": "realtime",
+      "input_cost_per_token": 6.0e-07,
+      "output_cost_per_token": 2.4e-06,
+      "input_cost_per_audio_token": 1.0e-05,
+      "cache_read_input_token_cost": 6.0e-08,
+      "cache_read_input_audio_token_cost": 3.0e-07,
+      "output_cost_per_audio_token": 2.0e-05
+    },
+    "gpt-realtime-2.1": {
+      "litellm_provider": "openai",
+      "mode": "realtime",
+      "input_cost_per_token": 4.0e-06,
+      "input_cost_per_audio_token": 3.2e-05,
+      "cache_read_input_token_cost": 4.0e-07,
+      "cache_read_input_audio_token_cost": 4.0e-07,
+      "output_cost_per_token": 2.4e-05,
+      "output_cost_per_audio_token": 6.4e-05
     }
   },
   "cases": [
@@ -30018,6 +30047,195 @@
         "prompt_tokens": 10,
         "min_completion_tokens": 9,
         "max_completion_tokens": 30
+      }
+    }
+  ],
+  "batch_cases": [
+    {
+      "name": "gpt-5.6-batch-halved_rates_when_map_has_no_batch_keys",
+      "covers": "quota_management.spend_tracking.batch_costs.fallback_rates",
+      "model": "gpt-5.6",
+      "litellm_model": "openai/gpt-5.6",
+      "output_lines": [
+        {
+          "status_code": 200,
+          "prompt_tokens": 100,
+          "completion_tokens": 50
+        },
+        {
+          "status_code": 200,
+          "prompt_tokens": 120,
+          "completion_tokens": 30
+        },
+        {
+          "status_code": 400
+        }
+      ],
+      "expected": {
+        "spend": 0.0007525,
+        "input_cost": 0.0001925,
+        "output_cost": 0.00056,
+        "prompt_tokens": 220,
+        "completion_tokens": 80,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-batch-cached_input_halved",
+      "covers": "quota_management.spend_tracking.batch_costs.cached_input",
+      "model": "gpt-5.6",
+      "litellm_model": "openai/gpt-5.6",
+      "output_lines": [
+        {
+          "status_code": 200,
+          "prompt_tokens": 100,
+          "completion_tokens": 10,
+          "cached_tokens": 40
+        }
+      ],
+      "expected": {
+        "spend": 0.000126,
+        "input_cost": 0.000056,
+        "output_cost": 0.00007,
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.4-batch-explicit_batch_rates_bill_cached_at_batch_input_rate",
+      "covers": "quota_management.spend_tracking.batch_costs.explicit_rates",
+      "model": "gpt-5.4",
+      "litellm_model": "openai/gpt-5.4",
+      "output_lines": [
+        {
+          "status_code": 200,
+          "prompt_tokens": 100,
+          "completion_tokens": 50,
+          "cached_tokens": 40
+        },
+        {
+          "status_code": 200,
+          "prompt_tokens": 120,
+          "completion_tokens": 30
+        }
+      ],
+      "expected": {
+        "spend": 0.000875,
+        "input_cost": 0.000275,
+        "output_cost": 0.0006,
+        "prompt_tokens": 220,
+        "completion_tokens": 80,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-batch-all_requests_failed_zero_spend",
+      "covers": "quota_management.spend_tracking.batch_costs.failed_requests",
+      "model": "gpt-5.6",
+      "litellm_model": "openai/gpt-5.6",
+      "output_lines": [
+        {
+          "status_code": 400
+        },
+        {
+          "status_code": 400
+        }
+      ],
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cost_header": false
+      }
+    }
+  ],
+  "realtime_cases": [
+    {
+      "name": "gpt-realtime-mini-2025-12-15-realtime-single_turn_text_audio_cached",
+      "covers": "quota_management.spend_tracking.realtime_costs.single_turn",
+      "model": "gpt-realtime-mini-2025-12-15",
+      "litellm_model": "openai/gpt-realtime-mini-2025-12-15",
+      "turns": [
+        {
+          "input_tokens": 150,
+          "output_tokens": 100,
+          "input_text_tokens": 70,
+          "input_audio_tokens": 80,
+          "input_cached_tokens": 20,
+          "output_text_tokens": 40,
+          "output_audio_tokens": 60
+        }
+      ],
+      "expected": {
+        "spend": 0.0021272,
+        "input_cost": 0.0008312,
+        "output_cost": 0.001296,
+        "prompt_tokens": 150,
+        "completion_tokens": 100,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-realtime-mini-2025-12-15-realtime-two_turns_summed_into_one_row",
+      "covers": "quota_management.spend_tracking.realtime_costs.multiple_turns",
+      "model": "gpt-realtime-mini-2025-12-15",
+      "litellm_model": "openai/gpt-realtime-mini-2025-12-15",
+      "turns": [
+        {
+          "input_tokens": 150,
+          "output_tokens": 100,
+          "input_text_tokens": 70,
+          "input_audio_tokens": 80,
+          "input_cached_tokens": 20,
+          "output_text_tokens": 40,
+          "output_audio_tokens": 60
+        },
+        {
+          "input_tokens": 100,
+          "output_tokens": 50,
+          "input_text_tokens": 100,
+          "input_audio_tokens": 0,
+          "input_cached_tokens": 0,
+          "output_text_tokens": 50,
+          "output_audio_tokens": 0
+        }
+      ],
+      "expected": {
+        "spend": 0.0023072,
+        "input_cost": 0.0008912,
+        "output_cost": 0.001416,
+        "prompt_tokens": 250,
+        "completion_tokens": 150,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-realtime-mini-2025-12-15-realtime-priced_from_session_created_model",
+      "covers": "quota_management.spend_tracking.realtime_costs.session_model",
+      "model": "gpt-realtime-mini-2025-12-15",
+      "litellm_model": "openai/gpt-realtime-mini-2025-12-15",
+      "session_model": "gpt-realtime-2.1",
+      "turns": [
+        {
+          "input_tokens": 150,
+          "output_tokens": 100,
+          "input_text_tokens": 70,
+          "input_audio_tokens": 80,
+          "input_cached_tokens": 20,
+          "output_text_tokens": 40,
+          "output_audio_tokens": 60
+        }
+      ],
+      "expected": {
+        "spend": 0.007568,
+        "input_cost": 0.002768,
+        "output_cost": 0.0048,
+        "prompt_tokens": 150,
+        "completion_tokens": 100,
+        "cost_header": false
       }
     }
   ]
