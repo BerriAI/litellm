@@ -885,6 +885,15 @@ class TestOpenAIResponsesAPIConfig:
         assert result.output_index == 0
         assert result.content_index == 0
 
+    def test_normalize_responses_input_wraps_string_as_user_item(self):
+        assert BaseResponsesAPIConfig.normalize_responses_input("Reply with exactly ROUTE_OK.") == [
+            {"role": "user", "content": "Reply with exactly ROUTE_OK."}
+        ]
+
+    def test_normalize_responses_input_leaves_list_untouched(self):
+        items = [{"role": "user", "content": "Reply with exactly ROUTE_OK."}]
+        assert BaseResponsesAPIConfig.normalize_responses_input(items) is items
+
     def test_base_strip_custom_tool_call_namespace_all_providers(self):
         """Base helper strips ``namespace`` from custom_tool_call for every provider path."""
         inp = [
