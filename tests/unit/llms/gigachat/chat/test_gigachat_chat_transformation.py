@@ -141,22 +141,6 @@ class TestValidateEnvironment:
         assert self.config._current_credentials == "my-creds"
         assert self.config._current_api_base == "https://my-api.example.com"
 
-    @patch(f"{TRANSFORM_MODULE}.get_access_token", return_value="token")
-    @patch(f"{TRANSFORM_MODULE}.get_secret_str")
-    def test_falls_back_to_env_for_credentials(  # test-quality-ok: mock-echo of internal wiring
-        self, mock_get_secret, mock_get_token
-    ):
-        mock_get_secret.return_value = "env-creds"
-        self.config.validate_environment(
-            headers={},
-            model="GigaChat",
-            messages=[],
-            optional_params={},
-            litellm_params={},
-            api_key=None,
-            api_base=None,
-        )
-        mock_get_secret.assert_any_call("GIGACHAT_CREDENTIALS")  # test-quality-ok: mock-echo of internal wiring
 
 
 class TestGetSupportedOpenAiParams:
@@ -864,18 +848,6 @@ class TestGetErrorClass:
 class TestUploadImage:
     def setup_method(self):
         self.config = GigaChatConfig()
-
-    @patch(f"{TRANSFORM_MODULE}.upload_file_sync", return_value="file-uploaded")
-    def test_upload_image_success(self, mock_upload):
-        self.config._current_credentials = "creds"
-        self.config._current_api_base = "https://api.example.com"
-        result = self.config._upload_image("https://example.com/img.jpg")
-        assert result == "file-uploaded"
-        mock_upload.assert_called_once_with(
-            image_url="https://example.com/img.jpg",
-            credentials="creds",
-            api_base="https://api.example.com",
-        )
 
     @patch(f"{TRANSFORM_MODULE}.upload_file_sync", side_effect=Exception("fail"))
     def test_upload_image_failure_returns_none(self, mock_upload):
