@@ -311,6 +311,10 @@ class PolicyAttachmentCreateRequest(BaseModel):
         le=2147483647,
         description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
     )
+    default: bool = Field(
+        default=False,
+        description="Apply this attachment only when no non-default attachment matches the request.",
+    )
 
 
 class PolicyAttachmentDBResponse(BaseModel):
@@ -326,6 +330,10 @@ class PolicyAttachmentDBResponse(BaseModel):
     priority: int | None = Field(
         default=None,
         description="Explicit execution order, lower runs first. Prioritised attachments run before those without one.",
+    )
+    default: bool = Field(
+        default=False,
+        description="Apply this attachment only when no non-default attachment matches the request.",
     )
     created_at: datetime | None = Field(default=None, description="When the attachment was created.")
     updated_at: datetime | None = Field(default=None, description="When the attachment was last updated.")

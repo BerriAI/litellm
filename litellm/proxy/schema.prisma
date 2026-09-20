@@ -1419,6 +1419,7 @@ model LiteLLM_PolicyAttachmentTable {
   models           String[]  @default([])  // Model names or patterns
   tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
   priority         Int?                    // Explicit execution order
+  is_default       Boolean   @default(false)  // Applied only when no non-default attachment matches
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt

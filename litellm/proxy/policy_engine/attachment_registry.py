@@ -119,6 +119,7 @@ class AttachmentRegistry:
             models=attachment_data.get("models"),
             tags=attachment_data.get("tags"),
             priority=attachment_data.get("priority"),
+            default=attachment_data.get("default", False),
         )
 
     def get_attached_policies(self, context: PolicyMatchContext) -> list[str]:
@@ -142,12 +143,14 @@ class AttachmentRegistry:
         """
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
+        in_scope: Final = tuple(
+            attachment
+            for attachment in self._attachments
+            if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
+        )
+        non_default: Final = tuple(attachment for attachment in in_scope if not attachment.default)
         matching_attachments: Final = sorted(
-            (
-                attachment
-                for attachment in self._attachments
-                if PolicyMatcher.scope_matches(scope=attachment.to_policy_scope(), context=context)
-            ),
+            non_default or tuple(attachment for attachment in in_scope if attachment.default),
             key=_attachment_sort_key,
         )
         broadest_attachment_by_policy: Final = MappingProxyType(
@@ -169,6 +172,11 @@ class AttachmentRegistry:
     @staticmethod
     def _describe_match_reason(attachment: PolicyAttachment, context: PolicyMatchContext) -> str:
         """Describe why an attachment matched the context."""
+        reason: Final = AttachmentRegistry._describe_scope_match(attachment, context)
+        return f"default:{reason}" if attachment.default else reason
+
+    @staticmethod
+    def _describe_scope_match(attachment: PolicyAttachment, context: PolicyMatchContext) -> str:
         from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 
         if attachment.is_global():
@@ -324,6 +332,7 @@ class AttachmentRegistry:
                     "models": attachment_request.models or [],
                     "tags": attachment_request.tags or [],
                     "priority": attachment_request.priority,
+                    "is_default": attachment_request.default,
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
                     "created_by": created_by,
@@ -340,6 +349,7 @@ class AttachmentRegistry:
                 models=attachment_request.models,
                 tags=attachment_request.tags,
                 priority=attachment_request.priority,
+                default=attachment_request.default,
             )
             self.add_attachment(attachment)
 
@@ -352,6 +362,7 @@ class AttachmentRegistry:
                 models=created_attachment.models or [],
                 tags=created_attachment.tags or [],
                 priority=created_attachment.priority,
+                default=created_attachment.is_default,
                 created_at=created_attachment.created_at,
                 updated_at=created_attachment.updated_at,
                 created_by=created_attachment.created_by,
@@ -429,6 +440,7 @@ class AttachmentRegistry:
                 models=attachment.models or [],
                 tags=attachment.tags or [],
                 priority=attachment.priority,
+                default=attachment.is_default,
                 created_at=attachment.created_at,
                 updated_at=attachment.updated_at,
                 created_by=attachment.created_by,
@@ -468,6 +480,7 @@ class AttachmentRegistry:
                     models=a.models or [],
                     tags=a.tags or [],
                     priority=a.priority,
+                    default=a.is_default,
                     created_at=a.created_at,
                     updated_at=a.updated_at,
                     created_by=a.created_by,
@@ -502,6 +515,7 @@ class AttachmentRegistry:
                     models=(attachment_response.models if attachment_response.models else None),
                     tags=attachment_response.tags if attachment_response.tags else None,
                     priority=attachment_response.priority,
+                    default=attachment_response.default,
                 )
                 for attachment_response in attachments
             ]
