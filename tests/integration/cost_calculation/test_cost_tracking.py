@@ -271,7 +271,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             scenario.cleanups.callback(delete_scenario, scenario_handle)
         deployment: Final = (
             register_scenario_deployment(scenario, case, marker, key)
-            if passthrough_provider is None
+            if passthrough_provider not in {"gemini", "anthropic"}
             else None
         )
         fallback_deployment: Final = (
