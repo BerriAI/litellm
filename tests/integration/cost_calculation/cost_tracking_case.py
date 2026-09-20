@@ -324,6 +324,12 @@ class BatchOutputLine(BaseModel):
             raise ValueError("status_code must be 200 or a 4xx status")
         return value
 
+    @model_validator(mode="after")
+    def validate_success_tokens(self) -> BatchOutputLine:
+        if self.status_code == 200 and (self.prompt_tokens is None or self.completion_tokens is None):
+            raise ValueError("successful batch output lines require prompt and completion tokens")
+        return self
+
     def render(self, index: int, model: str, request_id: str) -> dict[str, JsonValue]:
         if self.status_code != 200:
             return {
@@ -332,15 +338,18 @@ class BatchOutputLine(BaseModel):
                 "response": None,
                 "error": {"code": "bad_request", "message": "failed"},
             }
-        assert self.prompt_tokens is not None
-        assert self.completion_tokens is not None
-        usage: dict[str, JsonValue] = {
+        if self.prompt_tokens is None or self.completion_tokens is None:
+            raise ValueError("successful batch output lines require prompt and completion tokens")
+        usage: Final = {
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.prompt_tokens + self.completion_tokens,
+            **(
+                {"prompt_tokens_details": {"cached_tokens": self.cached_tokens}}
+                if self.cached_tokens is not None
+                else {}
+            ),
         }
-        if self.cached_tokens is not None:
-            usage["prompt_tokens_details"] = {"cached_tokens": self.cached_tokens}
         return {
             "id": f"batch_req_{index}",
             "custom_id": f"r{index}",
@@ -447,7 +456,7 @@ class RealtimeCostCase(BaseModel):
     covers: str
     model: str
     litellm_model: str
-    turns: tuple[RealtimeTurn, ...] = Field(min_length=1)
+    turns: tuple[RealtimeTurn, ...] = Field(min_length=0)
     session_model: str | None = None
     expected: ExactExpected
 

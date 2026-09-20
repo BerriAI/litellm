@@ -15,8 +15,10 @@ def assert_breakdown(
     response_content_type: str,
     expected: ExactExpected,
     breakdown: CostBreakdown,
-    response: httpx.Response,
+    response: httpx.Response | None,
 ) -> None:
+    if response is None:
+        assert not expected.cost_header, f"{case_name}: cost headers require an HTTP response"
     assert breakdown.input_cost is not None and approx_equal(breakdown.input_cost, expected.input_cost), (
         f"{case_name}: input_cost {breakdown.input_cost} != expected {expected.input_cost}"
     )
@@ -55,12 +57,12 @@ def assert_breakdown(
         assert (actual_component is None and omitted_component_allowed) or (
             actual_component is not None and approx_equal(actual_component, expected_component)
         ), f"{case_name}: {field} {actual_component} != expected {expected_component}"
-        if expected.cost_header and response_content_type == "application/json":
+        if response is not None and expected.cost_header and response_content_type == "application/json":
             header: str | None = response.headers.get(header_name)
             assert (header is None and omitted_component_allowed) or (
                 header is not None and approx_equal(float(header), expected_component)
             ), f"{case_name}: {header_name} {header} != expected {expected_component}"
-    if expected.cost_header and response_content_type == "application/json" and any(
+    if response is not None and expected.cost_header and response_content_type == "application/json" and any(
         component is not None
         for component in (
             expected.cache_read_cost,
@@ -87,7 +89,7 @@ def assert_exact(
     response_content_type: str,
     expected: ExactExpected,
     row: CostRow,
-    response: httpx.Response,
+    response: httpx.Response | None,
 ) -> None:
     assert row.spend is not None and approx_equal(row.spend, expected.spend), (
         f"{case_name}: spend {row.spend} != expected {expected.spend} "

@@ -247,8 +247,8 @@
     "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-priced_from_session_created_model]": [
       "quota_management.spend_tracking.realtime_costs.session_model"
     ],
-    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_no_turn_probe": [
-      "quota_management.spend_tracking.realtime_costs.no_turn_probe"
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-session_without_turns_zero_spend]": [
+      "quota_management.spend_tracking.realtime_costs.session_without_turns"
     ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-cache_read]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"

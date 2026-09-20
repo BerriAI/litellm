@@ -2,19 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import time
 from hashlib import sha256
 from typing import Final
 
-import httpx
 import pytest
 import websockets
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, object_value, string_value
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.assertions import assert_exact
-from integration.cost_calculation.conftest import CostRow, poll_rows, read_rows_now
+from integration.cost_calculation.conftest import poll_rows, read_rows_now
 from integration.cost_calculation.cost_tracking_case import (
     BATCH_CASES,
     REALTIME_CASES,
@@ -69,7 +67,6 @@ def _batch_response(case: BatchCostCase) -> JsonResponse | RoutedResponse:
         "completed": case.completed_count,
         "failed": case.failed_count,
     }
-    completed: Final = len(case.output_lines) > 0
     batch: Final = {
         "id": "batch-$REQUEST_ID",
         "object": "batch",
@@ -77,9 +74,9 @@ def _batch_response(case: BatchCostCase) -> JsonResponse | RoutedResponse:
         "errors": None,
         "input_file_id": "file-in-$REQUEST_ID",
         "completion_window": "24h",
-        "status": "completed" if completed else "completed",
-        "output_file_id": "file-out-$REQUEST_ID" if completed else None,
-        "error_file_id": None if completed else "file-err-$REQUEST_ID",
+        "status": "completed",
+        "output_file_id": "file-out-$REQUEST_ID" if case.output_lines else None,
+        "error_file_id": None if case.output_lines else "file-err-$REQUEST_ID",
         "created_at": 1,
         "in_progress_at": 1,
         "completed_at": 1,
@@ -168,10 +165,6 @@ def test_batch_costs(gateway: Gateway, case: BatchCostCase) -> None:
         assert file_response.is_success, file_response.text
         file_body: Final = JSON_OBJECT.validate_json(file_response.content)
         time.sleep(2)
-        file_rows: Final = read_rows_now(key)
-        if file_rows:
-            assert all(row.spend == 0.0 for row in file_rows)
-            logging.info("file creation rows: %s", file_rows)
         batch_response: Final = gateway.request(
             "POST",
             "/v1/batches",
@@ -190,17 +183,10 @@ def test_batch_costs(gateway: Gateway, case: BatchCostCase) -> None:
         second_retrieval: Final = gateway.request("GET", f"/v1/batches/{batch_id}", key=key)
         assert first_retrieval.is_success, first_retrieval.text
         assert second_retrieval.is_success, second_retrieval.text
-        rows: tuple[CostRow, ...]
-        if case.output_lines:
-            rows = poll_rows(key, 1)
-        else:
-            time.sleep(5)
-            rows = read_rows_now(key)
-            if not rows:
-                logging.info("%s: completed failed batch produced no SpendLogs row", case.name)
-                return
+        rows: Final = poll_rows(key, 1)
         retrieval_rows: Final = tuple(row for row in rows if row.call_type == "aretrieve_batch")
         assert len(retrieval_rows) == 1
+        assert all(row.spend == 0.0 for row in rows if row.call_type != "aretrieve_batch")
         row: Final = retrieval_rows[0]
         assert row.status == "success"
         assert row.call_type == "aretrieve_batch"
@@ -261,28 +247,4 @@ def test_realtime_costs(gateway: Gateway, case: RealtimeCostCase) -> None:
         assert row.status == "success"
         assert row.call_type == "_arealtime"
         assert row.model_id == identity
-        assert_exact(case.name, "application/json", case.expected, row, httpx.Response(200))
-
-
-@pytest.mark.covers("quota_management.spend_tracking.realtime_costs.no_turn_probe")
-def test_realtime_no_turn_probe(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario:
-        key: Final = scenario.key()
-        model_name, _identity = _register_deployment(
-            scenario,
-            "openai/gpt-realtime-mini-2025-12-15",
-            RealtimeResponse(content_type="application/x-realtime", events=()),
-            "realtime-no-turn",
-            realtime=True,
-        )
-        asyncio.run(
-            _run_realtime(
-                os.environ["INTEGRATION_PROXY_URL"].rstrip("/"),
-                key,
-                model_name,
-                0,
-            )
-        )
-        time.sleep(3)
-        rows: Final = read_rows_now(key)
-        logging.info("realtime no-turn probe rows=%s spend=%s", len(rows), rows[0].spend if rows else None)
+        assert_exact(case.name, "application/json", case.expected, row, None)

@@ -30237,6 +30237,22 @@
         "completion_tokens": 100,
         "cost_header": false
       }
+    },
+    {
+      "name": "gpt-realtime-mini-2025-12-15-realtime-session_without_turns_zero_spend",
+      "covers": "quota_management.spend_tracking.realtime_costs.session_without_turns",
+      "model": "gpt-realtime-mini-2025-12-15",
+      "litellm_model": "openai/gpt-realtime-mini-2025-12-15",
+      "turns": [],
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "breakdown_persisted": false,
+        "cost_header": false
+      }
     }
   ]
 }
