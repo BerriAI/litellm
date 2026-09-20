@@ -129,8 +129,8 @@ async def list_tools_with_pagination(
             )
             tools.extend(result.tools)
 
-            next_cursor = getattr(result, "next_cursor", None)
-            if not isinstance(next_cursor, str) or not next_cursor:
+            next_cursor = result.next_cursor
+            if not next_cursor:
                 return tools
             if next_cursor in seen_cursors:
                 verbose_logger.warning(
