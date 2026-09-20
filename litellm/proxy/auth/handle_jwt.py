@@ -2463,7 +2463,7 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=team_id_upsert,
             )
-            if provisioning is None:
+            if provisioning is None or prisma_client is not None:
                 identity: Final = await JWTAuthManager._resolve_claim_identity(
                     jwt_valid_token, handler, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
                 )
