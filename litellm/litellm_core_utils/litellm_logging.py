@@ -6380,7 +6380,7 @@ def get_standard_logging_object_payload(
             (None, None)
             if cache_hit is True
             else _response_impact_for_payload(
-                model=model_name,
+                model=base_model or model_name,
                 custom_llm_provider=custom_llm_provider,
                 completion_tokens=usage_dict.get("completion_tokens", 0),
                 response_time=end_time_float - start_time_float,

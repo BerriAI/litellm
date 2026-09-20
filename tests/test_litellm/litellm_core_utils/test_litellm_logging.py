@@ -7416,9 +7416,11 @@ class _StubImpactEstimator:
         )
         self.raises = raises
         self.calls = 0
+        self.requests = []
 
     def estimate(self, request):
         self.calls += 1
+        self.requests.append(request)
         if self.raises:
             raise ValueError("no model data")
         return self.impact
@@ -7485,3 +7487,18 @@ def test_a_cache_hit_is_not_attributed_inference_impact(logging_obj, impact_esti
     assert payload is not None
     assert payload["response_impact"] is None
     assert impact_estimator.calls == 0
+
+
+def test_the_routed_deployment_is_estimated_rather_than_the_group_alias(logging_obj, impact_estimator):
+    """A model group is a routing label with no hardware behind it, so estimating it would size the wrong model."""
+    payload = _build_payload(
+        logging_obj,
+        model="my-model-group",
+        litellm_params={
+            "metadata": {"deployment": "gpt-4o"},
+            "proxy_server_request": {"body": {}},
+        },
+    )
+
+    assert payload is not None
+    assert impact_estimator.requests[0].model == "gpt-4o"

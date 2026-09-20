@@ -1,5 +1,3 @@
-# What is this?
-## File for 'response_impact' estimation in Logging
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Final, Protocol
