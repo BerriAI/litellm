@@ -28,6 +28,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
@@ -138,6 +139,7 @@ from litellm.types.router import (
     updateLiteLLMParams,
 )
 from litellm.types.utils import (
+    COST_MAP_LOOKUP_KEY,
     echoed_cost_map_fields,
     echoed_cost_map_pricing_fields,
     without_server_derived_pricing,
@@ -886,6 +888,13 @@ def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, obje
         return MappingProxyType({})
 
 
+def _bundled_cost_map_entry(incoming_model_info: Mapping[str, object]) -> Mapping[str, object]:
+    catalog_key: Final = incoming_model_info.get(COST_MAP_LOOKUP_KEY)
+    if not isinstance(catalog_key, str):
+        return MappingProxyType({})
+    return GetModelCostMap.bundled_model_cost_map().get(catalog_key, MappingProxyType({}))
+
+
 def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> PrismaCompatibleUpdateDBModel:
     if updated_patch.model_info is not None:
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
@@ -910,7 +919,9 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     if updated_patch.model_info:
         incoming_model_info: Final = updated_patch.model_info.model_dump(exclude_none=True)
         echoed_fields: Final = echoed_cost_map_fields(
-            incoming_model_info, _cost_map_entry(db_model, incoming_model_info)
+            incoming_model_info,
+            _cost_map_entry(db_model, incoming_model_info),
+            _bundled_cost_map_entry(incoming_model_info),
         )
         merged_model_info.update(
             MappingProxyType(

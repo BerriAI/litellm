@@ -4090,6 +4090,30 @@ class TestModelInfoCostMapEchoFilter:
         assert info["mode"] == "chat"
         assert info["access_groups"] == ["staging"]
 
+    def test_reset_is_recognised_after_the_router_registered_the_override(self, monkeypatch: pytest.MonkeyPatch):
+        import litellm
+
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        pristine = litellm.get_model_info("openai/gpt-5.6")
+        polluted = {**pristine, "max_input_tokens": 2048}
+        monkeypatch.setattr(litellm, "get_model_info", lambda model, **_: polluted)
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="dep-echo-8", max_input_tokens=2048),
+        )
+        echo = {**pristine, "id": "dep-echo-8", "db_model": True}
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(**echo)),
+        )
+
+        info = json.loads(result["model_info"])
+        assert "max_input_tokens" not in info, info
+
     def test_echo_is_compared_against_the_deployments_lookup_not_the_key(self):
         import litellm
 

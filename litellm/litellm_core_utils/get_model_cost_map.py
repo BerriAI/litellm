@@ -10,6 +10,7 @@ export LITELLM_LOCAL_MODEL_COST_MAP=True
 """
 
 import asyncio
+import functools
 import hashlib
 import json
 import os
@@ -17,14 +18,16 @@ import random
 import sys
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm import verbose_logger
@@ -37,6 +40,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
 )
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
+_BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
 
 
@@ -87,6 +91,13 @@ class GetModelCostMap:
     def load_local_model_cost_map() -> dict:
         """Load the local backup model cost map bundled with the package."""
         return GetModelCostMap.load_local_model_cost_map_with_revision().model_cost_map
+
+    @staticmethod
+    @functools.lru_cache(maxsize=1)
+    def bundled_model_cost_map() -> Mapping[str, Mapping[str, object]]:
+        """The bundled catalog as shipped, untouched by ``register_model`` or router registrations."""
+        raw: Final = _BUNDLED_CATALOG_ADAPTER.validate_python(GetModelCostMap.load_local_model_cost_map())
+        return MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()})
 
     @classmethod
     def _get_backup_model_count(cls) -> int:

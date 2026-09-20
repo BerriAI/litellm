@@ -3779,16 +3779,20 @@ def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, 
     return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
 
 
-def echoed_cost_map_fields(model_info: Mapping[str, Any], cost_map_entry: Mapping[str, Any]) -> tuple[str, ...]:
+def echoed_cost_map_fields(model_info: Mapping[str, Any], *cost_map_entries: Mapping[str, Any]) -> tuple[str, ...]:
     """Fields a ``/model/info`` echo copied from the cost map unchanged.
 
     Only ``litellm.get_model_info`` emits ``key``, so a blob carrying it is an echo of that
-    response. Anything in it that still equals the resolved cost-map entry is a display value
-    nobody typed; a value the operator edited differs and stays a real override.
+    response. Anything in it that still equals a resolved cost-map entry is a display value
+    nobody typed; a value the operator edited differs from every entry and stays a real override.
+    Callers pass both the live entry, which the router rewrites with each deployment's own
+    overrides, and the bundled entry, so a reset to the catalog value reads as an echo either way.
     """
     if COST_MAP_LOOKUP_KEY not in model_info:
         return ()
-    return tuple(sorted(k for k, v in model_info.items() if k in cost_map_entry and cost_map_entry[k] == v))
+    return tuple(
+        sorted(k for k, v in model_info.items() if any(k in entry and entry[k] == v for entry in cost_map_entries))
+    )
 
 
 def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
