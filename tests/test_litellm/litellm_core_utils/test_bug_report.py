@@ -100,5 +100,5 @@ def test_strip_bug_report_notice():
     report = build_bug_report(RuntimeError("boom"), surface="sdk")
     notice = bug_report_notice(report)
 
-    assert strip_bug_report_notice(f"boom\n{notice}") == "boom"
+    assert strip_bug_report_notice(f"boom\n\n{notice}") == "boom\n"
     assert strip_bug_report_notice("boom") == "boom"

@@ -153,7 +153,10 @@ def bug_report_issue_url(report: BugReport) -> str:
 
 def strip_bug_report_notice(message: str) -> str:
     index: Final = message.find(NOTICE_PREFIX)
-    return message if index == -1 else message[:index].rstrip()
+    if index == -1:
+        return message
+    head: Final = message[:index]
+    return head.removesuffix("\n")
 
 
 def bug_report_notice(report: BugReport) -> str:
