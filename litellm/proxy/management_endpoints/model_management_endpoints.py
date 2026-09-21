@@ -28,6 +28,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.ptu_pricing import (
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
@@ -145,7 +146,7 @@ if TYPE_CHECKING:
     from prisma import types as prisma_types
 
 router: Final = APIRouter()
-CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points"})
+CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 
 
@@ -330,6 +331,28 @@ def _raise_on_strategy_router_write_violation(
         code=status.HTTP_400_BAD_REQUEST,
         param="litellm_params.model",
     )
+
+
+def _raise_on_invalid_credential_name(litellm_params: updateLiteLLMParams | None) -> None:
+    if litellm_params is None or "litellm_credential_name" not in litellm_params.model_fields_set:
+        return
+    credential_name: Final = litellm_params.litellm_credential_name
+    if credential_name is None:
+        return
+    if credential_name == "":
+        raise ProxyException(
+            message="litellm_credential_name cannot be an empty string. Send null to detach the stored credential or omit the field to leave it unchanged.",
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="litellm_credential_name",
+        )
+    if CredentialAccessor.find_credential(credential_name) is None:
+        raise ProxyException(
+            message=f"Credential '{credential_name}' not found. Create it via /credentials before attaching it to a model.",
+            type=ProxyErrorTypes.validation_error.value,
+            code=status.HTTP_400_BAD_REQUEST,
+            param="litellm_credential_name",
+        )
 
 
 AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY: Final = 5_872_301
@@ -1111,6 +1134,7 @@ async def patch_model(
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=db_model.litellm_params,
         )
+        _raise_on_invalid_credential_name(patch_data.litellm_params)
 
         ModelManagementAuthChecks.can_user_set_aws_session_tags(
             litellm_params=patch_data.litellm_params,
@@ -1921,21 +1945,28 @@ class ModelManagementAuthChecks:
         user_api_key_dict: UserAPIKeyAuth,
         existing_litellm_params: GenericLiteLLMParams | None = None,
     ) -> Literal[True]:
-        if litellm_params is None or litellm_params.litellm_credential_name is None:
+        if litellm_params is None:
             return True
-        if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None:
-            existing_credential_name: Final = decrypt_value_helper(
+        if "litellm_credential_name" not in litellm_params.model_fields_set:
+            return True
+        existing_credential_name: Final = (
+            decrypt_value_helper(
                 value=existing_litellm_params.litellm_credential_name,
                 key="litellm_credential_name",
                 exception_type="debug",
                 return_original_value=True,
             )
-            if litellm_params.litellm_credential_name == existing_credential_name:
-                return True
+            if existing_litellm_params is not None and existing_litellm_params.litellm_credential_name is not None
+            else None
+        )
+        requested_credential_name: Final = litellm_params.litellm_credential_name
+        if requested_credential_name == existing_credential_name:
+            return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
+        action: Final = "detach" if requested_credential_name is None else "attach"
         raise ProxyException(
-            message=f"Only a proxy admin can attach a stored credential (litellm_credential_name) to a model. Your role={user_api_key_dict.user_role}.",
+            message=f"Only a proxy admin can {action} a stored credential (litellm_credential_name) on a model. Your role={user_api_key_dict.user_role}.",
             type=ProxyErrorTypes.auth_error.value,
             code=status.HTTP_403_FORBIDDEN,
             param="litellm_credential_name",
