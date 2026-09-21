@@ -2563,28 +2563,19 @@ class TestListPromptsAndResourcesRestAPI:
         """The catalog response reuses the MCP SDK prompt type, which shares its class name with the
         prompt-management request model, so the two must land as separate OpenAPI components:
         POST /prompts still requires prompt_id + litellm_params while the catalog item requires name."""
-        from fastapi import FastAPI
+        from litellm.proxy.prompts.prompt_endpoints import Prompt as PromptManagementRequest
 
-        from litellm.proxy.prompts.prompt_endpoints import router as prompt_router
-
-        app = FastAPI()
-        app.include_router(rest_endpoints.router)
-        app.include_router(prompt_router)
-        spec = app.openapi()
-        schemas = spec["components"]["schemas"]
-
-        def component(ref: Dict[str, Any]) -> Dict[str, Any]:
-            return schemas[ref["$ref"].rsplit("/", 1)[1]]
-
-        create_prompt_operation = spec["paths"]["/prompts"]["post"]
-        create_prompt_body = component(create_prompt_operation["requestBody"]["content"]["application/json"]["schema"])
-        assert {"prompt_id", "litellm_params"} <= set(create_prompt_body["required"])
-
-        catalog_operation = spec["paths"]["/mcp-rest/prompts/list"]["get"]
-        catalog_response = component(catalog_operation["responses"]["200"]["content"]["application/json"]["schema"])
-        catalog_prompt = component(catalog_response["properties"]["prompts"]["items"])
+        catalog_schema: Final = rest_endpoints.ListMCPPromptsRestAPIResponse.model_json_schema(
+            ref_template="#/components/schemas/{model}"
+        )
+        items_ref: Final = catalog_schema["properties"]["prompts"]["items"]["$ref"]
+        assert items_ref.rsplit("/", 1)[1] != PromptManagementRequest.__name__
+        catalog_prompt: Final = catalog_schema["$defs"][items_ref.rsplit("/", 1)[1]]
         assert catalog_prompt["required"] == ["name"]
         assert "arguments" in catalog_prompt["properties"]
+
+        management_schema: Final = PromptManagementRequest.model_json_schema()
+        assert {"prompt_id", "litellm_params"} <= set(management_schema["required"])
 
 
 class TestCallToolRestAPI:
