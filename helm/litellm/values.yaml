@@ -397,6 +397,10 @@ gateway:
   #   failureThreshold: 30
   #   periodSeconds: 10
   startupProbe: {}
+  # Fixed pod count, rendered into the Deployment's spec.replicas only when
+  # hpa.enabled is false. With the HPA on, the autoscaler owns the count and
+  # this value is ignored.
+  replicaCount: 1
   hpa:
     enabled: true
     minReplicas: 1
@@ -524,6 +528,8 @@ backend:
   strategy: {}
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
+  # Same semantics as gateway.replicaCount.
+  replicaCount: 1
   hpa:
     enabled: true
     minReplicas: 1
@@ -590,6 +596,8 @@ ui:
   strategy: {}
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
+  # Same semantics as gateway.replicaCount.
+  replicaCount: 1
   hpa:
     enabled: false
     minReplicas: 1
