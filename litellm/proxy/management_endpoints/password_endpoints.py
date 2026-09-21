@@ -8,7 +8,7 @@ request kwargs to OTEL spans, which would log plaintext passwords. The audit
 signal is emitted by hand below, with field names only, never values.
 """
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Annotated, Final
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -58,7 +58,7 @@ def _user_table(
 )
 async def change_password(
     data: ChangePasswordRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> ChangePasswordResponse:
     """
     Change the calling user's own password.
