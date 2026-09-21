@@ -35,6 +35,7 @@ pub struct CyberArkSecretManager {
     api_key: SecretValue,
     token: Cache<(), SecretValue>,
     secrets: Cache<String, SecretValue>,
+    authentication_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +66,7 @@ impl CyberArkSecretManager {
             api_key,
             token,
             secrets,
+            authentication_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -139,6 +141,10 @@ impl CyberArkSecretManager {
     }
 
     async fn authenticate(&self) -> Result<SecretValue, Error> {
+        if let Some(token) = self.token.get(&()).await {
+            return Ok(token);
+        }
+        let _guard = self.authentication_lock.lock().await;
         if let Some(token) = self.token.get(&()).await {
             return Ok(token);
         }

@@ -89,6 +89,39 @@ async fn successful_reads_cache_auth_secret_and_redact_values() {
     }
 }
 
+#[tokio::test]
+async fn concurrent_reads_share_authentication_request() {
+    let server = MockServer::start().await;
+    Mock::given(path("/authn/acct/admin/authenticate"))
+        .and(body_string("k3y"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(TOKEN_JSON)
+                .set_delay(Duration::from_millis(20)),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/secrets/acct/variable/key"))
+        .and(header(
+            "authorization",
+            format!("Token token=\"{}\"", STANDARD.encode(TOKEN_JSON)),
+        ))
+        .respond_with(ResponseTemplate::new(200).set_body_string("value"))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(60));
+
+    let (first, second) = tokio::join!(
+        manager.async_read_secret("key"),
+        manager.async_read_secret("key")
+    );
+
+    assert_eq!(first.unwrap().unwrap().expose(), "value");
+    assert_eq!(second.unwrap().unwrap().expose(), "value");
+}
+
 #[rstest::rstest]
 #[case::not_found(404)]
 #[case::unauthorized(401)]

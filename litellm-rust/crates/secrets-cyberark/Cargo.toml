@@ -16,6 +16,7 @@ thiserror.workspace = true
 veil.workspace = true
 tracing = "0.1"
 percent-encoding = "2.3"
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 rstest.workspace = true
