@@ -231,6 +231,12 @@ fn counters_use_atomic_native_values_and_ignore_invalid_initial_values() {
             .unwrap(),
         "real"
     );
+    assert_eq!(
+        cache
+            .increment_cache("counter", 1.0, ExactCacheContext::default())
+            .unwrap(),
+        1.0
+    );
 }
 
 #[test]
