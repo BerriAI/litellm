@@ -152,8 +152,8 @@ impl<C: CacheCodec> BaseCache for S3Cache<C> {
     type Value = C::Value;
     type Context = ExactCacheContext;
 
-    fn get_ttl(&self, _context: &Self::Context) -> Option<Duration> {
-        None
+    fn get_ttl(&self, context: &Self::Context) -> Option<Duration> {
+        context.ttl
     }
 
     fn set_cache(

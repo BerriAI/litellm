@@ -204,6 +204,12 @@ async fn unsupported_and_noop_capabilities_match_python() {
     cache.flush_cache().unwrap();
     cache.disconnect().await.unwrap();
     assert_eq!(cache.get_ttl(&ExactCacheContext::default()), None);
+    assert_eq!(
+        cache.get_ttl(&ExactCacheContext {
+            ttl: Some(Duration::from_secs(45)),
+        }),
+        Some(Duration::from_secs(45))
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
