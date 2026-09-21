@@ -14078,120 +14078,15 @@ async def test_request_selected_during_guardrail_runs_concurrently_with_tool(mon
 
 
 @pytest.mark.asyncio
-async def test_config_edit_preserves_credentials_without_pinning_discovered_oauth_metadata(monkeypatch, config_only_mcp_manager_factory):
-    monkeypatch.setenv("LITELLM_MCP_OAUTH_DISCOVERY_ON_STARTUP", "false")
-    manager = config_only_mcp_manager_factory()
-    await manager.load_servers_from_config({"oauth_server": {
-        "url": "https://example.com/mcp", "transport": "http", "auth_type": "oauth2",
-        "oauth2_flow": "authorization_code", "client_id": "declared-client", "client_secret": "declared-secret",
-        "authorization_url": "https://idp.example.com/authorize", "timeout": 12.5,
-        "static_headers": {"X-Project": "project"}, "access_groups": ["engineering"],
-    }})
-    server = next(iter(manager.config_mcp_servers.values()))
-    server.issuer = "https://discovered.example.com"
-    server.token_url = "https://discovered.example.com/token"
-    server.scopes = ["discovered-scope"]
+@pytest.mark.parametrize("in_config,in_db,expected", [(True, False, True), (False, True, False), (True, True, False)])
+async def test_server_response_identifies_read_only_config(in_config, in_db, expected):
+    manager = MCPServerManager()
+    server = MCPServer(server_id="source-server", name="source_server", transport=MCPTransport.http)
+    manager.config_mcp_servers = {server.server_id: server} if in_config else {}
+    manager.registry = {server.server_id: server} if in_db else {}
 
-    request = manager.config_server_for_edit(server.server_id)
+    listed = await manager.get_all_mcp_servers_unfiltered()
 
-    assert request.server_id == server.server_id
-    assert request.credentials["client_id"] == "declared-client"
-    assert request.credentials["client_secret"] == "declared-secret"
-    assert request.credentials["scopes"] is None
-    assert request.issuer is None
-    assert request.token_url is None
-    assert request.authorization_url == "https://idp.example.com/authorize"
-    assert request.timeout == 12.5
-    assert request.static_headers == {"X-Project": "project"}
-    assert request.mcp_access_groups == ["engineering"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field,value", [
-    ("disallowed_tools", ["delete"]), ("allowed_params", {"read": ["id"]}),
-    ("allow_sampling", True), ("allow_elicitation", True), ("token_validation", {"tenant": "example"}),
-])
-async def test_config_edit_rejects_settings_the_database_cannot_restore(field, value, config_only_mcp_manager_factory):
-    manager = config_only_mcp_manager_factory()
-    await manager.load_servers_from_config({"restricted": {"url": "https://example.com/mcp", field: value}})
-    server = next(iter(manager.config_mcp_servers.values()))
-
-    with pytest.raises(HTTPException) as error:
-        manager.config_server_for_edit(server.server_id)
-
-    assert error.value.status_code == 400
-    assert "config-only settings" in error.value.detail["error"]
-    assert getattr(server, field) == value
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("raw", [
-    {"authentication_token": "os.environ/MCP_SECRET"},
-    {"static_headers": {"Authorization": "os.environ/MCP_SECRET"}},
-    {"env_vars": [{"name": "TOKEN", "value": "os.environ/MCP_SECRET", "scope": "global"}]},
-])
-async def test_config_edit_rejects_resolved_secret_references(raw, config_only_mcp_manager_factory):
-    manager = config_only_mcp_manager_factory()
-    await manager.load_servers_from_config(
-        {"secret_server": {"url": "https://example.com/mcp", "authentication_token": "resolved-secret"}},
-        raw_mcp_servers_config={"secret_server": {"url": "https://example.com/mcp", **raw}},
-    )
-    server = next(iter(manager.config_mcp_servers.values()))
-
-    with pytest.raises(HTTPException) as error:
-        manager.config_server_for_edit(server.server_id)
-
-    assert error.value.status_code == 400
-    assert "resolved-secret" not in str(error.value.detail)
-    assert "MCP_SECRET" not in str(error.value.detail)
-
-
-@pytest.mark.asyncio
-async def test_config_edit_rejects_config_beyond_string_scan_depth(config_only_mcp_manager_factory):
-    from functools import reduce
-
-    manager = config_only_mcp_manager_factory()
-    nested = reduce(lambda value, _: {"nested": value}, range(105), "plain")
-    await manager.load_servers_from_config(
-        {"deep": {"url": "https://example.com/mcp"}},
-        raw_mcp_servers_config={"deep": {"url": "https://example.com/mcp", "metadata": nested}},
-    )
-    server = next(iter(manager.config_mcp_servers.values()))
-
-    with pytest.raises(HTTPException) as error:
-        manager.config_server_for_edit(server.server_id)
-
-    assert error.value.status_code == 400
-    assert "source configuration" in error.value.detail["error"]
-
-
-@pytest.mark.asyncio
-async def test_config_edit_rejects_pinned_id_before_creating_a_reload_collision(config_only_mcp_manager_factory):
-    manager = config_only_mcp_manager_factory()
-    await manager.load_servers_from_config({"pinned": {
-        "server_id": "pinned-id", "url": "https://example.com/mcp",
-    }})
-
-    with pytest.raises(HTTPException) as error:
-        manager.config_server_for_edit("pinned-id")
-
-    assert error.value.status_code == 400
-    assert "pinned server_id" in error.value.detail["error"]
-    assert manager.get_registry()["pinned-id"].url == "https://example.com/mcp"
-
-
-@pytest.mark.asyncio
-async def test_config_edit_validation_error_does_not_disclose_credentials(config_only_mcp_manager_factory):
-    manager = config_only_mcp_manager_factory()
-    await manager.load_servers_from_config({"stdio_server": {
-        "transport": "stdio", "command": "unsupported-command", "args": ["argument"],
-        "authentication_token": "must-stay-private",
-    }})
-    server = next(iter(manager.config_mcp_servers.values()))
-
-    with pytest.raises(HTTPException) as error:
-        manager.config_server_for_edit(server.server_id)
-
-    assert error.value.status_code == 400
-    assert "must-stay-private" not in str(error.value.detail)
-    assert "source configuration" in error.value.detail["error"]
+    assert len(listed) == 1
+    assert listed[0].model_dump().get("is_config") is expected
+    assert manager._build_mcp_server_table(server).model_dump().get("is_config") is expected

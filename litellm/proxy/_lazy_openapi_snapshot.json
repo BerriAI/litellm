@@ -24173,6 +24173,12 @@
               "title": "Is Byok",
               "type": "boolean"
             },
+            "is_config": {
+              "default": false,
+              "description": "Whether this server is defined in config and is read-only.",
+              "title": "Is Config",
+              "type": "boolean"
+            },
             "issuer": {
               "anyOf": [
                 {
@@ -27221,6 +27227,12 @@
             "is_byok": {
               "default": false,
               "title": "Is Byok",
+              "type": "boolean"
+            },
+            "is_config": {
+              "default": false,
+              "description": "Whether this server is defined in config and is read-only.",
+              "title": "Is Config",
               "type": "boolean"
             },
             "issuer": {

@@ -30447,6 +30447,12 @@ export interface components {
              * @default false
              */
             is_byok: boolean;
+            /**
+             * Is Config
+             * @description Whether this server is defined in config and is read-only.
+             * @default false
+             */
+            is_config: boolean;
             /** Issuer */
             issuer?: string | null;
             /** Last Health Check */

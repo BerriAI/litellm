@@ -4954,7 +4954,6 @@ class ProxyConfig:
 
     def __init__(self) -> None:
         self.config: Mapping[str, object] = MappingProxyType({})
-        self.raw_mcp_servers: Mapping[str, object] = MappingProxyType({})
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
@@ -5628,10 +5627,6 @@ class ProxyConfig:
 
         self._initialize_secret_manager_from_raw_config(config=config, config_file_path=config_file_path)
 
-        raw_mcp_servers: Final = TypeAdapter(Mapping[str, object]).validate_python(
-            config.get("mcp_servers") or _EMPTY_SETTINGS_MAPPING
-        )
-        self.raw_mcp_servers = MappingProxyType({key: copy.deepcopy(value) for key, value in raw_mcp_servers.items()})
         config = self._check_for_os_environ_vars(config=config)
         self._apply_resolved_runtime_settings(config)
 
@@ -6622,9 +6617,7 @@ class ProxyConfig:
             litellm_settings: Final = config.get("litellm_settings", {})
             mcp_aliases: Final = litellm_settings.get("mcp_aliases", None)
 
-            await global_mcp_server_manager.load_servers_from_config(
-                mcp_servers_config, mcp_aliases, raw_mcp_servers_config=self.raw_mcp_servers
-            )
+            await global_mcp_server_manager.load_servers_from_config(mcp_servers_config, mcp_aliases)
 
         ## VECTOR STORES
         vector_store_registry_config: Final = config.get("vector_store_registry", None)
