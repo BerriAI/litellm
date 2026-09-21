@@ -12,7 +12,7 @@ use litellm_core::ocr::route::ocr_machine;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_llms::base_llm::ocr::{
     handler::OcrClient,
-    settings::{OcrSettings, Secrets},
+    settings::{EnvironmentSecrets, OcrSettings, Secrets},
 };
 use pyo3::{
     prelude::*,
@@ -41,7 +41,7 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let secrets = process_environment_secrets(&PythonSettings::SecretManager.read(py)?)?;
+    process_environment_secrets(&PythonSettings::SecretManager.read(py)?)?;
     let config = http::call_config(py, &kwargs, asynchronous)?;
     let client = OcrClient::new(
         http::pool(),
@@ -49,7 +49,7 @@ fn run_ocr(
         http::url_policy(py)?,
         VERTEX_AUTH.clone(),
         ocr_settings(py)?,
-        secrets,
+        Arc::new(EnvironmentSecrets),
     )
     .map_err(http::client_error)?;
     run_legacy_call(

@@ -436,6 +436,8 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         None
     }
 
+    fn secret_names(&self) -> Vec<&'static str>;
+
     fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
         ResolvedOcrCredentials {
             api_key: inputs
