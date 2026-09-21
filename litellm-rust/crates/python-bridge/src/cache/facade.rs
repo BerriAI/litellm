@@ -328,6 +328,7 @@ impl FacadeGuard {
                 "RedisClusterCache",
                 "redis",
             ),
+            ("gcs", _) => ("litellm.caching.gcs_cache", "GCSCache", "gcs"),
             ("disk", _) => ("litellm.caching.disk_cache", "DiskCache", "disk"),
             ("azure-blob", _) => (
                 "litellm.caching.azure_blob_cache",
@@ -393,6 +394,9 @@ impl FacadeGuard {
                     "embedding_timeout",
                     "_index_name",
                     "_redis_url",
+                    "bucket_name",
+                    "key_prefix",
+                    "path_service_account",
                 ],
             )?,
             disk_store: (kind == "disk")
