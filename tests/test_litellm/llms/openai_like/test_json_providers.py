@@ -576,7 +576,7 @@ class TestCoralBricksPricing:
     EXPECTED = {
         "coralbricks/glm-5.3-fp4": (1.12e-06, 4.4e-06),
         "coralbricks/glm-5.3-flash-fp4": (1.5e-07, 5e-07),
-        "coralbricks/kimi-k3": (3e-06, 1.5e-05),
+        "coralbricks/deepseek-v4.1-flash-fast-fp4": (2.2e-07, 6.6e-07),
         "coralbricks/gpt-oss-120b": (1.2e-07, 6e-07),
     }
 

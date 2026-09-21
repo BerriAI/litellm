@@ -34886,7 +34886,7 @@
         "supports_xhigh_reasoning_effort": true
     },
     "meta/muse-voice-transcribe-1.0": {
-        "input_cost_per_second": 0.00005,
+        "input_cost_per_second": 5e-05,
         "litellm_provider": "meta",
         "mode": "audio_transcription",
         "source": "https://dev.meta.ai/docs/speech-to-text",
@@ -65291,6 +65291,26 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "coralbricks/deepseek-v4.1-flash-fast-fp4": {
+        "cache_creation_input_token_cost": 6.6e-08,
+        "cache_read_input_token_cost": 0.0,
+        "input_cost_per_token": 2.2e-07,
+        "litellm_provider": "coralbricks",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 32768,
+        "max_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 6.6e-07,
+        "source": "https://www.coralbricks.ai/docs",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
     "coralbricks/glm-5.3-fp4": {
         "cache_creation_input_token_cost": 1.12e-06,
         "cache_read_input_token_cost": 0.0,
@@ -65330,25 +65350,5 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": false
-    },
-    "coralbricks/kimi-k3": {
-        "cache_creation_input_token_cost": 3e-06,
-        "cache_read_input_token_cost": 0.0,
-        "input_cost_per_token": 3e-06,
-        "litellm_provider": "coralbricks",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
-        "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
-        "source": "https://www.coralbricks.ai/docs",
-        "supported_endpoints": [
-            "/v1/chat/completions"
-        ],
-        "supports_function_calling": true,
-        "supports_native_streaming": true,
-        "supports_system_messages": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
     }
 }
