@@ -953,7 +953,10 @@ async def make_agent_public(
         await proxy_config.save_config(
             new_config=config.with_section(
                 "litellm_settings",
-                {**config.litellm_settings, "public_agent_groups": updated_public_agent_groups},  # mutable-ok: replacement section for save_config
+                {
+                    **config.litellm_settings,
+                    "public_agent_groups": updated_public_agent_groups,
+                },  # mutable-ok: replacement section for save_config
             )
         )
 
@@ -1058,7 +1061,10 @@ async def make_agents_public(
         await proxy_config.save_config(
             new_config=config.with_section(
                 "litellm_settings",
-                {**config.litellm_settings, "public_agent_groups": litellm.public_agent_groups},  # mutable-ok: replacement section for save_config
+                {
+                    **config.litellm_settings,
+                    "public_agent_groups": litellm.public_agent_groups,
+                },  # mutable-ok: replacement section for save_config
             )
         )
 

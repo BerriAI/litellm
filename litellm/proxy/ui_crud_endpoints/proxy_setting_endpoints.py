@@ -546,7 +546,10 @@ def _with_websearch_enabled_resolved(config: ProxyRuntimeConfig) -> ProxyRuntime
     }
     return config.with_section(
         "litellm_settings",
-        {**litellm_settings, "websearch_interception_params": resolved},  # mutable-ok: replacement section for save_config
+        {
+            **litellm_settings,
+            "websearch_interception_params": resolved,
+        },  # mutable-ok: replacement section for save_config
     )
 
 
@@ -623,7 +626,10 @@ async def add_allowed_ip(
     )
     updated: Final = config.with_section(
         "general_settings",
-        {**config.general_settings, "allowed_ips": list(updated_allowed_ips)},  # mutable-ok: replacement section for save_config
+        {
+            **config.general_settings,
+            "allowed_ips": list(updated_allowed_ips),
+        },  # mutable-ok: replacement section for save_config
     )
 
     await proxy_config.save_config(new_config=updated)
@@ -672,7 +678,10 @@ async def delete_allowed_ip(
     updated_allowed_ips: Final = tuple(ip for ip in before_allowed_ips if ip != ip_address.ip)
     updated: Final = config.with_section(
         "general_settings",
-        {**config.general_settings, "allowed_ips": list(updated_allowed_ips)},  # mutable-ok: replacement section for save_config
+        {
+            **config.general_settings,
+            "allowed_ips": list(updated_allowed_ips),
+        },  # mutable-ok: replacement section for save_config
     )
 
     await proxy_config.save_config(new_config=updated)
@@ -1723,7 +1732,9 @@ async def get_ui_settings():
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
     # Build config-like object for schema helper
-    config: Final[Mapping[str, object]] = {"litellm_settings": {"ui_settings": ui_settings}}  # mutable-ok: schema helper only reads it
+    config: Final[Mapping[str, object]] = {
+        "litellm_settings": {"ui_settings": ui_settings}
+    }  # mutable-ok: schema helper only reads it
 
     settings: Final = await _get_settings_with_schema(
         settings_key="ui_settings",

@@ -2781,7 +2781,10 @@ async def update_public_model_groups(
         await proxy_config.save_config(
             new_config=config.with_section(
                 "litellm_settings",
-                {**config.litellm_settings, "public_model_groups": request.model_groups},  # mutable-ok: replacement section for save_config
+                {
+                    **config.litellm_settings,
+                    "public_model_groups": request.model_groups,
+                },  # mutable-ok: replacement section for save_config
             )
         )
 
@@ -2847,7 +2850,10 @@ async def update_useful_links(
         await proxy_config.save_config(
             new_config=config.with_section(
                 "litellm_settings",
-                {**config.litellm_settings, "public_model_groups_links": request.useful_links},  # mutable-ok: replacement section for save_config
+                {
+                    **config.litellm_settings,
+                    "public_model_groups_links": request.useful_links,
+                },  # mutable-ok: replacement section for save_config
             )
         )
 

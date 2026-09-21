@@ -3021,7 +3021,10 @@ if MCP_AVAILABLE:
             await proxy_config.save_config(
                 new_config=config.with_section(
                     "litellm_settings",
-                    {**config.litellm_settings, "public_mcp_servers": litellm.public_mcp_servers},  # mutable-ok: replacement section for save_config
+                    {
+                        **config.litellm_settings,
+                        "public_mcp_servers": litellm.public_mcp_servers,
+                    },  # mutable-ok: replacement section for save_config
                 )
             )
 

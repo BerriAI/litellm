@@ -1196,10 +1196,7 @@ def run_server(
 
             ### LITELLM SETTINGS ###
             litellm_settings = _config.litellm_settings
-            if (
-                "json_logs" in litellm_settings
-                and litellm_settings["json_logs"] is True
-            ):
+            if "json_logs" in litellm_settings and litellm_settings["json_logs"] is True:
                 import litellm
 
                 litellm.json_logs = True

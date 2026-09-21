@@ -298,7 +298,10 @@ async def update_cost_discount_config(
         await proxy_config.save_config(
             new_config=config.with_section(
                 "litellm_settings",
-                {**config.litellm_settings, "cost_discount_config": cost_discount_config},  # mutable-ok: replacement section for save_config
+                {
+                    **config.litellm_settings,
+                    "cost_discount_config": cost_discount_config,
+                },  # mutable-ok: replacement section for save_config
             )
         )
 
@@ -470,7 +473,10 @@ async def update_cost_margin_config(
         await proxy_config.save_config(
             new_config=config.with_section(
                 "litellm_settings",
-                {**config.litellm_settings, "cost_margin_config": cost_margin_config},  # mutable-ok: replacement section for save_config
+                {
+                    **config.litellm_settings,
+                    "cost_margin_config": cost_margin_config,
+                },  # mutable-ok: replacement section for save_config
             )
         )
 
@@ -546,7 +552,10 @@ async def update_block_requests_for_models_without_pricing(
         await proxy_config.save_config(
             new_config=config.with_section(
                 "litellm_settings",
-                {**config.litellm_settings, "block_requests_for_models_without_pricing": request.enabled},  # mutable-ok: replacement section for save_config
+                {
+                    **config.litellm_settings,
+                    "block_requests_for_models_without_pricing": request.enabled,
+                },  # mutable-ok: replacement section for save_config
             )
         )
 

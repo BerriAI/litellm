@@ -4951,7 +4951,9 @@ def _resolve_env_params(params: Mapping[str, object]) -> dict[str, object]:
 def _resolve_env_params_from_os(params: Mapping[str, object]) -> dict[str, object]:
     """Resolve `os.environ/` refs in a params mapping via os.getenv (assistant_settings path)."""
     return {  # mutable-ok: fresh resolved copy so the frozen config is never mutated
-        key: os.getenv(value.removeprefix("os.environ/")) if isinstance(value, str) and value.startswith("os.environ/") else value
+        key: os.getenv(value.removeprefix("os.environ/"))
+        if isinstance(value, str) and value.startswith("os.environ/")
+        else value
         for key, value in params.items()
     }
 
@@ -5702,9 +5704,7 @@ class ProxyConfig:
             # Display loaded search tool
             search_tool_name = search_tool.get("search_tool_name", "")
             search_provider = search_tool.get("litellm_params", {})
-            search_provider = (
-                search_provider.get("search_provider", "") if isinstance(search_provider, Mapping) else ""
-            )
+            search_provider = search_provider.get("search_provider", "") if isinstance(search_provider, Mapping) else ""
             print(  # noqa: T201
                 f"\033[32m    {search_tool_name} ({search_provider})\033[0m"
             )
@@ -5845,12 +5845,16 @@ class ProxyConfig:
             _set_redis_usage_cache(coordination_redis_cache)
 
         ## Callback settings
-        callback_settings: Final[dict] = dict(config.callback_settings)  # mutable-ok: callback init requires a concrete dict
+        callback_settings: Final[dict] = dict(
+            config.callback_settings
+        )  # mutable-ok: callback init requires a concrete dict
         if callback_settings:
             litellm.callback_settings = callback_settings
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
-        litellm_settings: Final[dict] = dict(config.litellm_settings)  # mutable-ok: dict-typed initializers (guardrails, callbacks) require a concrete dict
+        litellm_settings: Final[dict] = dict(
+            config.litellm_settings
+        )  # mutable-ok: dict-typed initializers (guardrails, callbacks) require a concrete dict
         if litellm_settings:
             # Prometheus collectors have fixed label schemas. Load and validate this
             # setting before processing callbacks so YAML key order cannot construct
@@ -6208,7 +6212,9 @@ class ProxyConfig:
                 _set_redis_usage_cache(env_coordination_redis_cache)
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
-        general_settings: Final[dict] = dict(config.general_settings)  # mutable-ok: boot working copy; the store_model_in_db normalization writes into it
+        general_settings: Final[dict] = dict(
+            config.general_settings
+        )  # mutable-ok: boot working copy; the store_model_in_db normalization writes into it
 
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
@@ -6477,7 +6483,11 @@ class ProxyConfig:
                         )
                     litellm_model_name = litellm_model_params.get("model")
                     litellm_model_api_base = litellm_model_params.get("api_base")
-                    if isinstance(litellm_model_name, str) and "ollama" in litellm_model_name and litellm_model_api_base is None:
+                    if (
+                        isinstance(litellm_model_name, str)
+                        and "ollama" in litellm_model_name
+                        and litellm_model_api_base is None
+                    ):
                         run_ollama_serve()
                 print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa: T201
 
@@ -6501,7 +6511,9 @@ class ProxyConfig:
         from litellm.sandbox.sandbox_tools import register_sandbox_tools
 
         register_sandbox_tools(
-            [dict(tool) for tool in config.sandbox_tools]  # mutable-ok: dict copies so registry mutation cannot reach the frozen config
+            [
+                dict(tool) for tool in config.sandbox_tools
+            ]  # mutable-ok: dict copies so registry mutation cannot reach the frozen config
         )
 
         ## /fine_tuning/jobs endpoints config
@@ -6521,7 +6533,9 @@ class ProxyConfig:
             passthrough_endpoint_router,
         )
 
-        default_vertex_config: Final = dict(config.default_vertex_config) or None  # mutable-ok: dict copy for a dict-typed callee
+        default_vertex_config: Final = (
+            dict(config.default_vertex_config) or None
+        )  # mutable-ok: dict copy for a dict-typed callee
         passthrough_endpoint_router.set_default_vertex_config(config=default_vertex_config)
 
         ## ROUTER SETTINGS (e.g. routing_strategy, ...)
@@ -6584,7 +6598,9 @@ class ProxyConfig:
         )
 
         ## Prompt settings
-        prompts: Final = [dict(prompt) for prompt in config.prompts]  # mutable-ok: dict copies for a list[dict]-typed callee
+        prompts: Final = [
+            dict(prompt) for prompt in config.prompts
+        ]  # mutable-ok: dict copies for a list[dict]-typed callee
         if prompts:
             from litellm.proxy.prompts.init_prompts import init_prompts
 
@@ -6611,7 +6627,9 @@ class ProxyConfig:
                 global_mcp_tool_registry,
             )
 
-            global_mcp_tool_registry.load_tools_from_config(list(mcp_tools_config), config_file_path=config_file_path)  # mutable-ok: registry iterates a concrete list
+            global_mcp_tool_registry.load_tools_from_config(
+                list(mcp_tools_config), config_file_path=config_file_path
+            )  # mutable-ok: registry iterates a concrete list
 
         ## AGENTS
         agents_present: Final = "agents" in config.model_fields_set
@@ -6622,7 +6640,9 @@ class ProxyConfig:
             )
 
             global_agent_registry.load_agents_from_config(
-                cast("list[AgentConfig]", [dict(agent) for agent in agent_config])  # mutable-ok: dict copies; cast-ok: entries are AgentConfig-shaped YAML mappings
+                cast(
+                    "list[AgentConfig]", [dict(agent) for agent in agent_config]
+                )  # mutable-ok: dict copies; cast-ok: entries are AgentConfig-shaped YAML mappings
             )
 
         mcp_servers_config: Final = config.mcp_servers
@@ -6636,8 +6656,12 @@ class ProxyConfig:
             mcp_aliases: Final = litellm_settings.get("mcp_aliases", None)
 
             await global_mcp_server_manager.load_servers_from_config(
-                cast("dict[str, MCPServerConfig]", dict(mcp_servers_config)),  # mutable-ok: dict copy for a dict-typed callee; cast-ok: values are raw YAML mappings the manager reads via .get
-                cast("dict[str, str]", mcp_aliases) if isinstance(mcp_aliases, dict) else None,  # cast-ok: YAML-provided alias map
+                cast(
+                    "dict[str, MCPServerConfig]", dict(mcp_servers_config)
+                ),  # mutable-ok: dict copy for a dict-typed callee; cast-ok: values are raw YAML mappings the manager reads via .get
+                cast("dict[str, str]", mcp_aliases)
+                if isinstance(mcp_aliases, dict)
+                else None,  # cast-ok: YAML-provided alias map
             )
 
         ## VECTOR STORES
@@ -6650,7 +6674,9 @@ class ProxyConfig:
 
             # Load vector stores from config
             litellm.vector_store_registry.load_vector_stores_from_config(
-                [dict(store) for store in vector_store_registry_config]  # mutable-ok: dict copies so registry mutation cannot reach the frozen config
+                [
+                    dict(store) for store in vector_store_registry_config
+                ]  # mutable-ok: dict copies so registry mutation cannot reach the frozen config
             )
 
         ## WORKER REGISTRY (Global Control Plane)
@@ -6658,7 +6684,9 @@ class ProxyConfig:
         if worker_registry_config:
             if premium_user is not True:
                 raise ValueError("Trying to use `worker_registry`" + CommonProxyErrors.not_premium_user.value)
-            self.worker_registry = [WorkerRegistryEntry(**dict(e)) for e in worker_registry_config]  # mutable-ok: dict copies for ** unpacking
+            self.worker_registry = [
+                WorkerRegistryEntry(**dict(e)) for e in worker_registry_config
+            ]  # mutable-ok: dict copies for ** unpacking
         else:
             self.worker_registry = []
 
@@ -18044,7 +18072,8 @@ async def _persist_general_settings_ui_litellm_field(
     before_value: Final = config.litellm_settings.get(field_name)
     setattr(litellm, field_name, validated)
     updated: Final = config.with_section(
-        "litellm_settings", {**config.litellm_settings, field_name: validated}  # mutable-ok: replacement section for save_config
+        "litellm_settings",
+        {**config.litellm_settings, field_name: validated},  # mutable-ok: replacement section for save_config
     )
     await proxy_config.save_config(new_config=updated)
     asyncio.create_task(create_config_audit_log(field_name, "updated", before_value, validated, user_api_key_dict))
@@ -18382,9 +18411,10 @@ async def delete_callback(
         before_success_callbacks: Final = list(success_callbacks)
 
         # Remove callback from success_callback list
-        remaining_callbacks: Final = success_callbacks[: success_callbacks.index(callback_name)] + success_callbacks[
-            success_callbacks.index(callback_name) + 1 :
-        ]
+        remaining_callbacks: Final = (
+            success_callbacks[: success_callbacks.index(callback_name)]
+            + success_callbacks[success_callbacks.index(callback_name) + 1 :]
+        )
         updated: Final = config.with_section(
             "litellm_settings",  # mutable-ok: replacement section for save_config
             {**litellm_settings, "success_callback": list(remaining_callbacks)},
