@@ -652,6 +652,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
+        "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
         "output_db_cost_per_token",
         "output_dbu_cost_per_token",
@@ -740,6 +741,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -941,6 +943,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
                             "/v1beta/interactions",
@@ -1070,6 +1073,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)

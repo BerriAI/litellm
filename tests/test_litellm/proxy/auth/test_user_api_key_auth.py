@@ -2091,7 +2091,8 @@ async def test_auto_register_binds_api_key_to_token_hash():
 
 
 @pytest.mark.asyncio
-async def test_auto_register_first_request_propagates_user_email():
+@pytest.mark.parametrize("active", [True, False])
+async def test_auto_register_first_request_propagates_user_email(active: bool) -> None:
     """
     The first auto-registered JWT request must also carry user_email (resolved
     from the validated LiteLLM_UserTable), so attribution is consistent with the
@@ -2120,6 +2121,7 @@ async def test_auto_register_first_request_propagates_user_email():
         user_id="validated-user",
         user_email="validated@example.com",
         user_role="internal_user",
+        metadata={"scim_active": active},
     )
     mock_jwt_result = {
         "is_proxy_admin": False,
@@ -2150,7 +2152,7 @@ async def test_auto_register_first_request_propagates_user_email():
         patch("litellm.proxy.proxy_server.master_key", "sk-master"),
         patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
         patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock(post_call_failure_hook=AsyncMock(return_value=None))),
         patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
         patch(
             "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
@@ -2170,8 +2172,22 @@ async def test_auto_register_first_request_propagates_user_email():
             "litellm.proxy.auth.user_api_key_auth._auto_register_jwt_mapping",
             new_callable=AsyncMock,
             return_value=auto_registered_key,
-        ),
+        ) as auto_register,
     ):
+        if not active:
+            with pytest.raises(ProxyException, match="deactivated via SCIM") as exc:
+                await _user_api_key_auth_builder(
+                    request=mock_request,
+                    api_key=jwt_token,
+                    azure_api_key_header="",
+                    anthropic_api_key_header=None,
+                    google_ai_studio_api_key_header=None,
+                    azure_apim_header=None,
+                    request_data={},
+                )
+            assert int(exc.value.code) == 401
+            auto_register.assert_not_awaited()
+            return
         result = await _user_api_key_auth_builder(
             request=mock_request,
             api_key=jwt_token,
@@ -7315,15 +7331,15 @@ class TestJWTAuthUserEmail:
     the Prometheus `user_email` label and `user_api_key_user_email` in
     StandardLogging/SpendLogs metadata, which were always None for JWT traffic."""
 
-    def _jwt_request(self, jwt_token):
+    def _jwt_request(self, jwt_token, route="/v1/chat/completions"):
         mock_request = MagicMock()
-        mock_request.url.path = "/v1/chat/completions"
-        mock_request.method = "POST"
+        mock_request.url.path = route
+        mock_request.method = "GET" if route.endswith("/list") else "POST"
         mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
         mock_request.query_params = {}
         return mock_request
 
-    async def _run_jwt_auth(self, mock_jwt_result, jwt_token):
+    async def _run_jwt_auth(self, mock_jwt_result, jwt_token, route="/v1/chat/completions"):
         with (
             patch(
                 "litellm.proxy.proxy_server.general_settings",
@@ -7344,7 +7360,7 @@ class TestJWTAuthUserEmail:
                 litellm_jwtauth=LiteLLM_JWTAuth(),
             )
             return await user_api_key_auth(
-                request=self._jwt_request(jwt_token),
+                request=self._jwt_request(jwt_token, route),
                 api_key=f"Bearer {jwt_token}",
             )
 
@@ -7375,6 +7391,44 @@ class TestJWTAuthUserEmail:
 
         assert result.user_id == "jwt-human-user"
         assert result.user_email == "resolved@example.com"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("route", ["/mcp-rest/tools/list", "/mcp-rest/tools/call", "/v1/chat/completions", "/user/info"])
+    @pytest.mark.parametrize("active", [False, True, None, "false", 0])
+    @pytest.mark.parametrize("is_admin", [False, True])
+    async def test_jwt_auth_rejects_deactivated_user(
+        self, route: str, active: bool | str | int | None, is_admin: bool
+    ) -> None:
+        from typing import Final
+
+        jwt_token: Final = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        result: Final = {
+            "is_proxy_admin": is_admin,
+            "team_object": None,
+            "user_object": LiteLLM_UserTable(
+                user_id="jwt-human-user",
+                user_role=LitellmUserRoles.PROXY_ADMIN.value if is_admin else LitellmUserRoles.INTERNAL_USER.value,
+                metadata={} if active is None else {"scim_active": active},
+            ),
+            "end_user_object": None,
+            "org_object": None,
+            "token": jwt_token,
+            "team_id": None,
+            "user_id": "jwt-human-user",
+            "user_email": None,
+            "end_user_id": None,
+            "org_id": None,
+            "team_membership": None,
+            "jwt_claims": {"sub": "user1"},
+        }
+
+        if active is False:
+            with pytest.raises(ProxyException, match="deactivated via SCIM") as exc:
+                await self._run_jwt_auth(result, jwt_token, route)
+            assert int(exc.value.code) == 401
+        else:
+            token: Final = await self._run_jwt_auth(result, jwt_token, route)
+            assert token.user_id == "jwt-human-user"
 
     @pytest.mark.asyncio
     async def test_jwt_auth_populates_user_email_on_proxy_admin(self):

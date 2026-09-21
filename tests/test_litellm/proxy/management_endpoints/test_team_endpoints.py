@@ -51,6 +51,7 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     _verify_team_access,
     delete_team,
     list_available_teams,
+    reset_team_member_budget_fn,
     reset_team_member_spend_fn,
     router,
     team_member_add_duplication_check,
@@ -15107,6 +15108,221 @@ async def test_reset_team_member_spend_fn_proxy_admin_can_reset_own_spend(monkey
             ),
         )
     assert response["spend"] == 0.0
+
+
+def _reset_budget_admin() -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user")
+
+
+def _team_with_default_budget(team_id: str, budget_id: str) -> LiteLLM_TeamTable:
+    return LiteLLM_TeamTable(team_id=team_id, metadata={"team_member_budget_id": budget_id})
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_budget_fn_relinks_custom_member_to_team_default(monkeypatch):
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    mock_prisma_client = MagicMock()
+    real_cache = UserApiKeyCache()
+    await real_cache.async_set_cache(key="team-1_member-1", value="stale-membership")
+    await real_cache.async_set_cache(key="team_membership:member-1:team-1", value="stale-membership")
+
+    membership_row = LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", spend=10.0, budget_id="custom-b1")
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
+    mock_prisma_client.db.litellm_teammembership.update = AsyncMock(return_value=membership_row)
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=LiteLLM_BudgetTable(budget_id="team-default-b", max_budget=100.0)
+    )
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock()
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", real_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(return_value=_team_with_default_budget("team-1", "team-default-b")),
+    ):
+        response = await reset_team_member_budget_fn(
+            team_id="team-1", user_id="member-1", user_api_key_dict=_reset_budget_admin()
+        )
+
+    assert response.budget_id == "team-default-b"
+    assert response.previous_budget_id == "custom-b1"
+    assert response.budget_source == "team_default"
+    mock_prisma_client.db.litellm_teammembership.update.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "member-1", "team_id": "team-1"}},
+        data={"litellm_budget_table": {"connect": {"budget_id": "team-default-b"}}},
+    )
+    mock_prisma_client.db.litellm_budgettable.update.assert_not_awaited()
+    assert await real_cache.async_get_cache(key="team-1_member-1") is None
+    assert await real_cache.async_get_cache(key="team_membership:member-1:team-1") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_obj, default_row",
+    [
+        (LiteLLM_TeamTable(team_id="team-1"), None),
+        (_team_with_default_budget("team-1", "gone-b"), None),
+    ],
+    ids=["no_default_configured", "configured_default_row_missing"],
+)
+async def test_reset_team_member_budget_fn_detaches_member_when_team_has_no_usable_default(
+    monkeypatch, team_obj, default_row
+):
+    mock_prisma_client = MagicMock()
+    membership_row = LiteLLM_TeamMembership(user_id="member-1", team_id="team-1", budget_id="custom-b1")
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=membership_row)
+    mock_prisma_client.db.litellm_teammembership.update = AsyncMock(return_value=membership_row)
+    mock_prisma_client.db.litellm_budgettable.find_unique = AsyncMock(return_value=default_row)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(return_value=team_obj),
+    ):
+        response = await reset_team_member_budget_fn(
+            team_id="team-1", user_id="member-1", user_api_key_dict=_reset_budget_admin()
+        )
+
+    assert response.budget_id is None
+    assert response.previous_budget_id == "custom-b1"
+    assert response.budget_source == "none"
+    mock_prisma_client.db.litellm_teammembership.update.assert_awaited_once_with(
+        where={"user_id_team_id": {"user_id": "member-1", "team_id": "team-1"}},
+        data={"litellm_budget_table": {"disconnect": True}},
+    )
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_budget_fn_membership_not_found(monkeypatch):
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_teammembership.update = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(return_value=_team_with_default_budget("team-1", "team-default-b")),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await reset_team_member_budget_fn(
+                team_id="team-1", user_id="ghost-user", user_api_key_dict=_reset_budget_admin()
+            )
+    assert exc.value.status_code == 404
+    mock_prisma_client.db.litellm_teammembership.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reset_team_member_budget_fn_forbidden_for_non_admin(monkeypatch):
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teammembership.update = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock())
+
+    with patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+        AsyncMock(return_value=LiteLLM_TeamTable(team_id="team-1", members_with_roles=[])),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await reset_team_member_budget_fn(
+                team_id="team-1",
+                user_id="member-1",
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="plain-user"
+                ),
+            )
+    assert exc.value.status_code == 403
+    mock_prisma_client.db.litellm_teammembership.update.assert_not_awaited()
+
+
+async def _team_info_budget_sources(
+    team_row: LiteLLM_TeamTable,
+    memberships: list[LiteLLM_TeamMembership],
+    default_budget_row: LiteLLM_BudgetTable | None,
+) -> dict[str, str]:
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    mock_prisma.db.litellm_budgettable.find_unique = AsyncMock(return_value=default_budget_row)
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch(  # test-quality-ok: no live DB here; matches this file's established convention for endpoint-logic unit tests
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch.object(  # test-quality-ok: membership lookup is a module-level DB query with no injection point
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=memberships)
+        ),
+    ):
+        response = await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id=team_row.team_id,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    return {tm.user_id: tm.budget_source for tm in response["team_memberships"]}
+
+
+@pytest.mark.asyncio
+async def test_team_info_reports_whether_each_member_follows_the_team_default_budget():
+    sources = await _team_info_budget_sources(
+        team_row=_team_with_default_budget("team-1", "team-default-b"),
+        memberships=[
+            LiteLLM_TeamMembership(user_id="inherits", team_id="team-1", budget_id="team-default-b"),
+            LiteLLM_TeamMembership(user_id="customized", team_id="team-1", budget_id="own-b"),
+            LiteLLM_TeamMembership(user_id="unlinked", team_id="team-1", budget_id=None),
+        ],
+        default_budget_row=LiteLLM_BudgetTable(budget_id="team-default-b", max_budget=100.0),
+    )
+
+    assert sources == {
+        "inherits": "team_default",
+        "customized": "custom",
+        "unlinked": "team_default",
+    }
+
+
+@pytest.mark.asyncio
+async def test_team_info_reports_no_budget_source_when_team_has_no_default():
+    sources = await _team_info_budget_sources(
+        team_row=LiteLLM_TeamTable(team_id="team-1"),
+        memberships=[
+            LiteLLM_TeamMembership(user_id="customized", team_id="team-1", budget_id="own-b"),
+            LiteLLM_TeamMembership(user_id="unlinked", team_id="team-1", budget_id=None),
+        ],
+        default_budget_row=None,
+    )
+
+    assert sources == {
+        "customized": "custom",
+        "unlinked": "none",
+    }
+
+
+@pytest.mark.asyncio
+async def test_team_info_reports_no_budget_source_when_team_default_row_was_deleted():
+    sources = await _team_info_budget_sources(
+        team_row=_team_with_default_budget("team-1", "deleted-b"),
+        memberships=[
+            LiteLLM_TeamMembership(user_id="customized", team_id="team-1", budget_id="own-b"),
+            LiteLLM_TeamMembership(user_id="unlinked", team_id="team-1", budget_id=None),
+        ],
+        default_budget_row=None,
+    )
+
+    assert sources == {
+        "customized": "custom",
+        "unlinked": "none",
+    }
 
 
 @pytest.mark.asyncio

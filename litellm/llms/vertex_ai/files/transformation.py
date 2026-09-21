@@ -651,7 +651,7 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
 
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
-    map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, Any]],
+    map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
 ) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.
@@ -774,7 +774,7 @@ class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
     def __init__(
         self,
         openai_file_content: FileTypes,
-        map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, Any]],
+        map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, object]],
     ) -> None:
         self._openai_file_content = openai_file_content
         self._map_openai_to_vertex_params = map_openai_to_vertex_params
@@ -948,7 +948,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def _map_openai_to_vertex_params(
         self,
         openai_request_body: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         wrapper to call VertexGeminiConfig.map_openai_params
         """
