@@ -2487,6 +2487,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cache-redis-semantic"
+version = "0.1.0"
+dependencies = [
+ "litellm-cache",
+ "litellm-cache-redis",
+ "litellm-cache-response",
+ "r2d2",
+ "redis",
+ "redis-test",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-cache-response"
 version = "0.1.0"
 dependencies = [

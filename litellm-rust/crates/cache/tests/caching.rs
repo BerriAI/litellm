@@ -1,8 +1,8 @@
 use std::{sync::Mutex, time::Duration};
 
 use litellm_cache::{
-    BaseCache, CacheConnectionResult, CacheContext, Error, ExactCacheContext,
-    SemanticCacheContext, get_cache,
+    BaseCache, CacheConnectionResult, CacheContext, Error, ExactCacheContext, SemanticCacheContext,
+    get_cache,
 };
 
 struct TestCache {
@@ -132,10 +132,7 @@ fn semantic_context_with_ttl_preserves_lookup_inputs() {
     let context = SemanticCacheContext {
         input: Some(serde_json::json!("text")),
         messages: vec![serde_json::json!({"role": "user", "content": "hi"})],
-        metadata: serde_json::Map::from_iter([(
-            "key".into(),
-            serde_json::json!("value"),
-        )]),
+        metadata: serde_json::Map::from_iter([("key".into(), serde_json::json!("value"))]),
         scope: Some("scope".into()),
         ttl: None,
     };
