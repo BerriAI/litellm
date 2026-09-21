@@ -34,11 +34,24 @@ fn semantic_key(request: &NativeRequest, scope: &str) -> litellm_cache_response:
     ];
     let end_user = (scope == "end_user").then_some("user_api_key_end_user_id");
     for name in TENANT.into_iter().chain(end_user) {
-        let Some(value) = request
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get(name))
-        else {
+        let sources = [
+            request.metadata.as_ref(),
+            request.litellm_metadata.as_ref(),
+            request
+                .litellm_params
+                .as_ref()
+                .and_then(|params| params.get("metadata")),
+            request
+                .litellm_params
+                .as_ref()
+                .and_then(|params| params.get("litellm_metadata")),
+        ];
+        let Some(value) = sources.into_iter().flatten().find_map(|source| {
+            source
+                .as_object()
+                .and_then(|values| values.get(name))
+                .filter(|value| !value.is_null())
+        }) else {
             continue;
         };
         let value = match value {
@@ -340,7 +353,6 @@ impl NativeResponseCache {
                     Arc::clone(cache.backend_arc()),
                     embedder.clone(),
                     Self::semantic(&request, scope),
-                    super::request::now(),
                 ),
             ),
         }
@@ -417,7 +429,6 @@ impl NativeResponseCache {
                     embedder.clone(),
                     Self::semantic(&request, scope),
                     response,
-                    super::request::now(),
                 ),
             ),
         }
@@ -517,7 +528,6 @@ impl NativeResponseCache {
                         embedder.clone(),
                         requests,
                         responses,
-                        super::request::now(),
                     ),
                 )
             }
@@ -565,6 +575,8 @@ mod tests {
             messages: Some(json!([{"role": "user", "content": "prompt"}])),
             input: None,
             metadata: Some(metadata),
+            litellm_metadata: None,
+            litellm_params: None,
         }
     }
 
