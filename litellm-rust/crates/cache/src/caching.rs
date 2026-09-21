@@ -27,6 +27,7 @@ pub struct CacheKeyField {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub struct CacheKeyInput {
     pub fields: Vec<CacheKeyField>,
     pub preset: Option<String>,

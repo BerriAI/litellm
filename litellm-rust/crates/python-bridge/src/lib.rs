@@ -1,3 +1,4 @@
+mod cache;
 mod credentials;
 mod diagnostics;
 mod errors;
@@ -9,6 +10,8 @@ mod token_counter;
 
 #[pymodule(gil_used = true)]
 mod _native {
+    #[pymodule_export]
+    use crate::cache::{CacheResolver, NativeCacheHandle, ResolvedCache};
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
@@ -65,6 +68,9 @@ mod tests {
                 "achat_completions",
                 "ResponsesWebSocketConnection",
                 "TokenCounter",
+                "CacheResolver",
+                "NativeCacheHandle",
+                "CacheBinding",
                 "gil_stats",
                 "process_state_started",
                 "reserve_process_for_forking",

@@ -20,6 +20,9 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
 bytes.workspace = true
+litellm-cache.workspace = true
+litellm-cache-response.workspace = true
+serde.workspace = true
 litellm-auth.workspace = true
 litellm-callbacks-legacy-python.workspace = true
 litellm-core.workspace = true

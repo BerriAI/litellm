@@ -7,12 +7,12 @@ use litellm_cache::{
 use redis::Commands;
 
 const DEFAULT_TTL: Duration = Duration::from_secs(600);
-const KEY_PREFIX: &str = "litellm-cache:";
 
 pub struct RedisCache<S, C = redis::Connection> {
     connection: Arc<Mutex<C>>,
     default_ttl: Duration,
     codec: S,
+    namespace: Option<String>,
 }
 
 impl<S: CacheCodec> RedisCache<S> {
@@ -33,6 +33,7 @@ where
             connection: Arc::new(Mutex::new(connection)),
             default_ttl: default_ttl.unwrap_or(DEFAULT_TTL),
             codec,
+            namespace: None,
         }
     }
 
@@ -40,13 +41,44 @@ where
         self.connection.lock().map_err(|_| Error::Unavailable)
     }
 
-    fn namespaced_key(key: &str) -> String {
-        format!("{KEY_PREFIX}{key}")
+    pub fn with_namespace(self, namespace: Option<String>) -> Self {
+        Self {
+            namespace: namespace.filter(|value| !value.is_empty()),
+            ..self
+        }
     }
 
-    fn namespaced_pattern() -> &'static str {
-        const PATTERN: &str = "litellm-cache:*";
-        PATTERN
+    fn namespaced_key(&self, key: &str) -> String {
+        match &self.namespace {
+            Some(namespace) if !key.starts_with(&format!("{namespace}:")) => {
+                format!("{namespace}:{key}")
+            }
+            _ => key.into(),
+        }
+    }
+
+    fn namespaced_pattern(&self) -> Result<String, Error> {
+        let namespace = self.namespace.as_ref().ok_or(Error::UnscopedFlush)?;
+        let escaped: String = namespace
+            .chars()
+            .flat_map(|ch| {
+                if matches!(ch, '*' | '?' | '[' | ']' | '\\') {
+                    vec!['\\', ch]
+                } else {
+                    vec![ch]
+                }
+            })
+            .collect();
+        Ok(format!("{escaped}:*"))
+    }
+
+    fn decode_response(&self, value: redis::Value) -> Result<Option<S::Value>, Error> {
+        match value {
+            redis::Value::Nil => Ok(None),
+            redis::Value::BulkString(bytes) => self.codec.decode(&bytes).map(Some),
+            redis::Value::SimpleString(text) => self.codec.decode(text.as_bytes()).map(Some),
+            _ => Err(Error::InvalidEntry),
+        }
     }
 
     fn ttl_seconds(ttl: Duration) -> u64 {
@@ -84,28 +116,29 @@ where
         let payload = self.codec.encode(&value)?;
         let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
         self.connection()?
-            .set_ex::<_, _, ()>(Self::namespaced_key(key), payload, ttl)
+            .set_ex::<_, _, ()>(self.namespaced_key(key), payload, ttl)
             .map_err(|_| Error::Unavailable)
     }
 
     fn get_cache(&self, key: &str, _: &CacheKwargs) -> Result<Option<Self::Value>, Error> {
-        let bytes = self
+        let value = self
             .connection()?
-            .get::<_, Option<Vec<u8>>>(Self::namespaced_key(key))
+            .get::<_, redis::Value>(self.namespaced_key(key))
             .map_err(|_| Error::Unavailable)?;
-        bytes.map(|bytes| self.codec.decode(&bytes)).transpose()
+        self.decode_response(value)
     }
 
     fn delete_cache(&self, key: &str) -> Result<(), Error> {
         self.connection()?
-            .del::<_, ()>(Self::namespaced_key(key))
+            .del::<_, ()>(self.namespaced_key(key))
             .map_err(|_| Error::Unavailable)
     }
 
     fn flush_cache(&self) -> Result<(), Error> {
+        let pattern = self.namespaced_pattern()?;
         let mut connection = self.connection()?;
         let keys = connection
-            .scan_match(Self::namespaced_pattern())
+            .scan_match(pattern)
             .map_err(|_| Error::Unavailable)?
             .collect::<redis::RedisResult<Vec<String>>>()
             .map_err(|_| Error::Unavailable)?;
@@ -125,7 +158,7 @@ where
         kwargs: CacheKwargs,
     ) -> Result<(), Error> {
         let payload = self.codec.encode(&value)?;
-        let key = Self::namespaced_key(key);
+        let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
         Self::run_blocking(Arc::clone(&self.connection), move |connection| {
             connection
@@ -140,15 +173,14 @@ where
         key: &str,
         _: &CacheKwargs,
     ) -> Result<Option<Self::Value>, Error> {
-        let key = Self::namespaced_key(key);
-        Self::run_blocking(Arc::clone(&self.connection), move |connection| {
+        let key = self.namespaced_key(key);
+        let value = Self::run_blocking(Arc::clone(&self.connection), move |connection| {
             connection
-                .get::<_, Option<Vec<u8>>>(key)
+                .get::<_, redis::Value>(key)
                 .map_err(|_| Error::Unavailable)
         })
-        .await?
-        .map(|bytes| self.codec.decode(&bytes))
-        .transpose()
+        .await?;
+        self.decode_response(value)
     }
 
     async fn async_set_cache_pipeline(
@@ -161,7 +193,7 @@ where
             .map(|(key, value)| {
                 self.codec
                     .encode(&value)
-                    .map(|payload| (Self::namespaced_key(&key), payload))
+                    .map(|payload| (self.namespaced_key(&key), payload))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
@@ -177,7 +209,7 @@ where
     }
 
     async fn async_delete_cache(&self, key: &str) -> Result<(), Error> {
-        let key = Self::namespaced_key(key);
+        let key = self.namespaced_key(key);
         Self::run_blocking(Arc::clone(&self.connection), move |connection| {
             connection.del::<_, ()>(key).map_err(|_| Error::Unavailable)
         })
@@ -250,7 +282,8 @@ mod tests {
             MockCmd::new(redis::cmd("DEL").arg("litellm-cache:key"), Ok(1u32)),
         ])
         .assert_all_commands_consumed();
-        let cache = RedisCache::with_connection(connection, None, JsonCodec::<CacheEntry>::new());
+        let cache = RedisCache::with_connection(connection, None, JsonCodec::<CacheEntry>::new())
+            .with_namespace(Some("litellm-cache".into()));
 
         cache
             .set_cache("key", value.clone(), CacheKwargs::default())
@@ -275,7 +308,8 @@ mod tests {
             MockCmd::new(redis::cmd("DEL").arg("litellm-cache:key"), Ok(1u32)),
         ])
         .assert_all_commands_consumed();
-        let cache = RedisCache::with_connection(connection, None, JsonCodec::<CacheEntry>::new());
+        let cache = RedisCache::with_connection(connection, None, JsonCodec::<CacheEntry>::new())
+            .with_namespace(Some("litellm-cache".into()));
 
         cache.flush_cache().unwrap();
     }
@@ -284,7 +318,8 @@ mod tests {
     async fn test_connection_runs_ping_off_executor() {
         let connection = MockRedisConnection::new([MockCmd::new(redis::cmd("PING"), Ok("PONG"))])
             .assert_all_commands_consumed();
-        let cache = RedisCache::with_connection(connection, None, JsonCodec::<CacheEntry>::new());
+        let cache = RedisCache::with_connection(connection, None, JsonCodec::<CacheEntry>::new())
+            .with_namespace(Some("litellm-cache".into()));
 
         assert_eq!(
             cache.test_connection().await.unwrap().status,
