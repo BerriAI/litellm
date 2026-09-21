@@ -2468,7 +2468,22 @@ class JWTAuthManager:
                     jwt_valid_token, handler, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
                 )
                 return {**admin_result, "user_object": identity.user_object}
-            return admin_result
+            if prisma_client is None:
+                return admin_result
+            try:
+                admin_user: Final = await get_user_object(
+                    user_id=user_id,
+                    user_email=user_email,
+                    sso_user_id=user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except UserNotFoundError:
+                return admin_result
+            return {**admin_result, "user_object": admin_user}
 
         # Get team with model access
         ## Check if team_id is specified via x-litellm-team-id header

@@ -37,10 +37,10 @@ const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading:
   return (
     <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
       <SummaryCard
-        label="Total saved"
+        label="Total recorded savings"
         value={usd(totals.total)}
         hint={isLoading ? "Loading..." : "Compression + prompt caching + auto-router"}
-        info="The sum of the three tiles beside it. Its caching term is the LiteLLM-injected share, so this total is what the gateway itself delivered; caching that clients or providers brought on their own appears only in the caching tile's Total figure."
+        info="The sum of recorded savings in the three tiles beside it. Auto-router requests without an estimate are excluded. Its caching term is the LiteLLM-injected share; caching supplied by clients or providers appears only in the caching tile's Total figure."
       />
       <SummaryCard
         label="Compression savings"
@@ -58,8 +58,8 @@ const SavingsTiles = ({ results, isLoading }: { results: DailyData[]; isLoading:
       <SummaryCard
         label="Auto-router savings"
         value={usd(totals.autorouter)}
-        hint="vs. the priciest model it could pick"
-        info="What this traffic would have cost had every request gone to the most expensive model the auto-router can route to, minus what it actually cost. Switching leaves the new model with a cold cache, so it pays to write the prompt again while the baseline is priced as already warm; a route that thrashes the cache can total below zero, and a genuine first turn, where neither side had anything cached, is undercounted."
+        hint="Recorded estimates subtotal"
+        info="Sum of available per-request savings estimates against each router's highest-tier baseline, net of classifier cost. Requests without an estimate contribute nothing to this subtotal; this does not mean they saved zero. Historical records retain the estimator used when they were written. The Auto-router usage tab shows coverage for current estimates."
       />
     </div>
   );
