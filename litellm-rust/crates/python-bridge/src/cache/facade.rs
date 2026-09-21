@@ -1,3 +1,4 @@
+use litellm_cache_redis::RedisTopology;
 use litellm_host_python::from_py;
 use pyo3::{
     PyTraverseError, PyVisit,
@@ -29,8 +30,30 @@ struct RedisPoolGuard {
     reference: Py<PyAny>,
     connection_class: Py<PyAny>,
     connection_kwargs: Py<PyAny>,
-    max_connections: usize,
+    max_connections: Option<usize>,
+    attributes: RedisPoolAttributes,
 }
+
+#[derive(Clone, Copy)]
+struct RedisPoolAttributes {
+    pool: &'static str,
+    connection_class: &'static str,
+    max_connections: Option<&'static str>,
+}
+
+const STANDALONE_POOL: RedisPoolAttributes = RedisPoolAttributes {
+    pool: "connection_pool",
+    connection_class: "connection_class",
+    max_connections: Some("max_connections"),
+};
+
+const CLUSTER_POOL: RedisPoolAttributes = RedisPoolAttributes {
+    pool: "nodes_manager",
+    connection_class: "connection_pool_class",
+    max_connections: None,
+};
+
+const VALKEY_POOL: RedisPoolAttributes = STANDALONE_POOL;
 
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
@@ -141,16 +164,24 @@ impl ObjectGuard {
 }
 
 impl RedisPoolGuard {
-    fn capture(backend: &Bound<'_, PyAny>, client_name: &str) -> PyResult<Self> {
-        let pool = backend.getattr(client_name)?.getattr("connection_pool")?;
+    fn capture(
+        backend: &Bound<'_, PyAny>,
+        client_name: &str,
+        attributes: RedisPoolAttributes,
+    ) -> PyResult<Self> {
+        let pool = backend.getattr(client_name)?.getattr(attributes.pool)?;
         Ok(Self {
             reference: pool.clone().unbind(),
-            connection_class: pool.getattr("connection_class")?.unbind(),
+            connection_class: pool.getattr(attributes.connection_class)?.unbind(),
             connection_kwargs: pool
                 .getattr("connection_kwargs")?
                 .call_method0("copy")?
                 .unbind(),
-            max_connections: pool.getattr("max_connections")?.extract::<usize>()?,
+            max_connections: attributes
+                .max_connections
+                .map(|name| pool.getattr(name)?.extract::<usize>())
+                .transpose()?,
+            attributes,
         })
     }
 
@@ -160,13 +191,20 @@ impl RedisPoolGuard {
         backend: &Bound<'_, PyAny>,
         client_name: &str,
     ) -> PyResult<bool> {
-        let pool = backend.getattr(client_name)?.getattr("connection_pool")?;
+        let pool = backend
+            .getattr(client_name)?
+            .getattr(self.attributes.pool)?;
         Ok(self.reference.bind(py).is(&pool)
             && self
                 .connection_class
                 .bind(py)
-                .is(&pool.getattr("connection_class")?)
-            && self.max_connections == pool.getattr("max_connections")?.extract::<usize>()?
+                .is(&pool.getattr(self.attributes.connection_class)?)
+            && self.max_connections
+                == self
+                    .attributes
+                    .max_connections
+                    .map(|name| pool.getattr(name)?.extract::<usize>())
+                    .transpose()?
             && self
                 .connection_kwargs
                 .bind(py)
@@ -193,10 +231,16 @@ impl FacadeGuard {
                 "only exact built-in Cache facades can be registered",
             ));
         }
-        let (module, name, cache_kind) = match kind {
-            "memory" => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
-            "redis" => ("litellm.caching.redis_cache", "RedisCache", "redis"),
-            "valkey-semantic" => (
+        let cluster = matches!(service.topology(), Some(RedisTopology::Cluster { .. }));
+        let (module, name, cache_kind) = match (kind, cluster) {
+            ("memory", _) => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
+            ("redis", false) => ("litellm.caching.redis_cache", "RedisCache", "redis"),
+            ("redis", true) => (
+                "litellm.caching.redis_cluster_cache",
+                "RedisClusterCache",
+                "redis",
+            ),
+            ("valkey-semantic", false) => (
                 "litellm.caching.valkey_semantic_cache",
                 "ValkeySemanticCache",
                 "valkey-semantic",
@@ -251,25 +295,29 @@ impl FacadeGuard {
                     "embedding_timeout",
                 ],
             )?,
-            redis_pool: (kind == "redis" || kind == "valkey-semantic")
-                .then(|| {
-                    RedisPoolGuard::capture(
-                        &backend,
-                        if kind == "redis" {
-                            "redis_client"
-                        } else {
-                            "sync_client"
-                        },
-                    )
-                })
-                .transpose()?,
-            redis_client_name: (kind == "redis" || kind == "valkey-semantic").then_some(
-                if kind == "redis" {
-                    "redis_client"
-                } else {
-                    "sync_client"
-                },
-            ),
+            redis_pool: match (kind, cluster) {
+                ("redis", false) => Some(RedisPoolGuard::capture(
+                    &backend,
+                    "redis_client",
+                    STANDALONE_POOL,
+                )?),
+                ("redis", true) => Some(RedisPoolGuard::capture(
+                    &backend,
+                    "redis_client",
+                    CLUSTER_POOL,
+                )?),
+                ("valkey-semantic", false) => Some(RedisPoolGuard::capture(
+                    &backend,
+                    "sync_client",
+                    VALKEY_POOL,
+                )?),
+                _ => None,
+            },
+            redis_client_name: match (kind, cluster) {
+                ("redis", _) => Some("redis_client"),
+                ("valkey-semantic", false) => Some("sync_client"),
+                _ => None,
+            },
         })
     }
 
