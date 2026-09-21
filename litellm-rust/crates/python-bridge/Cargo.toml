@@ -20,6 +20,7 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
 bytes.workspace = true
+futures-util.workspace = true
 litellm-cache.workspace = true
 litellm-cache-azure-blob.workspace = true
 litellm-cache-memory.workspace = true
@@ -39,6 +40,10 @@ litellm-core-utils.workspace = true
 litellm-auth-gcp.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-secrets = { workspace = true, features = ["aws", "google"] }
+litellm-secrets-aws.workspace = true
+litellm-secrets-google.workspace = true
+litellm-secrets-types.workspace = true
 litellm-types.workspace = true
 litellm-host-python.workspace = true
 litellm-token-counter = { path = "../token-counter", default-features = false }
@@ -56,6 +61,8 @@ futures-util.workspace = true
 rstest.workspace = true
 sha2.workspace = true
 tokio-tungstenite.workspace = true
+wiremock = "0.6.5"
+aws-sdk-secretsmanager = "1.117.0"
 
 [[bench]]
 name = "serialization"

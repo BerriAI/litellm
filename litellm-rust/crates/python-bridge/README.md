@@ -1,0 +1,1 @@
+OCR resolves provider-declared secret names through `SecretSource` and `ResolvedSecrets`; messages, chat, responses, and transcription still read process environment variables directly and should adopt the same seam

@@ -10,16 +10,13 @@ use litellm_auth_gcp::VertexAuth;
 use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
 use litellm_core::ocr::route::ocr_machine;
 use litellm_core_utils::settings::ProcessEnvironment;
-use litellm_llms::base_llm::ocr::{
-    handler::OcrClient,
-    settings::{EnvironmentSecrets, OcrSettings, Secrets},
-};
+use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
 };
 
-use crate::{coercion::Field, errors::RustBridgeDeclined, http, python_settings::PythonSettings};
+use crate::{coercion::Field, http, python_settings::PythonSettings, secrets};
 
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "ocr",
@@ -41,7 +38,8 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    process_environment_secrets(&PythonSettings::SecretManager.read(py)?)?;
+    let snapshot = secrets::config::project(&PythonSettings::SecretManager.read(py)?)?;
+    let state = secrets::state::secret_manager_state(py, snapshot)?;
     let config = http::call_config(py, &kwargs, asynchronous)?;
     let client = OcrClient::new(
         http::pool(),
@@ -49,7 +47,7 @@ fn run_ocr(
         http::url_policy(py)?,
         VERTEX_AUTH.clone(),
         ocr_settings(py)?,
-        Arc::new(EnvironmentSecrets),
+        Arc::new(secrets::resolved::ResolvedSecrets::new(state)),
     )
     .map_err(http::client_error)?;
     run_legacy_call(
@@ -60,15 +58,6 @@ fn run_ocr(
         OcrRouteHost::new(request.unbind()),
         asynchronous,
     )
-}
-
-fn process_environment_secrets(secret_manager: &Bound<'_, PyAny>) -> PyResult<Secrets> {
-    if Field::read(secret_manager, "secret_manager.readable")?.schema_bool()? {
-        return Err(RustBridgeDeclined::new_err(
-            "a readable secret manager is configured and the Rust route only reads the process environment",
-        ));
-    }
-    Ok(Arc::new(ProcessEnvironment))
 }
 
 fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
@@ -115,22 +104,7 @@ pub(crate) fn aocr(
 
 #[cfg(test)]
 mod tests {
-    use pyo3::{prelude::*, types::PyDict};
-
-    use super::process_environment_secrets;
-    use crate::errors::RustBridgeDeclined;
-
-    fn secret_manager<'py>(py: Python<'py>, readable: bool) -> Bound<'py, PyAny> {
-        let locals = PyDict::new(py);
-        locals.set_item("readable", readable).unwrap();
-        py.run(
-            c"import types\nmanager = types.SimpleNamespace(readable=readable)",
-            Some(&locals),
-            Some(&locals),
-        )
-        .unwrap();
-        locals.get_item("manager").unwrap().unwrap()
-    }
+    use pyo3::prelude::*;
 
     #[test]
     fn provider_defaults_distinguish_falsey_values_and_exact_true() {
@@ -158,30 +132,6 @@ mod tests {
                     .to_string()
                     .contains("provider_defaults.vertex_project")
             );
-        });
-    }
-
-    #[test]
-    fn a_readable_secret_manager_sends_the_call_back_to_python() {
-        Python::initialize();
-        Python::attach(|py| {
-            let declined = process_environment_secrets(&secret_manager(py, true))
-                .err()
-                .expect("the Rust route declines");
-            assert!(declined.is_instance_of::<RustBridgeDeclined>(py));
-        });
-    }
-
-    #[test]
-    fn without_a_readable_secret_manager_secrets_are_the_process_environment() {
-        Python::initialize();
-        Python::attach(|py| {
-            let secrets = process_environment_secrets(&secret_manager(py, false)).unwrap();
-            assert_eq!(
-                secrets.get("LITELLM_RUST_BRIDGE_UNSET_VARIABLE_FOR_TEST"),
-                None
-            );
-            assert_eq!(secrets.get("PATH"), std::env::var("PATH").ok());
         });
     }
 }

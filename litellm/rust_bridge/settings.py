@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Final
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +33,23 @@ class ProviderDefaults:
 
 @dataclass(frozen=True, slots=True)
 class SecretManager:
-    readable: bool
+    system: object
+    access_mode: object
+    hosted_keys: object
+    primary_secret_name: object
+    premium_user: object
+    store_virtual_keys: object
+    prefix_for_stored_virtual_keys: object
+    kms_key_id: object
+    custom_secret_manager: object
+    aws_region_name: object
+    aws_role_name: object
+    aws_session_name: object
+    aws_external_id: object
+    aws_profile_name: object
+    aws_web_identity_token: object
+    aws_sts_endpoint: object
+    replica_regions: object
 
 
 def warn(message: str) -> None:
@@ -42,11 +59,34 @@ def warn(message: str) -> None:
 
 
 def secret_manager() -> SecretManager:
-    from litellm.secret_managers.main import (
-        _should_read_secret_from_secret_manager,  # pyright: ignore[reportPrivateUsage]  # canonical resolver is private
-    )
+    import litellm
+    from litellm.types.secret_managers.main import KeyManagementSettings
 
-    return SecretManager(readable=_should_read_secret_from_secret_manager())
+    settings: Final = litellm._key_management_settings or KeyManagementSettings()
+    system: Final = (
+        litellm._key_management_system.value
+        if litellm.secret_manager_client is not None and litellm._key_management_system is not None
+        else None
+    )
+    return SecretManager(
+        system=system,
+        access_mode=settings.access_mode,
+        hosted_keys=settings.hosted_keys,
+        primary_secret_name=settings.primary_secret_name,
+        premium_user=getattr(litellm, "premium_user", False),
+        store_virtual_keys=settings.store_virtual_keys,
+        prefix_for_stored_virtual_keys=settings.prefix_for_stored_virtual_keys,
+        kms_key_id=settings.kms_key_id,
+        custom_secret_manager=settings.custom_secret_manager,
+        aws_region_name=settings.aws_region_name,
+        aws_role_name=settings.aws_role_name,
+        aws_session_name=settings.aws_session_name,
+        aws_external_id=settings.aws_external_id,
+        aws_profile_name=settings.aws_profile_name,
+        aws_web_identity_token=settings.aws_web_identity_token,
+        aws_sts_endpoint=settings.aws_sts_endpoint,
+        replica_regions=settings.replica_regions,
+    )
 
 
 def provider_defaults() -> ProviderDefaults:

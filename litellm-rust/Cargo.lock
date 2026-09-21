@@ -2961,6 +2961,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "aws-sdk-secretsmanager",
  "bytes",
  "criterion",
  "futures-util",
@@ -2983,6 +2984,10 @@ dependencies = [
  "litellm-host-python",
  "litellm-http",
  "litellm-llms",
+ "litellm-secrets",
+ "litellm-secrets-aws",
+ "litellm-secrets-google",
+ "litellm-secrets-types",
  "litellm-token-counter",
  "litellm-types",
  "pyo3",
@@ -2995,6 +3000,7 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tokio-tungstenite",
+ "wiremock",
 ]
 
 [[package]]

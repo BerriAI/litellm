@@ -107,6 +107,16 @@ impl<'py> Field<'py> {
         ExactTrue(self.value.is(PyBool::new(self.value.py(), true)))
     }
 
+    #[cfg(test)]
+    pub(crate) fn schema_bool(&self) -> Result<bool, ProjectionError> {
+        if !self.value.is_instance_of::<PyBool>() {
+            return Err(ProjectionError::InternalSchemaFailure(
+                self.expected("a Boolean")?,
+            ));
+        }
+        Ok(self.exact_true().0)
+    }
+
     pub(crate) fn strict_string(&self) -> Result<String, ProjectionError> {
         let value = self
             .value
@@ -122,15 +132,6 @@ impl<'py> Field<'py> {
             ));
         }
         self.strict_string()
-    }
-
-    pub(crate) fn schema_bool(&self) -> Result<bool, ProjectionError> {
-        if !self.value.is_instance_of::<PyBool>() {
-            return Err(ProjectionError::InternalSchemaFailure(
-                self.expected("a Boolean")?,
-            ));
-        }
-        Ok(self.exact_true().0)
     }
 
     pub(crate) fn str_bool(&self) -> Result<StrBool, ProjectionError> {
@@ -186,6 +187,15 @@ impl<'py> Field<'py> {
             })
             .collect::<Result<Vec<_>, ProjectionError>>()?;
         Ok(StringCollection(values))
+    }
+
+    pub(crate) fn optional_string_collection(
+        &self,
+    ) -> Result<Option<StringCollection>, ProjectionError> {
+        if self.value.is_none() {
+            return Ok(None);
+        }
+        self.string_collection().map(Some)
     }
 
     pub(crate) fn host_collection(&self) -> Result<StringCollection, ProjectionError> {

@@ -7,6 +7,7 @@ mod http;
 mod marshal;
 mod python_settings;
 mod routes;
+mod secrets;
 mod token_counter;
 
 #[pymodule(gil_used = true)]
