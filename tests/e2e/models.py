@@ -991,6 +991,7 @@ class LiteLLMParamsBody(BaseModel):
     s3_region_name: str | None = None
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
+    s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
     aws_role_name: str | None = None
     aws_session_name: str | None = None

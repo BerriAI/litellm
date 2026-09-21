@@ -31211,6 +31211,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** S3 Access Key Id */
+            s3_access_key_id?: string | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Bucket Owner */
@@ -31223,6 +31225,8 @@ export interface components {
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
+            /** S3 Secret Access Key */
+            s3_secret_access_key?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
@@ -42011,6 +42015,8 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** S3 Access Key Id */
+            s3_access_key_id?: string | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
             /** S3 Bucket Owner */
@@ -42023,6 +42029,8 @@ export interface components {
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
+            /** S3 Secret Access Key */
+            s3_secret_access_key?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;

@@ -4653,6 +4653,33 @@ def test_bedrock_batch_params_never_reach_the_provider():
     )
 
 
+def test_documented_batch_s3_credentials_never_reach_the_provider():
+    """The Bedrock batch docs tell users to put s3_access_key_id, s3_secret_access_key
+    and s3_encryption_key_id on the deployment. Left unregistered they are swept into
+    additionalModelRequestFields, Bedrock 400s ordinary chat on that deployment with
+    `s3_secret_access_key: Extra inputs are not permitted`, and the S3 secret is sent
+    to the provider and printed in the debug log (LIT-8290).
+    """
+    configured = {
+        "s3_access_key_id": "configured-access-key-id",
+        "s3_secret_access_key": "configured-secret-access-key",
+        "s3_encryption_key_id": "arn:aws:kms:us-east-1:000000000000:key/configured",
+    }
+    kwargs = {"a_real_provider_specific_param": 1, **configured}
+
+    non_default = get_non_default_completion_params(dict(kwargs))
+
+    assert non_default == {"a_real_provider_specific_param": 1}, (
+        "documented batch S3 credentials leaked into the provider params: "
+        f"{sorted(set(non_default) - {'a_real_provider_specific_param'})}"
+    )
+
+    batch_params = dict(GenericLiteLLMParams(**kwargs))
+    assert {field: batch_params.get(field) for field in configured} == configured, (
+        "registering these must not strip them from the batch path"
+    )
+
+
 def test_client_side_timeout_marker_never_reaches_the_provider():
     """The proxy stamps kwargs["client_side_timeout"] = True whenever a request carries
     a caller-supplied timeout (body timeout / request_timeout / stream_timeout or the
