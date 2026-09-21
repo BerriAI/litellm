@@ -52,4 +52,4 @@ Verify typed values, TTL precedence, missing entries, serialization failures, na
 
 Public SDK, Router, and proxy activation still need constructor parity, stream replay, embedding partial-batch integration, response reconstruction, callback scheduling, and failure-policy integration. This foundation does not switch those request paths
 
-Redis cluster, disk, cloud stores, dual caching, and semantic caching remain follow-ups. Atomic counters, affinity claims, reservations, queues, and pubsub need explicit capabilities owned by their consuming features. Adding a cache backend does not establish those guarantees
+Redis cluster, disk, cloud stores, and semantic caching remain follow-ups. The generic dual cache now provides L2-first counters and atomic affinity claims with local fallback, but public Router integration remains follow-up work. Reservations, queues, and pubsub still need explicit capabilities owned by their consuming features. Adding a cache backend does not establish those guarantees
