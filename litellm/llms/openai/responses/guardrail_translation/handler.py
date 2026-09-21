@@ -85,9 +85,16 @@ from litellm.types.llms.openai import (
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
     OutputFunctionToolCall,
+    OutputReasoningText,
     OutputText,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+# Content parts a guardrail inspects and may rewrite. Both carry ``text``.
+# ``reasoning`` items type their parts as ``reasoning_text``; until that type
+# existed they were emitted as ``output_text``, so checking ``OutputText``
+# alone would silently stop scanning reasoning content.
+GUARDRAIL_TEXT_CONTENT_PARTS: Final = (OutputText, OutputReasoningText)
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
@@ -1020,7 +1027,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if content:
                     for content_item in content:
                         # Check if it's an OutputText with text
-                        if isinstance(content_item, OutputText):
+                        if isinstance(content_item, GUARDRAIL_TEXT_CONTENT_PARTS):
                             if content_item.text:
                                 return True
                         elif isinstance(content_item, dict):
@@ -1100,7 +1107,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         # Iterate through content items (list of OutputText objects)
         for content_idx, content_item in enumerate(content):
             # Handle both OutputText objects and dicts
-            if isinstance(content_item, OutputText):
+            if isinstance(content_item, GUARDRAIL_TEXT_CONTENT_PARTS):
                 text_content = content_item.text
             elif isinstance(content_item, dict):
                 text_content = content_item.get("text")
@@ -1144,7 +1151,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             if isinstance(output_item, GenericResponseOutputItem):
                 if output_item.content and content_idx < len(output_item.content):
                     content_item = output_item.content[content_idx]
-                    if isinstance(content_item, OutputText):
+                    if isinstance(content_item, GUARDRAIL_TEXT_CONTENT_PARTS):
                         content_item.text = guardrail_response
                     elif isinstance(content_item, dict):
                         content_item["text"] = guardrail_response
@@ -1154,7 +1161,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                     generic_item = GenericResponseOutputItem.model_validate(output_item.model_dump())
                     if generic_item.content and content_idx < len(generic_item.content):
                         content_item = generic_item.content[content_idx]
-                        if isinstance(content_item, OutputText):
+                        if isinstance(content_item, GUARDRAIL_TEXT_CONTENT_PARTS):
                             content_item.text = guardrail_response
                             # Update the original response output
                             if hasattr(output_item, "content") and output_item.content:

@@ -1,3 +1,7 @@
+# `Union` is no longer referenced in this module, but
+# `litellm/llms/base_llm/image_edit/transformation.py` does
+# `from litellm.types.responses.main import *` and annotates with it, so
+# dropping it here breaks that import at class-definition time.
 from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
@@ -124,9 +128,7 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     id: str
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
-    # `reasoning` items carry `reasoning_text` parts; `message` items carry
-    # `output_text` ones.
-    content: list[Union[OutputText, OutputReasoningText]]
+    content: list[OutputText | OutputReasoningText]
     phase: Phase = None
 
 
