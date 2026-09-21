@@ -10,8 +10,8 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     should_allow_legacy_cloud_file_ids,
     validate_managed_cloud_file_id,
 )
+from litellm.llms.bedrock.common_utils import s3_signing_auth_params
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import (
     FileContentRequest,
     HttpxBinaryResponseContent,
@@ -104,7 +104,7 @@ class BedrockFilesHandler(BaseAWSLLM):
 
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final[Credentials] = self.resolve_credentials(
-            AwsAuthParams.model_validate(optional_params), aws_region_name
+            s3_signing_auth_params(optional_params), aws_region_name
         )
 
         # Create S3 client

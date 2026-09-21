@@ -30,9 +30,7 @@ class TestGetBaseModelFromLitellmCallMetadata:
         assert _get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
 
     def test_returns_base_model(self):
-        result = _get_base_model_from_litellm_call_metadata(
-            {"model_info": {"base_model": "gpt-4"}}
-        )
+        result = _get_base_model_from_litellm_call_metadata({"model_info": {"base_model": "gpt-4"}})
         assert result == "gpt-4"
 
 
@@ -67,6 +65,15 @@ class TestGetLitellmParamsKwargsExtraction:
         assert "s3_endpoint_url" not in result_without_s3_kwargs
         assert "s3_region_name" not in result_without_s3_kwargs
 
+    def test_s3_credential_kwargs_are_forwarded_for_s3_signing(self):
+        result = get_litellm_params(s3_access_key_id="s3-key", s3_secret_access_key="s3-secret")
+        assert result["s3_access_key_id"] == "s3-key"
+        assert result["s3_secret_access_key"] == "s3-secret"
+
+        result_without_s3_kwargs = get_litellm_params()
+        assert "s3_access_key_id" not in result_without_s3_kwargs
+        assert "s3_secret_access_key" not in result_without_s3_kwargs
+
     def test_subset_of_kwargs_only_includes_provided(self):
         """Only provided kwargs appear, others remain absent."""
         result = get_litellm_params(azure_ad_token="token123")
@@ -97,9 +104,7 @@ class TestGetLitellmParamsBaseModel:
         assert result["base_model"] == "explicit"
 
     def test_falls_back_to_metadata(self):
-        result = get_litellm_params(
-            metadata={"model_info": {"base_model": "from-metadata"}}
-        )
+        result = get_litellm_params(metadata={"model_info": {"base_model": "from-metadata"}})
         assert result["base_model"] == "from-metadata"
 
     def test_none_when_no_source(self):
