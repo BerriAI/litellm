@@ -70,14 +70,14 @@ impl Inner {
         let name = match index_compatible(connection, &self.index_name, dims)? {
             Some(true) => self.index_name.clone(),
             Some(false) => self.isolated_index(connection, dims)?,
-            None => {
-                if create_index(connection, &self.index_name, dims).is_err()
-                    && index_compatible(connection, &self.index_name, dims)? != Some(true)
-                {
-                    return Err(Error::Unavailable);
-                }
-                self.index_name.clone()
-            }
+            None => match create_index(connection, &self.index_name, dims) {
+                Ok(()) => self.index_name.clone(),
+                Err(_) => match index_compatible(connection, &self.index_name, dims)? {
+                    Some(true) => self.index_name.clone(),
+                    Some(false) => self.isolated_index(connection, dims)?,
+                    None => return Err(Error::Unavailable),
+                },
+            },
         };
         let _ = self.resolved_index.set(name.clone());
         Ok(name)
