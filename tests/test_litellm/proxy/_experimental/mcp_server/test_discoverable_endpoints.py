@@ -12991,7 +12991,7 @@ def test_keyed_connection_rejects_wrong_endpoint_and_grant_type(keyed_oauth_clie
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["wrong_resource", "m2m"])
+@pytest.mark.parametrize("mode", ["wrong_resource", "m2m", "delegated"])
 async def test_keyed_connection_binding_rejects_resource_or_server_mode(keyed_oauth_client, monkeypatch, mode):
     from starlette.requests import Request
     from litellm.proxy import proxy_server
@@ -13016,7 +13016,9 @@ async def test_keyed_connection_binding_rejects_resource_or_server_mode(keyed_oa
     monkeypatch.setitem(
         global_mcp_server_manager.registry,
         harness.server.server_id,
-        harness.server.model_copy(update={"oauth2_flow": "client_credentials"}),
+        harness.server.model_copy(
+            update={"delegate_auth_to_upstream": True} if mode == "delegated" else {"oauth2_flow": "client_credentials"}
+        ),
     )
     request = Request(
         {
@@ -13025,7 +13027,8 @@ async def test_keyed_connection_binding_rejects_resource_or_server_mode(keyed_oa
             "method": "GET",
             "path": "/authorize",
             "headers": [(b"host", b"wrong.example" if mode == "wrong_resource" else b"gateway.example")],
-        }
+        },
+        receive=AsyncMock(return_value={"type": "http.request", "body": b"", "more_body": False}),
     )
     with pytest.raises(HTTPException) as exc:
         await harness.real_validate(request, harness.binding)

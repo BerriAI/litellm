@@ -568,6 +568,7 @@ class MCPRequestHandler:
             if (
                 target is None
                 or target.server_id not in allowed
+                or not target.is_gateway_managed_oauth2
                 or not target.needs_user_oauth_token
                 or target.oauth_identity_binding is not None
             ):

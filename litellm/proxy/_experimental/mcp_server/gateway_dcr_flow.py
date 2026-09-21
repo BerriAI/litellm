@@ -1638,7 +1638,11 @@ async def validate_connection_binding(request: Request, binding: ConnectionBindi
     )
     if server is None or server.server_id not in allowed:
         raise HTTPException(status_code=403, detail="Key is not allowed to access the selected MCP server")
-    if not server.needs_user_oauth_token or server.oauth_identity_binding is not None:
+    if (
+        not server.is_gateway_managed_oauth2
+        or not server.needs_user_oauth_token
+        or server.oauth_identity_binding is not None
+    ):
         raise HTTPException(status_code=400, detail="Server does not support a keyed connection grant")
     return server
 

@@ -9450,7 +9450,10 @@ class TestScopedSessionAdmission:
     ],
 )
 @pytest.mark.parametrize("grant_state", ["valid", "expired", "refresh", "oversized"])
-async def test_connection_credential_requires_exact_key_and_server(monkeypatch, key, selector, expected, grant_state):
+@pytest.mark.parametrize("server_mode", ["managed", "delegated"])
+async def test_connection_credential_requires_exact_key_and_server(
+    monkeypatch, key, selector, expected, grant_state, server_mode
+):
     import json
     from litellm.proxy._experimental.mcp_server import gateway_dcr_flow as flow
     from litellm.proxy._experimental.mcp_server.auth import user_api_key_auth_mcp as admission
@@ -9470,6 +9473,7 @@ async def test_connection_credential_requires_exact_key_and_server(monkeypatch, 
         transport="http",
         auth_type=MCPAuth.oauth2,
         oauth2_flow="authorization_code",
+        delegate_auth_to_upstream=server_mode == "delegated",
     )
     monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
     auth = UserAPIKeyAuth(
@@ -9499,7 +9503,13 @@ async def test_connection_credential_requires_exact_key_and_server(monkeypatch, 
         if grant_state == "refresh"
         else issued["access_token"]
     )
-    expected_status = 401 if expected == 200 and grant_state != "valid" else expected
+    expected_status = (
+        403
+        if server_mode == "delegated" and key is not None
+        else 401
+        if expected == 200 and grant_state != "valid"
+        else expected
+    )
     scope = {
         "type": "http",
         "method": "POST",
@@ -9516,7 +9526,12 @@ async def test_connection_credential_requires_exact_key_and_server(monkeypatch, 
         with pytest.raises(HTTPException) as exc:
             await MCPRequestHandler.process_mcp_request(scope)
         assert exc.value.status_code == expected_status
-        if key == "sk-original" and selector == "connection-target" and grant_state != "valid":
+        if (
+            server_mode == "managed"
+            and key == "sk-original"
+            and selector == "connection-target"
+            and grant_state != "valid"
+        ):
             assert "resource_metadata=" in exc.value.headers["www-authenticate"]
         assert flow.CONNECTION_SCOPE_KEY not in scope
         return
