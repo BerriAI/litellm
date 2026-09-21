@@ -8,29 +8,26 @@ use litellm_cache::{
     BaseCache, CacheCodec, CacheConnectionResult, CacheConnectionStatus, Error,
     SemanticCacheContext,
 };
-use litellm_cache_redis::connection::{ConnectionRef, Connections, ttl_seconds};
+use litellm_cache_redis::{
+    RedisTopology,
+    connection::{ConnectionRef, Connections},
+};
 use litellm_cache_response::{CacheEntry, ResponseCacheCodec};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::prompt::prompt_from_context;
 
-const REDIS_TIMEOUT: Duration = Duration::from_secs(5);
-const REDIS_POOL_SIZE: u32 = 16;
 const CACHE_KEY_FIELD: &str = "litellm_cache_key";
 const VECTOR_FIELD: &str = "prompt_vector";
 
 pub trait Embedder: Send + Sync + 'static {
-    fn embed(
-        &self,
-        prompt: &str,
-        metadata: &serde_json::Map<String, Value>,
-    ) -> Result<Vec<f32>, Error>;
+    fn embed(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error>;
 
     fn async_embed(
         &self,
         prompt: &str,
-        metadata: &serde_json::Map<String, Value>,
+        metadata: Option<&Value>,
     ) -> impl Future<Output = Result<Vec<f32>, Error>> + Send;
 }
 
@@ -212,7 +209,7 @@ pub struct RedisSemanticCache<E: Embedder, C = redis::Connection> {
 impl<E: Embedder> RedisSemanticCache<E> {
     pub fn new(url: &str, embedder: E, config: RedisSemanticConfig) -> Result<Self, Error> {
         Ok(Self {
-            connections: Arc::new(Connections::pooled(url, REDIS_TIMEOUT, REDIS_POOL_SIZE)?),
+            connections: Arc::new(Connections::open(url, &RedisTopology::Standalone)?),
             embedder,
             inner: Arc::new(Inner::new(config)),
         })
@@ -277,7 +274,7 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> BaseCache
         let Some(prompt) = prompt_from_context(context) else {
             return Ok(());
         };
-        let vector = self.embedder.embed(&prompt, &context.metadata)?;
+        let vector = self.embedder.embed(&prompt, context.metadata.as_ref())?;
         let tag = Self::tag(key, context).to_string();
         self.connections.execute(|connection| {
             self.inner
@@ -289,7 +286,7 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> BaseCache
         let Some(prompt) = prompt_from_context(context) else {
             return Ok(None);
         };
-        let vector = self.embedder.embed(&prompt, &context.metadata)?;
+        let vector = self.embedder.embed(&prompt, context.metadata.as_ref())?;
         let tag = Self::tag(key, context).to_string();
         self.connections
             .execute(|connection| self.inner.lookup(connection, &tag, &vector))
@@ -306,7 +303,7 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> BaseCache
         };
         let vector = self
             .embedder
-            .async_embed(&prompt, &context.metadata)
+            .async_embed(&prompt, context.metadata.as_ref())
             .await?;
         let tag = Self::tag(key, &context).to_string();
         let inner = Arc::clone(&self.inner);
@@ -326,7 +323,7 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> BaseCache
         };
         let vector = self
             .embedder
-            .async_embed(&prompt, &context.metadata)
+            .async_embed(&prompt, context.metadata.as_ref())
             .await?;
         let tag = Self::tag(key, context).to_string();
         let inner = Arc::clone(&self.inner);
@@ -612,4 +609,10 @@ fn bytes_field(fields: &[redis::Value], name: &str) -> Option<Vec<u8>> {
         redis::Value::SimpleString(text) => Some(text.clone().into_bytes()),
         _ => None,
     }
+}
+
+fn ttl_seconds(ttl: Duration) -> u64 {
+    ttl.as_secs()
+        .saturating_add(u64::from(ttl.subsec_nanos() > 0))
+        .max(1)
 }

@@ -1,13 +1,14 @@
+use litellm_auth_aws::AwsAuthConfig;
+use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
 use litellm_cache_redis::{RedisNode, RedisTopology};
 use litellm_cache_redis_semantic::RedisSemanticConfig;
+use litellm_cache_s3::{S3CacheConfig, S3Endpoint};
 use litellm_host_python::{release_gil, run_sync_value};
 use pyo3::{
     PyTraverseError, PyVisit,
     exceptions::{PyRuntimeError, PyTypeError},
     prelude::*,
 };
-
-use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
 
 use super::{
     cache_error, config::project_redis_semantic, embedder::PythonEmbedder, facade::FacadeGuard,
@@ -75,6 +76,40 @@ impl CacheTestHandle {
     }
 
     #[staticmethod]
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (bucket, *, region, endpoint_url=None, key_prefix="", access_key_id=None, secret_access_key=None, session_token=None))]
+    fn s3(
+        py: Python<'_>,
+        bucket: String,
+        region: String,
+        endpoint_url: Option<String>,
+        key_prefix: &str,
+        access_key_id: Option<String>,
+        secret_access_key: Option<String>,
+        session_token: Option<String>,
+    ) -> PyResult<Self> {
+        let config = S3CacheConfig {
+            bucket,
+            key_prefix: key_prefix.to_string(),
+            region: region.clone(),
+            endpoint: endpoint_url.map(|url| S3Endpoint { url }),
+            auth: AwsAuthConfig {
+                access_key_id,
+                secret_access_key,
+                session_token,
+                region_name: Some(region),
+                ..Default::default()
+            },
+        };
+        let service = run_sync_value(py, async move { Ok(NativeResponseCache::s3(config).await) })?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
     #[pyo3(signature = (bucket_name, *, gcs_path=None, path_service_account=None, endpoint=None, token=None))]
     fn gcs(
         py: Python<'_>,
@@ -104,6 +139,29 @@ impl CacheTestHandle {
     fn disk(py: Python<'_>, directory: String) -> PyResult<Self> {
         let service =
             release_gil(py, move || NativeResponseCache::disk(&directory)).map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (url, similarity_threshold, index_name, embedder))]
+    fn valkey_semantic(
+        url: String,
+        similarity_threshold: f64,
+        index_name: String,
+        embedder: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let python_embedder = PythonEmbedder::from_backend(embedder)?;
+        let service = NativeResponseCache::valkey_semantic(
+            &url,
+            similarity_threshold,
+            index_name,
+            python_embedder,
+        )
+        .map_err(cache_error)?;
         Ok(Self {
             service,
             guard: None,
@@ -164,11 +222,17 @@ impl CacheTestHandle {
     fn _bind_facade(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<()> {
         let service = self.service()?;
         let guard = FacadeGuard::capture(py, facade, &service)?;
-        let service = service.with_redis_flush_size(
-            facade
-                .getattr("redis_flush_size")?
-                .extract::<Option<usize>>()?,
-        );
+        let service = service
+            .with_scope(
+                facade
+                    .getattr("semantic_cache_scope")?
+                    .extract::<String>()?,
+            )
+            .with_redis_flush_size(
+                facade
+                    .getattr("redis_flush_size")?
+                    .extract::<Option<usize>>()?,
+            );
         let handle = Py::new(
             py,
             Self {

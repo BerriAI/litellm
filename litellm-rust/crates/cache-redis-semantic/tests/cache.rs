@@ -35,7 +35,7 @@ impl FakeEmbedder {
 }
 
 impl Embedder for FakeEmbedder {
-    fn embed(&self, prompt: &str, _: &serde_json::Map<String, Value>) -> Result<Vec<f32>, Error> {
+    fn embed(&self, prompt: &str, _: Option<&Value>) -> Result<Vec<f32>, Error> {
         self.calls.lock().unwrap().push(prompt.to_string());
 
         Ok(self
@@ -45,11 +45,7 @@ impl Embedder for FakeEmbedder {
             .unwrap_or_else(|| vec![0.1, 0.2, 0.3]))
     }
 
-    async fn async_embed(
-        &self,
-        prompt: &str,
-        metadata: &serde_json::Map<String, Value>,
-    ) -> Result<Vec<f32>, Error> {
+    async fn async_embed(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
         self.embed(prompt, metadata)
     }
 }
@@ -63,7 +59,7 @@ fn config() -> RedisSemanticConfig {
 
 fn messages_context(messages: Vec<Value>) -> SemanticCacheContext {
     SemanticCacheContext {
-        messages,
+        messages: Some(Value::Array(messages)),
         ..Default::default()
     }
 }

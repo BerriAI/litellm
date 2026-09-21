@@ -14,13 +14,13 @@ use super::{
     cache_error,
     embedder::{PythonEmbedder, with_prepared_embedding},
     native::NativeResponseCache,
-    request::{CacheRequest, now},
+    request::{NativeRequest, now},
 };
 
 pub(super) enum SemanticOperation {
-    Lookup(CacheRequest),
-    Store(CacheRequest, Value),
-    StoreBatch(VecDeque<(CacheRequest, Value)>),
+    Lookup(NativeRequest),
+    Store(NativeRequest, Value),
+    StoreBatch(VecDeque<(NativeRequest, Value)>),
 }
 
 enum Phase {
@@ -32,7 +32,7 @@ enum Phase {
 pub(super) struct SemanticBody {
     service: NativeResponseCache,
     operation: SemanticOperation,
-    pending: Option<(CacheRequest, Option<Value>)>,
+    pending: Option<(NativeRequest, Option<Value>)>,
     phase: Phase,
 }
 
@@ -101,7 +101,7 @@ impl ExecutionBody for SemanticBody {
                         let (request, _) = self.pending.as_ref().ok_or_else(|| {
                             PyRuntimeError::new_err("semantic execution has no pending operation")
                         })?;
-                        let semantic = request.semantic();
+                        let semantic = NativeResponseCache::redis_semantic_request(request);
                         let Some(prompt) = prompt_from_context(&semantic.context) else {
                             return self.backend_step(py, Err(Error::Unavailable));
                         };
@@ -113,7 +113,7 @@ impl ExecutionBody for SemanticBody {
                         let coroutine = embedder.async_embedding_coroutine(
                             py,
                             &prompt,
-                            &semantic.context.metadata,
+                            semantic.context.metadata.as_ref(),
                         )?;
                         self.phase = Phase::AwaitingEmbedding;
                         return Ok(ExecutionStep::Await(coroutine));
@@ -160,16 +160,15 @@ impl ExecutionBody for SemanticBody {
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.service.traverse(visit)
+        if let Some(embedder) = self.service.semantic_embedder() {
+            embedder.traverse(visit)?;
+        }
+        Ok(())
     }
 }
 
-pub(super) fn drive(
-    py: Python<'_>,
-    service: NativeResponseCache,
-    operation: SemanticOperation,
-) -> PyResult<Bound<'_, PyAny>> {
-    let execution = Py::new(py, Execution::new(SemanticBody::new(service, operation)))?;
+pub(super) fn drive(py: Python<'_>, body: SemanticBody) -> PyResult<Bound<'_, PyAny>> {
+    let execution = Py::new(py, Execution::new(body))?;
     py.import("litellm.rust_bridge.lifecycle")?
         .getattr("drive")?
         .call1((execution,))

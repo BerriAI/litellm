@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
-from typing import Literal, Never, final
+from typing import Never, final
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
@@ -94,6 +94,59 @@ class ResponsesWebSocketConnection:
     def close(self) -> Future[None]: ...
 
 @final
+class _CacheTestBinding:
+    @property
+    def kind(self) -> str: ...
+    def lookup(
+        self,
+        request: object,
+        *,
+        callback_kwargs: Mapping[str, object] | Sequence[object] | None = None,
+    ) -> object: ...
+    def store(
+        self,
+        request: object,
+        response: object,
+        *,
+        callback_kwargs: Mapping[str, object] | None = None,
+    ) -> None: ...
+    def lookup_batch(
+        self,
+        requests: Sequence[object],
+        *,
+        callback_kwargs: Sequence[object] | None = None,
+    ) -> object: ...
+    def async_lookup(
+        self,
+        request: object,
+        *,
+        callback_kwargs: Mapping[str, object] | None = None,
+    ) -> Future[object]: ...
+    def async_store(
+        self,
+        request: object,
+        response: object,
+        *,
+        callback_kwargs: Mapping[str, object] | None = None,
+    ) -> Future[None]: ...
+    def async_lookup_batch(
+        self,
+        requests: Sequence[object],
+        *,
+        callback_kwargs: Sequence[object] | None = None,
+    ) -> Future[object]: ...
+    def async_store_batch(
+        self,
+        requests: Sequence[object],
+        responses: Sequence[object],
+        *,
+        callback_result: object = None,
+        callback_kwargs: Mapping[str, object] | None = None,
+    ) -> Future[object]: ...
+    def async_flush(self) -> Future[None]: ...
+    def ping(self) -> Future[object]: ...
+
+@final
 class _CacheTestHandle:
     def __new__(cls, _uninstantiable: Never, /) -> Never: ...
     @staticmethod
@@ -109,10 +162,21 @@ class _CacheTestHandle:
         *,
         ttl_seconds: float = 60.0,
         namespace: str | None = None,
-        startup_nodes: list[tuple[str, int]] | None = None,
+        startup_nodes: Sequence[tuple[str, int]] | None = None,
     ) -> _CacheTestHandle: ...
     @staticmethod
     def disk(directory: str) -> _CacheTestHandle: ...
+    @staticmethod
+    def azure_blob(account_url: str, container: str) -> _CacheTestHandle: ...
+    @staticmethod
+    def redis_semantic(backend: object) -> _CacheTestHandle: ...
+    @staticmethod
+    def valkey_semantic(
+        url: str,
+        similarity_threshold: float,
+        index_name: str,
+        embedder: object,
+    ) -> _CacheTestHandle: ...
     @staticmethod
     def gcs(
         bucket_name: str,
@@ -123,48 +187,19 @@ class _CacheTestHandle:
         token: str | None = None,
     ) -> _CacheTestHandle: ...
     @staticmethod
-    def azure_blob(account_url: str, container: str) -> _CacheTestHandle: ...
-    @staticmethod
-    def redis_semantic(backend: object) -> _CacheTestHandle: ...
-    @property
-    def backend(
-        self,
-    ) -> Literal["memory", "redis", "gcs", "disk", "azure-blob", "redis_semantic"]: ...
-    def _bind_facade(self, facade: object) -> None: ...
-
-@final
-class _CacheTestBinding:
-    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
-    @property
-    def kind(self) -> Literal["disabled", "native", "python_callback"]: ...
-    def lookup(
-        self, request: object, *, callback_kwargs: object = None
-    ) -> object: ...
-    def store(
-        self, request: object, response: object, *, callback_kwargs: object = None
-    ) -> None: ...
-    def lookup_batch(
-        self, requests: object, *, callback_kwargs: object = None
-    ) -> object: ...
-    def async_lookup(
-        self, request: object, *, callback_kwargs: object = None
-    ) -> Future[object]: ...
-    def async_store(
-        self, request: object, response: object, *, callback_kwargs: object = None
-    ) -> Future[object]: ...
-    def async_lookup_batch(
-        self, requests: object, *, callback_kwargs: object = None
-    ) -> Future[object]: ...
-    def async_store_batch(
-        self,
-        requests: object,
-        responses: object,
+    def s3(
+        bucket: str,
         *,
-        callback_result: object = None,
-        callback_kwargs: object = None,
-    ) -> Future[object]: ...
-    def async_flush(self) -> Future[object]: ...
-    def ping(self) -> Future[object]: ...
+        region: str,
+        endpoint_url: str | None = None,
+        key_prefix: str = "",
+        access_key_id: str | None = None,
+        secret_access_key: str | None = None,
+        session_token: str | None = None,
+    ) -> _CacheTestHandle: ...
+    @property
+    def backend(self) -> str: ...
+    def _bind_facade(self, facade: object) -> None: ...
 
 @final
 class _CacheTestResolver:

@@ -1,11 +1,11 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use litellm_cache::{ExactCacheContext, SemanticCacheContext};
+use litellm_cache::ExactCacheContext;
 use litellm_cache_response::{CacheControls, CacheKeyInput, ResponseCacheRequest};
 use litellm_host_python::from_py;
 use pyo3::{exceptions::PyValueError, prelude::*};
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -14,69 +14,52 @@ struct RequestInput {
     controls: Option<CacheControls>,
     ttl_seconds: Option<f64>,
     max_age_seconds: Option<f64>,
+    messages: Option<Value>,
     input: Option<Value>,
-    messages: Option<Vec<Value>>,
-    metadata: Option<Map<String, Value>>,
+    metadata: Option<Value>,
+    litellm_metadata: Option<Value>,
+    litellm_params: Option<Value>,
     scope: Option<String>,
 }
 
 #[derive(Clone)]
-pub(super) struct CacheRequest {
-    key: CacheKeyInput,
-    controls: CacheControls,
-    ttl: Option<Duration>,
-    max_age: Option<Duration>,
-    input: Option<Value>,
-    messages: Vec<Value>,
-    metadata: Map<String, Value>,
-    scope: Option<String>,
+pub(super) struct NativeRequest {
+    pub(super) key: CacheKeyInput,
+    pub(super) controls: CacheControls,
+    pub(super) ttl: Option<Duration>,
+    pub(super) max_age: Option<Duration>,
+    pub(super) messages: Option<Value>,
+    pub(super) input: Option<Value>,
+    pub(super) metadata: Option<Value>,
+    pub(super) litellm_metadata: Option<Value>,
+    pub(super) litellm_params: Option<Value>,
+    pub(super) scope: Option<String>,
 }
 
-impl CacheRequest {
-    pub(super) fn exact(&self) -> ResponseCacheRequest<ExactCacheContext> {
-        let mut request = ResponseCacheRequest::new(self.key.clone());
-        request.controls = self.controls;
-        request.context.ttl = self.ttl;
-        request.max_age = self.max_age;
-        request
-    }
-
-    pub(super) fn semantic(&self) -> ResponseCacheRequest<SemanticCacheContext> {
-        ResponseCacheRequest {
-            key: self.key.clone(),
-            controls: self.controls,
-            context: SemanticCacheContext {
-                input: self.input.clone(),
-                messages: self.messages.clone(),
-                metadata: self.metadata.clone(),
-                scope: self.scope.clone(),
-                ttl: self.ttl,
-            },
-            max_age: self.max_age,
-        }
-    }
-}
-
-pub(super) fn request(value: &Bound<'_, PyAny>) -> PyResult<CacheRequest> {
+pub(super) fn request(value: &Bound<'_, PyAny>) -> PyResult<NativeRequest> {
     let input: RequestInput = from_py(value)?;
     request_input(input)
 }
 
-fn request_input(input: RequestInput) -> PyResult<CacheRequest> {
-    let defaults = ResponseCacheRequest::<ExactCacheContext>::new(input.key.clone());
-    Ok(CacheRequest {
+fn request_input(input: RequestInput) -> PyResult<NativeRequest> {
+    let controls = input.controls.unwrap_or_else(|| {
+        ResponseCacheRequest::<ExactCacheContext>::new(input.key.clone()).controls
+    });
+    Ok(NativeRequest {
         key: input.key,
-        controls: input.controls.unwrap_or(defaults.controls),
+        controls,
         ttl: input.ttl_seconds.map(duration).transpose()?,
         max_age: input.max_age_seconds.map(duration).transpose()?,
+        messages: input.messages,
         input: input.input,
-        messages: input.messages.unwrap_or_default(),
-        metadata: input.metadata.unwrap_or_default(),
+        metadata: input.metadata,
+        litellm_metadata: input.litellm_metadata,
+        litellm_params: input.litellm_params,
         scope: input.scope,
     })
 }
 
-pub(super) fn requests(value: &Bound<'_, PyAny>) -> PyResult<Vec<CacheRequest>> {
+pub(super) fn requests(value: &Bound<'_, PyAny>) -> PyResult<Vec<NativeRequest>> {
     from_py::<Vec<RequestInput>>(value)?
         .into_iter()
         .map(request_input)

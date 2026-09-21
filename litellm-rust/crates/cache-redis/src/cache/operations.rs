@@ -188,7 +188,7 @@ where
     }
 
     pub async fn ping(&self) -> Result<bool, Error> {
-        Self::run_blocking(Arc::clone(&self.connections), |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), |connection| {
             connection.ping().map_err(|_| Error::Unavailable)
         })
         .await
@@ -208,7 +208,7 @@ where
 
     pub async fn async_scan_iter(&self, pattern: &str, count: usize) -> Result<Vec<String>, Error> {
         let pattern = format!("{}*", self.namespaced_key(pattern));
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let mut matches = Vec::new();
             connection.scan(&pattern, count, |_, keys| {
                 matches.extend(keys);
@@ -231,7 +231,7 @@ where
         }
         let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(ttl.unwrap_or(self.default_ttl));
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let mut sadd = redis::cmd("SADD");
             sadd.arg(&key).arg(values);
             let mut expire = redis::cmd("EXPIRE");
@@ -279,7 +279,7 @@ where
         if operations.is_empty() {
             return Ok(Vec::new());
         }
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let commands = operations
                 .into_iter()
                 .map(|(key, values)| {
@@ -333,7 +333,7 @@ where
             .iter()
             .map(|(_, count)| count.is_some())
             .collect::<Vec<_>>();
-        let values = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        let values = Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let commands = operations
                 .into_iter()
                 .map(|(key, count)| {
@@ -426,7 +426,7 @@ where
         if operations.is_empty() {
             return Ok(Vec::new());
         }
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let mut commands = Vec::with_capacity(operations.len() * 2);
             let mut increments = Vec::with_capacity(operations.len());
             for (key, amount, ttl) in operations {
