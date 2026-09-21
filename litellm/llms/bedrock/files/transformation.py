@@ -67,7 +67,6 @@ from ..common_utils import (
     BedrockError,
     merge_bedrock_aws_request_params,
     resolve_s3_encryption_key_id,
-    s3_signing_auth_params,
 )
 
 S3_SIGNED_REQUEST_HEADERS_PARAM: Final = "_s3_signed_request_headers"
@@ -1154,7 +1153,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model="")
-        credentials: Final = self.resolve_credentials(s3_signing_auth_params(optional_params), aws_region_name)
+        credentials: Final = self.resolve_s3_credentials(optional_params, aws_region_name)
 
         # Calculate SHA256 hash of the content (REQUIRED for S3)
         content_hash: Final = hashlib.sha256(content.encode("utf-8")).hexdigest()
@@ -1501,9 +1500,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        credentials: Final = self.resolve_credentials(
-            s3_signing_auth_params(request_params.model_dump(exclude_none=True)), aws_region_name
-        )
+        credentials: Final = self.resolve_s3_credentials(request_params.model_dump(exclude_none=True), aws_region_name)
 
         empty_body_hash: Final = hashlib.sha256(b"").hexdigest()
         aws_request: Final = AWSRequest(  # any-ok: botocore AWSRequest is untyped

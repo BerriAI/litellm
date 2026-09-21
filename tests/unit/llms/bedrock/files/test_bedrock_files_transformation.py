@@ -3820,6 +3820,23 @@ def test_sign_s3_request_uses_the_s3_pair_when_it_differs_from_the_aws_identity(
     )
 
 
+def test_sign_s3_request_with_the_s3_pair_ignores_ambient_aws_session_token_role_and_profile(monkeypatch):
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "pod-token")
+    monkeypatch.setenv("AWS_ROLE_NAME", "arn:aws:iam::123456789012:role/pod")
+    monkeypatch.setenv("AWS_PROFILE_NAME", "pod-profile")
+    signed_headers, _signed_body = BedrockFilesConfig()._sign_s3_request(
+        content='{"custom_id": "req-1"}',
+        api_base="https://s3.us-east-1.amazonaws.com/safe-bucket/litellm-bedrock-files-model-id-abc.jsonl",
+        optional_params=dict(_SPLIT_IDENTITY_PARAMS),
+    )
+
+    lowered: Final = {key.lower(): value for key, value in signed_headers.items()}
+    assert lowered["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAS3ONLY/")
+    assert "x-amz-security-token" not in lowered, "an ambient AWS_SESSION_TOKEN must not be mixed into the s3_* pair"
+
+
 @pytest.mark.parametrize("method", ["GET", "DELETE"])
 def test_sign_s3_request_without_body_uses_the_s3_pair_when_it_differs_from_the_aws_identity(method):
     from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, _BedrockS3RequestParams

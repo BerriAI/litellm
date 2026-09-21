@@ -928,24 +928,17 @@ def test_bedrock_get_error_class_audit_covers_every_surface():
     assert len(_bedrock_configs_with_get_error_class()) >= 30
 
 
-def test_s3_signing_auth_params_prefers_the_s3_pair_over_the_aws_identity():
-    from litellm.llms.bedrock.common_utils import s3_signing_auth_params
+def test_s3_static_key_pair_returns_the_pair_when_both_keys_are_set():
+    from litellm.llms.bedrock.common_utils import s3_static_key_pair
 
-    auth = s3_signing_auth_params(
+    assert s3_static_key_pair(
         {
             "aws_access_key_id": "bedrock-key",
             "aws_secret_access_key": "bedrock-secret",
-            "aws_session_token": "bedrock-token",
-            "aws_role_name": "arn:aws:iam::123456789012:role/bedrock",
             "s3_access_key_id": "s3-key",
             "s3_secret_access_key": "s3-secret",
         }
-    )
-
-    assert auth.aws_access_key_id == "s3-key"
-    assert auth.aws_secret_access_key == "s3-secret"
-    assert auth.aws_session_token is None, "the aws_* session token belongs to the other identity"
-    assert auth.aws_role_name is None, "the aws_* role must not be assumed with the s3_* static pair"
+    ) == ("s3-key", "s3-secret")
 
 
 @pytest.mark.parametrize(
@@ -957,18 +950,7 @@ def test_s3_signing_auth_params_prefers_the_s3_pair_over_the_aws_identity():
         {"s3_access_key_id": "", "s3_secret_access_key": ""},
     ],
 )
-def test_s3_signing_auth_params_falls_back_to_the_aws_identity_without_a_full_s3_pair(partial_s3_pair):
-    from litellm.llms.bedrock.common_utils import s3_signing_auth_params
+def test_s3_static_key_pair_is_none_without_a_full_pair(partial_s3_pair):
+    from litellm.llms.bedrock.common_utils import s3_static_key_pair
 
-    auth = s3_signing_auth_params(
-        {
-            "aws_access_key_id": "bedrock-key",
-            "aws_secret_access_key": "bedrock-secret",
-            "aws_session_token": "bedrock-token",
-            **partial_s3_pair,
-        }
-    )
-
-    assert auth.aws_access_key_id == "bedrock-key"
-    assert auth.aws_secret_access_key == "bedrock-secret"
-    assert auth.aws_session_token == "bedrock-token"
+    assert s3_static_key_pair({"aws_access_key_id": "bedrock-key", **partial_s3_pair}) is None

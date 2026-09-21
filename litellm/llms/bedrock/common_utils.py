@@ -112,19 +112,15 @@ def merge_bedrock_aws_request_params(
     return request_params
 
 
-def s3_signing_auth_params(params: Mapping[str, object]) -> AwsAuthParams:
-    """Identity used to sign S3 requests: the s3_* static pair when both are set, otherwise the aws_* params."""
+def s3_static_key_pair(params: Mapping[str, object]) -> tuple[str, str] | None:
+    """The s3_access_key_id / s3_secret_access_key pair when both are set, otherwise None."""
     s3_access_key_id: Final = params.get("s3_access_key_id")
     s3_secret_access_key: Final = params.get("s3_secret_access_key")
-    has_s3_pair: Final = (
-        isinstance(s3_access_key_id, str)
-        and bool(s3_access_key_id)
-        and isinstance(s3_secret_access_key, str)
-        and bool(s3_secret_access_key)
-    )
-    if not has_s3_pair:
-        return AwsAuthParams.model_validate(params)
-    return AwsAuthParams(aws_access_key_id=str(s3_access_key_id), aws_secret_access_key=str(s3_secret_access_key))
+    if not isinstance(s3_access_key_id, str) or not s3_access_key_id:
+        return None
+    if not isinstance(s3_secret_access_key, str) or not s3_secret_access_key:
+        return None
+    return s3_access_key_id, s3_secret_access_key
 
 
 # Lazy import cache to avoid circular imports and performance impact
