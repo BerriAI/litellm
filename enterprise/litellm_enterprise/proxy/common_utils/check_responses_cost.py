@@ -6,7 +6,7 @@ same route are non-inference and free.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, Optional, cast
+from typing import TYPE_CHECKING, Dict, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -41,10 +41,15 @@ class CheckResponsesCost:
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
 
+    def _resolve_deployment(self, response_id: str) -> bool:
+        model_id: str | None = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
+        return model_id is not None and self.llm_router.get_deployment(model_id=model_id) is not None
+
     async def _get_response(
         self,
         response_id: str,
         litellm_metadata: Dict[str, str],
+        via_router: bool,
     ) -> ResponsesAPIResponse:
         """Fetch the upstream response, using deployment credentials when available.
 
@@ -55,8 +60,7 @@ class CheckResponsesCost:
         sees provider env vars, so it fails for every deployment whose credentials
         live in the config; the row then never leaves ``queued``.
         """
-        model_id: Optional[str] = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
-        if model_id is None or self.llm_router.get_deployment(model_id=model_id) is None:
+        if not via_router:
             return await litellm.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
         router_response = await self.llm_router.aget_responses(
             response_id=response_id, litellm_metadata=litellm_metadata
@@ -120,6 +124,8 @@ class CheckResponsesCost:
         - Cost is tracked by the get-responses call, billed because the poll is stamped
           with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
         - Mark responses in a terminal state as complete in the database
+        - Mark responses the provider no longer has (404 through a resolved
+          deployment) as stale_expired
         """
         try:
             await self._cleanup_stale_managed_objects()
@@ -139,6 +145,7 @@ class CheckResponsesCost:
         
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")
         completed_jobs = []
+        expired_jobs = []
 
         for job in jobs:
             unified_object_id = job.unified_object_id
@@ -151,30 +158,49 @@ class CheckResponsesCost:
                 # Get the stored response object to extract model information
                 stored_response = job.file_object
                 model_name = stored_response.get("model", None)
-                
+
                 # Decrypt the response ID
                 responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(unified_object_id)
-                
+
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                 }
-                
+
                 # Add model information if available
                 if model_name:
                     litellm_metadata["model"] = model_name
                     litellm_metadata["model_group"] = model_name  # Use same value for model_group
-                
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    f"Skipping job {unified_object_id} due to error: {e}"
+                )
+                continue
+
+            via_router = self._resolve_deployment(responses_id_security)
+            try:
                 response = await self._get_response(
                     response_id=responses_id_security,
                     litellm_metadata=litellm_metadata,
+                    via_router=via_router,
                 )
-                
+
                 verbose_proxy_logger.debug(
                     f"Response {unified_object_id} status: {response.status}, model: {model_name}"
                 )
-                
+
+            except litellm.NotFoundError as e:
+                if not via_router:
+                    verbose_proxy_logger.warning(
+                        f"Skipping job {unified_object_id} due to error: {e}"
+                    )
+                    continue
+                verbose_proxy_logger.info(
+                    f"Response {unified_object_id} no longer available at provider (404), marking stale_expired: {e}"
+                )
+                expired_jobs.append(job)
+                continue
             except Exception as e:
                 verbose_proxy_logger.warning(
                     f"Skipping job {unified_object_id} due to error: {e}"
@@ -195,5 +221,14 @@ class CheckResponsesCost:
             )
             verbose_proxy_logger.info(
                 f"Marked {len(completed_jobs)} response jobs as completed"
+            )
+
+        if len(expired_jobs) > 0:
+            await self.prisma_client.db.litellm_managedobjecttable.update_many(
+                where={"id": {"in": [job.id for job in expired_jobs]}},
+                data={"status": "stale_expired"},
+            )
+            verbose_proxy_logger.info(
+                f"Marked {len(expired_jobs)} response jobs as stale_expired"
             )
 
