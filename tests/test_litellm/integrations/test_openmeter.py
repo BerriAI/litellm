@@ -448,7 +448,6 @@ class TestOpenMeterIntegration:
         assert result["subject"] == "request-user"
 
     def test_common_logic_meters_responses_api_response(self):
-        """Checking if OpenMeter integration is generating usage data for ResponsesAPIResponse object"""
         logger = OpenMeterLogger()
 
         response_obj = _create_responses_api_response_as_logged(
@@ -472,8 +471,6 @@ class TestOpenMeterIntegration:
         assert result["data"]["total_tokens"] == 100
 
     def test_common_logic_omits_usage_for_unrecognized_response(self):
-        """Usage is only read off known LiteLLM response types, so a bare dict
-        carrying a `usage` key must not be metered."""
         logger = OpenMeterLogger()
 
         kwargs = {
