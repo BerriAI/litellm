@@ -11,12 +11,10 @@ from litellm.constants import BACKGROUND_INTERACTION_COST_POLLING_ENABLED
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
+    budget_reservation_from_metadata,
     get_litellm_metadata_from_kwargs,
 )
-from litellm.litellm_core_utils.litellm_logging import (
-    StandardLoggingPayloadSetup,
-    budget_reservation_from_metadata,
-)
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_information_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (

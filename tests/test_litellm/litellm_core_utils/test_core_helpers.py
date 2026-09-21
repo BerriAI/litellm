@@ -6,6 +6,8 @@ import pytest
 
 from litellm.litellm_core_utils.core_helpers import (
     _FINISH_REASON_MAP,
+    bind_budget_reservation_to_callbacks,
+    budget_reservation_from_metadata,
     drop_params_env_flag,
     drop_params_flag,
     get_or_create_metadata_bucket,
@@ -13,7 +15,60 @@ from litellm.litellm_core_utils.core_helpers import (
     normalize_drop_params,
     reconstruct_model_name,
     redact_nested_match_and_regex_keys,
+    unbind_budget_reservation_from_callbacks,
 )
+from litellm.proxy._types import UserAPIKeyAuth
+
+
+class TestBudgetReservationBinding:
+    """The request-end release skips a reservation a cost callback has claimed, so the claim
+    must land on the one dict auth stamped, through whichever metadata field or auth object
+    carries it, and a failed call must be able to hand it back."""
+
+    @staticmethod
+    def _reservation() -> dict:
+        return {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+
+    @pytest.mark.parametrize("metadata_variable_name", ["metadata", "litellm_metadata"])
+    def test_reservation_stamped_on_the_metadata_is_bound(self, metadata_variable_name: str):
+        reservation = self._reservation()
+
+        bind_budget_reservation_to_callbacks({metadata_variable_name: {"user_api_key_budget_reservation": reservation}})
+
+        assert reservation["callback_bound"] is True
+
+    def test_reservation_reachable_only_through_the_auth_object_is_bound(self):
+        reservation = self._reservation()
+        user_api_key_auth = UserAPIKeyAuth(token="hashed")
+        user_api_key_auth.budget_reservation = reservation
+
+        bind_budget_reservation_to_callbacks({"metadata": {"user_api_key_auth": user_api_key_auth}})
+
+        assert reservation["callback_bound"] is True
+
+    def test_reservation_reachable_only_through_a_dumped_auth_object_is_bound(self):
+        reservation = self._reservation()
+
+        bind_budget_reservation_to_callbacks({"metadata": {"user_api_key_auth": {"budget_reservation": reservation}}})
+
+        assert reservation["callback_bound"] is True
+
+    def test_unbind_hands_a_claimed_reservation_back(self):
+        reservation = self._reservation()
+        litellm_params = {"litellm_metadata": {"user_api_key_budget_reservation": reservation}}
+        bind_budget_reservation_to_callbacks(litellm_params)
+
+        unbind_budget_reservation_from_callbacks(litellm_params)
+
+        assert reservation["callback_bound"] is False
+
+    def test_request_without_a_reservation_binds_nothing(self):
+        metadata = {"user_api_key_auth": UserAPIKeyAuth(token="hashed")}
+
+        bind_budget_reservation_to_callbacks({"metadata": metadata, "litellm_metadata": None})
+
+        assert budget_reservation_from_metadata(metadata) is None
+        assert "user_api_key_budget_reservation" not in metadata
 
 
 class TestGetOrCreateMetadataBucket:

@@ -47,6 +47,7 @@ from litellm.constants import (
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
+    bind_budget_reservation_to_callbacks,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
 )
@@ -1617,6 +1618,7 @@ async def pass_through_request(
         passthrough_logging_payload["response_body"] = response_body
         end_time: Final = datetime.now()
         if response.status_code < 400:
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                     httpx_response=response,
@@ -2529,6 +2531,7 @@ async def websocket_passthrough_request(
             mock_response: Final = MockWebSocketResponse(target)
 
             # Use the same success handler as HTTP passthrough endpoints
+            bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
             GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
                 async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                     httpx_response=mock_response,
@@ -2699,6 +2702,7 @@ async def _relay_passthrough_response_bytes(
                 bytes_relayed,
             )
         await response.aclose()
+        bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=pass_through_endpoint_logging.pass_through_async_success_handler(
                 httpx_response=response,

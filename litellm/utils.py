@@ -81,7 +81,11 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    bind_budget_reservation_to_callbacks,
+    normalize_drop_params,
+    unbind_budget_reservation_from_callbacks,
+)
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
@@ -1880,6 +1884,8 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            if not _is_litellm_internal_call:
+                bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
             kwargs["litellm_logging_obj"] = logging_obj
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
@@ -2081,6 +2087,7 @@ def client(original_function):
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
             if logging_obj and not _is_litellm_internal_call:
+                unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
                 try:
                     logging_obj.failure_handler(
                         e, traceback_exception, start_time, end_time

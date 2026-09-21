@@ -59,6 +59,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     _user_api_key_auth_builder,
     get_api_key,
     user_api_key_auth,
+    user_api_key_auth_websocket_for_model,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
 
@@ -9099,3 +9100,34 @@ async def test_reserve_budget_after_common_checks_clears_the_request_state_when_
     )
 
     assert request.state.budget_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_websocket_auth_hands_the_reservation_to_the_socket_state():
+    from fastapi import WebSocket
+
+    reservation = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    websocket = WebSocket(
+        scope={
+            "type": "websocket",
+            "path": "/v1/realtime",
+            "headers": [(b"authorization", b"Bearer sk-1234")],
+            "query_string": b"model=gpt-realtime",
+        },
+        receive=AsyncMock(),
+        send=AsyncMock(),
+    )
+
+    async def auth_that_reserves(request, api_key):
+        request.state.budget_reservation = reservation
+        return UserAPIKeyAuth(token="hashed", budget_reservation=reservation)
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+        new=AsyncMock(side_effect=auth_that_reserves),
+    ):
+        result = await user_api_key_auth_websocket_for_model(websocket, model="gpt-realtime")
+
+    assert result.budget_reservation == reservation
+    assert websocket.state.budget_reservation is reservation
+    assert websocket.scope["state"]["budget_reservation"] is reservation
