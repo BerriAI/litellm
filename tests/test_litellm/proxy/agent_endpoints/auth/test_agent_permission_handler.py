@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
@@ -21,6 +20,7 @@ from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     UnrestrictedAgentAccess,
     accessible_agents,
 )
+from litellm.types.agents import AgentCaller
 
 
 def _registry_with(*agent_names: str) -> AgentRegistry:
@@ -195,6 +195,60 @@ class TestAgentRequestHandler:
         assert await AgentRequestHandler.is_agent_allowed("agent-beta", agent_key, resolve) is True
         assert await AgentRequestHandler.is_agent_allowed("agent-alpha", agent_key, resolve) is False
         assert asked == ["caller-agent"] * 3
+
+    @staticmethod
+    def _team_grants(grants: dict[str, AgentAccess]) -> AsyncMock:
+        async def by_team(user_api_key_auth: UserAPIKeyAuth | None = None) -> AgentAccess:
+            assert user_api_key_auth is not None
+            return grants.get(user_api_key_auth.team_id or "", UnrestrictedAgentAccess())
+
+        return AsyncMock(side_effect=by_team)
+
+    async def test_agent_key_acting_for_a_user_is_capped_at_the_invoking_teams_agents(self):
+        """LIT-8014: the agent's key and access groups reach alpha and beta, but the human who
+        invoked it belongs to a team granted only beta, so on their behalf the agent reaches only beta."""
+        agent_key: Final = self._key_granting(["agent-alpha", "agent-beta"], agent_id="caller-agent")
+        agent_key.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+        resolve, _ = self._ceiling_resolver(frozenset({"agent-alpha", "agent-beta", "agent-gamma"}))
+
+        with patch.object(  # test-quality-ok: the team resolver reads proxy_server globals with no injection seam
+            AgentRequestHandler,
+            "_get_allowed_agents_for_team",
+            self._team_grants({"callers": RestrictedAgentAccess(frozenset({"agent-beta", "agent-gamma"}))}),
+        ) as mock_team:
+            assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
+                frozenset({"agent-beta"})
+            )
+            assert await AgentRequestHandler.is_agent_allowed("agent-alpha", agent_key, resolve) is False
+
+        assert {call.args[0].team_id for call in mock_team.call_args_list} == {None, "callers"}
+
+    async def test_agent_key_acting_for_a_user_whose_team_grants_no_agent_reaches_none(self):
+        agent_key: Final = UserAPIKeyAuth(api_key="test-key", user_id="test-user", agent_id="caller-agent")
+        agent_key.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+        resolve, _ = self._ceiling_resolver(None)
+
+        with patch.object(  # test-quality-ok: the team resolver reads proxy_server globals with no injection seam
+            AgentRequestHandler,
+            "_get_allowed_agents_for_team",
+            self._team_grants({"callers": RestrictedAgentAccess(frozenset())}),
+        ):
+            assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
+                frozenset()
+            )
+
+    async def test_agent_key_acting_for_an_ungranted_caller_keeps_its_own_agents(self):
+        agent_key: Final = self._key_granting(["agent-alpha"], agent_id="caller-agent")
+        agent_key.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+        resolve, _ = self._ceiling_resolver(None)
+
+        with patch.object(  # test-quality-ok: the team resolver reads proxy_server globals with no injection seam
+            AgentRequestHandler, "_get_allowed_agents_for_team", self._team_grants({})
+        ):
+            assert await AgentRequestHandler.resolve_agent_access(agent_key, resolve) == RestrictedAgentAccess(
+                frozenset({"agent-alpha"})
+            )
+
 
     async def test_agent_access_groups_intersect_with_key_grants(self):
         agent_key: Final = self._key_granting(["agent-alpha", "agent-beta"], agent_id="caller-agent")

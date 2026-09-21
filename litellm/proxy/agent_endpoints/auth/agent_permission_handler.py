@@ -23,6 +23,7 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
     CeilingResolver,
     resolve_agent_access_group_ceiling,
 )
+from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentResponse
 
@@ -83,14 +84,24 @@ class AgentRequestHandler:
         user_api_key_auth: UserAPIKeyAuth | None = None,
         resolve_ceiling: CeilingResolver = resolve_agent_access_group_ceiling,
     ) -> AgentAccess:
-        """Agents the key may reach: key and team grants intersected with the agent's access group ceiling."""
+        """Agents the key may reach: key and team grants, intersected with the agent's access group ceiling
+        and, for an agent key acting on behalf of an invoking user, with that user's team grants."""
         key_team_access: Final = await AgentRequestHandler._resolve_key_team_agent_access(user_api_key_auth)
+        caller_access: Final = await AgentRequestHandler._agent_caller_access(user_api_key_auth)
+        own_access: Final = _intersect_agent_access(key_team_access, caller_access)
         agent_ceiling: Final = await AgentRequestHandler._agent_access_group_ceiling(user_api_key_auth, resolve_ceiling)
         if agent_ceiling is None:
-            return key_team_access
-        if isinstance(key_team_access, UnrestrictedAgentAccess):
+            return own_access
+        if isinstance(own_access, UnrestrictedAgentAccess):
             return RestrictedAgentAccess(agent_ceiling)
-        return RestrictedAgentAccess(key_team_access.agent_ids & agent_ceiling)
+        return RestrictedAgentAccess(own_access.agent_ids & agent_ceiling)
+
+    @staticmethod
+    async def _agent_caller_access(user_api_key_auth: UserAPIKeyAuth | None) -> AgentAccess:
+        caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
+        if caller_auth is None:
+            return UnrestrictedAgentAccess()
+        return await AgentRequestHandler._get_allowed_agents_for_team(caller_auth)
 
     @staticmethod
     async def _resolve_key_team_agent_access(
