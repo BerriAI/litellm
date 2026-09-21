@@ -30,6 +30,7 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
@@ -52,6 +53,19 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import Message, SelectTokenizerResponse
 
 
+def _deployment_token_limit(deployment_model_info: Mapping[str, object] | None, field: str) -> int | None:
+    """A deployment's own ``max_input_tokens`` / ``max_output_tokens``, if it declared one.
+
+    Several deployments can point at one backend model string, and each registers its
+    model_info into the global cost map under that shared key, so whichever registered
+    last owns the entry there. Only the deployment handling this request knows its own
+    limits, which is why they win over anything the cost map says.
+    """
+    if deployment_model_info is None:
+        return None
+    return coerce_token_limit(deployment_model_info.get(field))
+
+
 def get_modified_max_tokens(
     model: str,
     base_model: str,
@@ -59,6 +73,7 @@ def get_modified_max_tokens(
     user_max_tokens: int | None,
     buffer_perc: float | None,
     buffer_num: float | None,
+    deployment_model_info: Mapping[str, object] | None = None,
 ) -> int | None:
     """
     Params:
@@ -66,19 +81,32 @@ def get_modified_max_tokens(
     Returns the user's max output tokens, adjusted for:
     - the size of input - for models where input + output can't exceed X
     - model max output tokens - for models where there is a separate output token limit
+
+    ``deployment_model_info`` is the model_info of the deployment serving this request.
+    Its limits win over the cost map, which keys on the backend model string that
+    sibling deployments share.
     """
     try:
         if user_max_tokens is None:
             return None
 
-        ## MODEL INFO
-        _model_info: Final = litellm.get_model_info(model=model)
-
-        max_output_tokens: Final = litellm.get_max_tokens(model=base_model)  # assume min context window is 4k tokens
+        deployment_max_output_tokens: Final = _deployment_token_limit(deployment_model_info, "max_output_tokens")
+        max_output_tokens: Final = (
+            deployment_max_output_tokens
+            if deployment_max_output_tokens is not None
+            else litellm.get_max_tokens(model=base_model)  # assume min context window is 4k tokens
+        )
 
         ## UNKNOWN MAX OUTPUT TOKENS - return user defined amount
         if max_output_tokens is None:
             return user_max_tokens
+
+        deployment_max_input_tokens: Final = _deployment_token_limit(deployment_model_info, "max_input_tokens")
+        max_input_tokens: Final = (
+            deployment_max_input_tokens
+            if deployment_max_input_tokens is not None
+            else litellm.get_model_info(model=model)["max_input_tokens"]
+        )
 
         input_tokens = litellm.token_counter(model=base_model, messages=messages)
 
@@ -94,7 +122,7 @@ def get_modified_max_tokens(
         input_tokens += int(token_buffer)
         verbose_logger.debug("max_output_tokens: %s, user_max_tokens: %s", max_output_tokens, user_max_tokens)
         ## CASE 1: model input + output can't exceed X - happens when max input = max output, e.g. gpt-3.5-turbo
-        if _model_info["max_input_tokens"] == max_output_tokens:
+        if max_input_tokens == max_output_tokens:
             verbose_logger.debug("input_tokens: %s, max_output_tokens: %s", input_tokens, max_output_tokens)
             if input_tokens > max_output_tokens:
                 pass  # allow call to fail normally - don't set max_tokens to negative.

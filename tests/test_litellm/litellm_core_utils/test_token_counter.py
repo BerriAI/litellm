@@ -681,6 +681,157 @@ def test_get_modified_max_tokens(
         )
 
 
+SHARED_BACKEND_MODEL = "hosted_vllm/qwen3-coder-for-token-limit-tests"
+
+
+@pytest.fixture
+def restore_global_token_state():
+    """Router registration writes into the global cost map, and an earlier test in this
+    file replaces litellm.token_counter without putting it back."""
+    cost_before = dict(litellm.model_cost)
+    counter_before = litellm.token_counter
+    yield
+    litellm.model_cost.clear()
+    litellm.model_cost.update(cost_before)
+    litellm.token_counter = counter_before
+
+
+def _router_over_one_backend(aliases):
+    """A router where every alias points at the same backend model string.
+
+    Each alias declares its own limits, which is the shape that made sibling
+    deployments overwrite each other in the shared cost-map entry.
+    """
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": SHARED_BACKEND_MODEL,
+                    "api_key": "sk-fake",
+                    "api_base": "http://vllm.internal:8000/v1",
+                },
+                "model_info": {"id": f"{name}-id", **limits},
+            }
+            for name, limits in aliases.items()
+        ]
+    )
+
+
+def _max_tokens_sent_for(router, alias, requested):
+    """The max_tokens the proxy would actually send upstream for this alias."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    observed = {}
+
+    class _Probe(CustomLogger):
+        def log_pre_api_call(self, model, messages, kwargs):
+            observed["max_tokens"] = (kwargs.get("optional_params") or {}).get("max_tokens")
+
+    litellm.callbacks = [_Probe()]
+    try:
+        router.completion(
+            model=alias,
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=requested,
+            mock_response="hi",
+        )
+    finally:
+        litellm.callbacks = []
+    return observed["max_tokens"]
+
+
+def test_max_output_tokens_does_not_leak_between_aliases_sharing_a_backend_model(
+    monkeypatch, restore_global_token_state
+):
+    """https://github.com/BerriAI/litellm/issues/42215
+
+    Sibling deployments all register their model_info under the same
+    {provider}/{model} cost-map key, so whichever registered last used to decide the
+    output budget for every alias over that backend.
+    """
+    monkeypatch.setattr(litellm, "modify_params", True)
+    router = _router_over_one_backend(
+        {
+            "thorough": {"max_input_tokens": 262144, "max_output_tokens": 65536},
+            "fast": {"max_input_tokens": 262144, "max_output_tokens": 16384},
+            "tiny": {"max_input_tokens": 262144, "max_output_tokens": 8192},
+        }
+    )
+
+    # each alias gets to spend exactly the budget it declared, not the last one registered
+    assert _max_tokens_sent_for(router, "thorough", 65536) == 65536
+    assert _max_tokens_sent_for(router, "fast", 16384) == 16384
+    assert _max_tokens_sent_for(router, "tiny", 8192) == 8192
+
+
+def test_each_alias_clamps_an_over_ask_to_its_own_ceiling(monkeypatch, restore_global_token_state):
+    """The clamp still has to bite, otherwise the fix just stops enforcing limits."""
+    monkeypatch.setattr(litellm, "modify_params", True)
+    router = _router_over_one_backend(
+        {
+            "thorough": {"max_input_tokens": 262144, "max_output_tokens": 65536},
+            "tiny": {"max_input_tokens": 262144, "max_output_tokens": 8192},
+        }
+    )
+
+    assert _max_tokens_sent_for(router, "thorough", 999999) == 65536
+    assert _max_tokens_sent_for(router, "tiny", 999999) == 8192
+
+
+def test_deployment_max_input_tokens_wins_over_the_shared_cost_map_entry():
+    """max_input_tokens rides the same shared cost-map key as max_output_tokens.
+
+    When it equals the output limit the clamp switches to the input+output branch, so a
+    sibling's value leaking in silently changes which budget rule a request gets.
+    """
+    calculated = get_modified_max_tokens(
+        model="gpt-3.5-turbo",
+        base_model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hello"}],
+        user_max_tokens=5000,
+        buffer_perc=0,
+        buffer_num=0,
+        deployment_model_info={"max_input_tokens": 200000, "max_output_tokens": 100000},
+    )
+
+    # the deployment separates input from output, so the whole ask fits under its own
+    # output ceiling rather than being cut down by gpt-3.5-turbo's shared 4096
+    assert calculated == 5000
+
+
+def test_clamp_falls_back_to_the_cost_map_when_the_deployment_declares_no_limit():
+    """A direct litellm.completion() call has no deployment behind it."""
+    calculated = get_modified_max_tokens(
+        model="gpt-3.5-turbo",
+        base_model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hello"}],
+        user_max_tokens=5000,
+        buffer_perc=0,
+        buffer_num=0,
+        deployment_model_info={"id": "no-limits-declared"},
+    )
+
+    assert calculated == litellm.get_max_tokens("gpt-3.5-turbo")
+
+
+def test_a_malformed_declared_limit_is_ignored_rather_than_crashing_the_call():
+    """model_info is registered verbatim, so a config typo reaches this code as a string."""
+    calculated = get_modified_max_tokens(
+        model="gpt-3.5-turbo",
+        base_model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "hello"}],
+        user_max_tokens=5000,
+        buffer_perc=0,
+        buffer_num=0,
+        deployment_model_info={"max_output_tokens": "not-a-number"},
+    )
+
+    assert calculated == litellm.get_max_tokens("gpt-3.5-turbo")
+
+
 def test_empty_tools():
     messages = [{"role": "user", "content": "hey, how's it going?", "tool_calls": None}]
 
