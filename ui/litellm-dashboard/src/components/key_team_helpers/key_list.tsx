@@ -1,7 +1,6 @@
-import { Setter } from "@/types";
-import { useEffect, useState } from "react";
-import { keyListCall, Member, Organization } from "../networking";
+import { Member } from "../networking";
 import type { ObjectPermission } from "../object_permission_types";
+import type { ModelBudgetUsage, ModelMaxBudget } from "./ModelMaxBudgetEditor";
 
 export interface Team {
   team_id: string;
@@ -11,18 +10,25 @@ export interface Team {
   budget_duration: string | null;
   tpm_limit: number | null;
   rpm_limit: number | null;
+  tpd_limit?: number | null;
   organization_id: string;
+  metadata?: Record<string, unknown> | null;
+  budget_reset_at?: string | null;
+  blocked?: boolean;
   created_at: string;
   updated_at?: string | null;
   keys: KeyResponse[];
   keys_count?: number;
   members_count?: number;
   members_with_roles: Member[];
+  team_member_permissions?: string[] | null;
   spend: number;
   access_group_ids?: string[];
   access_group_models?: string[];
   access_group_mcp_server_ids?: string[];
   access_group_agent_ids?: string[];
+  // Parent org's model ceiling. undefined = no org / not loaded; [] or ["all-proxy-models"] = no ceiling.
+  organization_models?: string[] | null;
 }
 
 export interface KeyResponse {
@@ -31,6 +37,7 @@ export interface KeyResponse {
   key_name: string;
   key_alias: string;
   spend: number;
+  total_spend: number;
   max_budget: number;
   expires: string;
   models: string[];
@@ -43,6 +50,7 @@ export interface KeyResponse {
   metadata: Record<string, unknown>;
   tpm_limit: number;
   rpm_limit: number;
+  tpd_limit?: number | null;
   duration: string;
   budget_duration: string;
   budget_reset_at: string;
@@ -51,15 +59,19 @@ export interface KeyResponse {
   key_type: string | null;
   permissions: Record<string, unknown>;
   model_spend: Record<string, number>;
-  model_max_budget: Record<string, number>;
+  model_max_budget: ModelMaxBudget;
+  model_max_budget_usage?: Record<string, ModelBudgetUsage> | null;
   soft_budget_cooldown: boolean;
   blocked: boolean;
+  deleted_at?: string | null;
+  deleted_by?: string | null;
   litellm_budget_table: Record<string, unknown>;
   organization_id: string | null;
   org_id?: string | null;
   created_at: string;
   created_by?: string;
   updated_at: string;
+  settings_updated_at?: string | null;
   last_active: string | null;
   team_spend: number;
   team_alias: string;
@@ -94,6 +106,7 @@ export interface KeyResponse {
   object_permission?: ObjectPermission | null;
   access_group_ids?: string[];
   budget_fallbacks?: Record<string, string[]>;
+  router_settings?: Record<string, unknown> | null;
   budget_limits?: Array<{ budget_duration: string; max_budget: number; reset_at?: string }>;
   auto_rotate?: boolean;
   rotation_interval?: string;
@@ -111,114 +124,3 @@ export interface KeyResponse {
     user_alias: string | null;
   };
 }
-
-interface KeyListResponse {
-  keys: KeyResponse[];
-  total_count: number;
-  current_page: number;
-  total_pages: number;
-}
-
-interface UseKeyListProps {
-  selectedTeam?: Team;
-  currentOrg: Organization | null;
-  selectedKeyAlias: string | null;
-  accessToken: string;
-  createClicked: boolean;
-  expand?: string[];
-}
-
-interface PaginationData {
-  currentPage: number;
-  totalPages: number;
-  totalCount: number;
-}
-
-interface UseKeyListReturn {
-  keys: KeyResponse[];
-  isLoading: boolean;
-  error: Error | null;
-  pagination: PaginationData;
-  refresh: (params?: Record<string, unknown>) => Promise<void>;
-  setKeys: Setter<KeyResponse[]>;
-}
-
-const useKeyList = ({
-  selectedTeam,
-  currentOrg,
-  selectedKeyAlias,
-  accessToken,
-  createClicked,
-  expand = [],
-}: UseKeyListProps): UseKeyListReturn => {
-  const [keyData, setKeyData] = useState<KeyListResponse>({
-    keys: [],
-    total_count: 0,
-    current_page: 1,
-    total_pages: 0,
-  });
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [error, setError] = useState<Error | null>(null);
-
-  const fetchKeys = async (params: Record<string, unknown> = {}): Promise<void> => {
-    try {
-      if (!accessToken) {
-        return;
-      }
-      setIsLoading(true);
-
-      const page = typeof params.page === "number" ? params.page : 1;
-      const pageSize = typeof params.pageSize === "number" ? params.pageSize : 100;
-
-      const data = await keyListCall(
-        accessToken,
-        null,
-        null,
-        null,
-        null,
-        null,
-        page,
-        pageSize,
-        null,
-        null,
-        expand.join(","),
-      );
-      setKeyData(data);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err : new Error("An error occurred"));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchKeys();
-  }, [selectedTeam, currentOrg, accessToken, selectedKeyAlias, createClicked]);
-
-  const setKeys = (newKeysOrUpdater: KeyResponse[] | ((prevKeys: KeyResponse[]) => KeyResponse[])) => {
-    setKeyData((prevData) => {
-      const newKeys = typeof newKeysOrUpdater === "function" ? newKeysOrUpdater(prevData.keys) : newKeysOrUpdater;
-
-      return {
-        ...prevData,
-        keys: newKeys,
-      };
-    });
-  };
-
-  return {
-    keys: keyData.keys,
-    isLoading,
-    error,
-    pagination: {
-      currentPage: keyData.current_page,
-      totalPages: keyData.total_pages,
-      totalCount: keyData.total_count,
-    },
-    refresh: fetchKeys,
-    setKeys,
-  };
-};
-
-export default useKeyList;

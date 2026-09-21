@@ -1,4 +1,3 @@
-import os
 import time
 from unittest.mock import AsyncMock
 
@@ -12,34 +11,13 @@ from litellm.types.utils import StandardLoggingPayload
 
 
 @pytest.fixture
-def clean_env():
-    # Save original env
-    original_api_key = os.environ.get("DD_API_KEY")
-    original_app_key = os.environ.get("DD_APP_KEY")
-    original_site = os.environ.get("DD_SITE")
-
-    # Set test env
-    os.environ["DD_API_KEY"] = "test_api_key"
-    os.environ["DD_APP_KEY"] = "test_app_key"
-    os.environ["DD_SITE"] = "test.datadoghq.com"
-
-    yield
-
-    # Restore original env
-    if original_api_key:
-        os.environ["DD_API_KEY"] = original_api_key
-    else:
-        del os.environ["DD_API_KEY"]
-
-    if original_app_key:
-        os.environ["DD_APP_KEY"] = original_app_key
-    else:
-        del os.environ["DD_APP_KEY"]
-
-    if original_site:
-        os.environ["DD_SITE"] = original_site
-    else:
-        del os.environ["DD_SITE"]
+def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, value in (
+        ("DD_API_KEY", "test_api_key"),
+        ("DD_APP_KEY", "test_app_key"),
+        ("DD_SITE", "test.datadoghq.com"),
+    ):
+        monkeypatch.setenv(key, value)
 
 
 @pytest.mark.asyncio

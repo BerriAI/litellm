@@ -6,7 +6,7 @@ OpenInference's vocabulary — compose ``["genai", "openinference", "weave"]``
 to feed a Weave backend.
 """
 
-from typing import Callable
+from collections.abc import Callable
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
 from litellm.integrations.otel.mappers.utils import collect, json_or_none

@@ -9,6 +9,7 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2] / "scripts" / "budget_ratchet_check.py"
@@ -66,6 +67,80 @@ def test_dropped_rule_is_a_regression():
 
 def test_new_rule_in_head_is_clean():
     assert ratchet.regressions_for("b.json", {}, {"new-rule": _spec_of(5)}) == []
+
+
+def test_dropped_rule_that_graduated_to_a_hard_failing_config_is_clean():
+    base = {"UP006": _spec_of(0)}
+    assert ratchet.regressions_for("b.json", base, {}, graduated=("UP006",)) == []
+
+
+def test_graduation_matches_by_prefix_like_ruff_selectors_do():
+    base = {"ANN202": _spec_of(865)}
+    assert ratchet.regressions_for("b.json", base, {}, graduated=("ANN",)) == []
+
+
+def test_an_unrelated_graduation_does_not_excuse_a_dropped_rule():
+    base = {"C901": _spec_of(3)}
+    regs = ratchet.regressions_for("b.json", base, {}, graduated=("UP006", "SIM118"))
+    assert [r.rule for r in regs] == ["C901"]
+    assert "dropped" in regs[0].detail
+
+
+def test_graduation_never_excuses_a_raised_limit():
+    base = {"UP006": _spec_of(0)}
+    regs = ratchet.regressions_for("b.json", base, {"UP006": _spec_of(7)}, graduated=("UP006",))
+    assert [r.rule for r in regs] == ["UP006"]
+    assert "0 -> 7" in regs[0].detail
+
+
+def test_dropped_rule_the_checker_retired_is_clean():
+    base: Final = {"TQ008": _spec_of(10993)}
+    assert ratchet.regressions_for("b.json", base, {}, retired=frozenset({"TQ008"})) == []
+
+
+def test_dropped_rule_the_checker_still_emits_is_a_regression():
+    base: Final = {"TQ001": _spec_of(5), "TQ008": _spec_of(10993)}
+    regs: Final = ratchet.regressions_for("b.json", base, {}, retired=frozenset({"TQ008"}))
+    assert [r.rule for r in regs] == ["TQ001"]
+    assert "dropped" in regs[0].detail
+
+
+def test_retirement_never_excuses_a_raised_limit():
+    base: Final = {"TQ008": _spec_of(0)}
+    regs: Final = ratchet.regressions_for("b.json", base, {"TQ008": _spec_of(7)}, retired=frozenset({"TQ008"}))
+    assert [r.rule for r in regs] == ["TQ008"]
+    assert "0 -> 7" in regs[0].detail
+
+
+def test_retired_rules_come_from_the_paired_checker():
+    base: Final = {"TQ001": _spec_of(5), "TQ008": _spec_of(10993)}
+    assert ratchet.retired_rules("test-quality-budget.json", base) == frozenset({"TQ008"})
+
+
+def test_budgets_without_a_paired_checker_never_retire():
+    base: Final = {"TQ008": _spec_of(1)}
+    for rel in ("ruff-strict-budget.json", "type-discipline-budget.json", "basedpyright-code-budget.json"):
+        assert ratchet.retired_rules(rel, base) == frozenset()
+
+
+def test_graduated_selectors_come_from_the_paired_ruff_config():
+    selectors = ratchet.graduated_selectors("ruff-strict-budget.json")
+    assert "UP006" in selectors
+    assert "ANN" not in selectors
+
+
+def test_budgets_without_a_paired_config_can_never_graduate():
+    assert ratchet.graduated_selectors("type-discipline-budget.json") == ()
+    assert ratchet.graduated_selectors("basedpyright-code-budget.json") == ()
+
+
+def test_a_selector_the_config_also_ignores_does_not_count_as_graduated():
+    lint = {"ignore": ["UP006"], "extend-select": ["UP006", "SIM118"]}
+    assert ratchet.selectors_hard_failed_by(lint) == ("SIM118",)
+
+
+def test_selectors_hard_failed_by_reads_a_config_with_no_ignore_list():
+    assert ratchet.selectors_hard_failed_by({"extend-select": ["UP006"]}) == ("UP006",)
 
 
 def test_deleted_budget_file_is_a_regression():

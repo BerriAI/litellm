@@ -1,21 +1,22 @@
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { organizationKeys, useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useQueryClient } from "@tanstack/react-query";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { useVisitedTabs } from "@/hooks/useVisitedTabs";
 import { MoneyCell } from "@/components/shared/table_cells";
 import CopyButton from "@/components/shared/CopyButton";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { teamDetailHref } from "@/utils/entityLinks";
 import { createTeamAliasMap } from "@/utils/teamUtils";
-import type { ColumnsType } from "antd/es/table";
+import { BadgeLink } from "@/components/shared/BadgeLink";
 import { ArrowLeft } from "lucide-react";
 import React, { useMemo, useState } from "react";
-import MemberTable from "../common_components/MemberTable";
+import MemberTable, { type MemberTableColumn } from "../common_components/MemberTable";
 import UserSearchModal from "../common_components/user_search_modal";
-import NotificationsManager from "../molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import {
   Member,
   organizationMemberAddCall,
@@ -25,6 +26,7 @@ import {
 import ObjectPermissionsView from "../object_permissions_view";
 import MemberModal from "../team/EditMembership";
 import { OrgSettingsForm } from "./org-settings/OrgSettingsForm";
+import { ORGANIZATION_TAB_URL_KEY, ORGANIZATION_TABS, type OrganizationTab } from "./organizationTabs";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -33,7 +35,6 @@ interface OrganizationInfoProps {
   is_org_admin: boolean;
   is_proxy_admin: boolean;
   userModels: string[];
-  editOrg: boolean;
 }
 
 const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
@@ -43,7 +44,6 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   is_org_admin,
   is_proxy_admin,
   userModels,
-  editOrg,
 }) => {
   const queryClient = useQueryClient();
   const { data: orgData, isLoading: loading } = useOrganization(organizationId);
@@ -53,9 +53,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const [selectedEditMember, setSelectedEditMember] = useState<Member | null>(null);
   const canEditOrg = is_org_admin || is_proxy_admin;
   const { data: teams } = useTeams();
-  const { onTabChange, hasVisited } = useVisitedTabs(editOrg ? "settings" : "overview");
+  const [tab, setTab] = useUrlTab(ORGANIZATION_TABS, "overview", ORGANIZATION_TAB_URL_KEY);
+  const { onTabChange, hasVisited } = useVisitedTabs(tab);
 
   const teamAliasMap = useMemo(() => createTeamAliasMap(teams), [teams]);
+
+  const handleTabChange = (value: OrganizationTab) => {
+    setTab(value);
+    onTabChange(value);
+  };
 
   const handleMemberAdd = async (values: any) => {
     try {
@@ -68,13 +74,13 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         user_id: values.user_id,
         role: values.role,
       };
-      const response = await organizationMemberAddCall(accessToken, organizationId, member);
+      await organizationMemberAddCall(accessToken, organizationId, member);
 
-      NotificationsManager.success("Organization member added successfully");
+      toast.success("Organization member added successfully");
       setIsAddMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to add organization member");
+      toast.fromError("Failed to add organization member");
       console.error("Error adding organization member:", error);
     }
   };
@@ -89,12 +95,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         role: values.role,
       };
 
-      const response = await organizationMemberUpdateCall(accessToken, organizationId, member);
-      NotificationsManager.success("Organization member updated successfully");
+      await organizationMemberUpdateCall(accessToken, organizationId, member);
+      toast.success("Organization member updated successfully");
       setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to update organization member");
+      toast.fromError("Failed to update organization member");
       console.error("Error updating organization member:", error);
     }
   };
@@ -104,11 +110,11 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
       if (!accessToken) return;
 
       await organizationMemberDeleteCall(accessToken, organizationId, values.user_id);
-      NotificationsManager.success("Organization member deleted successfully");
+      toast.success("Organization member deleted successfully");
       setIsEditMemberModalVisible(false);
       queryClient.invalidateQueries({ queryKey: organizationKeys.all });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to delete organization member");
+      toast.fromError("Failed to delete organization member");
       console.error("Error deleting organization member:", error);
     }
   };
@@ -121,23 +127,23 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     return <div className="p-4">Organization not found</div>;
   }
 
-  const orgExtraColumns: ColumnsType<Member> = [
+  const orgMemberById = new Map((orgData.members || []).map((m) => [m.user_id, m]));
+  const orgMemberFor = (record: Member) => (record.user_id != null ? orgMemberById.get(record.user_id) : undefined);
+
+  const orgExtraColumns: MemberTableColumn[] = [
     {
       title: "Spend (USD)",
       key: "spend",
-      render: (_: unknown, record: Member) => {
-        const orgMember =
-          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
-        return <MoneyCell value={orgMember?.spend} decimals={4} />;
-      },
+      sortValue: (record: Member) => orgMemberFor(record)?.spend ?? null,
+      render: (record: Member) => <MoneyCell value={orgMemberFor(record)?.spend} decimals={4} />,
     },
     {
       title: "Created At",
       key: "created_at",
-      render: (_: unknown, record: Member) => {
-        const orgMember =
-          record.user_id != null ? (orgData.members || []).find((m) => m.user_id === record.user_id) : undefined;
-        return <span>{orgMember?.created_at ? new Date(orgMember.created_at).toLocaleString() : "-"}</span>;
+      sortValue: (record: Member) => orgMemberFor(record)?.created_at ?? null,
+      render: (record: Member) => {
+        const createdAt = orgMemberFor(record)?.created_at;
+        return <span>{createdAt ? new Date(createdAt).toLocaleString() : "-"}</span>;
       },
     },
   ];
@@ -158,7 +164,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         </div>
       </div>
 
-      <Tabs defaultValue={editOrg ? "settings" : "overview"} onValueChange={onTabChange} className="mb-4">
+      <Tabs value={tab} onValueChange={handleTabChange} className="mb-4">
         <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
           <TabsTrigger value="overview" className="flex-none rounded-none px-4 py-2">
             Overview
@@ -206,8 +212,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               <CardContent>
                 <p className="text-sm text-muted-foreground">Rate Limits</p>
                 <div className="mt-2 text-sm text-foreground">
-                  <p>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</p>
-                  <p>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</p>
+                  <p>TPM: {orgData.litellm_budget_table.tpm_limit ?? "Unlimited"}</p>
+                  <p>RPM: {orgData.litellm_budget_table.rpm_limit ?? "Unlimited"}</p>
                   {orgData.litellm_budget_table.max_parallel_requests && (
                     <p>Max Parallel Requests: {orgData.litellm_budget_table.max_parallel_requests}</p>
                   )}
@@ -220,13 +226,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <p className="text-sm text-muted-foreground">Models</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {orgData.models.length === 0 ? (
-                    <Badge variant="secondary">All proxy models</Badge>
+                    <BadgeLink>All proxy models</BadgeLink>
                   ) : (
-                    orgData.models.map((model, index) => (
-                      <Badge key={index} variant="secondary">
-                        {model}
-                      </Badge>
-                    ))
+                    orgData.models.map((model, index) => <BadgeLink key={index}>{model}</BadgeLink>)
                   )}
                 </div>
               </CardContent>
@@ -237,9 +239,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <p className="text-sm text-muted-foreground">Teams</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {orgData.teams?.map((team, index) => (
-                    <Badge key={index} variant="secondary">
+                    <BadgeLink key={index} href={teamDetailHref(team.team_id)}>
                       {teamAliasMap[team.team_id] || team.team_id}
-                    </Badge>
+                    </BadgeLink>
                   ))}
                 </div>
               </CardContent>
@@ -256,10 +258,12 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
         <TabsContent keepMounted={hasVisited("members")} value="members" className="pt-4">
           <div className="space-y-4">
             <MemberTable
+              key={orgData.organization_id}
               members={(orgData.members || []).map((m) => ({
                 role: m.user_role || "",
                 user_id: m.user_id,
                 user_email: m.user_email,
+                user_alias: m.user?.user_alias ?? null,
               }))}
               canEdit={canEditOrg}
               onEdit={(member) => {
@@ -309,16 +313,14 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                     <p className="font-medium text-foreground">Models</p>
                     <div className="mt-1 flex flex-wrap gap-2">
                       {orgData.models.map((model, index) => (
-                        <Badge key={index} variant="secondary">
-                          {model}
-                        </Badge>
+                        <BadgeLink key={index}>{model}</BadgeLink>
                       ))}
                     </div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Rate Limits</p>
-                    <div>TPM: {orgData.litellm_budget_table.tpm_limit || "Unlimited"}</div>
-                    <div>RPM: {orgData.litellm_budget_table.rpm_limit || "Unlimited"}</div>
+                    <div>TPM: {orgData.litellm_budget_table.tpm_limit ?? "Unlimited"}</div>
+                    <div>RPM: {orgData.litellm_budget_table.rpm_limit ?? "Unlimited"}</div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Budget</p>

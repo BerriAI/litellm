@@ -6,12 +6,9 @@ by making actual API calls and validating JSON response format.
 """
 
 import json
-import os
-import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import pytest
 import litellm

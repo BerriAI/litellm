@@ -1,10 +1,38 @@
 "use client";
 
+import { CircleHelp } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import { Form, Input, Modal, Typography } from "antd";
-import type { MemoryRow } from "@/components/networking";
+import { z } from "zod/v4";
 
-const { Text } = Typography;
+import type { MemoryRow } from "@/components/networking";
+import { FieldGroup } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useZodForm } from "@/lib/forms/useZodForm";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+
+const memorySchema = z.object({
+  key: z.string().min(1, "Key is required"),
+  value: z.string().min(1, "Value is required"),
+  metadata: z.string(),
+});
+
+type MemoryFormValues = z.output<typeof memorySchema>;
+
+const labelWithHint = (label: React.ReactNode, hint: string): React.ReactNode => (
+  <>
+    {label}
+    <Tooltip>
+      <TooltipTrigger render={<CircleHelp className="size-3.5 shrink-0 cursor-help text-muted-foreground" />} />
+      <TooltipContent>{hint}</TooltipContent>
+    </Tooltip>
+  </>
+);
+
+const EMPTY_MEMORY: MemoryFormValues = { key: "", value: "", metadata: "" };
 
 interface MemoryEditModalProps {
   open: boolean;
@@ -15,81 +43,104 @@ interface MemoryEditModalProps {
 }
 
 export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, initialRow, onClose, onSave }) => {
-  const [form] = Form.useForm();
+  const form = useZodForm(memorySchema, { defaultValues: EMPTY_MEMORY, mode: "onChange" });
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     if (mode === "edit" && initialRow) {
-      form.setFieldsValue({
+      form.reset({
         key: initialRow.key,
         value: initialRow.value,
         metadata: initialRow.metadata != null ? JSON.stringify(initialRow.metadata, null, 2) : "",
       });
-    } else {
-      form.resetFields();
+      return;
     }
+    form.reset(EMPTY_MEMORY);
   }, [open, mode, initialRow, form]);
 
-  const handleOk = async () => {
-    const values = await form.validateFields();
+  const handleOk = form.handleSubmit(async (values) => {
     setSubmitting(true);
-    const ok = await onSave(values.key.trim(), values.value ?? "", values.metadata ?? "", mode === "create");
+    const ok = await onSave(values.key.trim(), values.value, values.metadata, mode === "create");
     setSubmitting(false);
-    if (ok) {
-      form.resetFields();
-      onClose();
-    }
-  };
+    if (!ok) return;
+    form.reset(EMPTY_MEMORY);
+    onClose();
+  });
 
   return (
-    <Modal
+    <Dialog
       open={open}
-      title={mode === "create" ? "Create memory" : `Edit ${initialRow?.key ?? ""}`}
-      onCancel={() => {
-        form.resetFields();
-        onClose();
+      onOpenChange={(open) => {
+        if (!open) {
+          form.reset(EMPTY_MEMORY);
+          onClose();
+        }
       }}
-      onOk={handleOk}
-      okText={mode === "create" ? "Create" : "Save"}
-      confirmLoading={submitting}
-      width={640}
-      destroyOnClose
     >
-      <Form form={form} layout="vertical">
-        <Form.Item
-          label="Key"
-          name="key"
-          rules={[{ required: true, message: "Key is required" }]}
-          tooltip="Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes)."
-        >
-          <Input placeholder="e.g. user_role" disabled={mode === "edit"} />
-        </Form.Item>
-        <Form.Item
-          label="Value"
-          name="value"
-          rules={[{ required: true, message: "Value is required" }]}
-          tooltip="Markdown/text injected into LLM context. Plain strings are fine."
-        >
-          <Input.TextArea rows={8} placeholder="What the agent should remember…" />
-        </Form.Item>
-        <Form.Item
-          label={
-            <span>
-              Metadata <Text type="secondary">(optional JSON)</Text>
-            </span>
-          }
-          name="metadata"
-          tooltip="Optional structured metadata — must be valid JSON if provided."
-        >
-          <Input.TextArea
-            rows={4}
-            placeholder='{"tags": ["example"]}'
-            style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
-          />
-        </Form.Item>
-      </Form>
-    </Modal>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[640px]">
+        <DialogHeader>
+          <DialogTitle>{mode === "create" ? "Create memory" : `Edit ${initialRow?.key ?? ""}`}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={(event) => event.preventDefault()} noValidate>
+          <TooltipProvider>
+            <FieldGroup>
+              <FormField
+                control={form.control}
+                name="key"
+                label={labelWithHint(
+                  "Key",
+                  "Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes).",
+                )}
+              >
+                {({ ref, ...field }) => (
+                  <Input {...field} ref={ref} placeholder="e.g. user_role" disabled={mode === "edit"} />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="value"
+                label={labelWithHint("Value", "Markdown/text injected into LLM context. Plain strings are fine.")}
+              >
+                {({ ref, ...field }) => (
+                  <Textarea {...field} ref={ref} rows={8} placeholder="What the agent should remember…" />
+                )}
+              </FormField>
+
+              <FormField
+                control={form.control}
+                name="metadata"
+                label={labelWithHint(
+                  <span>
+                    Metadata <span className="text-muted-foreground">(optional JSON)</span>
+                  </span>,
+                  "Optional structured metadata — must be valid JSON if provided.",
+                )}
+              >
+                {({ ref, ...field }) => (
+                  <Textarea {...field} ref={ref} rows={4} placeholder='{"tags": ["example"]}' className="font-mono" />
+                )}
+              </FormField>
+            </FieldGroup>
+          </TooltipProvider>
+        </form>
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => {
+              form.reset(EMPTY_MEMORY);
+              onClose();
+            }}
+          >
+            Cancel
+          </Button>
+          <Button onClick={handleOk} disabled={submitting} aria-busy={submitting}>
+            {mode === "create" ? "Create" : "Save"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 };
 

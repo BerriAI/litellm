@@ -10,12 +10,14 @@ export interface ProjectUpdateParams {
   description?: string;
   team_id?: string;
   models?: string[];
-  max_budget?: number;
+  max_budget?: number | null;
   blocked?: boolean;
   guardrails?: string[];
   metadata?: Record<string, unknown>;
   model_rpm_limit?: Record<string, number>;
   model_tpm_limit?: Record<string, number>;
+  model_itpm_limit?: Record<string, number>;
+  model_otpm_limit?: Record<string, number>;
 }
 
 // ── Fetch function ───────────────────────────────────────────────────────────

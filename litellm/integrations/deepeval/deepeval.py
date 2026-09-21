@@ -1,4 +1,7 @@
 import os
+from typing import Final
+
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.api import Api, Endpoints, HttpMethods
@@ -12,7 +15,6 @@ from litellm.integrations.deepeval.utils import (
     to_zod_compatible_iso,
     validate_environment,
 )
-from litellm._logging import verbose_logger
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
@@ -21,7 +23,7 @@ class DeepEvalLogger(CustomLogger):
     """Logs litellm traces to DeepEval's platform."""
 
     def __init__(self, *args, **kwargs):
-        api_key = os.getenv("CONFIDENT_API_KEY")
+        api_key: Final = os.getenv("CONFIDENT_API_KEY")
         self.litellm_environment = os.getenv("LITELM_ENVIRONMENT", "development")
         validate_environment(self.litellm_environment)
         if not api_key:
@@ -46,17 +48,17 @@ class DeepEvalLogger(CustomLogger):
         await self._async_event_handler(kwargs, response_obj, start_time, end_time, is_success=True)
 
     def _prepare_trace_api(self, kwargs, response_obj, start_time, end_time, is_success):
-        _start_time = to_zod_compatible_iso(start_time)
-        _end_time = to_zod_compatible_iso(end_time)
-        _standard_logging_object = kwargs.get("standard_logging_object", {})
-        base_api_span = self._create_base_api_span(
+        _start_time: Final = to_zod_compatible_iso(start_time)
+        _end_time: Final = to_zod_compatible_iso(end_time)
+        _standard_logging_object: Final = kwargs.get("standard_logging_object", {})
+        base_api_span: Final = self._create_base_api_span(
             kwargs,
             standard_logging_object=_standard_logging_object,
             start_time=_start_time,
             end_time=_end_time,
             is_success=is_success,
         )
-        trace_api = self._create_trace_api(
+        trace_api: Final = self._create_trace_api(
             base_api_span,
             standard_logging_object=_standard_logging_object,
             start_time=_start_time,
@@ -74,9 +76,9 @@ class DeepEvalLogger(CustomLogger):
         return body
 
     def _sync_event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
-        body = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
+        body: Final = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
         try:
-            response = self.api.send_request(
+            response: Final = self.api.send_request(
                 method=HttpMethods.POST,
                 endpoint=Endpoints.TRACING_ENDPOINT,
                 body=body,
@@ -86,8 +88,8 @@ class DeepEvalLogger(CustomLogger):
         verbose_logger.debug("DeepEvalLogger: sync_log_failure_event: Api response %s", response)
 
     async def _async_event_handler(self, kwargs, response_obj, start_time, end_time, is_success):
-        body = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
-        response = await self.api.a_send_request(
+        body: Final = self._prepare_trace_api(kwargs, response_obj, start_time, end_time, is_success)
+        response: Final = await self.api.a_send_request(
             method=HttpMethods.POST,
             endpoint=Endpoints.TRACING_ENDPOINT,
             body=body,
@@ -97,7 +99,7 @@ class DeepEvalLogger(CustomLogger):
 
     def _create_base_api_span(self, kwargs, standard_logging_object, start_time, end_time, is_success):
         # extract usage
-        usage = standard_logging_object.get("response", {}).get("usage", {})
+        usage: Final = standard_logging_object.get("response", {}).get("usage", {})
         if is_success:
             output = (
                 standard_logging_object.get("response", {})

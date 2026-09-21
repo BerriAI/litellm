@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -13,11 +13,25 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def fal_images_to_image_objects(images: object) -> tuple[ImageObject, ...]:
+    if not isinstance(images, list):
+        return ()
+    return tuple(
+        ImageObject(url=image_data.get("url", None), b64_json=image_data.get("b64_json", None))
+        if isinstance(image_data, dict)
+        else ImageObject(url=image_data, b64_json=None)
+        for image_data in images
+        if isinstance(image_data, (dict, str))
+    )
 
 
 class FalAIBaseConfig(BaseImageGenerationConfig):
@@ -31,12 +45,12 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete url for the request
@@ -54,13 +68,13 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        final_api_key: Optional[str] = api_key or get_secret_str("FAL_AI_API_KEY")
+        final_api_key: Final[str | None] = api_key or get_secret_str("FAL_AI_API_KEY")
         if not final_api_key:
             raise ValueError("FAL_AI_API_KEY is not set")
 
@@ -76,15 +90,15 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "tiktoken.Encoding | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the image generation response to the litellm image response
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -94,26 +108,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
-        # Handle fal.ai response format
-        images = response_data.get("images", [])
-        if isinstance(images, list):
-            for image_data in images:
-                if isinstance(image_data, dict):
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data.get("url", None),
-                            b64_json=image_data.get("b64_json", None),
-                        )
-                    )
-                elif isinstance(image_data, str):
-                    # If images is just a list of URLs
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data,
-                            b64_json=None,
-                        )
-                    )
-
+        model_response.data.extend(fal_images_to_image_objects(response_data.get("images", ())))
         return model_response
 
 
@@ -122,7 +117,7 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
     Default Fal AI image generation configuration for generic models.
     """
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for fal.ai image generation
         """
@@ -139,9 +134,9 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        supported_params = self.get_supported_openai_params(model)
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        supported_params: Final = self.get_supported_openai_params(model)
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     optional_params[k] = non_default_params[k]
                 elif drop_params:
@@ -164,7 +159,7 @@ class FalAIImageGenerationConfig(FalAIBaseConfig):
         """
         Transform the image generation request to the fal.ai image generation request body
         """
-        fal_ai_image_generation_request_body = {
+        fal_ai_image_generation_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }

@@ -6,14 +6,11 @@ BEFORE a polling ID is created, so rate-limited requests get a
 synchronous error instead of a polling ID that immediately fails.
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, Request, Response
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
@@ -90,7 +87,7 @@ class TestSkipPreCallLogic:
                 await processor.base_process_llm_request(
                     request=MagicMock(spec=Request),
                     fastapi_response=MagicMock(spec=Response),
-                    user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     route_type="aresponses",
                     proxy_logging_obj=mock_proxy_logging,
                     llm_router=MagicMock(),
@@ -133,7 +130,6 @@ class TestPollingEndpointPreCallGuard:
             "litellm.proxy.proxy_server.proxy_config": MagicMock(),
             "litellm.proxy.proxy_server.proxy_logging_obj": AsyncMock(),
             "litellm.proxy.proxy_server.redis_usage_cache": AsyncMock(),
-            "litellm.proxy.proxy_server.select_data_generator": None,
             "litellm.proxy.proxy_server.user_api_base": None,
             "litellm.proxy.proxy_server.user_max_tokens": None,
             "litellm.proxy.proxy_server.user_model": None,

@@ -1,15 +1,10 @@
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.containers.main import (
@@ -156,6 +151,42 @@ class TestContainerAPI:
             assert isinstance(response, ContainerObject)
             assert response.id == "cntr_async_123"
             assert response.name == "Async Test Container"
+
+    @pytest.mark.asyncio
+    async def test_acreate_container_encodes_router_model_id(self):
+        """
+        The async handler returns a coroutine, so the managed-ID encoding must run
+        after it resolves. Otherwise follow-up calls (retrieve/delete/files) lose the
+        deployment and fall back to global provider credentials.
+        """
+        upstream_response = ContainerObject(
+            id="cntr_upstream_123",
+            object="container",
+            created_at=1747857508,
+            status="running",
+            expires_after={"anchor": "last_active_at", "minutes": 20},
+            last_active_at=1747857508,
+            name="Routed Container",
+        )
+
+        async def _resolve_upstream():
+            return upstream_response
+
+        with patch.object(  # test-quality-ok: create_container exposes no client seam, only the handler
+            base_llm_http_handler,
+            "container_create_handler",
+            side_effect=lambda **kwargs: _resolve_upstream() if kwargs["_is_async"] else upstream_response,
+        ):
+            response = await acreate_container(
+                name="Routed Container",
+                custom_llm_provider="openai",
+                litellm_metadata={"model_info": {"id": "deployment-abc"}},
+            )
+
+        decoded = ResponsesAPIRequestUtils._decode_container_id(response.id)
+        assert decoded["model_id"] == "deployment-abc"
+        assert decoded["custom_llm_provider"] == "openai"
+        assert decoded["response_id"] == "cntr_upstream_123"
 
     @pytest.mark.asyncio
     async def test_alist_containers_basic(self):
@@ -384,7 +415,7 @@ class TestContainerAPI:
             "container_create_handler",
             side_effect=Exception("API Error"),
         ):
-            with pytest.raises(Exception):
+            with pytest.raises(litellm.APIConnectionError):
                 create_container(
                     name="Error Test Container", custom_llm_provider="openai"
                 )

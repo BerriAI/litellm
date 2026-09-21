@@ -1,0 +1,1 @@
+Prints every collected Python call under litellm/ from live traces against replayed HTTP responses. API-key and Vertex credentials scenarios exercise separate authentication paths; credentials scenarios replay the token exchange locally.

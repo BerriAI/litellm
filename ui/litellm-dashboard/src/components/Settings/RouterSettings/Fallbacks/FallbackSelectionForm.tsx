@@ -4,11 +4,11 @@
  * Decoupled from form submission logic
  */
 
-import { Button } from "@tremor/react";
-import { Tabs } from "antd";
-import { Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Plus, X } from "lucide-react";
 import React, { useEffect, useState } from "react";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
 
 interface FallbackSelectionFormProps {
@@ -61,7 +61,7 @@ export function FallbackSelectionForm({
 
   const handleRemoveGroup = (targetId: string) => {
     if (groups.length === 1) {
-      MessageManager.warning("At least one group is required");
+      toast.warning("At least one group is required");
       return;
     }
     const newGroups = groups.filter((g) => g.id !== targetId);
@@ -76,29 +76,15 @@ export function FallbackSelectionForm({
     onGroupsChange(newGroups);
   };
 
-  // Generate tab items
-  const items = groups.map((group, index) => {
-    const label = group.primaryModel ? group.primaryModel : `Group ${index + 1}`;
-    return {
-      key: group.id,
-      label: label,
-      closable: groups.length > 1, // Only allow closing if there's more than 1 group
-      children: (
-        <FallbackGroupConfig
-          group={group}
-          onChange={handleGroupUpdate}
-          availableModels={availableModels}
-          maxFallbacks={maxFallbacks}
-        />
-      ),
-    };
-  });
+  const groupLabel = (group: FallbackGroup, index: number) =>
+    group.primaryModel ? group.primaryModel : `Group ${index + 1}`;
 
   if (groups.length === 0) {
     return (
-      <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-        <p className="text-gray-500 mb-4">No fallback groups configured</p>
-        <Button variant="primary" onClick={handleAddGroup} icon={() => <Plus className="w-4 h-4" />}>
+      <div className="text-center py-12 bg-muted rounded-lg border border-dashed border-border">
+        <p className="text-muted-foreground mb-4">No fallback groups configured</p>
+        <Button onClick={handleAddGroup}>
+          <Plus className="w-4 h-4" />
           Create First Group
         </Button>
       </div>
@@ -106,22 +92,47 @@ export function FallbackSelectionForm({
   }
 
   return (
-    <Tabs
-      type="editable-card"
-      activeKey={activeKey}
-      onChange={setActiveKey}
-      onEdit={(targetKey, action) => {
-        if (action === "add") handleAddGroup();
-        else if (action === "remove" && groups.length > 1) {
-          handleRemoveGroup(targetKey as string);
-        }
-      }}
-      items={items}
-      className="fallback-tabs"
-      tabBarStyle={{
-        marginBottom: 0,
-      }}
-      hideAdd={groups.length >= maxGroups}
-    />
+    <Tabs value={activeKey} onValueChange={setActiveKey}>
+      <div className="flex items-center border-b">
+        <TabsList variant="line" className="h-auto justify-start rounded-none p-0">
+          {groups.map((group, index) => (
+            <div key={group.id} className="relative flex items-center">
+              <TabsTrigger
+                value={group.id}
+                className={`flex-none rounded-none py-2 pl-4 ${groups.length > 1 ? "pr-9" : "pr-4"}`}
+              >
+                {groupLabel(group, index)}
+              </TabsTrigger>
+              {groups.length > 1 && (
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="absolute right-1"
+                  aria-label={`Remove ${groupLabel(group, index)}`}
+                  onClick={() => handleRemoveGroup(group.id)}
+                >
+                  <X />
+                </Button>
+              )}
+            </div>
+          ))}
+        </TabsList>
+        {groups.length < maxGroups && (
+          <Button variant="ghost" size="icon-sm" aria-label="Add fallback group" onClick={handleAddGroup}>
+            <Plus />
+          </Button>
+        )}
+      </div>
+      {groups.map((group) => (
+        <TabsContent key={group.id} value={group.id} className="pt-4">
+          <FallbackGroupConfig
+            group={group}
+            onChange={handleGroupUpdate}
+            availableModels={availableModels}
+            maxFallbacks={maxFallbacks}
+          />
+        </TabsContent>
+      ))}
+    </Tabs>
   );
 }

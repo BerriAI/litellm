@@ -15,15 +15,17 @@
 # enough to invoke Cloud Run admin APIs (`gcloud auth login`).
 
 resource "terraform_data" "migration" {
+  count = var.create_runtime ? 1 : 0
+
   triggers_replace = {
-    job_id    = google_cloud_run_v2_job.migrations.id
+    job_id    = google_cloud_run_v2_job.migrations[0].id
     job_image = local.migrations_image
   }
 
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
     environment = {
-      JOB     = google_cloud_run_v2_job.migrations.name
+      JOB     = google_cloud_run_v2_job.migrations[0].name
       REGION  = var.region
       PROJECT = var.project_id
     }

@@ -8,7 +8,6 @@ Verifies:
 """
 
 import os
-import sys
 import time
 from unittest.mock import AsyncMock, patch
 
@@ -16,7 +15,6 @@ import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(0, os.path.abspath("../.."))
 
 import uuid
 from litellm.caching.dual_cache import DualCache

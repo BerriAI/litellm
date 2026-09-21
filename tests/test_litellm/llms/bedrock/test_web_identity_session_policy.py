@@ -32,9 +32,14 @@ action.
 import base64
 import json
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import TypeAdapter
+
+from litellm.llms.bedrock.base_aws_llm import WebIdentitySessionPolicy, _SessionPolicyStatement
 
 # Actions the Claude Platform on AWS service is documented to call.
 # Source: AWS IAM action reference + the #27678 surface area.
@@ -49,9 +54,9 @@ _CLAUDE_PLATFORM_ACTIONS = {
 }
 
 
-def _captured_policy() -> dict:
-    """Run _auth_with_web_identity_token under mocks + return the parsed
-    Policy dict that was actually sent to STS."""
+def _captured_policy_document() -> str:
+    """Run _auth_with_web_identity_token under mocks + return the Policy
+    JSON document that was actually sent to STS."""
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
     base = BaseAWSLLM()
@@ -84,11 +89,21 @@ def _captured_policy() -> dict:
 
     mock_sts.assume_role_with_web_identity.assert_called_once()
     kwargs = mock_sts.assume_role_with_web_identity.call_args.kwargs
-    policy_str = kwargs["Policy"]
-    return json.loads(policy_str)
+    return kwargs["Policy"]
 
 
-def _statement_by_sid(policy: dict, sid: str) -> dict:
+_SESSION_POLICY_ADAPTER: Final = TypeAdapter(WebIdentitySessionPolicy)
+
+
+def _captured_policy() -> WebIdentitySessionPolicy:
+    return _SESSION_POLICY_ADAPTER.validate_python(json.loads(_captured_policy_document()))
+
+
+def _granted_actions(policy: WebIdentitySessionPolicy) -> frozenset[str]:
+    return frozenset(action for stmt in policy["Statement"] for action in stmt["Action"])
+
+
+def _statement_by_sid(policy: WebIdentitySessionPolicy, sid: str) -> _SessionPolicyStatement:
     for stmt in policy["Statement"]:
         if stmt.get("Sid") == sid:
             return stmt
@@ -102,7 +117,6 @@ class TestWebIdentitySessionPolicyShape:
     def test_policy_parses_as_valid_iam_document(self):
         policy = _captured_policy()
         assert policy["Version"] == "2012-10-17"
-        assert isinstance(policy["Statement"], list)
         assert len(policy["Statement"]) >= 2
 
     def test_bedrock_statement_actions_preserved(self):
@@ -117,6 +131,19 @@ class TestWebIdentitySessionPolicyShape:
         ):
             assert required in actions, f"{required} missing from BedrockLiteLLM"
 
+    def test_bedrock_count_tokens_action_present(self):
+        """Regression for #33142: the CountTokens handler authorizes
+        against ``bedrock:CountTokens``, so the session-policy ceiling
+        must grant it or every count-tokens request via OIDC auth 403s
+        even when the role's identity policy allows it."""
+        policy = _captured_policy()
+        bedrock_stmt = _statement_by_sid(policy, "BedrockLiteLLM")
+        actions = set(bedrock_stmt["Action"])
+        assert "bedrock:CountTokens" in actions, (
+            "bedrock:CountTokens missing from BedrockLiteLLM — "
+            "count-tokens requests will 403 on OIDC auth"
+        )
+
 
 class TestClaudePlatformActionsCovered:
     """The #30200 bug: every action in the claude_platform service
@@ -124,16 +151,7 @@ class TestClaudePlatformActionsCovered:
 
     @pytest.mark.parametrize("action", sorted(_CLAUDE_PLATFORM_ACTIONS))
     def test_claude_platform_action_present(self, action: str):
-        policy = _captured_policy()
-        # Action may live in any Statement — search across all.
-        all_actions: set = set()
-        for stmt in policy["Statement"]:
-            stmt_actions = stmt.get("Action")
-            if isinstance(stmt_actions, str):
-                all_actions.add(stmt_actions)
-            elif isinstance(stmt_actions, list):
-                all_actions.update(stmt_actions)
-        assert action in all_actions, (
+        assert action in _granted_actions(_captured_policy()), (
             f"{action} missing from session policy — "
             f"bedrock/claude_platform/* requests will 403 on OIDC auth"
         )
@@ -166,15 +184,7 @@ class TestBedrockMantleActionsCovered:
     action" even when the role's identity policy grants it."""
 
     def test_bedrock_mantle_create_inference_present(self):
-        policy = _captured_policy()
-        all_actions: set = set()
-        for stmt in policy["Statement"]:
-            stmt_actions = stmt.get("Action")
-            if isinstance(stmt_actions, str):
-                all_actions.add(stmt_actions)
-            elif isinstance(stmt_actions, list):
-                all_actions.update(stmt_actions)
-        assert "bedrock-mantle:CreateInference" in all_actions, (
+        assert "bedrock-mantle:CreateInference" in _granted_actions(_captured_policy()), (
             "bedrock-mantle:CreateInference missing from session policy — "
             "bedrock_mantle/* requests will 403 on OIDC/WIF auth"
         )
@@ -220,7 +230,7 @@ class TestInvalidIdentityTokenSurfacesAudience:
     operator can diagnose the mismatch without enabling LITELLM_LOG=DEBUG on a
     prod instance."""
 
-    _AUD = "https://guidepoint.litellm-prod.ai"
+    _AUD = "https://gateway.example.com"
     _ISS = "https://accounts.google.com"
     _STS_MESSAGE = (
         "An error occurred (InvalidIdentityToken) when calling the "
@@ -295,3 +305,44 @@ class TestPolicyTransportConditions:
             "ClaudePlatformLiteLLM must require aws:SecureTransport=true "
             "to keep parity with the bedrock statement"
         )
+
+
+_STS_SESSION_POLICY_PLAINTEXT_LIMIT: Final = 2048
+
+_BEDROCK_ROUTE_ACTIONS: Final = MappingProxyType(
+    {
+        "model/{model_id}/invoke": "bedrock:InvokeModel",
+        "model/{model_id}/invoke-with-response-stream": "bedrock:InvokeModelWithResponseStream",
+        "model/{model_id}/converse": "bedrock:InvokeModel",
+        "model/{model_id}/converse-stream": "bedrock:InvokeModelWithResponseStream",
+        "model/{model_id}/count-tokens": "bedrock:CountTokens",
+        "guardrail/{guardrail_id}/version/{version}/apply": "bedrock:ApplyGuardrail",
+        "rerank": "bedrock:Rerank",
+        "knowledgebases/{knowledge_base_id}/retrieve": "bedrock:Retrieve",
+        "knowledgebases": "bedrock:ListKnowledgeBases",
+        "agents/{agent_id}/agentAliases/{alias_id}/sessions/{session_id}/text": "bedrock:InvokeAgent",
+        "runtimes/{agent_runtime_arn}/invocations": "bedrock-agentcore:InvokeAgentRuntime",
+        "runtimes/{agent_runtime_arn}/invocations with X-Amzn-Bedrock-AgentCore-Runtime-User-Id": (
+            "bedrock-agentcore:InvokeAgentRuntimeForUser"
+        ),
+        "mcp": "bedrock-agentcore:InvokeGateway",
+    }
+)
+
+
+class TestSessionPolicyGrantsEveryBedrockRoute:
+    """LIT-7348: ``/rerank`` authorizes against ``bedrock:Rerank``, which the
+    ceiling never granted, so rerank 403d on web identity auth while static
+    credentials and IRSA worked. Each route the bedrock package signs with the
+    web identity session maps to the IAM action it authorizes against, and the
+    ceiling must grant every one of them."""
+
+    @pytest.mark.parametrize(("route", "action"), sorted(_BEDROCK_ROUTE_ACTIONS.items()))
+    def test_route_action_is_granted_by_the_ceiling(self, route: str, action: str):
+        assert action in _granted_actions(_captured_policy()), (
+            f"/{route} authorizes against {action}, which the session policy does not grant, "
+            "so it 403s on web identity auth"
+        )
+
+    def test_policy_document_fits_the_sts_plaintext_limit(self):
+        assert len(_captured_policy_document()) <= _STS_SESSION_POLICY_PLAINTEXT_LIMIT

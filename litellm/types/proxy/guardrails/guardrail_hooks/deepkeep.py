@@ -1,12 +1,10 @@
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
 
 
 class DeepKeepGuardrailConfigModelOptionalParams(BaseModel):
-    unreachable_fallback: Optional[str] = Field(
+    unreachable_fallback: str | None = Field(
         default="fail_closed",
         description=(
             "Behavior when the DeepKeep API is unreachable. "
@@ -17,21 +15,21 @@ class DeepKeepGuardrailConfigModelOptionalParams(BaseModel):
 
 
 class DeepKeepGuardrailConfigModel(GuardrailConfigModel[DeepKeepGuardrailConfigModelOptionalParams]):
-    api_key: Optional[str] = Field(
+    api_key: str | None = Field(
         default=None,
         description=(
             "The API key for the DeepKeep AI Firewall. "
             "If not provided, the `DEEPKEEP_API_KEY` environment variable is checked."
         ),
     )
-    api_base: Optional[str] = Field(
+    api_base: str | None = Field(
         default=None,
         description=(
             "The API base URL for the DeepKeep AI Firewall. "
             "If not provided, the `DEEPKEEP_API_BASE` environment variable is checked."
         ),
     )
-    deepkeep_firewall_id: Optional[str] = Field(
+    deepkeep_firewall_id: str | None = Field(
         default=None,
         description=(
             "The DeepKeep Firewall ID to use for guardrail evaluation. "

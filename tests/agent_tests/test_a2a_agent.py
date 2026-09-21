@@ -40,7 +40,7 @@ class MockA2AClient:
             name="mock-agent", url="http://mock-agent.local"
         )
 
-    async def send_message(self, request):
+    async def send_message(self, request, *, context=None):
         from a2a.compat.v0_3.conversions import pb2_v10
 
         for text in ("hel", "hello"):
@@ -57,7 +57,7 @@ def mock_a2a_client(monkeypatch):
     import litellm.a2a_protocol.main as a2a_main
 
     async def _fake_create_a2a_client(
-        base_url, timeout=60.0, extra_headers=None, streaming=False
+        base_url, timeout=60.0, extra_headers=None, streaming=False, relative_card_path=None
     ):
         return MockA2AClient()
 

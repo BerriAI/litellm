@@ -1,5 +1,3 @@
-import os
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -7,9 +5,6 @@ from litellm._uuid import uuid
 from dotenv import load_dotenv
 
 load_dotenv()
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 import hashlib
 import random
@@ -741,8 +736,6 @@ def test_sync_responses_api_caching():
     # Step 1: Cache the responses API response
     caching_handler.sync_set_cache(result=responses_api_response, kwargs=kwargs)
 
-    time.sleep(0.5)
-
     # Step 2: Retrieve from cache
     cached_response = caching_handler._sync_get_cache(
         model=original_model,
@@ -875,7 +868,6 @@ def test_sync_get_cache_does_not_eagerly_log_streaming_responses_hits():
     }
 
     caching_handler.sync_set_cache(result=responses_api_response, kwargs=kwargs)
-    time.sleep(0.2)
 
     cached_response = caching_handler._sync_get_cache(
         model=original_model,
@@ -920,7 +912,6 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
     }
 
     caching_handler.sync_set_cache(result=chat_completion_response, kwargs=kwargs)
-    time.sleep(0.2)
 
     cached_response = caching_handler._sync_get_cache(
         model=original_model,
@@ -936,24 +927,14 @@ def test_sync_get_cache_defers_streaming_completion_hit_callbacks():
 
 
 def test_should_defer_streaming_cache_hit_callbacks_for_any_streaming_request():
-    assert (
-        _should_defer_streaming_cache_hit_callbacks(
-            kwargs={"stream": True},
-        )
-        is True
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+    stream_replay = CustomStreamWrapper(
+        completion_stream=iter(()), model="gpt-4o", logging_obj=logging_obj
     )
-    assert (
-        _should_defer_streaming_cache_hit_callbacks(
-            kwargs={"stream": False},
-        )
-        is False
-    )
-    assert (
-        _should_defer_streaming_cache_hit_callbacks(
-            kwargs={},
-        )
-        is False
-    )
+    assert _should_defer_streaming_cache_hit_callbacks(cached_result=stream_replay) is True
+    assert _should_defer_streaming_cache_hit_callbacks(cached_result=ModelResponse()) is False
+    assert _should_defer_streaming_cache_hit_callbacks(cached_result={"id": "msg_1"}) is False
 
 
 @pytest.mark.asyncio

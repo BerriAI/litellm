@@ -48,6 +48,7 @@ const CredentialsTable: React.FC<CredentialsTableProps> = ({
   return (
     <DataTable
       data={credentials}
+      paginationMode="client"
       columns={columns}
       getRowId={(credential, index) => credential.credential_name || String(index)}
       sortingMode="client"

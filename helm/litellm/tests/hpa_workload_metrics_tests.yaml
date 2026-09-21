@@ -1,0 +1,213 @@
+suite: test gateway HPA per-pod requests-per-second and tokens-per-second targets
+templates:
+  - gateway/hpa.yaml
+  - gateway/servicemonitor.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: scales on CPU and memory only by default
+    template: gateway/hpa.yaml
+    asserts:
+      - equal:
+          path: spec.metrics
+          value:
+            - type: Resource
+              resource:
+                name: cpu
+                target:
+                  type: Utilization
+                  averageUtilization: 70
+            - type: Resource
+              resource:
+                name: memory
+                target:
+                  type: Utilization
+                  averageUtilization: 80
+
+  - it: adds a requests-per-second Pods metric next to the resource metrics
+    template: gateway/hpa.yaml
+    set:
+      gateway.hpa.targetRequestsPerSecond: 90
+    asserts:
+      - lengthEqual:
+          path: spec.metrics
+          count: 3
+      - contains:
+          path: spec.metrics
+          content:
+            type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 70
+      - equal:
+          path: spec.metrics[2]
+          value:
+            type: Pods
+            pods:
+              metric:
+                name: litellm_requests_per_second
+              target:
+                type: AverageValue
+                averageValue: "90"
+      - notContains:
+          path: spec.metrics
+          content:
+            type: Pods
+            pods:
+              metric:
+                name: litellm_tokens_per_second
+          any: true
+
+  - it: adds a tokens-per-second Pods metric on its own
+    template: gateway/hpa.yaml
+    set:
+      gateway.hpa.targetTokensPerSecond: 6M
+    asserts:
+      - lengthEqual:
+          path: spec.metrics
+          count: 3
+      - equal:
+          path: spec.metrics[2]
+          value:
+            type: Pods
+            pods:
+              metric:
+                name: litellm_tokens_per_second
+              target:
+                type: AverageValue
+                averageValue: "6M"
+      - notContains:
+          path: spec.metrics
+          content:
+            type: Pods
+            pods:
+              metric:
+                name: litellm_requests_per_second
+          any: true
+
+  - it: renders requests and tokens targets together and keeps CPU and memory
+    template: gateway/hpa.yaml
+    set:
+      gateway.hpa.targetRequestsPerSecond: 90
+      gateway.hpa.targetTokensPerSecond: 6000000
+    asserts:
+      - lengthEqual:
+          path: spec.metrics
+          count: 4
+      - equal:
+          path: spec.metrics[0].resource.name
+          value: cpu
+      - equal:
+          path: spec.metrics[1].resource.name
+          value: memory
+      - equal:
+          path: spec.metrics[2].pods.metric.name
+          value: litellm_requests_per_second
+      - equal:
+          path: spec.metrics[3].pods.metric.name
+          value: litellm_tokens_per_second
+      - equal:
+          path: spec.metrics[3].pods.target.averageValue
+          value: "6000000"
+
+  - it: scales on workload metrics alone when the resource targets are cleared
+    template: gateway/hpa.yaml
+    set:
+      gateway.hpa.targetCPUUtilizationPercentage: null
+      gateway.hpa.targetMemoryUtilizationPercentage: null
+      gateway.hpa.targetRequestsPerSecond: 90
+      gateway.hpa.targetTokensPerSecond: 6000000
+    asserts:
+      - lengthEqual:
+          path: spec.metrics
+          count: 2
+      - notContains:
+          path: spec.metrics
+          content:
+            type: Resource
+          any: true
+      - equal:
+          path: spec.metrics[0].pods.metric.name
+          value: litellm_requests_per_second
+      - equal:
+          path: spec.metrics[1].pods.metric.name
+          value: litellm_tokens_per_second
+      - notMatchRegexRaw:
+          pattern: per_minute
+
+  - it: ignores the per-minute keys, which the chart never shipped
+    template: gateway/hpa.yaml
+    set:
+      gateway.hpa.targetRequestsPerMinute: 5400
+      gateway.hpa.targetTokensPerMinute: 360000000
+    asserts:
+      - lengthEqual:
+          path: spec.metrics
+          count: 2
+      - notContains:
+          path: spec.metrics
+          content:
+            type: Pods
+          any: true
+
+  - it: renders no ServiceMonitor by default
+    template: gateway/servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses a ServiceMonitor without the metrics server, whose http port needs a bearer token
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: gateway.serviceMonitor.enabled requires gateway.metricsServer.enabled
+
+  - it: scrapes each gateway pod through the metrics port
+    template: gateway/servicemonitor.yaml
+    release:
+      name: rel
+      namespace: llm
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.metricsServer.enabled: true
+      gateway.serviceMonitor.labels:
+        release: kube-prometheus-stack
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: metadata.labels.release
+          value: kube-prometheus-stack
+      - equal:
+          path: spec.selector.matchLabels
+          value:
+            app.kubernetes.io/name: litellm
+            app.kubernetes.io/instance: rel
+            app.kubernetes.io/component: gateway
+      - equal:
+          path: spec.namespaceSelector.matchNames
+          value:
+            - llm
+      - equal:
+          path: spec.endpoints
+          value:
+            - port: metrics
+              path: /metrics/
+              interval: 15s
+              scrapeTimeout: 10s
+              scheme: http
+
+  - it: honours a custom scrape interval
+    template: gateway/servicemonitor.yaml
+    set:
+      gateway.serviceMonitor.enabled: true
+      gateway.serviceMonitor.interval: 30s
+      gateway.metricsServer.enabled: true
+    asserts:
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s

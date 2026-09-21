@@ -594,15 +594,19 @@ def _build_control_plane_client(proxy_config: ProxyConfig):
         base_url=proxy_config.base_url,
         master_key=proxy_config.api_key,
         control_plane_base_url=proxy_config.base_url,
+        replica_urls=(proxy_config.base_url,),
     )
 
 
 def _register_deployment(proxy, deployment: CompatDeployment) -> str:
     """Register one deployment and return its proxy-assigned model_id
-    once it is servable on the data plane."""
+    once it is servable on the data plane. The aliases are shared by every
+    cell and, under xdist, by every worker, so no call to them belongs to
+    one test and none is cached: the matrix exists to reach real providers."""
     return proxy.create_model(
         deployment.model_name,
         deployment.litellm_params,
+        provider_live=True,
     )
 
 

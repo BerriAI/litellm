@@ -7,14 +7,9 @@ This test file verifies the fixes for Issue #19923:
 - Model metadata correctly reflects capabilities
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.llms.minimax.chat.transformation import MinimaxChatConfig
 from litellm.llms.openrouter.chat.transformation import OpenrouterConfig

@@ -1,14 +1,9 @@
 import json
-import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, safe_json_structure, strip_null_bytes
 
 
 def test_primitive_types():
@@ -230,3 +225,14 @@ def test_pydantic_base_model():
     assert len(result["healthy_endpoints"]) == 2
     assert result["healthy_endpoints"][0]["name"] == "test"
     assert result["healthy_endpoints"][1] == {"value": 1, "label": "one"}
+
+
+def test_safe_json_structure_keeps_tuples_and_drops_non_string_keys():
+    data = {"models": ("a", "b"), "tags": {"y", "x"}, 1: "dropped", "nested": {"deep": ("c",)}}
+
+    structure = safe_json_structure(data, value_transform=lambda key, value: value.upper())
+
+    assert isinstance(structure, dict)
+    assert structure == {"models": ("A", "B"), "tags": ["X", "Y"], "nested": {"deep": ("C",)}}
+    assert type(structure["models"]) is tuple
+    assert json.loads(safe_dumps(data)) == {"models": ["a", "b"], "tags": ["x", "y"], "nested": {"deep": ["c"]}}

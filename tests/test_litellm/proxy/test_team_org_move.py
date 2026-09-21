@@ -97,7 +97,7 @@ class TestValidateTeamOrgChange:
         team = _make_team(member_ids=["sso-user-001"])
         org = _make_org(members=[])
 
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(Exception, match='Cannot move team to organization\\. Team has user_id') as exc_info:
             validate_team_org_change(
                 team=team, organization=org, llm_router=router, is_proxy_admin=False
             )

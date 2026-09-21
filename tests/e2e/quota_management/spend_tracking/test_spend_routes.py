@@ -17,9 +17,11 @@ fast: no batch-write wait, no provider calls.
 """
 
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import pytest
 
+from e2e_http import ProbeResult
 from models import DateRangeParams
 from spend_e2e_client import SpendClient
 
@@ -72,6 +74,19 @@ SPEND_ROUTES = (
 
 _SPEND_PREFIXES = ("/spend", "/global/spend", "/global/activity")
 
+# Served from the MonthlyGlobalSpend / DailyTagSpend / Last30d* views, which the
+# proxy creates in the background once the schema migrations have landed, so on a
+# fresh database they can 500 for a while after the proxy starts serving.
+_VIEW_BACKED_ROUTES: Final = frozenset(
+    (
+        "/global/spend",
+        "/global/spend/keys",
+        "/global/spend/models",
+        "/global/spend/tags",
+        "/global/spend/logs",
+    )
+)
+
 
 def _date_range() -> DateRangeParams:
     # Satisfies date-required endpoints (report/activity/provider); ignored elsewhere.
@@ -80,9 +95,15 @@ def _date_range() -> DateRangeParams:
     return DateRangeParams(start_date=start.isoformat(), end_date=end.isoformat())
 
 
+def _probe(client: SpendClient, route: str) -> ProbeResult:
+    if route in _VIEW_BACKED_ROUTES:
+        return client.probe_until_healthy(route, params=_date_range())
+    return client.probe(route, params=_date_range())
+
+
 @pytest.mark.parametrize("route", SPEND_ROUTES)
 def test_spend_route_responsive(client: SpendClient, route: str) -> None:
-    result = client.probe(route, params=_date_range())
+    result = _probe(client, route)
     print(f"{route} -> {result.status_code}\n{result.body[:600]}")
     assert result.healthy, f"{route} -> {result.status_code}\n{result.body[:600]}"
 

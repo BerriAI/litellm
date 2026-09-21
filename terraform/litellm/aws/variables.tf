@@ -74,20 +74,63 @@ variable "ui_password" {
 }
 
 # ---------- Networking ----------
+#
+# Two modes:
+#
+#   1. Module-owned (default, `vpc_id = ""`): the stack creates a VPC, public
+#      and private subnets per AZ, an internet gateway, a NAT gateway, and
+#      the route tables wiring them together. `vpc_cidr` + `azs` drive it.
+#   2. Bring-your-own (`vpc_id` set): the stack creates no networking and
+#      places the ALB in `public_subnet_ids` and every task, plus the Aurora
+#      and ElastiCache subnet groups, in `private_subnet_ids`. `vpc_cidr` and
+#      `azs` are then unused.
+
+variable "vpc_id" {
+  description = <<-EOT
+    Existing VPC to deploy into. Leave empty ("") to have the module create
+    its own VPC, subnets, NAT gateway, and route tables. When set,
+    `public_subnet_ids` and `private_subnet_ids` are required and no
+    networking is created: the private subnets must already have egress
+    (NAT gateway or equivalent) so tasks can reach LLM providers, ECR/GHCR,
+    and Secrets Manager.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  description = "Existing public subnets for the ALB, in at least 2 AZs. Required when `vpc_id` is set, ignored otherwise."
+  type        = list(string)
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  description = "Existing private subnets for the ECS tasks, Aurora, and ElastiCache. Required when `vpc_id` is set, ignored otherwise."
+  type        = list(string)
+  default     = []
+}
+
+variable "additional_task_security_group_ids" {
+  description = <<-EOT
+    Extra security groups to attach to the ECS tasks, on top of the one the
+    module creates. Useful with `vpc_id`: attach a group your existing
+    database or cache already allows inbound from, instead of editing their
+    ingress rules.
+  EOT
+  type        = list(string)
+  default     = []
+}
 
 variable "vpc_cidr" {
-  description = "CIDR block for the VPC."
+  description = "CIDR block for the VPC the module creates. Unused when `vpc_id` is set."
   type        = string
   default     = "10.40.0.0/16"
 }
 
 variable "azs" {
-  description = "Availability zones to spread subnets across. At least 2 required for RDS and ALB."
+  description = "Availability zones to spread the module-created subnets across. At least 2 required for Aurora and the ALB. Unused when `vpc_id` is set."
   type        = list(string)
-  validation {
-    condition     = length(var.azs) >= 2
-    error_message = "Provide at least 2 availability zones."
-  }
+  default     = []
 }
 
 # ---------- Component images ----------
@@ -154,6 +197,44 @@ variable "gateway_num_workers" {
   validation {
     condition     = var.gateway_num_workers >= 1
     error_message = "gateway_num_workers must be >= 1."
+  }
+}
+
+variable "gateway_connection_pool_enabled" {
+  description = <<-EOT
+    Run an in-container PgBouncer (transaction mode, loopback) in each gateway
+    task, shared by every uvicorn worker. Without it each of the
+    `gateway_num_workers` workers opens its own Prisma pool straight to
+    Postgres, so a task's footprint against the database connection ceiling is
+    workers x connection_limit and grows with every task. Sets
+    LITELLM_PGBOUNCER_ENABLED / LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS /
+    LITELLM_PGBOUNCER_MAX_CLIENT_CONN on the gateway container only. Works with
+    the module-created Aurora too: the pooler mints the IAM token itself and
+    renews it before it expires.
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "gateway_pool_max_db_connections" {
+  description = "Upstream Postgres connections one gateway task may hold when gateway_connection_pool_enabled is set, regardless of gateway_num_workers. 20 suits 4 workers; a 5000-connection database then fits roughly 200 tasks."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.gateway_pool_max_db_connections >= 1
+    error_message = "gateway_pool_max_db_connections must be >= 1."
+  }
+}
+
+variable "gateway_pool_max_client_conn" {
+  description = "Client connections the in-container PgBouncer accepts from the gateway workers when gateway_connection_pool_enabled is set."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.gateway_pool_max_client_conn >= 1
+    error_message = "gateway_pool_max_client_conn must be >= 1."
   }
 }
 
@@ -229,6 +310,47 @@ variable "gateway_memory_target" {
   default     = 80
 }
 
+variable "gateway_target_requests_per_second" {
+  description = <<-EOT
+    Requests per second one gateway task should serve. Adds an
+    ALBRequestCountPerTarget target-tracking policy next to the CPU/memory
+    ones (Application Auto Scaling follows whichever asks for more tasks).
+    CloudWatch publishes that metric as a 1-minute count, so the policy
+    targets 60x this value and ECS reacts on a ~1 minute cadence. 0 skips
+    the policy.
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "gateway_target_tokens_per_second" {
+  description = <<-EOT
+    Tokens per second one gateway task should serve. Adds a target-tracking
+    policy on gateway_tokens_metric summed over each 60s period, divided by
+    60 and by the service's Container Insights RunningTaskCount. Tokens are
+    counted when a response completes, so the signal trails long streams.
+    0 skips the policy.
+  EOT
+  type        = number
+  default     = 0
+}
+
+variable "gateway_tokens_metric" {
+  description = <<-EOT
+    CloudWatch metric carrying the gateway's litellm_total_tokens_metric_total
+    counter, as published by the CloudWatch agent's Prometheus scraper (it
+    emits the delta between scrapes, so Sum over a period is the tokens
+    served in it). Required when gateway_target_tokens_per_second > 0.
+    dimensions must match the metric_declaration the agent publishes with.
+  EOT
+  type = object({
+    namespace  = string
+    name       = optional(string, "litellm_total_tokens_metric_total")
+    dimensions = optional(map(string), {})
+  })
+  default = null
+}
+
 variable "backend_autoscaling_enabled" {
   description = "Toggle Application Auto Scaling target-tracking on the backend service."
   type        = bool
@@ -279,6 +401,34 @@ variable "ui_cpu_target" {
 
 # ---------- RDS ----------
 
+variable "create_database" {
+  description = <<-EOT
+    Create the Aurora Postgres cluster (default). Set false to skip it and
+    either point the stack at an existing database via `database_url`, or
+    run without a database at all when `database_url` is also empty. The
+    DB-less mode drops key management, spend tracking, and the admin UI's
+    persistence: the proxy then serves traffic authenticated by
+    LITELLM_MASTER_KEY only.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "database_url" {
+  description = <<-EOT
+    Postgres connection string for an existing database, e.g.
+    `postgresql://user:pass@host:5432/litellm`. Only read when
+    `create_database = false`. Stored in a
+    `<tenant>-litellm-<env>-database-url` Secrets Manager entry and injected
+    into gateway, backend, and the migration task as DATABASE_URL, so the
+    value never lands in a task definition. The schema migration still runs
+    against it on every apply.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 variable "db_instance_class" {
   description = "Aurora instance class for both writer and reader."
   type        = string
@@ -310,6 +460,31 @@ variable "db_username" {
 }
 
 # ---------- Redis ----------
+
+variable "create_redis" {
+  description = <<-EOT
+    Create the ElastiCache Redis replication group (default). Set false to
+    skip it and either point the stack at an existing cache via `redis_url`,
+    or run with no Redis at all when `redis_url` is also empty. Without
+    Redis the proxy loses cross-task state: rate limits, budgets, and the
+    router's cooldowns become per-task instead of cluster-wide.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "redis_url" {
+  description = <<-EOT
+    Connection string for an existing Redis, e.g.
+    `rediss://:password@host:6379`. Only read when `create_redis = false`.
+    Stored in a `<tenant>-litellm-<env>-redis-url` Secrets Manager entry and
+    injected as REDIS_URL, which takes precedence over REDIS_HOST/REDIS_PORT
+    in the proxy.
+  EOT
+  type        = string
+  default     = ""
+  sensitive   = true
+}
 
 variable "redis_node_type" {
   description = "ElastiCache node type."
@@ -453,6 +628,44 @@ variable "proxy_config" {
   default     = {}
 }
 
+# ---------- Prometheus metrics sidecar ----------
+
+variable "gateway_metrics_port" {
+  description = <<-EOT
+    Serve Prometheus /metrics from a `metrics` sidecar container in the
+    gateway task on this port (1-65535, not 4000), so a scrape never runs on
+    an inference worker. The sidecar runs the gateway image with
+    `python -m litellm.proxy.prometheus_metrics_server` and aggregates the
+    workers' PROMETHEUS_MULTIPROC_DIR samples over a task volume. Null (the
+    default) leaves /metrics on the gateway port only. The sidecar port has
+    no virtual-key auth and is not routed through the ALB; open it to your
+    scrapers with gateway_metrics_scrape_cidrs. Needs gateway_image v1.101.0
+    or newer.
+  EOT
+  type        = number
+  default     = null
+
+  validation {
+    condition     = var.gateway_metrics_port == null || (var.gateway_metrics_port >= 1 && var.gateway_metrics_port <= 65535 && var.gateway_metrics_port != 4000)
+    error_message = "gateway_metrics_port must be between 1 and 65535 and must not be 4000 (the gateway port)."
+  }
+}
+
+variable "gateway_metrics_scrape_cidrs" {
+  description = <<-EOT
+    CIDR blocks allowed to reach gateway_metrics_port on the gateway tasks
+    (your Prometheus or collector subnets). Empty by default, so only the
+    ALB can reach the tasks. Ignored when gateway_metrics_port is null.
+  EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for c in var.gateway_metrics_scrape_cidrs : can(cidrnetmask(c))])
+    error_message = "gateway_metrics_scrape_cidrs must contain valid IPv4 CIDR blocks."
+  }
+}
+
 variable "log_retention_days" {
   description = "CloudWatch log retention for the three services."
   type        = number
@@ -594,4 +807,74 @@ variable "billing_metrics_ca_cert_pem" {
   type        = string
   default     = ""
   sensitive   = true
+}
+
+# ---------- Collector sidecar ----------
+#
+# Opt-in offload of spend tracking from the gateway's uvicorn workers to a
+# `python -m litellm.proxy.collector` sidecar in the same Fargate task (helm's
+# `gateway.collector`). Fargate awsvpc tasks share one network namespace,
+# so the sidecar listens on loopback TCP. Disabled (the default) adds nothing
+# to the task definition.
+
+variable "collector_enabled" {
+  description = "Run the collector sidecar next to the gateway container and have the gateway ship spend events to it (sets LITELLM_COLLECTOR_ENABLED=true on both). Autoscaling still targets the whole task's CPU/memory, sidecar included."
+  type        = bool
+  default     = false
+}
+
+variable "collector_port" {
+  description = "Loopback TCP port the sidecar listens on (LITELLM_COLLECTOR_ADDRESS=tcp://127.0.0.1:<port>)."
+  type        = number
+  default     = 4010
+
+  validation {
+    condition     = var.collector_port >= 1024 && var.collector_port <= 65535 && var.collector_port != 4000
+    error_message = "collector_port must be in 1024-65535 and not 4000."
+  }
+}
+
+variable "collector_cpu" {
+  description = "CPU units reserved for the sidecar container, carved out of gateway_cpu. Matches helm's collector.resources.requests.cpu (500m)."
+  type        = number
+  default     = 512
+}
+
+variable "collector_memory" {
+  description = "Hard memory limit (MiB) for the sidecar container, carved out of gateway_memory. Matches helm's collector.resources.limits.memory (2Gi)."
+  type        = number
+  default     = 2048
+}
+
+variable "collector_buffer_size" {
+  description = "Per-worker in-memory queue of spend events waiting to be shipped to the sidecar (LITELLM_COLLECTOR_BUFFER_SIZE)."
+  type        = number
+  default     = 1000
+
+  validation {
+    condition     = var.collector_buffer_size >= 1
+    error_message = "collector_buffer_size must be >= 1."
+  }
+}
+
+variable "collector_on_unavailable" {
+  description = "What the gateway does with spend events when the sidecar is unreachable or the buffer is full (LITELLM_COLLECTOR_ON_UNAVAILABLE): `fallback` runs the pipeline in-process, `drop` discards them."
+  type        = string
+  default     = "fallback"
+
+  validation {
+    condition     = contains(["fallback", "drop"], var.collector_on_unavailable)
+    error_message = "collector_on_unavailable must be one of: fallback, drop."
+  }
+}
+
+variable "collector_drain_timeout_seconds" {
+  description = "Seconds a gateway worker waits on shutdown for its buffered spend events to reach the sidecar (LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS)."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.collector_drain_timeout_seconds > 0
+    error_message = "collector_drain_timeout_seconds must be > 0."
+  }
 }

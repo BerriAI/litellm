@@ -42,14 +42,14 @@ at call time. The provider table below is the source of truth; edit `PROVIDERS` 
 | openai | `openai-realtime` | `openai/gpt-realtime-2` |
 | azure | `azure-realtime` | `azure/gpt-realtime-2` (GA protocol) |
 | gemini | `gemini-realtime` | `gemini/gemini-3.1-flash-live-preview` |
-| vertex_ai | `vertex-realtime` | `vertex_ai/gemini-live-2.5-flash-preview-native-audio-09-2025` |
+| vertex_ai | `vertex-realtime` | `vertex_ai/gemini-live-2.5-flash-native-audio` |
 
 Bedrock and xai (`xai/grok-4-1-fast-non-reasoning`) are supported by the proxy but
 kept commented out in `PROVIDERS` until they pass end-to-end here; re-enable them by
 uncommenting their entry.
 
 Every provider is provisioned and asserted; the suite never skips a provider. Per
-`tests/e2e/CLAUDE.md` there is no sanctioned skip: the whole-suite proxy-liveness
+`tests/e2e/AGENTS.md` there is no sanctioned skip: the whole-suite proxy-liveness
 probe hard-fails when no proxy answers, and a provider whose credentials or upstream
 realtime model are missing on the gateway is likewise a hard failure, not a skip.
 Give the gateway each provider's credentials to turn its tests green.

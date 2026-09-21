@@ -3,18 +3,17 @@ Unit tests for the MCPClient class - critical functionality only.
 """
 
 import base64
-import os
-import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, ANY
 
 # Add the project root to the path
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
-from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult
+from mcp.types import CallToolResult as MCPCallToolResult
+from mcp.types import ListToolsResult, PaginatedRequestParams
+from mcp.types import Tool as MCPTool
 
 
 def test_mcp_client_uses_configurable_default_timeout():
@@ -187,6 +186,80 @@ class TestMCPClientUnitTests:
         assert result == mock_tools
         mock_session_instance.initialize.assert_called_once()
         mock_session_instance.list_tools.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch.object(mcp_client_module, "streamable_http_client")  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
+    @patch.object(mcp_client_module, "ClientSession")  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
+    async def test_list_tools_follows_next_cursor_until_exhausted(
+        self,
+        mock_session_class,
+        mock_transport,
+    ):
+        """Test listing tools follows MCP pagination cursors until exhausted."""
+        mock_transport_ctx = AsyncMock()
+        mock_transport.return_value = mock_transport_ctx
+        mock_transport_instance = MagicMock()
+        mock_transport_ctx.__aenter__ = AsyncMock(return_value=mock_transport_instance)
+
+        mock_session_ctx = AsyncMock()
+        mock_session_class.return_value = mock_session_ctx
+        mock_session_instance = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+
+        first_page_tools = [
+            MCPTool(name=f"tool_{idx}", description=f"Tool {idx}", inputSchema={}) for idx in range(100)
+        ]
+        second_page_tool = MCPTool(
+            name="tool_100",
+            description="Tool 100",
+            inputSchema={},
+        )
+        mock_session_instance.list_tools.side_effect = [
+            ListToolsResult(tools=first_page_tools, nextCursor="page-2"),
+            ListToolsResult(tools=[second_page_tool]),
+        ]
+
+        client = MCPClient("http://example.com")
+        result = await client.list_tools()
+
+        assert result == [*first_page_tools, second_page_tool]
+        assert mock_session_instance.list_tools.call_count == 2
+        second_call_params = mock_session_instance.list_tools.call_args_list[1].kwargs["params"]
+        assert isinstance(second_call_params, PaginatedRequestParams)
+        assert second_call_params.cursor == "page-2"
+
+    @pytest.mark.asyncio
+    @patch.object(mcp_client_module, "streamable_http_client")  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
+    @patch.object(mcp_client_module, "ClientSession")  # test-quality-ok: exercises MCPClient wiring; the walk itself is covered sessionless in test_tools.py
+    async def test_list_tools_swallows_mid_walk_error_without_raise_on_error(
+        self,
+        mock_session_class,
+        mock_transport,
+    ):
+        """Test a mid-walk failure returns [] when raise_on_error is False."""
+        mock_transport_ctx = AsyncMock()
+        mock_transport.return_value = mock_transport_ctx
+        mock_transport_instance = MagicMock()
+        mock_transport_ctx.__aenter__ = AsyncMock(return_value=mock_transport_instance)
+
+        mock_session_ctx = AsyncMock()
+        mock_session_class.return_value = mock_session_ctx
+        mock_session_instance = AsyncMock()
+        mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_session_instance)
+
+        mock_session_instance.list_tools.side_effect = [
+            ListToolsResult(
+                tools=[MCPTool(name="tool_0", description="Tool 0", inputSchema={})],
+                nextCursor="page-2",
+            ),
+            RuntimeError("transient upstream failure"),
+        ]
+
+        client = MCPClient("http://example.com")
+        result = await client.list_tools()
+
+        assert result == []
+        assert mock_session_instance.list_tools.call_count == 2
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
