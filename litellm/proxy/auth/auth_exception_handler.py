@@ -19,7 +19,11 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.proxy.auth.auth_utils import (
+    _get_request_ip_address,
+    is_invalid_virtual_key_error,
+    mark_invalid_virtual_key_error,
+)
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage]  # canonical non-throwing request header reader
 )
@@ -38,6 +42,39 @@ if TYPE_CHECKING:
     Span = _Span | Any
 else:
     Span = Any
+
+
+def _as_proxy_exception(e: Exception) -> ProxyException:
+    """Convert an authentication failure into the ProxyException the client receives."""
+    if isinstance(e, litellm.BudgetExceededError):
+        return ProxyException(
+            message=e.message,
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+        )
+    if isinstance(e, HTTPException):
+        return ProxyException(
+            message=getattr(e, "detail", f"Authentication Error({e})"),
+            type=ProxyErrorTypes.auth_error,
+            param=getattr(e, "param", "None"),
+            code=getattr(e, "status_code", status.HTTP_401_UNAUTHORIZED),
+        )
+    if isinstance(e, ProxyException):
+        return e
+    if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+        return ProxyException(
+            message=PrismaDBExceptionHandler.database_unavailable_message(e),
+            type=ProxyErrorTypes.no_db_connection,
+            param="None",
+            code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return ProxyException(
+        message="Authentication Error, " + str(e),
+        type=ProxyErrorTypes.auth_error,
+        param=getattr(e, "param", "None"),
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
 
 
 def _with_auth_failure_metadata(

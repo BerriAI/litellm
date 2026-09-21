@@ -689,7 +689,7 @@ async def test_budget_auth_failure_logs_spend_metadata_from_request_header(
             {"allow_requests_on_db_unavailable": False},
         ),
     ):
-        with pytest.raises(ProxyException):
+        with pytest.raises(ProxyException) as exc_info:
             await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
                 BudgetExceededError(message="Budget exceeded", current_cost=100, max_budget=100),
                 request,
@@ -699,6 +699,8 @@ async def test_budget_auth_failure_logs_spend_metadata_from_request_header(
                 "sk-over-budget",
             )
 
+    assert exc_info.value.code == str(status.HTTP_429_TOO_MANY_REQUESTS)
+    assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
     logged_request_data = mock_hook.call_args.kwargs["request_data"]
     assert logged_request_data["metadata"]["spend_logs_metadata"] == expected_spend_logs_metadata
     assert logged_request_data["metadata"]["requester_ip_address"] == "10.1.2.3"
