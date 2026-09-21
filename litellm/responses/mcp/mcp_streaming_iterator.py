@@ -39,6 +39,19 @@ def _output_items(response: ResponsesAPIResponse) -> Sequence[object]:
     return tuple(cast("Sequence[object]", response.output))  # cast-ok: items are only carried, never inspected
 
 
+def _function_call_id(item: object) -> str | None:
+    """The call id of a function_call item, None for every other item kind."""
+    item_type: Final[object] = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+    if item_type != "function_call":
+        return None
+    call_id: Final[object] = (
+        item.get("call_id") or item.get("id")
+        if isinstance(item, dict)
+        else getattr(item, "call_id", None) or getattr(item, "id", None)
+    )
+    return call_id if isinstance(call_id, str) else None
+
+
 def _set_event_field(event: ResponsesAPIStreamingResponse, name: str, value: object) -> None:
     """Events are pydantic models with extra fields allowed, so any event type can carry the field."""
     setattr(event, name, value)
@@ -588,9 +601,14 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         return max(len(_output_items(response)), self._round_max_output_index + 1)
 
     def _absorb_round(self, response: ResponsesAPIResponse) -> None:
-        """Bank a finished round's items so the final response.completed can list them."""
+        """Bank a finished round's items, each function_call the gateway answered replaced by its mcp_call."""
         width: Final = self._round_output_width(response)
-        self._composed_output.extend(_output_items(response))
+        answered_call_ids: Final = frozenset(
+            call_id for result in self.tool_results if (call_id := result.get("tool_call_id")) is not None
+        )
+        self._composed_output.extend(
+            item for item in _output_items(response) if _function_call_id(item) not in answered_call_ids
+        )
         self._composed_output.extend(self._pending_mcp_call_items)
         self._output_index_offset += width + len(self._pending_mcp_call_items)
         self._pending_mcp_call_items.clear()
@@ -842,6 +860,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     **{  # mutable-ok: consumed once by the model constructor
                         "id": item_id,
                         "type": "mcp_call",
+                        "status": "completed",
                         "approval_request_id": f"mcpr_{uuid.uuid4().hex[:8]}",
                         "arguments": tool_arguments,
                         "error": None,
