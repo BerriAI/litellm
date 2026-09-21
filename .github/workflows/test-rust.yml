@@ -120,6 +120,20 @@ jobs:
 
       - run: cargo test --workspace --doc --locked
 
+      - name: Test token counter feature combinations
+        run: |
+          for features in '' fast huggingface tiktoken fast,huggingface fast,tiktoken huggingface,tiktoken fast,huggingface,tiktoken; do
+            cargo test -p litellm-token-counter --locked --no-default-features --features "$features"
+            cargo check -p litellm-python-bridge --locked --no-default-features --features "abi3${features:+,$features}"
+          done
+
+      - name: Test secret manager feature combinations
+        run: |
+          cargo test -p litellm-auth-gcp --locked --no-default-features
+          for features in '' aws google aws,google; do
+            cargo test -p litellm-secrets --locked --no-default-features --features "$features"
+          done
+
   rust-wheel:
     runs-on: ubuntu-latest
     timeout-minutes: 30

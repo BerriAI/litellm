@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
+    ProxyException,
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
@@ -27,6 +28,8 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _raise_if_rate_limits_required_but_missing,
     clear_cache,
     delete_team_models,
+    patch_model,
+    update_model,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
@@ -6601,6 +6604,65 @@ class TestTeamMemberAutoRouterWrites:
         assert saved_info["member_auto_router"] is (change == "unrelated")
         assert saved_info["team_id"] == "member-team"
         assert saved_info["access_groups"] == ["retained-admin-group"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic"])
+    async def test_jev_dashboard_save_preserves_server_transport(self, endpoint: str, change: str) -> None:
+        original: Final = self._row()
+        transport: Final = {"api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com"}
+        stored_config: Final = {
+            "classifier_type": "jev",
+            "tiers": {"SIMPLE": "allowed"},
+            "jev_classifier_config": {**transport, "instructions": "Old instructions", "timeout_ms": 6100},
+        }
+        row: Final = original.model_copy(
+            update={
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": stored_config,
+                },
+            }
+        )
+        database: Final = self._database(self._team(), row)
+        overrides: Final = {
+            "save": {},
+            "rotate": {"api_key": "synthetic-replacement-jev-key"},
+            "move": {"api_base": "https://new-jev.example.com", "api_key": "synthetic-replacement-jev-key"},
+            "move-without-key": {"api_base": "https://new-jev.example.com"},
+            "reset": {"api_key": None, "api_base": None},
+            "heuristic": {},
+        }[change]
+        config: Final = {
+            "tiers": {"SIMPLE": "allowed"},
+            "classifier_type": "heuristic" if change == "heuristic" else "jev",
+            **({} if change == "heuristic" else {"jev_classifier_config": {"timeout_ms": 8100, **overrides}}),
+        }
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config=config),
+            model_info=ModelInfo(id=row.model_id),
+        )
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with self._environment(database, row):
+            operation: Final = (
+                patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+            )
+            if change == "move-without-key":
+                with pytest.raises(ProxyException, match="api_base requires"):
+                    await operation
+                database.db.litellm_proxymodeltable.update.assert_not_awaited()
+                return
+            await operation
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        expected: Final = (
+            config
+            if change == "heuristic"
+            else {**config, "jev_classifier_config": {**transport, "timeout_ms": 8100, **overrides}}
+        )
+        assert saved == expected
+        assert row.litellm_params["complexity_router_config"] == stored_config
+        assert request.litellm_params.complexity_router_config == config
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
