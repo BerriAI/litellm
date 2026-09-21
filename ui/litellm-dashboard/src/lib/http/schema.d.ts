@@ -17386,11 +17386,12 @@ export interface paths {
          * Change Password
          * @description Change the calling user's own password.
          *
-         *     Requires the current password. The new password must satisfy the
-         *     configured password policy (`general_settings.password_policy_*`: minimum
-         *     length, character classes, and, when enabled, breached-password screening
-         *     via haveibeenpwned.com). A successful change lifts any pending forced
-         *     password reset (`password_reset_required`) on the account.
+         *     Requires the current password. The new password must differ from the
+         *     current one and satisfy the configured password policy
+         *     (`general_settings.password_policy_*`: minimum length, character classes,
+         *     and, when enabled, breached-password screening via haveibeenpwned.com).
+         *     A successful change lifts any pending forced password reset
+         *     (`password_reset_required`) on the account.
          *
          *     Parameters:
          *     - current_password: str - The user's current password.
