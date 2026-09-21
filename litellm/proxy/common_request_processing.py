@@ -1378,18 +1378,11 @@ _METADATA_BUCKET_KEYS: Final = ("metadata", "litellm_metadata")
 
 
 def _request_metadata_buckets(request_data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    return tuple(
-        bucket
-        for key in _METADATA_BUCKET_KEYS
-        if isinstance(bucket := request_data.get(key), Mapping)
-    )
+    return tuple(bucket for key in _METADATA_BUCKET_KEYS if isinstance(bucket := request_data.get(key), Mapping))
 
 
 def include_guardrail_response_requested(request_data: Mapping[str, object]) -> bool:
-    return any(
-        bucket.get("include_guardrail_response") is True
-        for bucket in _request_metadata_buckets(request_data)
-    )
+    return any(bucket.get("include_guardrail_response") is True for bucket in _request_metadata_buckets(request_data))
 
 
 def attach_guardrail_information(response: object, request_data: Mapping[str, object]) -> None:
