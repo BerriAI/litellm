@@ -15096,3 +15096,19 @@ async def test_loading_mcp_config_keeps_secret_references_in_edit_preflight(tmp_
         manager.config_server_for_edit(server.server_id)
     assert error.value.status_code == 400
     assert "secret references" in error.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_edit_snapshot_does_not_restrict_yaml_metadata(tmp_path, monkeypatch):
+    from datetime import date
+
+    from litellm.proxy import proxy_server
+
+    config_file = tmp_path / "mcp.yaml"
+    config_file.write_text("mcp_servers:\n  metadata_server:\n    url: https://example.com/mcp\n    mcp_info:\n      published: 2026-09-21\n")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    config = proxy_server.ProxyConfig()
+
+    resolved = await config.get_config(str(config_file))
+
+    assert resolved["mcp_servers"]["metadata_server"]["mcp_info"]["published"] == date(2026, 9, 21)

@@ -5628,9 +5628,10 @@ class ProxyConfig:
 
         self._initialize_secret_manager_from_raw_config(config=config, config_file_path=config_file_path)
 
-        self.raw_mcp_servers = MappingProxyType(
-            {key: copy.deepcopy(value) for key, value in _as_settings_mapping(config.get("mcp_servers")).items()}
+        raw_mcp_servers: Final = TypeAdapter(Mapping[str, object]).validate_python(
+            config.get("mcp_servers") or _EMPTY_SETTINGS_MAPPING
         )
+        self.raw_mcp_servers = MappingProxyType({key: copy.deepcopy(value) for key, value in raw_mcp_servers.items()})
         config = self._check_for_os_environ_vars(config=config)
         self._apply_resolved_runtime_settings(config)
 
