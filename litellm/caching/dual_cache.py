@@ -12,7 +12,7 @@ import logging
 import time
 from collections.abc import Sequence
 from threading import Lock
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from litellm.types.caching import RedisPipelineIncrementOperation
@@ -34,20 +34,14 @@ else:
 
 from collections import OrderedDict
 
-_KeyT = TypeVar("_KeyT")
-_ValueT = TypeVar("_ValueT")
 
-
-class LimitedSizeOrderedDict(OrderedDict[_KeyT, _ValueT]):
-    def __init__(self, *, max_size: int = 100) -> None:
-        super().__init__()
+class LimitedSizeOrderedDict(OrderedDict):
+    def __init__(self, *args, max_size=100, **kwargs):
+        super().__init__(*args, **kwargs)
         self.max_size = max_size
 
-    def __setitem__(self, key: _KeyT, value: _ValueT) -> None:
-        if key in self:
-            super().__setitem__(key, value)
-            self.move_to_end(key)
-            return
+    def __setitem__(self, key, value):
+        # If inserting a new key exceeds max size, remove the oldest item
         if len(self) >= self.max_size:
             self.popitem(last=False)
         super().__setitem__(key, value)
@@ -74,9 +68,7 @@ class DualCache(BaseCache):
         self.in_memory_cache = in_memory_cache or InMemoryCache()
         # If redis_cache is not provided, use the default RedisCache
         self.redis_cache = redis_cache
-        self.last_redis_batch_access_time: LimitedSizeOrderedDict[str, float] = LimitedSizeOrderedDict(
-            max_size=default_max_redis_batch_cache_size
-        )
+        self.last_redis_batch_access_time = LimitedSizeOrderedDict(max_size=default_max_redis_batch_cache_size)
         self._last_redis_batch_access_time_lock = Lock()
         self.redis_batch_cache_expiry = (
             default_redis_batch_cache_expiry or litellm.default_redis_batch_cache_expiry or 10

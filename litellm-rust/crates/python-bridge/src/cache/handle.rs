@@ -1,26 +1,7 @@
-use std::time::Duration;
-
 use litellm_host_python::release_gil;
 use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*};
 
 use super::{cache_error, facade::FacadeGuard, native::NativeResponseCache, request::duration};
-use crate::python_settings::PythonSettings;
-
-const PYTHON_REDIS_DEFAULT_TTL: Duration = Duration::from_secs(60);
-
-#[derive(FromPyObject)]
-struct PythonCacheSettings {
-    default_redis_ttl: Option<f64>,
-}
-
-fn redis_default_ttl(py: Python<'_>) -> PyResult<Duration> {
-    let settings: PythonCacheSettings = PythonSettings::Cache.read(py)?.extract()?;
-    settings
-        .default_redis_ttl
-        .map(duration)
-        .transpose()
-        .map(|ttl| ttl.unwrap_or(PYTHON_REDIS_DEFAULT_TTL))
-}
 
 #[pyclass(frozen, name = "_CacheTestHandle")]
 pub(crate) struct CacheTestHandle {
@@ -53,17 +34,14 @@ impl CacheTestHandle {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (url, *, ttl_seconds=None, namespace=None))]
+    #[pyo3(signature = (url, *, ttl_seconds=60.0, namespace=None))]
     fn redis(
         py: Python<'_>,
         url: String,
-        ttl_seconds: Option<f64>,
+        ttl_seconds: f64,
         namespace: Option<String>,
     ) -> PyResult<Self> {
-        let ttl = Some(match ttl_seconds {
-            Some(seconds) => duration(seconds)?,
-            None => redis_default_ttl(py)?,
-        });
+        let ttl = Some(duration(ttl_seconds)?);
         let service = release_gil(py, move || NativeResponseCache::redis(&url, ttl, namespace))
             .map_err(cache_error)?;
         Ok(Self {
