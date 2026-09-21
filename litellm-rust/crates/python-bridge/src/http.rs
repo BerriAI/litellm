@@ -7,7 +7,7 @@ use std::{
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_http::{
     HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
-    Unsupported,
+    TlsSource, Unsupported,
     media::{PublicDnsResolver, UrlPolicy},
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
@@ -41,18 +41,26 @@ pub(crate) fn call_config(
     Ok(resolution.config)
 }
 
-pub(crate) fn client_error(error: litellm_http::Error, config: &HttpClientConfig) -> PyErr {
+pub(crate) fn client_error(error: litellm_http::Error) -> PyErr {
     match error {
-        litellm_http::Error::Read { path, .. } | litellm_http::Error::InvalidPem { path, .. }
-            if config.client_certificate.as_ref() == Some(&path) =>
-        {
-            PyValueError::new_err(
-                "http_settings.ssl_certificate: expected a readable PEM certificate and private key",
-            )
+        litellm_http::Error::Read {
+            tls_source: TlsSource::ClientIdentity,
+            ..
         }
-        litellm_http::Error::Read { .. } | litellm_http::Error::InvalidPem { .. } => {
-            PyValueError::new_err("http_settings.ssl_verify: expected a readable PEM CA bundle")
+        | litellm_http::Error::InvalidPem {
+            tls_source: TlsSource::ClientIdentity,
+            ..
+        } => PyValueError::new_err(
+            "http_settings.ssl_certificate: expected a readable PEM certificate and private key",
+        ),
+        litellm_http::Error::Read {
+            tls_source: TlsSource::CaBundle,
+            ..
         }
+        | litellm_http::Error::InvalidPem {
+            tls_source: TlsSource::CaBundle,
+            ..
+        } => PyValueError::new_err("http_settings.ssl_verify: expected a readable PEM CA bundle"),
         _ => PyValueError::new_err("http_settings: native HTTP client configuration is invalid"),
     }
 }
@@ -184,6 +192,33 @@ settings = types.SimpleNamespace(**{{name: defaults[name] for name in json.loads
                     user_agent: Some("litellm/test".into()),
                     ..HttpSettings::default()
                 }
+            );
+        });
+    }
+
+    #[test]
+    fn client_error_uses_tls_source_when_paths_match() {
+        Python::initialize();
+        Python::attach(|py| {
+            let path = PathBuf::from("/shared.pem");
+            let ca_error = client_error(litellm_http::Error::InvalidPem {
+                path: path.clone(),
+                message: "invalid".into(),
+                tls_source: TlsSource::CaBundle,
+            });
+            assert_eq!(
+                ca_error.to_string(),
+                "ValueError: http_settings.ssl_verify: expected a readable PEM CA bundle"
+            );
+            let client_error = client_error(litellm_http::Error::InvalidPem {
+                path,
+                message: "invalid".into(),
+                tls_source: TlsSource::ClientIdentity,
+            });
+            assert!(client_error.is_instance_of::<PyValueError>(py));
+            assert_eq!(
+                client_error.to_string(),
+                "ValueError: http_settings.ssl_certificate: expected a readable PEM certificate and private key"
             );
         });
     }
