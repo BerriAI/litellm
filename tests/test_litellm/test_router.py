@@ -17077,3 +17077,51 @@ def test_router_dispatch_prompt_completion_direct(monkeypatch: pytest.MonkeyPatc
     assert response.choices[0].message.content == "dispatched reply"
 
 
+def test_router_fallback_ignores_injected_original_prompt_params(
+    prompt_version_clean_registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: Final[list[dict[str, object]]] = []
+
+    async def mock_failover_injected_acompletion(*args, **kwargs):
+        calls.append(dict(kwargs))
+        if kwargs.get("model") == "openai/gpt-4o-primary":
+            raise litellm.RateLimitError(
+                message="Rate limit reached",
+                response=httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+                llm_provider="openai",
+                model="gpt-4o-primary",
+            )
+        return litellm.ModelResponse(
+            choices=[litellm.utils.Choices(message=litellm.utils.Message(content="safe reply", role="assistant"))]
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", mock_failover_injected_acompletion)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary-model",
+                "litellm_params": {"model": "openai/gpt-4o-primary"},
+            },
+            {
+                "model_name": "fallback-model",
+                "litellm_params": {"model": "openai/gpt-4o-fallback"},
+            },
+        ],
+        fallbacks=[{"primary-model": ["fallback-model"]}],
+        num_retries=0,
+    )
+
+    response: Final = asyncio.run(
+        router.acompletion(
+            model="primary-model",
+            messages=[{"role": "user", "content": "test query"}],
+            _original_prompt_params={"api_base": "https://attacker.example"},
+        )
+    )
+
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "safe reply"
+    assert len(calls) == 2
+    for call in calls:
+        assert "api_base" not in call

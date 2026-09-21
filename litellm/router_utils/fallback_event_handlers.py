@@ -474,11 +474,24 @@ def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     return getattr(kwargs.get("original_function"), "__name__", None) in PROVIDER_SCOPED_CREATION_FUNCTION_NAMES
 
 
+ALLOWED_FALLBACK_PROMPT_PARAMS: Final = frozenset({
+    "prompt_id",
+    "prompt_variables",
+    "prompt_label",
+    "prompt_version",
+    "prompt_environment",
+})
+
+
 def _restore_fallback_prompt_state(kwargs: dict[str, object]) -> None:
-    if "_unrendered_messages" in kwargs:
-        kwargs["messages"] = safe_deep_copy(kwargs["_unrendered_messages"])
-    if "_original_prompt_params" in kwargs and isinstance(kwargs["_original_prompt_params"], dict):
-        kwargs.update(kwargs["_original_prompt_params"])
+    unrendered: Final = kwargs.get("_unrendered_messages")
+    if isinstance(unrendered, list):
+        kwargs["messages"] = safe_deep_copy(unrendered)
+    original_prompt_params: Final = kwargs.get("_original_prompt_params")
+    if isinstance(original_prompt_params, dict):
+        for key in ALLOWED_FALLBACK_PROMPT_PARAMS:
+            if key in original_prompt_params:
+                kwargs[key] = original_prompt_params[key]
     kwargs.pop("_in_prompt_factory", None)
 
 

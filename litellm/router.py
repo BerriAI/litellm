@@ -2706,6 +2706,9 @@ class Router:
         **kwargs,
     ):
         try:
+            kwargs.pop("_unrendered_messages", None)
+            kwargs.pop("_original_prompt_params", None)
+            kwargs.pop("_in_prompt_factory", None)
             kwargs["model"] = model
             kwargs["messages"] = messages
             kwargs["stream"] = stream
