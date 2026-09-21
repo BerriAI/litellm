@@ -22,6 +22,11 @@ describe("getCurlCommand", () => {
     const result = getCurlCommand("gpt-4o", "");
     expect(result).toContain("Your query here");
   });
+
+  it("should show a key placeholder instead of a literal key", () => {
+    const result = getCurlCommand("gpt-4o", "test query");
+    expect(result).toContain("'Authorization: Bearer <your-master-key>'");
+  });
 });
 
 describe("runSemanticFilterTest", () => {

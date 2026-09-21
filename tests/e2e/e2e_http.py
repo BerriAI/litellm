@@ -95,7 +95,7 @@ class UnauthorizedError(BaseModel):
 class RateLimitedError(BaseModel):
     kind: Literal["rate_limited"] = "rate_limited"
     retry_after_seconds: int | None = None
-    # litellm overloads 429 for budget_exceeded too, so keep the body to tell them apart.
+    # keep the body so callers can tell limiter kinds apart.
     body: str = ""
 
 

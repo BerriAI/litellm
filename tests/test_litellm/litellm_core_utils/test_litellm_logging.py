@@ -3033,7 +3033,7 @@ def test_get_error_information_budget_exceeded_structured_fields():
     assert result["error_budget_entity_id"] == "repro-user"
     assert result["error_budget_limit"] == 1e-06
     assert result["error_budget_spend"] == 3.4e-05
-    assert result["error_code"] == "429"
+    assert result["error_code"] == "422"
     assert result["error_class"] == "BudgetExceededError"
     assert result["error_rate_limit_type"] == "budget"
 
@@ -3530,6 +3530,24 @@ def test_function_setup_litellm_metadata_guardrail_writes_visible_after_setup():
     merged = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
     assert merged.get("standard_logging_guardrail_information") == [guardrail_entry]
     assert merged.get("applied_guardrails") == ["pam-ethical-request"]
+
+
+def test_get_standard_logging_metadata_merges_recorded_applied_guardrails():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        metadata={"applied_guardrails": ["blocker"]},
+        litellm_params={},
+        applied_guardrails=["guard-a", "blocker", "guard-b"],
+    )
+    assert result["applied_guardrails"] == ["guard-a", "blocker", "guard-b"]
+
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        metadata={"applied_guardrails": ["blocker"]},
+        litellm_params={},
+        applied_guardrails=["guard-a"],
+    )
+    assert result["applied_guardrails"] == ["guard-a", "blocker"]
 
 
 def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
@@ -6389,7 +6407,7 @@ def test_get_error_information_keeps_traceback_for_unmapped_provider_4xx():
 
 
 def test_get_error_information_skips_traceback_for_budget_rejection_with_provider():
-    """A key-over-budget 429 is the proxy's own rejection even after the auth
+    """A key-over-budget 422 is the proxy's own rejection even after the auth
     handler stamps the requested model's provider onto it, so it stays cheap."""
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -6398,7 +6416,7 @@ def test_get_error_information_skips_traceback_for_budget_rejection_with_provide
         litellm.BudgetExceededError(current_cost=0.01, max_budget=0.0, llm_provider="anthropic")
     )
     result = StandardLoggingPayloadSetup.get_error_information(over_budget)
-    assert result["error_code"] == "429"
+    assert result["error_code"] == "422"
     assert result["llm_provider"] == "anthropic"
     assert result["traceback"] == ""
 
