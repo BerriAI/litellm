@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 import litellm
@@ -228,3 +230,140 @@ def test_remove_prompt_is_a_no_op_for_an_unknown_registry_key(isolated_callbacks
 )
 def test_parse_prompt_version_accepts_integers_and_json_strings(raw_version: object, expected: int | None) -> None:
     assert parse_prompt_version(raw_version) == expected
+
+
+def test_strip_version_suffix_handles_both_dot_and_underscore() -> None:
+    from litellm.integrations.dotprompt.prompt_manager import strip_version_suffix
+
+    assert strip_version_suffix("greeting.v1") == "greeting"
+    assert strip_version_suffix("greeting_v2") == "greeting"
+    assert strip_version_suffix("greeting") is None
+    assert strip_version_suffix("greeting.vabc") is None
+    assert strip_version_suffix("greeting_vabc") is None
+
+
+def test_prompt_manager_version_indexing_and_retrieval() -> None:
+    from litellm.integrations.dotprompt.prompt_manager import PromptManager
+
+    manager: Final = PromptManager(
+        prompt_data={"prompt_one": {"content": "Hello {{name}}", "metadata": {}}},
+        prompt_version=3,
+    )
+    assert manager.get_prompt("prompt_one", version=3) is not None
+    assert manager.get_prompt("prompt_one.v3") is not None
+    assert manager.get_prompt("prompt_one_v3") is not None
+
+    manager.add_prompt(prompt_id="prompt_two", content="Hi there")
+    assert manager.get_prompt("prompt_two", version=3) is not None
+    assert manager.get_prompt("prompt_two_v3") is not None
+
+
+def test_dotprompt_manager_version_matching_and_fallback() -> None:
+    from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
+
+    dot_mgr: Final = DotpromptManager(
+        prompt_data={"greeting": {"content": "Hello {{name}}"}},
+        prompt_id="greeting",
+        prompt_version=2,
+    )
+    mismatched_spec: Final = _db_prompt_spec(content="Test", version=1)
+
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    dynamic_params: Final = StandardCallbackDynamicParams()
+
+    assert (
+        dot_mgr.should_run_prompt_management(
+            prompt_id="greeting", dynamic_callback_params=dynamic_params, prompt_spec=mismatched_spec
+        )
+        is False
+    )
+    assert (
+        dot_mgr.should_run_prompt_management(
+            prompt_id="greeting_v2", dynamic_callback_params=dynamic_params, prompt_spec=None
+        )
+        is True
+    )
+    assert (
+        dot_mgr.should_run_prompt_management(
+            prompt_id="other_prompt_v2", dynamic_callback_params=dynamic_params, prompt_spec=None
+        )
+        is False
+    )
+
+    client: Final = dot_mgr._compile_prompt_helper(
+        prompt_id="greeting",
+        prompt_spec=None,
+        prompt_variables={"name": "Alice"},
+        dynamic_callback_params=dynamic_params,
+    )
+    assert client.get("prompt_template") is not None
+    assert any("Alice" in str(msg.get("content", "")) for msg in client.get("prompt_template", []))
+
+
+def test_logging_prompt_management_version_filtering(isolated_callbacks: list) -> None:
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.prompts.prompt_registry import IN_MEMORY_PROMPT_REGISTRY
+
+    registry: Final = IN_MEMORY_PROMPT_REGISTRY
+    registry.initialize_prompt(prompt=_db_prompt_spec("Prompt V1", version=1))
+    registry.initialize_prompt(prompt=_db_prompt_spec("Prompt V2", version=2))
+
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        litellm_call_id="call-123",
+        start_time=datetime.now(),
+        function_id="fn-123",
+    )
+
+    resolved_v1: Final = logging_obj.get_custom_logger_for_prompt_management(
+        model="gpt-4o",
+        non_default_params={},
+        prompt_id="greeting",
+        prompt_version=1,
+    )
+    assert resolved_v1 is not None
+    assert getattr(resolved_v1, "prompt_version", None) == 1
+
+    resolved_v2: Final = logging_obj.get_custom_logger_for_prompt_management(
+        model="gpt-4o",
+        non_default_params={},
+        prompt_id="greeting",
+        prompt_version=2,
+    )
+    assert resolved_v2 is not None
+    assert getattr(resolved_v2, "prompt_version", None) == 2
+
+
+def test_restore_fallback_prompt_state_allowlist() -> None:
+    from litellm.router_utils.fallback_event_handlers import _restore_fallback_prompt_state
+
+    kwargs: Final[dict[str, object]] = {
+        "_unrendered_messages": [{"role": "user", "content": "original"}],
+        "_original_prompt_params": {
+            "prompt_id": "test_p",
+            "prompt_variables": {"a": 1},
+            "prompt_label": "prod",
+            "prompt_version": 2,
+            "prompt_environment": "staging",
+            "malicious_key": "injected",
+        },
+        "_in_prompt_factory": True,
+        "messages": [{"role": "user", "content": "rendered"}],
+    }
+
+    _restore_fallback_prompt_state(kwargs)
+
+    assert kwargs["messages"] == [{"role": "user", "content": "original"}]
+    assert kwargs["prompt_id"] == "test_p"
+    assert kwargs["prompt_variables"] == {"a": 1}
+    assert kwargs["prompt_label"] == "prod"
+    assert kwargs["prompt_version"] == 2
+    assert kwargs["prompt_environment"] == "staging"
+    assert "malicious_key" not in kwargs
+    assert "_in_prompt_factory" not in kwargs

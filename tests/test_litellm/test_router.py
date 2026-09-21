@@ -17127,3 +17127,141 @@ def test_router_fallback_ignores_injected_original_prompt_params(
     assert len(calls) == 2
     for call in calls:
         assert "api_base" not in call
+
+
+def test_router_dispatch_prompt_completion_direct_unlisted(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def mock_direct_acompletion(*args, **kwargs):
+        return litellm.ModelResponse(
+            choices=[litellm.utils.Choices(message=litellm.utils.Message(content="unlisted reply", role="assistant"))]
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", mock_direct_acompletion)
+
+    router: Final = Router(model_list=[])
+
+    response: Final = asyncio.run(
+        router._dispatch_prompt_completion(
+            model="unlisted-model",
+            original_model_name="unlisted-model",
+            unrendered_messages=[{"role": "user", "content": "hi"}],
+            original_prompt_params={"prompt_id": "test"},
+            original_function=router._acompletion,
+            prompt_management_params={"prompt_id", "prompt_version"},
+            kwargs={"model": "unlisted-model", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    )
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "unlisted reply"
+
+
+def test_router_dispatch_prompt_completion_direct_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: Final[list[str]] = []
+
+    async def mock_failover_acompletion(*args, **kwargs):
+        model: Final = kwargs.get("model")
+        calls.append(str(model))
+        if model == "unlisted-model":
+            raise RuntimeError("primary direct fail")
+        return litellm.ModelResponse(
+            choices=[litellm.utils.Choices(message=litellm.utils.Message(content="fallback reply", role="assistant"))]
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", mock_failover_acompletion)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "fallback-target",
+                "litellm_params": {"model": "openai/gpt-4o-fallback"},
+            }
+        ],
+        fallbacks=[{"unlisted-model": ["fallback-target"]}],
+        num_retries=0,
+    )
+
+    response: Final = asyncio.run(
+        router._dispatch_prompt_completion(
+            model="unlisted-model",
+            original_model_name="unlisted-model",
+            unrendered_messages=[{"role": "user", "content": "hi"}],
+            original_prompt_params={"prompt_id": "test"},
+            original_function=router._acompletion,
+            prompt_management_params={"prompt_id", "prompt_version"},
+            kwargs={"model": "unlisted-model", "messages": [{"role": "user", "content": "hi"}], "metadata": {}},
+        )
+    )
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "fallback reply"
+    assert len(calls) == 2
+
+
+def test_router_dispatch_prompt_completion_direct_no_fallback_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def mock_fail_acompletion(*args, **kwargs):
+        raise RuntimeError("direct unhandled error")
+
+    monkeypatch.setattr(litellm, "acompletion", mock_fail_acompletion)
+
+    router: Final = Router(model_list=[])
+
+    with pytest.raises(RuntimeError, match="direct unhandled error"):
+        asyncio.run(
+            router._dispatch_prompt_completion(
+                model="unlisted-model",
+                original_model_name="unlisted-model",
+                unrendered_messages=[{"role": "user", "content": "hi"}],
+                original_prompt_params={"prompt_id": "test"},
+                original_function=router._acompletion,
+                prompt_management_params={"prompt_id", "prompt_version"},
+                kwargs={"model": "unlisted-model", "messages": [{"role": "user", "content": "hi"}]},
+            )
+        )
+
+
+def test_async_function_with_fallbacks_positional_messages(
+    prompt_version_clean_registry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.types.prompts.init_prompts import PromptInfo, PromptLiteLLMParams, PromptSpec
+
+    async def mock_positional_acompletion(*args, **kwargs):
+        return litellm.ModelResponse(
+            choices=[litellm.utils.Choices(message=litellm.utils.Message(content="pos reply", role="assistant"))]
+        )
+
+    monkeypatch.setattr(litellm, "acompletion", mock_positional_acompletion)
+
+    spec: Final = PromptSpec(
+        prompt_id="greeting.v1",
+        version=1,
+        environment="production",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="greeting",
+            prompt_integration="dotprompt",
+            prompt_data={"content": "System: Hello\n\nUser: {{input}}", "metadata": {}},
+        ),
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+    prompt_version_clean_registry.initialize_prompt(spec)
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "pos-model",
+                "litellm_params": {
+                    "model": "dotprompt/gpt-4o",
+                    "prompt_id": "greeting",
+                    "prompt_version": 1,
+                },
+            }
+        ]
+    )
+
+    response: Final = asyncio.run(
+        router.async_function_with_fallbacks(
+            [{"role": "user", "content": "hello"}],
+            model="pos-model",
+            original_function=router._acompletion,
+        )
+    )
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "pos reply"
+
