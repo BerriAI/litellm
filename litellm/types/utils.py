@@ -2552,7 +2552,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     @field_serializer("data")
-    def _serialize_image_data(self, data: list[OpenAIImage] | None) -> list[dict[str, object]] | None:
+    def _serialize_image_data(self, data: Sequence[OpenAIImage] | None) -> Sequence[Mapping[str, object]] | None:
         return None if data is None else [image.model_dump() for image in data]
 
     def __init__(
