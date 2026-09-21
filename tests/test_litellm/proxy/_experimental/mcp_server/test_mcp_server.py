@@ -2465,6 +2465,80 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
     assert total_streamed == len(first_chunk) + sum(len(b) for b in oversized_tail)
 
 
+_UTF8_PEEK_SPLITS: Final = (
+    ("\u00e9", 1),
+    ("\u2014", 1),
+    ("\u2014", 2),
+    ("\U0001f642", 1),
+    ("\U0001f642", 2),
+    ("\U0001f642", 3),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("character", "split"), _UTF8_PEEK_SPLITS)
+@pytest.mark.parametrize("chunked", (False, True))
+async def test_mcp_routing_replays_body_with_split_utf8_preview(character: str, split: int, chunked: bool) -> None:
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    cap: Final = mcp_module._MCP_ROUTING_PEEK_MAX_BYTES
+    prefix: Final = b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"echo","arguments":{"text":"'
+    payload: Final = prefix + b"x" * (cap - split - len(prefix)) + character.encode("utf-8") + b'"}}}'
+    chunks: Final = (payload[:cap], payload[cap:]) if chunked else (payload,)
+    messages: Final[tuple[Message, ...]] = tuple(
+        {"type": "http.request", "body": chunk, "more_body": index < len(chunks) - 1}
+        for index, chunk in enumerate(chunks)
+    )
+    receive: Final = AsyncMock(side_effect=messages)
+    send: Final = AsyncMock()
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+
+    async def handle_request(request_scope: Scope, replay: Receive, outgoing: Send) -> None:
+        assert receive.await_count == 1
+        for expected in messages:
+            assert await replay() == expected
+        await outgoing({"type": "http.response.start", "status": 202, "headers": []})
+        await outgoing({"type": "http.response.body", "body": b""})
+
+    downstream: Final = AsyncMock(side_effect=handle_request)
+    stateful: Final = AsyncMock()
+    with (
+        _client_allowlist_patches({}, None),
+        patch(  # test-quality-ok: module singleton is the ASGI dispatch seam
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=downstream),
+        ),
+        patch(  # test-quality-ok: module singleton is the ASGI dispatch seam
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    downstream.assert_awaited_once()
+    stateful.assert_not_awaited()
+    assert send.call_args_list[0].args[0]["status"] == 202
+    assert receive.await_count == len(messages)
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    (
+        (b'{"method":"initialize"}', True),
+        (b'{"method":"tools/call"}', False),
+        (b"", False),
+        (b"[]", False),
+        (b'{"method":', False),
+        (b'{"method":"initialize","text":"\xff"}', False),
+        (b'{"method":"initialize","text":"\xe2', False),
+    ),
+)
+def test_initialize_sniff_handles_invalid_encoding(body: bytes, expected: bool) -> None:
+    from litellm.proxy._experimental.mcp_server.server import _is_initialize_request
+
+    assert _is_initialize_request(body) is expected
+
+
 @pytest.mark.asyncio
 async def test_enforce_stateful_session_cap_evicts_oldest_idle_then_rejects():
     """
@@ -4016,7 +4090,8 @@ def test_jsonrpc_text_has_top_level_method_ignores_nested_method():
 
 
 @pytest.mark.asyncio
-async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
+@pytest.mark.parametrize(("character", "split"), (("x", 1), *_UTF8_PEEK_SPLITS))
+async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(character: str, split: int) -> None:
     """Regression: a large JSON-RPC *response* POST whose ``result`` payload
     nests a ``method`` key must skip the per-session lock so it does not
     deadlock behind the in-flight request POST that is holding the lock while
@@ -4071,9 +4146,13 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
     # A JSON-RPC response larger than the routing peek cap so it can't be fully
     # parsed, with a nested "method" key in the first bytes to trip a flat
     # substring heuristic.
-    response_body = (
-        '{"jsonrpc":"2.0","id":99,"result":{"toolResult":{"method":"GET","payload":"' + ("x" * 5000) + '"}}}'
-    ).encode()
+    response_prefix: Final = b'{"jsonrpc":"2.0","id":99,"result":{"toolResult":{"method":"GET","payload":"'
+    response_body: Final = (
+        response_prefix
+        + b"x" * (mcp_server._MCP_ROUTING_PEEK_MAX_BYTES - split - len(response_prefix))
+        + character.encode("utf-8")
+        + b'"}}}'
+    )
 
     try:
         with (
@@ -4100,6 +4179,8 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
             # Under a flat substring heuristic the response would acquire the
             # lock held by req_task and this wait would time out (deadlock).
             await asyncio.wait_for(response_handled.wait(), timeout=1.0)
+
+            assert not req_task.done()
 
             gate.set()
             await asyncio.gather(req_task, resp_task)
