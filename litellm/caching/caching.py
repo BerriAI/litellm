@@ -81,7 +81,7 @@ class Cache:
         s3_aws_access_key_id: str | None = None,
         s3_aws_secret_access_key: str | None = None,
         s3_aws_session_token: str | None = None,
-        s3_config: Any | None = None,
+        s3_config: object | None = None,
         s3_path: str | None = None,
         gcs_bucket_name: str | None = None,
         gcs_path_service_account: str | None = None,

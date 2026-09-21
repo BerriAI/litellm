@@ -15,6 +15,7 @@ import databricksLogo from "../../public/assets/logos/databricks.svg";
 import deepgramLogo from "../../public/assets/logos/deepgram.png";
 import deepinfraLogo from "../../public/assets/logos/deepinfra.png";
 import deepseekLogo from "../../public/assets/logos/deepseek.svg";
+import edenaiLogo from "../../public/assets/logos/edenai.svg";
 import elevenlabsLogo from "../../public/assets/logos/elevenlabs.png";
 import falAiLogo from "../../public/assets/logos/fal_ai.jpg";
 import featherlessLogo from "../../public/assets/logos/featherless.svg";
@@ -103,6 +104,7 @@ export enum Providers {
   Deepseek = "Deepseek",
   DOCKER_MODEL_RUNNER = "Docker Model Runner",
   DOTPROMPT = "Dotprompt",
+  EDENAI = "Eden AI",
   ElevenLabs = "ElevenLabs",
   EMPOWER = "Empower",
   FalAI = "Fal AI",
@@ -152,7 +154,7 @@ export enum Providers {
   PETALS = "Petals",
   PG_VECTOR = "Pg Vector",
   PREDIBASE = "Predibase",
-  Qwen_AI_Platform = "Qwen AI Platform",
+  Qwen_AI_Platform = "Qianwen AI Platform",
   QwenCloud = "QwenCloud",
   RECRAFT = "Recraft",
   REPLICATE = "Replicate",
@@ -219,6 +221,7 @@ export const provider_map: Record<string, string> = {
   Deepseek: "deepseek",
   DOCKER_MODEL_RUNNER: "docker_model_runner",
   DOTPROMPT: "dotprompt",
+  EDENAI: "edenai",
   ElevenLabs: "elevenlabs",
   EMPOWER: "empower",
   FalAI: "fal_ai",
@@ -331,6 +334,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Deepseek]: deepseekLogo.src,
   [Providers.Deepgram]: deepgramLogo.src,
   [Providers.DeepInfra]: deepinfraLogo.src,
+  [Providers.EDENAI]: edenaiLogo.src,
   [Providers.ElevenLabs]: elevenlabsLogo.src,
   [Providers.FalAI]: falAiLogo.src,
   [Providers.FEATHERLESS_AI]: featherlessLogo.src,
@@ -436,6 +440,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Cognition]: "cognition/swe-1.7",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
+  [Providers.EDENAI]: "edenai/openai/gpt-mini-latest",
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
