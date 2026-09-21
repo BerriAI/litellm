@@ -3416,6 +3416,48 @@ class CostBreakdown(TypedDict, total=False):
     margin_total_amount: float  # Total margin added in USD (optional)
 
 
+class ImpactValue(TypedDict, total=False):
+    """One environmental impact figure."""
+
+    value: ReadOnly[float]  # Always set; the midpoint when the estimator models an interval
+    min: ReadOnly[float | None]  # Lower bound, set only when the figure is modelled as an interval
+    max: ReadOnly[float | None]
+    unit: ReadOnly[str]
+
+
+class ImpactInformation(TypedDict, total=False):
+    """
+    Estimated environmental impact of a request.
+
+    Figures are only comparable when their ``boundary`` matches, and the boundary cannot
+    be recovered after the fact, so it is recorded per request: ``A`` is operational
+    electricity only, ``B`` adds allocated embodied hardware, ``C`` adds amortized
+    training. See https://arxiv.org/pdf/2606.10660 read 2026-09-20
+    """
+
+    energy: ReadOnly[ImpactValue | None]
+    gwp: ReadOnly[ImpactValue | None]
+    adpe: ReadOnly[ImpactValue | None]
+    pe: ReadOnly[ImpactValue | None]
+    water: ReadOnly[ImpactValue | None]
+    boundary: ReadOnly[Literal["A", "B", "C"] | None]
+    estimator: ReadOnly[str | None]
+
+
+class StandardLoggingImpactFailureDebugInformation(TypedDict, total=False):
+    """
+    Debug information, if impact estimation fails.
+
+    Avoid logging sensitive information like response or optional params
+    """
+
+    error_str: Required[ReadOnly[str]]
+    traceback_str: Required[ReadOnly[str]]
+    model: ReadOnly[str | None]
+    custom_llm_provider: ReadOnly[str | None]
+    estimator: ReadOnly[str | None]
+
+
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """Status fields for easy filtering and analytics"""
 
@@ -3496,6 +3538,8 @@ class StandardLoggingPayload(ClassifierAudit):
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: list[StandardLoggingGuardrailInformation] | None
     standard_built_in_tools_params: StandardBuiltInToolsParams | None
+    response_impact: NotRequired[ReadOnly[ImpactInformation | None]]
+    response_impact_failure_debug_info: NotRequired[ReadOnly[StandardLoggingImpactFailureDebugInformation | None]]
 
 
 from collections.abc import AsyncIterator, Iterator

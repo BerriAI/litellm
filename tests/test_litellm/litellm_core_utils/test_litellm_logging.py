@@ -7415,3 +7415,108 @@ class TestAzurePTUSpilloverCost:
         finally:
             litellm.model_cost.pop(custom_model_id, None)
             self._unregister_models()
+
+
+# ── response_impact ───────────────────────────────────────────────────────────
+
+
+class _StubImpactEstimator:
+    name = "stub"
+
+    def __init__(self, impact=None, raises=False):
+        from litellm.impact_calculator import point_impact_value
+        from litellm.types.utils import ImpactInformation
+
+        self.impact = impact if impact is not None else ImpactInformation(
+            energy=point_impact_value(unit="Wh", value=1.5),
+            boundary="B",
+            estimator="stub",
+        )
+        self.raises = raises
+        self.calls = 0
+        self.requests = []
+
+    def estimate(self, request):
+        self.calls += 1
+        self.requests.append(request)
+        if self.raises:
+            raise ValueError("no model data")
+        return self.impact
+
+
+@pytest.fixture
+def impact_estimator(monkeypatch):
+    import litellm
+    from litellm.impact_calculator import register_impact_estimator, reset_default_estimator_cache
+
+    monkeypatch.setattr(litellm, "track_impact", True)
+    estimator = _StubImpactEstimator()
+    register_impact_estimator(estimator)
+    yield estimator
+    register_impact_estimator(None)
+    reset_default_estimator_cache()
+
+
+def _build_payload(logging_obj, **extra_kwargs):
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import (
+        get_standard_logging_object_payload,
+    )
+
+    now = datetime.now()
+    return get_standard_logging_object_payload(
+        kwargs={"model": "gpt-4o", "messages": [], **extra_kwargs},
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+
+def test_standard_logging_payload_carries_the_impact_estimate(logging_obj, impact_estimator):
+    """The estimate has to reach the payload, since that is the only thing loggers ever see."""
+    payload = _build_payload(logging_obj)
+
+    assert payload is not None
+    assert payload["response_impact"] == impact_estimator.impact
+    assert payload["response_impact_failure_debug_info"] is None
+
+
+def test_standard_logging_payload_records_an_impact_failure_without_losing_the_payload(
+    logging_obj, impact_estimator
+):
+    """A broken estimator must cost the impact figure only, never the whole log record."""
+    impact_estimator.raises = True
+
+    payload = _build_payload(logging_obj)
+
+    assert payload is not None
+    assert payload["response_cost"] is not None
+    assert payload["response_impact"] is None
+    assert "no model data" in payload["response_impact_failure_debug_info"]["error_str"]
+
+
+def test_a_cache_hit_is_not_attributed_inference_impact(logging_obj, impact_estimator):
+    """A cached response ran no inference, so attributing energy to it would double count."""
+    payload = _build_payload(logging_obj, cache_hit=True)
+
+    assert payload is not None
+    assert payload["response_impact"] is None
+    assert impact_estimator.calls == 0
+
+
+def test_the_routed_deployment_is_estimated_rather_than_the_group_alias(logging_obj, impact_estimator):
+    """A model group is a routing label with no hardware behind it, so estimating it would size the wrong model."""
+    payload = _build_payload(
+        logging_obj,
+        model="my-model-group",
+        litellm_params={
+            "metadata": {"deployment": "gpt-4o"},
+            "proxy_server_request": {"body": {}},
+        },
+    )
+
+    assert payload is not None
+    assert impact_estimator.requests[0].model == "gpt-4o"

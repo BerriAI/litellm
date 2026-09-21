@@ -132,6 +132,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GuardrailStatus,
     ImageResponse,
+    ImpactInformation,
     LiteLLMBatch,
     LiteLLMLoggingBaseClass,
     LiteLLMRealtimeStreamLoggingObject,
@@ -143,6 +144,7 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingAdditionalHeaders,
     StandardLoggingHiddenParams,
+    StandardLoggingImpactFailureDebugInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingMetadata,
     StandardLoggingModelCostFailureDebugInformation,
@@ -6217,6 +6219,37 @@ def _autorouter_savings_for_payload(
         return None
 
 
+def _response_impact_for_payload(
+    model: str,
+    custom_llm_provider: str | None,
+    completion_tokens: int,
+    response_time: float,
+) -> tuple[ImpactInformation | None, StandardLoggingImpactFailureDebugInformation | None]:
+    """Estimate impact for one request, recording any estimator failure the way a cost failure is."""
+    from litellm.impact_calculator import ImpactRequest, calculate_impact, current_estimator_name
+
+    try:
+        impact: Final = calculate_impact(
+            ImpactRequest(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                completion_tokens=completion_tokens,
+                response_time=response_time,
+            )
+        )
+        return impact, None
+    except Exception as e:  # noqa: BLE001  # an estimator must never fail request logging
+        debug_info: Final = StandardLoggingImpactFailureDebugInformation(
+            error_str=str(e),
+            traceback_str=_get_traceback_str_for_error(str(e)),
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            estimator=current_estimator_name(),
+        )
+        verbose_logger.debug("response_impact_failure_debug_information: %s", debug_info)
+        return None, debug_info
+
+
 def get_standard_logging_object_payload(
     kwargs: dict | None,
     init_response_obj: Any | BaseModel | dict,
@@ -6387,6 +6420,16 @@ def get_standard_logging_object_payload(
             model_name = response_model_name
 
         request_cost_breakdown: Final = cost_breakdown_with_guardrail(logging_obj.cost_breakdown, guardrail_cost)
+        response_impact, response_impact_failure_debug_info = (
+            (None, None)
+            if cache_hit is True
+            else _response_impact_for_payload(
+                model=base_model or model_name,
+                custom_llm_provider=custom_llm_provider,
+                completion_tokens=usage_dict.get("completion_tokens", 0),
+                response_time=end_time_float - start_time_float,
+            )
+        )
         captured_baseline: Final = logging_obj.baseline_observation
         autorouter_savings: Final = (
             None
@@ -6444,6 +6487,8 @@ def get_standard_logging_object_payload(
             cache_key=clean_hidden_params["cache_key"],
             response_cost=response_cost,
             cost_breakdown=request_cost_breakdown,
+            response_impact=response_impact,
+            response_impact_failure_debug_info=response_impact_failure_debug_info,
             autorouter_savings=autorouter_savings,
             autorouter_savings_estimate=(
                 {
