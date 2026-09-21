@@ -4,12 +4,14 @@ pub enum Error {
     EnterpriseRequired,
     #[error("invalid secret name")]
     InvalidSecretName(#[from] litellm_secrets_types::Error),
-    #[error("HashiCorp Vault request failed")]
-    Request(
+    #[error("HashiCorp Vault client failed")]
+    Client(
         #[from]
         #[redact]
-        reqwest::Error,
+        vaultrs::error::ClientError,
     ),
+    #[error("HashiCorp Vault client settings are invalid: {message}")]
+    ClientSettings { message: String },
     #[error("HashiCorp Vault TLS identity could not be configured for {path}: {message}")]
     TlsIdentity {
         path: std::path::PathBuf,

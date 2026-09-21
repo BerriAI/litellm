@@ -22,7 +22,51 @@ fn config(server: &MockServer, values: &[(&str, &str)]) -> HashicorpVaultConfig 
 }
 
 fn manager(server: &MockServer, values: &[(&str, &str)]) -> HashicorpVault {
-    HashicorpVault::with_client(reqwest::Client::new(), config(server, values), true).unwrap()
+    HashicorpVault::from_config(config(server, values), true).unwrap()
+}
+
+fn auth_response(token: &str, lease_duration: u64) -> serde_json::Value {
+    json!({
+        "auth": {
+            "client_token": token,
+            "accessor": "",
+            "policies": [],
+            "token_policies": [],
+            "metadata": null,
+            "lease_duration": lease_duration,
+            "renewable": false,
+            "entity_id": "",
+            "token_type": "service",
+            "orphan": false
+        },
+        "lease_id": "",
+        "lease_duration": lease_duration,
+        "renewable": false,
+        "request_id": "",
+        "warnings": null,
+        "wrap_info": null
+    })
+}
+
+fn read_response(data: serde_json::Value) -> serde_json::Value {
+    json!({
+        "data": {
+            "data": data,
+            "metadata": {
+                "created_time": "",
+                "deletion_time": "",
+                "custom_metadata": null,
+                "destroyed": false,
+                "version": 1
+            }
+        },
+        "lease_id": "",
+        "lease_duration": 0,
+        "renewable": false,
+        "request_id": "",
+        "warnings": null,
+        "wrap_info": null
+    })
 }
 
 #[tokio::test]
@@ -32,7 +76,7 @@ async fn token_reads_use_vault_headers_and_cache_values() {
         .and(path("/v1/secret/data/name"))
         .and(header("X-Vault-Token", "token"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"data": {"data": {"key": "value"}}})),
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "value"}))),
         )
         .expect(1)
         .mount(&server)
@@ -47,6 +91,12 @@ async fn token_reads_use_vault_headers_and_cache_values() {
             .unwrap()
             .expose(),
         "value"
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.headers.contains_key("X-Vault-Namespace"))
     );
     assert_eq!(
         manager
@@ -63,9 +113,10 @@ async fn token_reads_use_vault_headers_and_cache_values() {
 async fn namespace_mount_and_prefix_are_sanitized_in_the_url() {
     let server: MockServer = MockServer::start().await;
     Mock::given(method("GET"))
-        .and(path("/v1/team-a/kv-prod/data/virtual-keys/name"))
+        .and(path("/v1/kv-prod/data/virtual-keys/name"))
+        .and(header("X-Vault-Namespace", "team-a"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"data": {"data": {"key": "value"}}})),
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "value"}))),
         )
         .expect(1)
         .mount(&server)
@@ -80,10 +131,10 @@ async fn namespace_mount_and_prefix_are_sanitized_in_the_url() {
         ],
     );
 
-    assert_eq!(
-        manager.secret_url("name").unwrap(),
-        format!("{}/v1/team-a/kv-prod/data/virtual-keys/name", server.uri())
-    );
+    let location = manager.secret_location("name").unwrap();
+    assert_eq!(location.namespace.as_deref(), Some("team-a"));
+    assert_eq!(location.mount, "kv-prod");
+    assert_eq!(location.path, "virtual-keys/name");
     assert!(manager.async_read_secret("name").await.unwrap().is_some());
 }
 
@@ -96,12 +147,15 @@ fn trailing_address_slashes_are_removed() {
     });
     let config: HashicorpVaultConfig =
         HashicorpVaultConfig::from_environment(environment.as_ref()).unwrap();
-    let manager: HashicorpVault =
-        HashicorpVault::with_client(reqwest::Client::new(), config, true).unwrap();
+    let manager: HashicorpVault = HashicorpVault::from_config(config, true).unwrap();
 
     assert_eq!(
-        manager.secret_url("name").unwrap(),
-        "http://vault.test:8200/v1/secret/data/name"
+        manager.secret_location("name").unwrap(),
+        litellm_secrets_hashicorp::SecretLocation {
+            namespace: None,
+            mount: "secret".to_owned(),
+            path: "name".to_owned(),
+        }
     );
 }
 
@@ -127,18 +181,23 @@ async fn approle_login_uses_namespace_and_reuses_the_token() {
         .and(path("/v1/auth/custom-approle/login"))
         .and(header("X-Vault-Namespace", "login-root"))
         .and(body_json(json!({"role_id": "role", "secret_id": "secret"})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(
-            json!({"auth": {"client_token": "login-token", "lease_duration": 3600}}),
-        ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(auth_response("login-token", 3600)))
         .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/v1/secret-root/secret/data/name"))
+        .and(path("/v1/secret/data/name"))
         .and(header("X-Vault-Token", "login-token"))
+        .and(header("X-Vault-Namespace", "secret-root"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"data": {"data": {"key": "value"}}})),
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "value"}))),
         )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/v1/secret/data/name-2"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"errors": ["missing"]})))
         .expect(1)
         .mount(&server)
         .await;
@@ -162,17 +221,13 @@ async fn approle_tokens_expire_after_the_vault_lease() {
     let server: MockServer = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/auth/approle/login"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(
-                json!({"auth": {"client_token": "login-token", "lease_duration": 1}}),
-            ),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(auth_response("login-token", 1)))
         .expect(2)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"data": {"data": {"key": "value"}}})),
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "value"}))),
         )
         .expect(2)
         .mount(&server)
@@ -201,54 +256,98 @@ async fn tls_login_posts_the_role_and_uses_the_client_identity() {
     std::fs::write(&key_path, TEST_PRIVATE_KEY).unwrap();
     Mock::given(method("POST"))
         .and(path("/v1/auth/cert/login"))
-        .and(body_json(json!({"name": "vault-role"})))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(
-                json!({"auth": {"client_token": "cert-token", "lease_duration": 0}}),
-            ),
-        )
-        .expect(1)
+        .and(header("X-Vault-Namespace", "login-ns"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(auth_response("cert-token", 0)))
+        .expect(2)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
         .and(path("/v1/secret/data/name"))
+        .and(header("X-Vault-Token", "cert-token"))
+        .and(header("X-Vault-Namespace", "secret-ns"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"data": {"data": {"key": "value"}}})),
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "value"}))),
         )
+        .expect(2)
         .mount(&server)
         .await;
-    let manager: HashicorpVault = HashicorpVault::new(
-        {
-            let environment_values: HashMap<String, String> = HashMap::from([
-                ("HCP_VAULT_ADDR".to_owned(), server.uri()),
-                (
-                    "HCP_VAULT_CLIENT_CERT".to_owned(),
-                    cert_path.to_str().unwrap().to_owned(),
-                ),
-                (
-                    "HCP_VAULT_CLIENT_KEY".to_owned(),
-                    key_path.to_str().unwrap().to_owned(),
-                ),
-                ("HCP_VAULT_CERT_ROLE".to_owned(), "vault-role".to_owned()),
-            ]);
-            Arc::new(move |name: &str| environment_values.get(name).cloned())
-        },
-        true,
-    )
-    .unwrap();
-
-    assert!(manager.async_read_secret("name").await.unwrap().is_some());
-    assert_eq!(
-        manager.login_url().as_deref(),
-        Some(format!("{}/v1/auth/cert/login", server.uri()).as_str())
+    let role_values: HashMap<String, String> = HashMap::from([
+        ("HCP_VAULT_ADDR".to_owned(), server.uri()),
+        (
+            "HCP_VAULT_CLIENT_CERT".to_owned(),
+            cert_path.to_str().unwrap().to_owned(),
+        ),
+        (
+            "HCP_VAULT_CLIENT_KEY".to_owned(),
+            key_path.to_str().unwrap().to_owned(),
+        ),
+        ("HCP_VAULT_CERT_ROLE".to_owned(), "vault-role".to_owned()),
+        (
+            "HCP_VAULT_LOGIN_NAMESPACE".to_owned(),
+            "login-ns".to_owned(),
+        ),
+        (
+            "HCP_VAULT_SECRET_NAMESPACE".to_owned(),
+            "secret-ns".to_owned(),
+        ),
+    ]);
+    let role_environment: Arc<dyn Lookup + Send + Sync> =
+        Arc::new(move |name: &str| role_values.get(name).cloned());
+    let role_manager: HashicorpVault = HashicorpVault::new(role_environment, true).unwrap();
+    assert!(
+        role_manager
+            .async_read_secret("name")
+            .await
+            .unwrap()
+            .is_some()
     );
+
+    let no_role_values: HashMap<String, String> = HashMap::from([
+        ("HCP_VAULT_ADDR".to_owned(), server.uri()),
+        (
+            "HCP_VAULT_CLIENT_CERT".to_owned(),
+            cert_path.to_str().unwrap().to_owned(),
+        ),
+        (
+            "HCP_VAULT_CLIENT_KEY".to_owned(),
+            key_path.to_str().unwrap().to_owned(),
+        ),
+        (
+            "HCP_VAULT_LOGIN_NAMESPACE".to_owned(),
+            "login-ns".to_owned(),
+        ),
+        (
+            "HCP_VAULT_SECRET_NAMESPACE".to_owned(),
+            "secret-ns".to_owned(),
+        ),
+    ]);
+    let no_role_environment: Arc<dyn Lookup + Send + Sync> =
+        Arc::new(move |name: &str| no_role_values.get(name).cloned());
+    let no_role_manager: HashicorpVault = HashicorpVault::new(no_role_environment, true).unwrap();
+    assert!(
+        no_role_manager
+            .async_read_secret("name")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let login_bodies: Vec<serde_json::Value> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.method.as_str() == "POST")
+        .map(|request| serde_json::from_slice(&request.body).unwrap())
+        .collect();
+    assert!(login_bodies.contains(&json!({"name": "vault-role"})));
+    assert!(login_bodies.contains(&json!({})));
 }
 
 #[rstest::rstest]
-#[case::missing(404, json!({}), 0)]
-#[case::malformed(200, json!({}), 1)]
-#[case::missing_key(200, json!({"data": {"data": {}}}), 0)]
-#[case::non_string(200, json!({"data": {"data": {"key": 1}}}), 2)]
+#[case::missing(404, json!({"errors": ["missing"]}), 0)]
+#[case::malformed(200, json!({"data": "invalid"}), 1)]
+#[case::missing_key(200, json!({}), 0)]
+#[case::non_string(200, json!({"key": 1}), 2)]
 #[tokio::test]
 async fn read_responses_distinguish_absence_and_malformed_payloads(
     #[case] status: u16,
@@ -257,7 +356,13 @@ async fn read_responses_distinguish_absence_and_malformed_payloads(
 ) {
     let server: MockServer = MockServer::start().await;
     Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(status).set_body_json(body))
+        .respond_with(ResponseTemplate::new(status).set_body_json(
+            if status == 200 && expected != 1 {
+                read_response(body)
+            } else {
+                body
+            },
+        ))
         .expect(1)
         .mount(&server)
         .await;
@@ -279,7 +384,7 @@ async fn write_and_delete_invalidate_the_read_cache() {
     Mock::given(method("GET"))
         .and(path("/v1/secret/data/name"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"data": {"data": {"key": "value"}}})),
+            ResponseTemplate::new(200).set_body_json(read_response(json!({"key": "value"}))),
         )
         .expect(2)
         .mount(&server)
@@ -289,7 +394,21 @@ async fn write_and_delete_invalidate_the_read_cache() {
         .and(body_json(
             json!({"data": {"key": "updated", "description": "description"}}),
         ))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {"version": 2}})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {
+                "created_time": "",
+                "deletion_time": "",
+                "custom_metadata": null,
+                "destroyed": false,
+                "version": 2
+            },
+            "lease_id": "",
+            "lease_duration": 0,
+            "renewable": false,
+            "request_id": "",
+            "warnings": null,
+            "wrap_info": null
+        })))
         .expect(1)
         .mount(&server)
         .await;
@@ -331,12 +450,9 @@ async fn no_auth_and_invalid_names_fail_without_requests() {
 #[tokio::test]
 async fn debug_output_redacts_authentication_values() {
     let server: MockServer = MockServer::start().await;
-    let manager: HashicorpVault = HashicorpVault::with_client(
-        reqwest::Client::new(),
-        config(&server, &[("HCP_VAULT_TOKEN", "token-value")]),
-        true,
-    )
-    .unwrap();
+    let manager: HashicorpVault =
+        HashicorpVault::from_config(config(&server, &[("HCP_VAULT_TOKEN", "token-value")]), true)
+            .unwrap();
     let debug: String = format!("{manager:?}");
     assert!(!debug.contains("token-value"));
     assert!(!debug.contains("secret-id"));
@@ -365,13 +481,35 @@ fn configuration_matches_python_parity_fixture() {
             Arc::new(move |name: &str| values.get(name).cloned());
         let config: HashicorpVaultConfig =
             HashicorpVaultConfig::from_environment(environment.as_ref()).unwrap();
-        let manager: HashicorpVault =
-            HashicorpVault::with_client(reqwest::Client::new(), config, true).unwrap();
+        let manager: HashicorpVault = HashicorpVault::from_config(config.clone(), true).unwrap();
+        let location = manager.secret_location(&case.secret_name).unwrap();
+        let namespace = location
+            .namespace
+            .as_deref()
+            .map(|namespace| format!("{namespace}/"))
+            .unwrap_or_default();
         assert_eq!(
-            manager.secret_url(&case.secret_name).unwrap(),
+            format!(
+                "{}/v1/{}{}/data/{}",
+                config.address, namespace, location.mount, location.path
+            ),
             case.expected_secret_url
         );
-        assert_eq!(manager.login_url(), case.expected_login_url);
+        let login_url = config.approle.as_ref().map_or_else(
+            || {
+                config
+                    .tls_cert
+                    .as_ref()
+                    .map(|_| format!("{}/v1/auth/cert/login", config.address))
+            },
+            |approle| {
+                Some(format!(
+                    "{}/v1/auth/{}/login",
+                    config.address, approle.mount_path
+                ))
+            },
+        );
+        assert_eq!(login_url, case.expected_login_url);
         assert_eq!(
             manager.config().login_namespace(),
             case.expected_login_namespace.as_deref()
@@ -391,8 +529,15 @@ async fn live_vault_round_trip() {
     let manager: HashicorpVault = HashicorpVault::new(environment, true).unwrap();
     let name: String = std::env::var("LITELLM_VAULT_LIVE_SECRET_NAME").unwrap();
     let value: SecretValue = SecretValue::new("native-live-value");
-    let url: String = manager.secret_url(&name).unwrap();
-    println!("native provenance: {} {}", module_path!(), url);
+    let location = manager.secret_location(&name).unwrap();
+    println!(
+        "native provenance: {} vaultrs {} {:?} {} {}",
+        module_path!(),
+        manager.config().address,
+        location.namespace,
+        location.mount,
+        location.path
+    );
     manager
         .async_write_secret(&name, value.clone(), None)
         .await
