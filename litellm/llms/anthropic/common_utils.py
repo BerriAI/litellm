@@ -236,25 +236,26 @@ def _merge_beta_headers(existing: str | None, new_beta: str) -> str:
 
 
 def is_anthropic_api_base(api_base: str | None) -> bool:
-    if not api_base:
-        return True
     from litellm.secret_managers.main import get_secret_str
 
     configured_base: Final = (
         get_secret_str("ANTHROPIC_API_BASE") or get_secret_str("ANTHROPIC_BASE_URL") or litellm.api_base
     )
-    parsed: Final = urlparse(api_base)
-    scheme: Final = parsed.scheme.lower()
-    if scheme != "https":
-        return bool(
-            configured_base is not None
-            and api_base.rstrip("/") == configured_base.rstrip("/")
-            and parsed.hostname in ("localhost", "127.0.0.1")
-        )
+    resolved: Final = api_base or configured_base
+    if not resolved:
+        return True
+    parsed: Final = urlparse(resolved)
     hostname: Final = (parsed.hostname or "").lower()
     if hostname == "anthropic.com" or hostname.endswith(".anthropic.com"):
+        return parsed.scheme.lower() == "https"
+    if (
+        configured_base is not None
+        and api_base is not None
+        and resolved.rstrip("/") == configured_base.rstrip("/")
+        and hostname in ("localhost", "127.0.0.1")
+    ):
         return True
-    return bool(configured_base is not None and api_base.rstrip("/") == configured_base.rstrip("/"))
+    return False
 
 
 def optionally_handle_anthropic_oauth(
@@ -269,27 +270,26 @@ def optionally_handle_anthropic_oauth(
             "Stripping Anthropic OAuth token from request to non-Anthropic api_base: %s",
             api_base,
         )
-        auth_header_name: Final = next(
-            (
-                name
-                for name, value in headers.items()
-                if name.lower() == "authorization" and is_anthropic_oauth_key(value)
-            ),
-            None,
-        )
-        if auth_header_name:
-            headers.pop(auth_header_name)
-        existing_beta: Final[str | None] = headers.get("anthropic-beta")
-        if existing_beta:
-            filtered_betas: Final = tuple(
-                b.strip() for b in existing_beta.split(",") if b.strip() and b.strip() != ANTHROPIC_OAUTH_BETA_HEADER
-            )
-            if filtered_betas:
-                headers["anthropic-beta"] = ",".join(filtered_betas)
-            else:
-                headers.pop("anthropic-beta", None)
-        headers.pop("anthropic-dangerous-direct-browser-access", None)
-        return headers, api_key
+        for name in tuple(headers):
+            name_lower: Final = name.lower()
+            if name_lower in ("authorization", "x-api-key") and is_anthropic_oauth_key(headers[name]):
+                headers.pop(name)
+            elif name_lower == "anthropic-beta":
+                existing_beta: Final = headers.get(name)
+                if existing_beta:
+                    filtered_betas: Final = tuple(
+                        b.strip()
+                        for b in existing_beta.split(",")
+                        if b.strip() and b.strip() != ANTHROPIC_OAUTH_BETA_HEADER
+                    )
+                    if filtered_betas:
+                        headers[name] = ",".join(filtered_betas)
+                    else:
+                        headers.pop(name)
+            elif name_lower == "anthropic-dangerous-direct-browser-access":
+                headers.pop(name)
+        sanitized_key: Final = None if is_anthropic_oauth_key(api_key) else api_key
+        return headers, sanitized_key
 
     # Check Authorization header (passthrough / forwarded requests)
     auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
@@ -303,13 +303,22 @@ def optionally_handle_anthropic_oauth(
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
         return headers, api_key
-    # Check api_key directly (standard chat/completion flow)
-    if api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
-        for name in tuple(header_name for header_name in headers if header_name.lower() == "x-api-key"):
+
+    # Check if api_key itself is an OAuth token
+    if is_anthropic_oauth_key(api_key):
+        for name in tuple(
+            header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
+        ):
             headers.pop(name)
-        headers["authorization"] = f"Bearer {api_key}"
+        headers["authorization"] = (
+            api_key
+            if api_key.startswith("Bearer ")
+            else f"Bearer {api_key}"  # pyright: ignore[reportOptionalMemberAccess]  # guarded by is_anthropic_oauth_key
+        )
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
+        return headers, api_key
+
     return headers, api_key
 
 
@@ -1141,14 +1150,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         resolved_key: Final = AnthropicModelInfo.get_api_key(api_key)
         if resolved_key is not None:
-            if is_anthropic_oauth_key(resolved_key) and is_anthropic_api_base(api_base):
-                return {"authorization": f"Bearer {resolved_key}"}
+            if is_anthropic_oauth_key(resolved_key):
+                if is_anthropic_api_base(api_base):
+                    return {"authorization": f"Bearer {resolved_key}"}
+                return None
             return AnthropicModelInfo._make_api_key_auth_header(resolved_key, api_base, use_bearer_for_custom_base)
         auth_token: Final = AnthropicModelInfo.get_auth_token()
         if auth_token is not None:
-            if is_anthropic_api_base(api_base):
-                return {"authorization": f"Bearer {auth_token}"}
-            return None
+            if is_anthropic_oauth_key(auth_token) and not is_anthropic_api_base(api_base):
+                return None
+            return {"authorization": f"Bearer {auth_token}"}
         return None
 
     @staticmethod
