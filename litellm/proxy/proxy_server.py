@@ -6640,9 +6640,12 @@ class ProxyConfig:
             )
 
             global_agent_registry.load_agents_from_config(
-                cast(
-                    "list[AgentConfig]", [dict(agent) for agent in agent_config]
-                )  # mutable-ok: dict copies; cast-ok: entries are AgentConfig-shaped YAML mappings
+                cast(  # cast-ok: entries are AgentConfig-shaped YAML mappings
+                    "list[AgentConfig]",
+                    [
+                        dict(agent) for agent in agent_config
+                    ],  # mutable-ok: dict copies so registry mutation cannot reach the frozen config
+                )
             )
 
         mcp_servers_config: Final = config.mcp_servers
@@ -6656,12 +6659,13 @@ class ProxyConfig:
             mcp_aliases: Final = litellm_settings.get("mcp_aliases", None)
 
             await global_mcp_server_manager.load_servers_from_config(
-                cast(
-                    "dict[str, MCPServerConfig]", dict(mcp_servers_config)
-                ),  # mutable-ok: dict copy for a dict-typed callee; cast-ok: values are raw YAML mappings the manager reads via .get
-                cast("dict[str, str]", mcp_aliases)
+                cast(  # cast-ok: values are raw YAML mappings the manager reads via .get
+                    "dict[str, MCPServerConfig]",
+                    dict(mcp_servers_config),  # mutable-ok: dict copy for a dict-typed callee
+                ),
+                cast("dict[str, str]", mcp_aliases)  # cast-ok: YAML-provided alias map
                 if isinstance(mcp_aliases, dict)
-                else None,  # cast-ok: YAML-provided alias map
+                else None,
             )
 
         ## VECTOR STORES
