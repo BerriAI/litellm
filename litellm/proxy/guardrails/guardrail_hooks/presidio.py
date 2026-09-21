@@ -702,9 +702,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         valid_candidates: Final = tuple(
             c
             for c in analyze_results
-            if c.get("start") is not None
-            and c.get("end") is not None
-            and int(c["start"]) < int(c["end"])
+            if c.get("start") is not None and c.get("end") is not None and int(c["start"]) < int(c["end"])
         )
         if not valid_candidates:
             return ()
@@ -739,12 +737,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     int(x["end"]) - int(x["start"]),
                 ),
             )
-            resolved: Final = MappingProxyType({
-                "entity_type": best_candidate.get("entity_type") or "UNKNOWN",
-                "start": cluster_start,
-                "end": cluster_end,
-                "score": max(float(s.get("score") or 0) for s in cluster),
-            })
+            resolved: Final = MappingProxyType(
+                {
+                    "entity_type": best_candidate.get("entity_type") or "UNKNOWN",
+                    "start": cluster_start,
+                    "end": cluster_end,
+                    "score": max(float(s.get("score") or 0) for s in cluster),
+                }
+            )
             return resolved
 
         return tuple(_resolve_cluster(c) for c in clusters)
