@@ -305,7 +305,10 @@ class CredentialLiteLLMParams(BaseModel):
     s3_bucket_name: str | None = None
     s3_endpoint_url: str | None = None
     s3_region_name: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
     s3_encryption_key_id: str | None = None
+    s3_bucket_owner: str | None = None
     aws_batch_role_arn: str | None = None
     s3_output_bucket_name: str | None = None
     bedrock_tags: list | None = None
@@ -539,6 +542,8 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_1080p: float | None
     output_cost_per_second_4k: ReadOnly[float | None]
     num_retries: int | None

@@ -22889,6 +22889,45 @@
             "video"
         ]
     },
+    "fal_ai/minimax/h3/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.06,
+        "output_cost_per_second_2k": 0.13,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://fal.ai/models/minimax/h3/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.06,
+        "output_cost_per_second_2k": 0.13,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://fal.ai/models/minimax/h3/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "fal_ai/bytedance/seedance-2.0/text-to-video": {
         "litellm_provider": "fal_ai",
         "mode": "video_generation",
@@ -24917,10 +24956,11 @@
     "fal_ai/fal-ai/flux/dev": {
         "litellm_provider": "fal_ai",
         "metadata": {
-            "notes": "fal bills FLUX.1 [dev] at $0.025 per megapixel, rounding each image up to the nearest megapixel. Every named fal image_size (including the landscape_4_3 default) rounds up to 1 megapixel, so this flat per-image price is exact for them"
+            "notes": "fal bills FLUX.1 [dev] at $0.025 per megapixel, rounding each image up to the nearest megapixel. The per-pixel rate is used when Fal reports the output size, and the flat per-image price is the fallback when dimensions are unavailable"
         },
         "mode": "image_generation",
         "output_cost_per_image": 0.025,
+        "output_cost_per_pixel": 2.384185791015625e-08,
         "source": "https://fal.ai/models/fal-ai/flux/dev",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -42971,21 +43011,21 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4-pro": {
-        "input_cost_per_token": 9.19242e-07,
+        "input_cost_per_token": 9.00798e-07,
         "input_cost_per_token_cache_hit": 4.4e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.838484e-06,
+        "output_cost_per_token": 1.801596e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "cache_read_input_token_cost": 7.66035e-08,
+        "cache_read_input_token_cost": 7.50665e-08,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_vision": false,
@@ -54468,7 +54508,10 @@
         "supports_native_structured_output": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "zai.glm-4.7-flash": {
         "input_cost_per_token": 7e-08,
@@ -76846,5 +76889,65 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "openrouter/xiaomi/mimo-v2.6-flash": {
+        "cache_read_input_token_cost": 2.8e-09,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false
+    },
+    "openrouter/xiaomi/mimo-v2.6-pro": {
+        "cache_read_input_token_cost": 3.6e-09,
+        "input_cost_per_token": 4.35e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 8.7e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false
+    },
+    "openrouter/xiaomi/mimo-v2.6-pro-ultraspeed": {
+        "cache_read_input_token_cost": 3.6e-08,
+        "input_cost_per_token": 4.35e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 8.7e-06,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false
     }
 }

@@ -629,6 +629,25 @@ def test_aws_credential_redaction_catches_quoted_values():
     assert redact_string(safe) == safe
 
 
+def test_bedrock_batch_s3_credential_redaction_in_deployment_dump():
+    """The router logs each deployment's litellm_params at DEBUG. A Bedrock batch
+    deployment carries s3_secret_access_key there, which the aws_* key-name rule
+    did not cover, so the S3 secret was printed verbatim (LIT-8290)."""
+    cases = (
+        "{'s3_secret_access_key': 'wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY'}",
+        "s3_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+        "{'s3_access_key_id': 'not-an-akia-shaped-value'}",
+    )
+    for secret_line in cases:
+        result = redact_string(secret_line)
+        assert "REDACTED" in result, f"S3 credential redaction missed: {secret_line!r}"
+        assert "wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY" not in result
+        assert "not-an-akia-shaped-value" not in result
+
+    safe = "'s3_bucket_name': 'my-batch-bucket'"
+    assert redact_string(safe) == safe
+
+
 @pytest.mark.parametrize(
     "extra",
     (

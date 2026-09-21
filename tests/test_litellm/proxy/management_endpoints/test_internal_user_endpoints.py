@@ -4614,3 +4614,42 @@ async def test_bulk_update_screens_shared_password_with_single_lookup(_admin_pri
 
     assert response.successful_updates == 5
     assert lookup_count == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> None:
+    from litellm.proxy._types import DeleteUserRequest, LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.internal_user_endpoints import delete_user
+
+    deleted: Final = LiteLLM_UserTable(user_id="user-gone", user_email="gone@example.test", teams=[])
+    survivor: Final = LiteLLM_UserTable(user_id="user-stays", user_email="stays@example.test", teams=[])
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=deleted)
+    prisma_client.db.litellm_teamtable.find_many = mocker.AsyncMock(return_value=[])
+    prisma_client.db.litellm_jwtkeymapping.find_many = mocker.AsyncMock(return_value=[])
+    prisma_client.db.litellm_verificationtoken.find_many = mocker.AsyncMock(return_value=[])
+    prisma_client.db.litellm_verificationtoken.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_invitationlink.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_organizationmembership.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_teammembership.delete_many = mocker.AsyncMock(return_value=0)
+    prisma_client.db.litellm_usertable.delete_many = mocker.AsyncMock(return_value=1)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    cache: Final = UserApiKeyCache()
+    for row in (deleted, survivor):
+        await cache.async_set_cache(key=row.user_id, value=row, model_type=LiteLLM_UserTable)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: exercise a real isolated cache
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", None)  # test-quality-ok: delete_user reads it off proxy_server at call time
+    broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await delete_user(
+        data=DeleteUserRequest(user_ids=[deleted.user_id]),
+        user_api_key_dict=UserAPIKeyAuth(user_id="proxy-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert await cache.async_get_cache(key=deleted.user_id, model_type=LiteLLM_UserTable) is None
+    assert await cache.async_get_cache(key=survivor.user_id, model_type=LiteLLM_UserTable) == survivor
+    broadcast.assert_awaited_once_with(cache_key=deleted.user_id)

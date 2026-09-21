@@ -227,6 +227,28 @@ def test_langfuse_mapper_renders_a_responses_api_call_from_the_standard_logging_
     assert attrs["langfuse.observation.type"] == "generation"
 
 
+def test_langfuse_mapper_renders_an_ocr_call_with_the_page_markdown_as_output():
+    payload = {
+        "call_type": "aocr",
+        "custom_llm_provider": "mistral",
+        "model": "mistral-ocr-latest",
+        "messages": None,
+        "response": {
+            "object": "ocr",
+            "model": "mistral-ocr-latest",
+            "pages": [{"index": 0, "markdown": "# Invoice"}, {"index": 1, "markdown": "Total: 42"}],
+            "usage_info": {"pages_processed": 2},
+        },
+    }
+    data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
+    attrs = LangfuseMapper().map(data)
+
+    assert json.loads(attrs["langfuse.observation.output"]) == [
+        {"role": "assistant", "content": "# Invoice\n\nTotal: 42", "refusal": None, "tool_calls": None}
+    ]
+    assert attrs["langfuse.observation.type"] == "generation"
+
+
 # --------------------------------------------------------------------------- #
 #  Weave
 # --------------------------------------------------------------------------- #
