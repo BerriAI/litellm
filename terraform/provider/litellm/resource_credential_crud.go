@@ -1,13 +1,21 @@
 package litellm
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
+)
+
+const (
+	endpointCredential               = "/credentials/%s"
+	endpointCredentialByName         = "/credentials/by_name/%s"
+	endpointCredentialByNameForModel = "/credentials/by_name/%s?model_id=%s"
 )
 
 // retryCredentialRead attempts to read a credential with exponential backoff.
@@ -53,34 +61,28 @@ func retryCredentialRead(d *schema.ResourceData, m interface{}, maxRetries int) 
 	return err
 }
 
-func resourceLiteLLMCredentialCreate(d *schema.ResourceData, m interface{}) error {
-	client := m.(*Client)
-
-	credentialName := d.Get("credential_name").(string)
-	modelID := d.Get("model_id").(string)
-	credentialInfo := d.Get("credential_info").(map[string]interface{})
-	credentialValues := d.Get("credential_values").(map[string]interface{})
-
-	// Convert credential_info to map[string]interface{} for JSON
+func credentialRequestFromResource(d *schema.ResourceData, credentialName string) CredentialRequest {
 	credInfoMap := make(map[string]interface{})
-	for k, v := range credentialInfo {
+	for k, v := range d.Get("credential_info").(map[string]interface{}) {
 		credInfoMap[k] = v
 	}
-
-	// Convert credential_values to map[string]interface{} for JSON
 	credValuesMap := make(map[string]interface{})
-	for k, v := range credentialValues {
+	for k, v := range d.Get("credential_values").(map[string]interface{}) {
 		credValuesMap[k] = v
 	}
-
-	credentialRequest := CredentialRequest{
+	return CredentialRequest{
 		CredentialName:   credentialName,
-		ModelID:          modelID,
+		ModelID:          d.Get("model_id").(string),
 		CredentialInfo:   credInfoMap,
 		CredentialValues: credValuesMap,
 	}
+}
 
-	resp, err := MakeRequest(client, "POST", "/credentials", credentialRequest)
+func resourceLiteLLMCredentialCreate(d *schema.ResourceData, m interface{}) error {
+	client := m.(*Client)
+	credentialName := d.Get("credential_name").(string)
+
+	resp, err := MakeRequest(client, "POST", "/credentials", credentialRequestFromResource(d, credentialName))
 	if err != nil {
 		return fmt.Errorf("failed to create credential: %w", err)
 	}
@@ -88,25 +90,51 @@ func resourceLiteLLMCredentialCreate(d *schema.ResourceData, m interface{}) erro
 
 	err = handleCredentialAPIResponse(resp, nil, client)
 	if err != nil {
+		if errors.Is(err, errCredentialConflict) {
+			return handleCredentialNameConflict(d, m, credentialName)
+		}
 		return fmt.Errorf("failed to create credential: %w", err)
 	}
 
-	// Set the resource ID to the credential name
 	d.SetId(credentialName)
 
 	log.Printf("[INFO] Credential created with name %s. Starting retry mechanism to read the credential...", credentialName)
 	return retryCredentialRead(d, m, 5)
 }
 
+func handleCredentialNameConflict(d *schema.ResourceData, m interface{}, credentialName string) error {
+	if !d.Get("adopt_existing").(bool) {
+		return fmt.Errorf(
+			"credential %q already exists on the proxy but is not in Terraform state. "+
+				"Import it to manage it here:\n\n"+
+				"  terraform import litellm_credential.<this resource's name in your config> %s\n\n"+
+				"The next apply then updates it to match this configuration. To take it over during "+
+				"create instead, set adopt_existing = true on this resource, which overwrites the "+
+				"existing credential's values with the ones configured here",
+			credentialName, shellSingleQuote(credentialName),
+		)
+	}
+
+	log.Printf("[WARN] Credential %q already exists; adopt_existing is set, so taking it over and updating it to match configuration.", credentialName)
+	d.SetId(credentialName)
+	if err := patchCredential(m.(*Client), d, credentialName); err != nil {
+		d.SetId("")
+		return fmt.Errorf("failed to adopt existing credential %q: %w", credentialName, err)
+	}
+	return retryCredentialRead(d, m, 5)
+}
+
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
 func resourceLiteLLMCredentialRead(d *schema.ResourceData, m interface{}) error {
 	client := m.(*Client)
 	credentialName := d.Id()
 
-	// Try to get credential by name first
-	modelID := d.Get("model_id").(string)
-	endpoint := fmt.Sprintf("/credentials/by_name/%s", credentialName)
-	if modelID != "" {
-		endpoint += fmt.Sprintf("?model_id=%s", modelID)
+	endpoint := fmt.Sprintf(endpointCredentialByName, url.PathEscape(credentialName))
+	if modelID := d.Get("model_id").(string); modelID != "" {
+		endpoint = fmt.Sprintf(endpointCredentialByNameForModel, url.PathEscape(credentialName), url.QueryEscape(modelID))
 	}
 
 	resp, err := MakeRequest(client, "GET", endpoint, nil)
@@ -138,41 +166,27 @@ func resourceLiteLLMCredentialRead(d *schema.ResourceData, m interface{}) error 
 	return nil
 }
 
-func resourceLiteLLMCredentialUpdate(d *schema.ResourceData, m interface{}) error {
-	client := m.(*Client)
-	credentialName := d.Id()
-
-	credentialInfo := d.Get("credential_info").(map[string]interface{})
-	credentialValues := d.Get("credential_values").(map[string]interface{})
-
-	// Convert credential_info to map[string]interface{} for JSON
-	credInfoMap := make(map[string]interface{})
-	for k, v := range credentialInfo {
-		credInfoMap[k] = v
-	}
-
-	// Convert credential_values to map[string]interface{} for JSON
-	credValuesMap := make(map[string]interface{})
-	for k, v := range credentialValues {
-		credValuesMap[k] = v
-	}
-
-	credentialRequest := CredentialRequest{
-		CredentialName:   credentialName,
-		CredentialInfo:   credInfoMap,
-		CredentialValues: credValuesMap,
-	}
-
-	endpoint := fmt.Sprintf("/credentials/%s", credentialName)
-	resp, err := MakeRequest(client, "PATCH", endpoint, credentialRequest)
+func patchCredential(client *Client, d *schema.ResourceData, credentialName string) error {
+	resp, err := MakeRequest(client, "PATCH", fmt.Sprintf(endpointCredential, url.PathEscape(credentialName)), credentialRequestFromResource(d, credentialName))
 	if err != nil {
 		return fmt.Errorf("failed to update credential: %w", err)
 	}
 	defer resp.Body.Close()
 
-	err = handleCredentialAPIResponse(resp, nil, client)
-	if err != nil {
+	if err := handleCredentialAPIResponse(resp, nil, client); err != nil {
 		return fmt.Errorf("failed to update credential: %w", err)
+	}
+	return nil
+}
+
+func resourceLiteLLMCredentialUpdate(d *schema.ResourceData, m interface{}) error {
+	if !d.HasChangesExcept("adopt_existing") {
+		return nil
+	}
+
+	credentialName := d.Id()
+	if err := patchCredential(m.(*Client), d, credentialName); err != nil {
+		return err
 	}
 
 	log.Printf("[INFO] Credential updated with name %s. Starting retry mechanism to read the credential...", credentialName)
@@ -183,8 +197,7 @@ func resourceLiteLLMCredentialDelete(d *schema.ResourceData, m interface{}) erro
 	client := m.(*Client)
 	credentialName := d.Id()
 
-	endpoint := fmt.Sprintf("/credentials/%s", credentialName)
-	resp, err := MakeRequest(client, "DELETE", endpoint, nil)
+	resp, err := MakeRequest(client, "DELETE", fmt.Sprintf(endpointCredential, url.PathEscape(credentialName)), nil)
 	if err != nil {
 		return fmt.Errorf("failed to delete credential: %w", err)
 	}

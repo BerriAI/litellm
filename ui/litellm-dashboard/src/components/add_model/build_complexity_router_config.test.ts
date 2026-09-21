@@ -4,6 +4,7 @@ import {
   normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getClassifierModelError,
+  getHeuristicV2SuccessThresholdError,
   getClassifierReasoningEffortError,
   getMissingTiersError,
   hydrateCustomTierSet,
@@ -48,6 +49,67 @@ const baseParams: BuildComplexityRouterConfigParams = {
 };
 
 describe("buildComplexityRouterConfig", () => {
+  it("forwards preset references and explicit overrides without materializing absent text on create", () => {
+    const settings = {
+      efficient_profile_preset: "efficient-v1",
+      capable_profile_preset: "capable-v1",
+      harness_preset: "runtime-v1",
+      efficient_profile: "Explicit efficient override",
+      capable_profile: "Explicit capable override",
+      harness: "Explicit harness override",
+      max_quality_gap: 0.05,
+    };
+    const config = buildComplexityRouterConfig({ ...baseParams, classifierType: "llm_v2", llmV2Config: settings });
+    expect(config.llm_v2_config).toEqual(settings);
+    const { efficient_profile: _efficient, capable_profile: _capable, harness: _harness, ...refs } = settings;
+    const refConfig = buildComplexityRouterConfig({ ...baseParams, classifierType: "llm_v2", llmV2Config: refs });
+    expect(JSON.parse(JSON.stringify(refConfig)).llm_v2_config).toEqual(refs);
+  });
+
+  it.each(["capability", "llm_v2", "heuristic"] as const)(
+    "disables the removed overrides only for forecast creates: %s",
+    (classifierType) => {
+      const forecast = classifierType !== "heuristic";
+      const params = {
+        ...baseParams,
+        classifierType,
+        adaptive: true,
+        enableContextWindowEscalation: true,
+        contextWindowEscalationBuffer: 0.9,
+      };
+      const config = buildComplexityRouterConfig(params);
+      expect(config.adaptive).toBe(!forecast);
+      expect(config.enable_context_window_escalation).toBe(!forecast);
+      expect(config.escalation_keywords).toEqual(forecast ? [] : ["LITELLM ESCALATE"]);
+      for (const key of [
+        "adaptive_weights",
+        "adaptive_eligible",
+        "tier_distance_penalty",
+        "context_window_escalation_buffer",
+      ]) {
+        expect(Object.hasOwn(config, key)).toBe(!forecast);
+      }
+      if (forecast) {
+        const untouched = buildComplexityRouterConfig({ ...baseParams, classifierType });
+        expect(untouched.enable_context_window_escalation).toBe(false);
+        expect(untouched.escalation_keywords).toEqual([]);
+      }
+    },
+  );
+
+  it("carries Fast and reasoning overrides independently into a new router payload", () => {
+    const params = { speed: "fast", reasoning_effort: "high", max_tokens: 1024 };
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      tiers: { ...tiers, COMPLEX: ["primary"], REASONING: ["secondary"] },
+      tierModelParams: { COMPLEX: { primary: params }, REASONING: { secondary: { speed: "fast" } } },
+    });
+    expect(config.tier_model_configs).toEqual({
+      COMPLEX: [{ model_name: "primary", litellm_params: params }],
+      REASONING: [{ model_name: "secondary", litellm_params: { speed: "fast" } }],
+    });
+  });
+
   it("emits tiers, classifier_type, and escalation_keywords when nothing else is configured", () => {
     const config = buildComplexityRouterConfig(baseParams);
     const expected = {
@@ -150,7 +212,27 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.classifier_llm_config).toBeUndefined();
     expect(config.classifier_context_window_size).toBeUndefined();
     expect(config.classifier_fallback).toBeUndefined();
+    expect(config).not.toHaveProperty("heuristic_v2_success_threshold");
   });
+
+  it.each([0, 0.95, 1])("serializes a heuristic v2 success threshold of %s", (heuristicV2SuccessThreshold) => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "heuristic_v2",
+      heuristicV2SuccessThreshold,
+    });
+    expect(config.heuristic_v2_success_threshold).toBe(heuristicV2SuccessThreshold);
+  });
+
+  it.each(["heuristic", "llm", "heuristic_first", "hybrid", "capability", "llm_v2"] as const)(
+    "retains the inactive success threshold under %s",
+    (classifierType) => {
+      expect(
+        buildComplexityRouterConfig({ ...baseParams, classifierType, heuristicV2SuccessThreshold: 0.91 })
+          .heuristic_v2_success_threshold,
+      ).toBe(0.91);
+    },
+  );
 
   it("includes classifier_context_window_size and classifier_context_budget_chars only when classifier_type is llm", () => {
     const params: BuildComplexityRouterConfigParams = {
@@ -821,6 +903,19 @@ describe("buildComplexityRouterConfig tier model params", () => {
       COMPLEX: [{ model_name: "claude-sonnet-4", litellm_params: { reasoning_effort: "high" } }],
     });
   });
+});
+
+describe("getHeuristicV2SuccessThresholdError", () => {
+  it.each([undefined, 0, 0.95, 1])("accepts the optional probability %s", (threshold) => {
+    expect(getHeuristicV2SuccessThresholdError(threshold)).toBeNull();
+  });
+
+  it.each([-0.01, 1.01, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects invalid success threshold %s",
+    (threshold) => {
+      expect(getHeuristicV2SuccessThresholdError(threshold)).toBe("Success threshold must be a number between 0 and 1");
+    },
+  );
 });
 
 describe("getClassifierModelError", () => {

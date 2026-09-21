@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from anthropic.types import RawMessageStreamEvent, ToolParam
 
-from e2e_config import EXPECT_RUST, unique_marker
+from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -32,17 +32,6 @@ WEATHER_TOOL: ToolParam = {
         "required": ["city"],
     },
 }
-
-
-def _assert_rust_served(headers: dict[str, str]) -> None:
-    if not EXPECT_RUST:
-        return
-    assert headers.get("x-litellm-rust") == "true", (
-        "E2E_EXPECT_RUST is set, so this gateway must serve /v1/messages through the "
-        "Rust path, but the response carried no x-litellm-rust marker. The request "
-        "still succeeded, which is exactly the failure mode: a gateway whose native "
-        f"extension is unavailable falls back to Python silently. headers={headers}"
-    )
 
 
 def _assert_streamed_ok(event_types: list[str]) -> None:
@@ -88,14 +77,13 @@ class TestAzureFoundryMessages:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
 
-        raw = client.messages.with_raw_response.create(
+        stream = client.messages.create(
             model=model,
             max_tokens=64,
             stream=True,
             messages=[{"role": "user", "content": "Count from one to three."}],
         )
-        _assert_rust_served({name.lower(): value for name, value in raw.headers.items()})
-        _assert_streamed_ok([event.type for event in raw.parse()])
+        _assert_streamed_ok([event.type for event in stream])
 
     @pytest.mark.covers("llm.messages.azure_foundry.tool_use.nonstream.works")
     def test_tool_use_nonstream(

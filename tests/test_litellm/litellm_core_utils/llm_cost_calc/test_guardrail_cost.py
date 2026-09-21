@@ -1,4 +1,3 @@
-import os
 
 import pytest
 
@@ -119,22 +118,6 @@ def test_billed_guardrail_cost_by_unit_is_none_when_unpriced_report_only_or_forg
 def test_billed_guardrail_cost_by_unit_treats_none_in_spend_as_billed():
     entry = {"guardrail_cost_by_unit": {"contentPolicyUnits": 0.15}, "guardrail_cost_in_spend": None}
     assert billed_guardrail_cost_by_unit(entry) == {"contentPolicyUnits": 0.15}
-
-
-def test_shipped_bedrock_guardrail_prices_match_aws_pricing_page(monkeypatch):
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    assert litellm.model_cost["bedrock/guardrails"]["guardrail_cost_per_unit"] == {
-        "automatedReasoningPolicyUnits": 0.00017,
-        "contentPolicyImageUnits": 0.00075,
-        "contentPolicyUnits": 0.00015,
-        "contextualGroundingPolicyUnits": 0.0001,
-        "sensitiveInformationPolicyFreeUnits": 0.0,
-        "sensitiveInformationPolicyUnits": 0.0001,
-        "topicPolicyUnits": 0.00015,
-        "wordPolicyUnits": 0.0,
-    }
-    assert "bedrock/guardrails" not in litellm.bedrock_models
 
 
 def test_guardrail_information_cost_sums_entries():

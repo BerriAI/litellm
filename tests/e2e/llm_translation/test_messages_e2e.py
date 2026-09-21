@@ -153,6 +153,7 @@ class TestAnthropicMessages:
         )
 
     @pytest.mark.covers("llm.messages.anthropic.basic.stream.works")
+    @pytest.mark.provider_live
     def test_messages_streams_completion(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -321,6 +322,7 @@ def _request_tool(client: Anthropic, model: str, question: MessageParam, tool: T
 
 
 class TestOpenAIMessagesToolContinuation:
+    @pytest.mark.provider_live
     @pytest.mark.parametrize("stream", [True, False], ids=["stream", "nonstream"])
     def test_required_tool_arguments_and_correlated_result(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, stream: bool

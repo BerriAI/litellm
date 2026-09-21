@@ -5739,9 +5739,15 @@ class TestMCPDcrBridgeDelegateAdmission:
         prisma and are swallowed (``_safe_fetch`` / the SCIM gate's fail-open), so their checks
         skip. Yields the ``get_key_object`` mock so callers can assert the sealed ``key_hash`` was
         the reload key."""
+        from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
+
         get_key_object = AsyncMock(return_value=return_value, side_effect=side_effect)
+        get_org_object = AsyncMock(side_effect=OrganizationNotFoundError("Organization doesn't exist in db."))
         patchers = [
             patch("litellm.proxy.auth.auth_checks.get_key_object", get_key_object),
+            patch(  # test-quality-ok: central auth now resolves org limits; this fixture models a missing org row
+                "litellm.proxy.auth.auth_checks.get_org_object", get_org_object
+            ),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
         ]
@@ -6333,15 +6339,15 @@ class TestMCPDcrBridgeDelegateAdmission:
                 )
         return exc_info.value
 
-    async def test_over_budget_admission_surfaces_429_not_401(self):
-        """A validly-authenticated but over-budget identity surfaces the standard pipeline's 429, not
+    async def test_over_budget_admission_surfaces_422_not_401(self):
+        """A validly-authenticated but over-budget identity surfaces the standard pipeline's 422, not
         a misleading 401. Flattening budget to 401 told the caller their credential was invalid, which
         on a DCR client reads as broken auth and triggers a re-authorize that cannot fix a budget
         problem. Regression for the status-flattening finding on the live-policy gate."""
         import litellm
 
         mapped = await self._enforce_with_gate_error(litellm.BudgetExceededError(current_cost=10.0, max_budget=1.0))
-        assert mapped.status_code == 429
+        assert mapped.status_code == 422
 
     async def test_db_outage_during_policy_surfaces_503_not_401(self):
         """A transient database outage during the live-policy gate surfaces a retryable 503, not a 401

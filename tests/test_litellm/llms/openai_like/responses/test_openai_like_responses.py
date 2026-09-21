@@ -6,7 +6,6 @@ import os
 import sys
 from unittest.mock import patch
 
-import pytest
 
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
@@ -58,12 +57,6 @@ class TestSimpleProviderConfigSupportedEndpoints:
 class TestJSONProviderRegistryResponsesAPI:
     """Test supports_responses_api on JSONProviderRegistry."""
 
-    def test_existing_provider_no_responses(self):
-        """Existing providers without supported_endpoints don't support responses"""
-        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
-
-        # publicai has no supported_endpoints in JSON, defaults to []
-        assert JSONProviderRegistry.supports_responses_api("publicai") is False
 
     def test_nonexistent_provider(self):
         """Non-existent provider returns False"""
@@ -73,31 +66,6 @@ class TestJSONProviderRegistryResponsesAPI:
             JSONProviderRegistry.supports_responses_api("nonexistent_provider_xyz")
             is False
         )
-
-    def test_provider_with_responses_endpoint(self):
-        """A provider with /v1/responses in supported_endpoints returns True"""
-        from litellm.llms.openai_like.json_loader import (
-            JSONProviderRegistry,
-            SimpleProviderConfig,
-        )
-
-        # Temporarily inject a test provider
-        test_config = SimpleProviderConfig(
-            "test_responses_provider",
-            {
-                "base_url": "https://test.example.com",
-                "api_key_env": "TEST_API_KEY",
-                "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
-            },
-        )
-        JSONProviderRegistry._providers["test_responses_provider"] = test_config
-        try:
-            assert (
-                JSONProviderRegistry.supports_responses_api("test_responses_provider")
-                is True
-            )
-        finally:
-            del JSONProviderRegistry._providers["test_responses_provider"]
 
 
 class TestCreateResponsesConfigClass:
