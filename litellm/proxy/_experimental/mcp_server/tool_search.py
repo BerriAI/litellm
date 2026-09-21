@@ -99,11 +99,20 @@ def mcp_tool_search_settings() -> MCPToolSearchSettings | ValidationError:
 
 
 def _tool_result(tool: Tool) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+    }  # mutable-ok: wire schema payload
 
 
 def _scored_result(tool: Tool, score: float) -> ToolSearchResult:
-    return {"name": tool.name, "description": tool.description or "", "inputSchema": tool.inputSchema, "score": score}
+    return {
+        "name": tool.name,
+        "description": tool.description or "",
+        "inputSchema": tool.input_schema,
+        "score": score,
+    }  # mutable-ok: wire schema payload
 
 
 _MCP_PROXY_IDENTITY_META_KEY: Final[str] = "litellm.ai/proxy_tool_identity"
@@ -148,11 +157,11 @@ def _proxy_schema_result(tool: Tool) -> MCPProxySchemaResult:
         "tool_id": mcp_proxy_tool_id(tool),
         "name": tool.name,
         "description": tool.description or "",
-        "inputSchema": tool.inputSchema,
+        "inputSchema": tool.input_schema,
     }
-    if tool.outputSchema is None:
+    if tool.output_schema is None:
         return base
-    return {**base, "outputSchema": tool.outputSchema}  # mutable-ok: wire schema payload
+    return {**base, "outputSchema": tool.output_schema}  # mutable-ok: wire schema payload
 
 
 def _tool_text(tool: Tool) -> str:
@@ -372,7 +381,7 @@ def _text_tool_result(text: str, is_error: bool) -> CallToolResult:
 
     return CallToolResult(
         content=[TextContent(type="text", text=text)],  # mutable-ok: CallToolResult accepts only list content
-        isError=is_error,
+        is_error=is_error,
     )
 
 
@@ -565,7 +574,7 @@ async def handle_mcp_proxy_tool(
     if not isinstance(tool_arguments, dict):
         return _text_tool_result("arguments must be an object", is_error=True)
     try:
-        validate(instance=tool_arguments, schema=tool.inputSchema)
+        validate(instance=tool_arguments, schema=tool.input_schema)
     except JsonSchemaValidationError as exc:
         return _text_tool_result(f"Invalid arguments: {exc.message}", is_error=True)
 

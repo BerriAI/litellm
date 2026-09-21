@@ -65,6 +65,19 @@ describe("AttachmentTable", () => {
     );
   });
 
+  it("should show a Default badge only for default attachments", () => {
+    const attachments = [
+      makeAttachment({ attachment_id: "att-def00001", policy_name: "fallback", default: true }),
+      makeAttachment({ attachment_id: "att-def00002", policy_name: "regular" }),
+    ];
+    renderWithProviders(<AttachmentTable {...defaultProps} attachments={attachments} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    const fallbackRow = rows.find((row) => within(row).queryByText("fallback"));
+    const regularRow = rows.find((row) => within(row).queryByText("regular"));
+    expect(within(fallbackRow!).getByText("Default")).toBeInTheDocument();
+    expect(within(regularRow!).queryByText("Default")).not.toBeInTheDocument();
+  });
+
   it("should show skeleton rows when isLoading is true", () => {
     renderWithProviders(<AttachmentTable {...defaultProps} isLoading />);
     expect(screen.getAllByTestId("skeleton-row").length).toBeGreaterThan(0);
