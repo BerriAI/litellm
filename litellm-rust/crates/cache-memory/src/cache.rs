@@ -1,13 +1,14 @@
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
+    collections::{BinaryHeap, HashMap, HashSet},
+    hash::Hash,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use litellm_cache::{
-    BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheKwargs, ClaimCache, CounterCache,
-    Error, IncrementOperation,
+    BaseCache, BatchCache, CacheConnectionResult, CacheConnectionStatus, ClaimCache, CounterCache,
+    DeleteCache, Error, ExactCacheContext, FlushCache, IncrementOperation, SetCache, TtlCache,
 };
 
 const DEFAULT_MAX_SIZE_IN_MEMORY: usize = 200;
@@ -219,7 +220,7 @@ where
         key: &str,
         candidate: V,
         eligible: &[V],
-        kwargs: CacheKwargs,
+        context: ExactCacheContext,
     ) -> Result<V, Error> {
         if self.max_size_in_memory == 0 {
             return Ok(candidate);
@@ -239,14 +240,23 @@ where
             return Ok(existing.clone());
         }
         let winner = existing.unwrap_or(candidate);
-        Self::set_expiration(&mut state, key, now + self.get_ttl(&kwargs));
+        Self::set_expiration(
+            &mut state,
+            key,
+            now + self.get_ttl(&context).unwrap_or(self.default_ttl),
+        );
         state.values.insert(key.into(), winner.clone());
         Ok(winner)
     }
 }
 
 impl CounterCache for InMemoryCache<f64> {
-    fn increment_cache(&self, key: &str, amount: f64, kwargs: CacheKwargs) -> Result<f64, Error> {
+    fn increment_cache(
+        &self,
+        key: &str,
+        amount: f64,
+        context: ExactCacheContext,
+    ) -> Result<f64, Error> {
         if self.max_size_in_memory == 0 {
             return Ok(amount);
         }
@@ -255,7 +265,11 @@ impl CounterCache for InMemoryCache<f64> {
         Self::evict(&mut state, self.max_size_in_memory, now, key);
         let value = state.values.get(key).copied().unwrap_or_default() + amount;
         if !state.expirations.contains_key(key) {
-            Self::set_expiration(&mut state, key, now + self.get_ttl(&kwargs));
+            Self::set_expiration(
+                &mut state,
+                key,
+                now + self.get_ttl(&context).unwrap_or(self.default_ttl),
+            );
         }
         state.values.insert(key.into(), value);
         Ok(value)
@@ -273,10 +287,7 @@ impl InMemoryCache<f64> {
                 self.increment_cache(
                     &operation.key,
                     operation.amount,
-                    CacheKwargs {
-                        ttl: operation.ttl,
-                        ..CacheKwargs::default()
-                    },
+                    ExactCacheContext { ttl: operation.ttl },
                 )
             })
             .collect()
@@ -285,26 +296,24 @@ impl InMemoryCache<f64> {
 
 impl<V: Clone + Send + Sync + 'static> BaseCache for InMemoryCache<V> {
     type Value = V;
+    type Context = ExactCacheContext;
 
-    fn default_ttl(&self) -> Duration {
-        self.default_ttl
+    fn get_ttl(&self, context: &Self::Context) -> Option<Duration> {
+        context.ttl.or(Some(self.default_ttl))
     }
 
-    fn set_cache(&self, key: &str, value: Self::Value, kwargs: CacheKwargs) -> Result<(), Error> {
-        let ttl = self.get_ttl(&kwargs);
+    fn set_cache(
+        &self,
+        key: &str,
+        value: Self::Value,
+        context: &ExactCacheContext,
+    ) -> Result<(), Error> {
+        let ttl = self.get_ttl(context).unwrap_or(self.default_ttl);
         self.set_cache(key, value, Some(ttl)).map(|_| ())
     }
 
-    fn get_cache(&self, key: &str, _: &CacheKwargs) -> Result<Option<Self::Value>, Error> {
+    fn get_cache(&self, key: &str, _: &ExactCacheContext) -> Result<Option<Self::Value>, Error> {
         self.get_cache(key)
-    }
-
-    fn delete_cache(&self, key: &str) -> Result<(), Error> {
-        self.delete_cache(key)
-    }
-
-    fn flush_cache(&self) -> Result<(), Error> {
-        self.flush_cache()
     }
 
     async fn disconnect(&self) -> Result<(), Error> {
@@ -320,6 +329,60 @@ impl<V: Clone + Send + Sync + 'static> BaseCache for InMemoryCache<V> {
     }
 }
 
+impl<V: Clone + Send + Sync + 'static> BatchCache for InMemoryCache<V> {}
+
+impl<V: Clone + Send + Sync + 'static> DeleteCache for InMemoryCache<V> {
+    fn delete_cache(&self, key: &str) -> Result<(), Error> {
+        InMemoryCache::delete_cache(self, key)
+    }
+}
+
+impl<V: Clone + Send + Sync + 'static> FlushCache for InMemoryCache<V> {
+    fn flush_cache(&self) -> Result<(), Error> {
+        InMemoryCache::flush_cache(self)
+    }
+}
+
+impl<V: Clone + Send + Sync + 'static> TtlCache for InMemoryCache<V> {
+    async fn async_get_ttl(&self, key: &str) -> Result<Option<Duration>, Error> {
+        InMemoryCache::async_get_ttl(self, key).await
+    }
+}
+
+impl<T> SetCache for InMemoryCache<HashSet<T>>
+where
+    T: Clone + Eq + Hash + Send + Sync + 'static,
+{
+    type SetValue = T;
+    type SetResult = Vec<T>;
+
+    async fn async_set_cache_sadd(
+        &self,
+        key: &str,
+        values: Vec<Self::SetValue>,
+        ttl: Option<Duration>,
+    ) -> Result<Self::SetResult, Error> {
+        if self.max_size_in_memory == 0 {
+            return Ok(values);
+        }
+        let now = (self.now)();
+        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        Self::evict(&mut state, self.max_size_in_memory, now, key);
+        let mut stored = state.values.get(key).cloned().unwrap_or_default();
+        stored.extend(values.iter().cloned());
+        if let (Some(limit), Some(measure)) = (self.max_entry_bytes, &self.measure_value)
+            && measure(&stored)? > limit
+        {
+            return Ok(values);
+        }
+        if !state.expirations.contains_key(key) {
+            Self::set_expiration(&mut state, key, now + ttl.unwrap_or(self.default_ttl));
+        }
+        state.values.insert(key.into(), stored);
+        Ok(values)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,7 +392,7 @@ mod tests {
         let cache = InMemoryCache::<f64>::new(Some(4), None);
         for _ in 0..100 {
             cache
-                .increment_cache("counter", 1.0, CacheKwargs::default())
+                .increment_cache("counter", 1.0, ExactCacheContext::default())
                 .unwrap();
         }
         assert_eq!(cache.state.lock().unwrap().expiration_heap.len(), 1);

@@ -1,7 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::{
-    BaseCache, BatchEntry, CacheConnectionResult, CacheKwargs, ClaimCache, CounterCache, Error,
+    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, ClaimCache,
+    CounterCache, DeleteCache, Error, FlushCache,
 };
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -94,19 +95,17 @@ impl<L1, L2> DualCache<L1, L2> {
         }
     }
 
-    fn promotion_kwargs(&self, kwargs: &CacheKwargs) -> CacheKwargs {
-        CacheKwargs {
-            ttl: self.promotion_ttl.or(kwargs.ttl),
-            extras: kwargs.extras.clone(),
-        }
+    fn promotion_context<C: CacheContext>(&self, context: &C) -> C {
+        context.with_ttl(self.promotion_ttl.or(context.ttl()))
     }
 }
 
-impl<V, L1, L2> DualCache<L1, L2>
+impl<V, C, L1, L2> DualCache<L1, L2>
 where
     V: Clone + Send + Sync + 'static,
-    L1: BaseCache<Value = V>,
-    L2: BaseCache<Value = V>,
+    C: CacheContext,
+    L1: BaseCache<Value = V, Context = C>,
+    L2: BaseCache<Value = V, Context = C>,
 {
     fn missing(entries: &[BatchEntry<V>]) -> Vec<usize> {
         entries
@@ -119,7 +118,7 @@ where
     fn merge_batch(
         &self,
         keys: &[String],
-        kwargs: &CacheKwargs,
+        context: &C,
         mut entries: Vec<BatchEntry<V>>,
         missing: Vec<usize>,
         remote: Vec<BatchEntry<V>>,
@@ -129,8 +128,9 @@ where
         }
         for (index, entry) in missing.into_iter().zip(remote) {
             if let BatchEntry::Hit(value) = &entry {
+                let promotion_context = self.promotion_context(context);
                 self.l1
-                    .set_cache(&keys[index], value.clone(), self.promotion_kwargs(kwargs))?;
+                    .set_cache(&keys[index], value.clone(), &promotion_context)?;
             }
             entries[index] = entry;
         }
@@ -138,46 +138,105 @@ where
     }
 }
 
-impl<V, L1, L2> BaseCache for DualCache<L1, L2>
+impl<V, C, L1, L2> BaseCache for DualCache<L1, L2>
 where
     V: Clone + Send + Sync + 'static,
-    L1: BaseCache<Value = V>,
-    L2: BaseCache<Value = V>,
+    C: CacheContext,
+    L1: BaseCache<Value = V, Context = C>,
+    L2: BaseCache<Value = V, Context = C>,
 {
     type Value = V;
+    type Context = C;
 
-    fn default_ttl(&self) -> Duration {
-        self.l2.default_ttl()
+    fn get_ttl(&self, context: &Self::Context) -> Option<Duration> {
+        self.l2.get_ttl(context)
     }
 
-    fn set_cache(&self, key: &str, value: V, kwargs: CacheKwargs) -> Result<(), Error> {
+    fn set_cache(&self, key: &str, value: V, context: &C) -> Result<(), Error> {
         if self.writes_remote() {
-            self.remote(self.l2.set_cache(key, value.clone(), kwargs.clone()))?;
+            self.remote(self.l2.set_cache(key, value.clone(), context))?;
         }
-        self.l1.set_cache(key, value, kwargs)
+        self.l1.set_cache(key, value, context)
     }
 
-    fn get_cache(&self, key: &str, kwargs: &CacheKwargs) -> Result<Option<V>, Error> {
-        if let Some(value) = self.l1.get_cache(key, kwargs)? {
+    fn get_cache(&self, key: &str, context: &C) -> Result<Option<V>, Error> {
+        if let Some(value) = self.l1.get_cache(key, context)? {
             return Ok(Some(value));
         }
         if !self.reads_remote() {
             return Ok(None);
         }
-        let value = self.remote(self.l2.get_cache(key, kwargs))?.flatten();
+        let value = self.remote(self.l2.get_cache(key, context))?.flatten();
         if let Some(value) = &value {
-            self.l1
-                .set_cache(key, value.clone(), self.promotion_kwargs(kwargs))?;
+            let promotion_context = self.promotion_context(context);
+            self.l1.set_cache(key, value.clone(), &promotion_context)?;
         }
         Ok(value)
     }
 
-    fn get_cache_batch(
+    async fn async_set_cache(&self, key: &str, value: V, context: C) -> Result<(), Error> {
+        if self.writes_remote() {
+            self.remote(
+                self.l2
+                    .async_set_cache(key, value.clone(), context.clone())
+                    .await,
+            )?;
+        }
+        self.l1.async_set_cache(key, value, context).await
+    }
+
+    async fn async_get_cache(&self, key: &str, context: &C) -> Result<Option<V>, Error> {
+        if let Some(value) = self.l1.async_get_cache(key, context).await? {
+            return Ok(Some(value));
+        }
+        if !self.reads_remote() {
+            return Ok(None);
+        }
+        let value = self
+            .remote(self.l2.async_get_cache(key, context).await)?
+            .flatten();
+        if let Some(value) = &value {
+            self.l1
+                .async_set_cache(key, value.clone(), self.promotion_context(context))
+                .await?;
+        }
+        Ok(value)
+    }
+
+    async fn async_set_cache_pipeline(
         &self,
-        keys: &[String],
-        kwargs: &CacheKwargs,
-    ) -> Result<Vec<BatchEntry<V>>, Error> {
-        let entries = self.l1.get_cache_batch(keys, kwargs)?;
+        entries: Vec<(String, V)>,
+        context: C,
+    ) -> Result<(), Error> {
+        if self.writes_remote() {
+            self.remote(
+                self.l2
+                    .async_set_cache_pipeline(entries.clone(), context.clone())
+                    .await,
+            )?;
+        }
+        self.l1.async_set_cache_pipeline(entries, context).await
+    }
+
+    async fn disconnect(&self) -> Result<(), Error> {
+        self.l2.disconnect().await?;
+        self.l1.disconnect().await
+    }
+
+    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
+        self.l2.test_connection().await
+    }
+}
+
+impl<V, C, L1, L2> BatchCache for DualCache<L1, L2>
+where
+    V: Clone + Send + Sync + 'static,
+    C: CacheContext,
+    L1: BatchCache<Value = V, Context = C>,
+    L2: BatchCache<Value = V, Context = C>,
+{
+    fn batch_get_cache(&self, keys: &[String], context: &C) -> Result<Vec<BatchEntry<V>>, Error> {
+        let entries = self.l1.batch_get_cache(keys, context)?;
         let missing = Self::missing(&entries);
         if missing.is_empty() || !self.reads_remote() {
             return Ok(entries);
@@ -186,49 +245,20 @@ where
             .iter()
             .map(|index| keys[*index].clone())
             .collect::<Vec<_>>();
-        match self.remote(self.l2.get_cache_batch(&remote_keys, kwargs))? {
-            Some(remote) => self.merge_batch(keys, kwargs, entries, missing, remote),
+        match self.remote(self.l2.batch_get_cache(&remote_keys, context))? {
+            Some(remote) => self.merge_batch(keys, context, entries, missing, remote),
             None => Ok(entries),
         }
     }
 
-    async fn async_set_cache(&self, key: &str, value: V, kwargs: CacheKwargs) -> Result<(), Error> {
-        if self.writes_remote() {
-            self.remote(
-                self.l2
-                    .async_set_cache(key, value.clone(), kwargs.clone())
-                    .await,
-            )?;
-        }
-        self.l1.async_set_cache(key, value, kwargs).await
-    }
-
-    async fn async_get_cache(&self, key: &str, kwargs: &CacheKwargs) -> Result<Option<V>, Error> {
-        if let Some(value) = self.l1.async_get_cache(key, kwargs).await? {
-            return Ok(Some(value));
-        }
-        if !self.reads_remote() {
-            return Ok(None);
-        }
-        let value = self
-            .remote(self.l2.async_get_cache(key, kwargs).await)?
-            .flatten();
-        if let Some(value) = &value {
-            self.l1
-                .async_set_cache(key, value.clone(), self.promotion_kwargs(kwargs))
-                .await?;
-        }
-        Ok(value)
-    }
-
-    async fn async_get_cache_batch(
+    async fn async_batch_get_cache(
         &self,
         keys: Vec<String>,
-        kwargs: CacheKwargs,
+        context: C,
     ) -> Result<Vec<BatchEntry<V>>, Error> {
         let entries = self
             .l1
-            .async_get_cache_batch(keys.clone(), kwargs.clone())
+            .async_batch_get_cache(keys.clone(), context.clone())
             .await?;
         let missing = Self::missing(&entries);
         if missing.is_empty() || !self.reads_remote() {
@@ -237,29 +267,22 @@ where
         let remote_keys = missing.iter().map(|index| keys[*index].clone()).collect();
         match self.remote(
             self.l2
-                .async_get_cache_batch(remote_keys, kwargs.clone())
+                .async_batch_get_cache(remote_keys, context.clone())
                 .await,
         )? {
-            Some(remote) => self.merge_batch(&keys, &kwargs, entries, missing, remote),
+            Some(remote) => self.merge_batch(&keys, &context, entries, missing, remote),
             None => Ok(entries),
         }
     }
+}
 
-    async fn async_set_cache_pipeline(
-        &self,
-        cache_list: Vec<(String, V)>,
-        kwargs: CacheKwargs,
-    ) -> Result<(), Error> {
-        if self.writes_remote() {
-            self.remote(
-                self.l2
-                    .async_set_cache_pipeline(cache_list.clone(), kwargs.clone())
-                    .await,
-            )?;
-        }
-        self.l1.async_set_cache_pipeline(cache_list, kwargs).await
-    }
-
+impl<V, C, L1, L2> DeleteCache for DualCache<L1, L2>
+where
+    V: Clone + Send + Sync + 'static,
+    C: CacheContext,
+    L1: DeleteCache<Value = V, Context = C>,
+    L2: DeleteCache<Value = V, Context = C>,
+{
     fn delete_cache(&self, key: &str) -> Result<(), Error> {
         if self.writes_remote() {
             self.remote(self.l2.delete_cache(key))?;
@@ -273,7 +296,15 @@ where
         }
         self.l1.async_delete_cache(key).await
     }
+}
 
+impl<V, C, L1, L2> FlushCache for DualCache<L1, L2>
+where
+    V: Clone + Send + Sync + 'static,
+    C: CacheContext,
+    L1: FlushCache<Value = V, Context = C>,
+    L2: FlushCache<Value = V, Context = C>,
+{
     fn flush_cache(&self) -> Result<(), Error> {
         if self.writes_remote() {
             self.remote(self.l2.flush_cache())?;
@@ -287,65 +318,47 @@ where
         }
         self.l1.async_flush_cache().await
     }
-
-    async fn disconnect(&self) -> Result<(), Error> {
-        self.l2.disconnect().await?;
-        self.l1.disconnect().await
-    }
-
-    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        self.l2.test_connection().await
-    }
 }
 
-impl<L1, L2> CounterCache for DualCache<L1, L2>
+impl<C, L1, L2> CounterCache for DualCache<L1, L2>
 where
-    L1: BaseCache<Value = f64>,
-    L2: CounterCache,
+    C: CacheContext,
+    L1: BaseCache<Value = f64, Context = C>,
+    L2: CounterCache<Context = C>,
 {
-    fn increment_cache(&self, key: &str, amount: f64, kwargs: CacheKwargs) -> Result<f64, Error> {
-        let value = self.l2.increment_cache(key, amount, kwargs.clone())?;
-        self.l1.set_cache(key, value, kwargs)?;
+    fn increment_cache(&self, key: &str, amount: f64, context: C) -> Result<f64, Error> {
+        let value = self.l2.increment_cache(key, amount, context.clone())?;
+        self.l1.set_cache(key, value, &context)?;
         Ok(value)
     }
 
-    async fn async_increment_cache(
-        &self,
-        key: &str,
-        amount: f64,
-        kwargs: CacheKwargs,
-    ) -> Result<f64, Error> {
+    async fn async_increment(&self, key: &str, amount: f64, context: C) -> Result<f64, Error> {
         let value = self
             .l2
-            .async_increment_cache(key, amount, kwargs.clone())
+            .async_increment(key, amount, context.clone())
             .await?;
-        self.l1.async_set_cache(key, value, kwargs).await?;
+        self.l1.async_set_cache(key, value, context).await?;
         Ok(value)
     }
 }
 
-impl<V, L1, L2> ClaimCache for DualCache<L1, L2>
+impl<V, C, L1, L2> ClaimCache for DualCache<L1, L2>
 where
     V: Clone + PartialEq + Send + Sync + 'static,
-    L1: ClaimCache<Value = V>,
-    L2: ClaimCache<Value = V>,
+    C: CacheContext,
+    L1: ClaimCache<Value = V, Context = C>,
+    L2: ClaimCache<Value = V, Context = C>,
 {
-    fn claim_cache(
-        &self,
-        key: &str,
-        candidate: V,
-        eligible: &[V],
-        kwargs: CacheKwargs,
-    ) -> Result<V, Error> {
+    fn claim_cache(&self, key: &str, candidate: V, eligible: &[V], context: C) -> Result<V, Error> {
         match self.remote(
             self.l2
-                .claim_cache(key, candidate.clone(), eligible, kwargs.clone()),
+                .claim_cache(key, candidate.clone(), eligible, context.clone()),
         )? {
             Some(winner) => {
-                self.l1.set_cache(key, winner.clone(), kwargs)?;
+                self.l1.set_cache(key, winner.clone(), &context)?;
                 Ok(winner)
             }
-            None => self.l1.claim_cache(key, candidate, eligible, kwargs),
+            None => self.l1.claim_cache(key, candidate, eligible, context),
         }
     }
 
@@ -354,20 +367,22 @@ where
         key: &str,
         candidate: V,
         eligible: Vec<V>,
-        kwargs: CacheKwargs,
+        context: C,
     ) -> Result<V, Error> {
         match self.remote(
             self.l2
-                .async_claim_cache(key, candidate.clone(), eligible.clone(), kwargs.clone())
+                .async_claim_cache(key, candidate.clone(), eligible.clone(), context.clone())
                 .await,
         )? {
             Some(winner) => {
-                self.l1.async_set_cache(key, winner.clone(), kwargs).await?;
+                self.l1
+                    .async_set_cache(key, winner.clone(), context)
+                    .await?;
                 Ok(winner)
             }
             None => {
                 self.l1
-                    .async_claim_cache(key, candidate, eligible, kwargs)
+                    .async_claim_cache(key, candidate, eligible, context)
                     .await
             }
         }

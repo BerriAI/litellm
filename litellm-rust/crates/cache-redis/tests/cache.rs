@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use litellm_cache::{
-    BaseCache, BatchEntry, CacheCodec, CacheConnectionStatus, CacheKwargs, ClaimCache,
-    CounterCache, Error, IncrementOperation, JsonCodec, get_cache, set_cache,
+    BaseCache, BatchCache, BatchEntry, CacheCodec, CacheConnectionStatus, CacheScript, ClaimCache,
+    CounterCache, DeleteCache, Error, ExactCacheContext, FlushCache, IncrementOperation, JsonCodec,
+    ScriptCache, get_cache, set_cache,
 };
 use litellm_cache_redis::{
     RedisArg, RedisCache, RedisLpopOperation, RedisLpopResult, RedisRpushOperation,
@@ -48,12 +49,11 @@ fn generic_helpers_use_the_injected_codec_and_ttl() {
     ])
     .assert_all_commands_consumed();
     let cache = RedisCache::with_connection(connection, None, TaggedByteCodec(42));
-    let kwargs = CacheKwargs {
+    let context = ExactCacheContext {
         ttl: Some(Duration::from_millis(1500)),
-        ..Default::default()
     };
-    set_cache(&cache, "counter", 7, kwargs.clone()).unwrap();
-    assert_eq!(get_cache(&cache, "counter", &kwargs).unwrap(), Some(7));
+    set_cache(&cache, "counter", 7, &context).unwrap();
+    assert_eq!(get_cache(&cache, "counter", &context).unwrap(), Some(7));
 }
 
 #[tokio::test]
@@ -83,28 +83,27 @@ async fn async_operations_preserve_codec_ttl_and_missing_values() {
         Some(Duration::from_secs(9)),
         TaggedByteCodec(42),
     );
-    let kwargs = CacheKwargs::default();
+    let context = ExactCacheContext::default();
     cache
-        .batch_cache_write("counter", 7, kwargs.clone())
+        .batch_cache_write("counter", 7, context.clone())
         .await
         .unwrap();
     assert_eq!(
-        cache.async_get_cache("counter", &kwargs).await.unwrap(),
+        cache.async_get_cache("counter", &context).await.unwrap(),
         Some(7)
     );
     cache
         .async_set_cache_pipeline(
             vec![("batch".into(), 8)],
-            CacheKwargs {
+            ExactCacheContext {
                 ttl: Some(Duration::from_millis(1500)),
-                ..Default::default()
             },
         )
         .await
         .unwrap();
     cache.async_delete_cache("counter").await.unwrap();
     assert_eq!(
-        cache.async_get_cache("counter", &kwargs).await.unwrap(),
+        cache.async_get_cache("counter", &context).await.unwrap(),
         None
     );
 }
@@ -117,30 +116,30 @@ async fn codec_errors_propagate_without_writing_partial_batches() {
     ])
     .assert_all_commands_consumed();
     let cache = RedisCache::with_connection(connection, None, TaggedByteCodec(42));
-    let kwargs = CacheKwargs::default();
+    let context = ExactCacheContext::default();
     assert_eq!(
-        cache.set_cache("invalid", 255, kwargs.clone()),
+        cache.set_cache("invalid", 255, &context),
         Err(Error::InvalidEntry)
     );
     assert_eq!(
-        cache.async_set_cache("invalid", 255, kwargs.clone()).await,
+        cache.async_set_cache("invalid", 255, context.clone()).await,
         Err(Error::InvalidEntry)
     );
     assert_eq!(
         cache
             .async_set_cache_pipeline(
                 vec![("valid".into(), 7), ("invalid".into(), 255)],
-                kwargs.clone(),
+                context.clone(),
             )
             .await,
         Err(Error::InvalidEntry)
     );
     assert_eq!(
-        cache.get_cache("invalid", &kwargs),
+        cache.get_cache("invalid", &context),
         Err(Error::InvalidEntry)
     );
     assert_eq!(
-        cache.async_get_cache("invalid", &kwargs).await,
+        cache.async_get_cache("invalid", &context).await,
         Err(Error::InvalidEntry)
     );
 }
@@ -155,12 +154,14 @@ fn namespaces_are_optional_and_existing_prefixes_are_not_duplicated() {
     let cache = RedisCache::with_connection(connection, None, JsonCodec::<String>::new())
         .with_namespace(Some("team".into()));
     assert_eq!(
-        cache.get_cache("key", &CacheKwargs::default()).unwrap(),
+        cache
+            .get_cache("key", &ExactCacheContext::default())
+            .unwrap(),
         None
     );
     assert_eq!(
         cache
-            .get_cache("team:key", &CacheKwargs::default())
+            .get_cache("team:key", &ExactCacheContext::default())
             .unwrap(),
         None
     );
@@ -221,9 +222,9 @@ async fn batch_reads_keep_order_and_treat_invalid_values_as_invalid_entries() {
 
     assert_eq!(
         cache
-            .async_get_cache_batch(
+            .async_batch_get_cache(
                 vec!["hit".into(), "miss".into(), "invalid".into()],
-                CacheKwargs::default(),
+                ExactCacheContext::default(),
             )
             .await
             .unwrap(),
@@ -327,6 +328,13 @@ async fn direct_redis_operations_preserve_namespace_values_and_missing_ttls() {
                 .arg("team:key"),
             Ok("team:key"),
         ),
+        MockCmd::new(
+            redis::cmd("EVAL")
+                .arg("return KEYS[1]")
+                .arg(1usize)
+                .arg("team:key"),
+            Ok("team:key"),
+        ),
         MockCmd::new(redis::cmd("CLIENT").arg("LIST"), Ok("id=1")),
         MockCmd::new(redis::cmd("INFO"), Ok("redis_version:7")),
         MockCmd::new(redis::cmd("FLUSHALL"), Ok("OK")),
@@ -383,6 +391,14 @@ async fn direct_redis_operations_preserve_namespace_values_and_missing_ttls() {
     assert_eq!(
         cache
             .async_eval("return KEYS[1]".into(), vec!["key".into()], Vec::new())
+            .await
+            .unwrap(),
+        redis::Value::BulkString(b"team:key".to_vec())
+    );
+    assert_eq!(
+        cache
+            .async_register_script("return KEYS[1]".into())
+            .invoke(vec!["key".into()], Vec::new())
             .await
             .unwrap(),
         redis::Value::BulkString(b"team:key".to_vec())
@@ -602,7 +618,7 @@ async fn claims_match_eligible_values_written_by_another_encoder() {
                 "pin",
                 candidate,
                 vec![stored.clone()],
-                CacheKwargs::default()
+                ExactCacheContext::default()
             )
             .await
             .unwrap(),
@@ -630,7 +646,7 @@ fn claims_retry_when_the_key_changes_and_replace_ineligible_winners() {
                 "pin",
                 candidate.clone(),
                 &[serde_json::json!({"model_id": "a"})],
-                CacheKwargs::default()
+                ExactCacheContext::default()
             )
             .unwrap(),
         candidate
@@ -654,7 +670,7 @@ fn claims_without_eligible_values_keep_the_winner_without_refreshing_its_ttl() {
                 "pin",
                 serde_json::json!({"model_id": "b"}),
                 &[],
-                CacheKwargs::default()
+                ExactCacheContext::default()
             )
             .unwrap(),
         serde_json::json!({"model_id": "a"})
@@ -679,7 +695,7 @@ async fn async_increment_runs_the_atomic_script() {
 
     assert_eq!(
         cache
-            .async_increment_cache("counter", 2.5, CacheKwargs::default())
+            .async_increment("counter", 2.5, ExactCacheContext::default())
             .await
             .unwrap(),
         4.5

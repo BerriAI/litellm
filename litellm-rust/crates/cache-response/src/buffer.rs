@@ -1,6 +1,6 @@
 use std::{sync::Mutex, time::Duration};
 
-use litellm_cache::{BaseCache, Error};
+use litellm_cache::{BaseCache, Error, ExactCacheContext};
 use serde_json::Value;
 
 use crate::{CacheEntry, ResponseCache, ResponseCacheRequest};
@@ -18,7 +18,7 @@ impl WriteBuffer {
         }
     }
 
-    pub async fn async_store<B: BaseCache<Value = CacheEntry>>(
+    pub async fn async_store<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>>(
         &self,
         cache: &ResponseCache<B>,
         request: &ResponseCacheRequest,

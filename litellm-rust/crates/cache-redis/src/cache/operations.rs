@@ -1,9 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::{CacheCodec, Error, IncrementOperation};
+use litellm_cache::{
+    CacheCodec, CacheScript, ClientInfoCache, Error, IncrementOperation, QueueCache, ScanCache,
+    ScriptCache, SetCache, TtlCache,
+};
 use redis::Commands;
 
-use super::{ConnectionRef, RedisCache};
+use super::{ConnectionRef, Connections, RedisCache, namespaced_key};
 
 const INCREMENT_WITH_FLOOR_SCRIPT: &str = concat!(
     "local count = redis.call('INCRBY', KEYS[1], ARGV[1]); ",
@@ -86,6 +89,46 @@ pub enum RedisLpopResult {
     Missing,
     Value(Vec<u8>),
     Values(Vec<Vec<u8>>),
+}
+
+pub struct RedisScript<C> {
+    connections: Arc<Connections<C>>,
+    namespace: Option<String>,
+    source: String,
+}
+
+impl<C> CacheScript for RedisScript<C>
+where
+    C: redis::ConnectionLike + Send + 'static,
+{
+    type Argument = RedisArg;
+    type Output = redis::Value;
+
+    async fn invoke(
+        &self,
+        keys: Vec<String>,
+        arguments: Vec<Self::Argument>,
+    ) -> Result<Self::Output, Error> {
+        let keys = keys
+            .into_iter()
+            .map(|key| namespaced_key(self.namespace.as_deref(), &key))
+            .collect::<Vec<_>>();
+        let connections = Arc::clone(&self.connections);
+        let source = self.source.clone();
+        tokio::task::spawn_blocking(move || {
+            connections.execute(|connection| {
+                redis::cmd("EVAL")
+                    .arg(source)
+                    .arg(keys.len())
+                    .arg(keys)
+                    .arg(arguments)
+                    .query(connection)
+                    .map_err(|_| Error::Unavailable)
+            })
+        })
+        .await
+        .map_err(|_| Error::Unavailable)?
+    }
 }
 
 impl<S, C> RedisCache<S, C>
@@ -497,4 +540,94 @@ fn increment_with_floor(
         .arg(ttl)
         .query(connection)
         .map_err(|_| Error::Unavailable)
+}
+
+impl<S, C> TtlCache for RedisCache<S, C>
+where
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    async fn async_get_ttl(&self, key: &str) -> Result<Option<Duration>, Error> {
+        RedisCache::async_get_ttl(self, key)
+            .await
+            .map(|ttl| ttl.map(|seconds| Duration::from_secs(seconds as u64)))
+    }
+}
+
+impl<S, C> ScanCache for RedisCache<S, C>
+where
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    async fn async_scan_iter(&self, pattern: &str, count: usize) -> Result<Vec<String>, Error> {
+        RedisCache::async_scan_iter(self, pattern, count).await
+    }
+}
+
+impl<S, C> ClientInfoCache for RedisCache<S, C>
+where
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    type ClientList = String;
+    type Info = String;
+
+    fn client_list(&self) -> Result<Self::ClientList, Error> {
+        RedisCache::client_list(self)
+    }
+
+    fn info(&self) -> Result<Self::Info, Error> {
+        RedisCache::info(self)
+    }
+}
+
+impl<S, C> SetCache for RedisCache<S, C>
+where
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    type SetValue = RedisArg;
+    type SetResult = usize;
+
+    async fn async_set_cache_sadd(
+        &self,
+        key: &str,
+        values: Vec<Self::SetValue>,
+        ttl: Option<Duration>,
+    ) -> Result<Self::SetResult, Error> {
+        RedisCache::async_set_cache_sadd(self, key, values, ttl).await
+    }
+}
+
+impl<S, C> QueueCache for RedisCache<S, C>
+where
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    type QueueValue = RedisArg;
+    type PopResult = RedisLpopResult;
+
+    async fn async_rpush(&self, key: &str, values: Vec<Self::QueueValue>) -> Result<usize, Error> {
+        RedisCache::async_rpush(self, key, values).await
+    }
+
+    async fn async_lpop(&self, key: &str, count: Option<usize>) -> Result<Self::PopResult, Error> {
+        RedisCache::async_lpop(self, key, count).await
+    }
+}
+
+impl<S, C> ScriptCache for RedisCache<S, C>
+where
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    type Script = RedisScript<C>;
+
+    fn async_register_script(&self, source: String) -> Self::Script {
+        RedisScript {
+            connections: Arc::clone(&self.connections),
+            namespace: self.namespace.clone(),
+            source,
+        }
+    }
 }

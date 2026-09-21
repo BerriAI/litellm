@@ -1,7 +1,6 @@
 use std::{future::Future, time::Duration};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 
 use crate::Error;
 
@@ -12,10 +11,25 @@ pub enum BatchEntry<V> {
     Invalid,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct CacheKwargs {
+pub trait CacheContext: Clone + Send + Sync + 'static {
+    fn ttl(&self) -> Option<Duration>;
+
+    fn with_ttl(&self, ttl: Option<Duration>) -> Self;
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExactCacheContext {
     pub ttl: Option<Duration>,
-    pub extras: Map<String, Value>,
+}
+
+impl CacheContext for ExactCacheContext {
+    fn ttl(&self) -> Option<Duration> {
+        self.ttl
+    }
+
+    fn with_ttl(&self, ttl: Option<Duration>) -> Self {
+        Self { ttl }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -35,78 +49,44 @@ pub struct CacheConnectionResult {
 
 pub trait BaseCache: Send + Sync {
     type Value: Clone + Send + Sync + 'static;
+    type Context: CacheContext;
 
-    fn default_ttl(&self) -> Duration {
-        Duration::from_secs(60)
-    }
+    fn get_ttl(&self, context: &Self::Context) -> Option<Duration>;
 
-    fn get_ttl(&self, kwargs: &CacheKwargs) -> Duration {
-        kwargs.ttl.unwrap_or_else(|| self.default_ttl())
-    }
-
-    fn set_cache(&self, key: &str, value: Self::Value, kwargs: CacheKwargs) -> Result<(), Error>;
-
-    fn get_cache(&self, key: &str, kwargs: &CacheKwargs) -> Result<Option<Self::Value>, Error>;
-
-    fn get_cache_batch(
+    fn set_cache(
         &self,
-        keys: &[String],
-        kwargs: &CacheKwargs,
-    ) -> Result<Vec<BatchEntry<Self::Value>>, Error> {
-        keys.iter()
-            .map(|key| match self.get_cache(key, kwargs) {
-                Ok(Some(value)) => Ok(BatchEntry::Hit(value)),
-                Ok(None) => Ok(BatchEntry::Miss),
-                Err(Error::InvalidEntry) => Ok(BatchEntry::Invalid),
-                Err(error) => Err(error),
-            })
-            .collect()
-    }
+        key: &str,
+        value: Self::Value,
+        context: &Self::Context,
+    ) -> Result<(), Error>;
+
+    fn get_cache(&self, key: &str, context: &Self::Context) -> Result<Option<Self::Value>, Error>;
 
     fn async_set_cache(
         &self,
         key: &str,
         value: Self::Value,
-        kwargs: CacheKwargs,
+        context: Self::Context,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        async move { self.set_cache(key, value, kwargs) }
+        async move { self.set_cache(key, value, &context) }
     }
 
     fn async_get_cache(
         &self,
         key: &str,
-        kwargs: &CacheKwargs,
+        context: &Self::Context,
     ) -> impl Future<Output = Result<Option<Self::Value>, Error>> + Send {
-        async move { self.get_cache(key, kwargs) }
-    }
-
-    fn async_get_cache_batch(
-        &self,
-        keys: Vec<String>,
-        kwargs: CacheKwargs,
-    ) -> impl Future<Output = Result<Vec<BatchEntry<Self::Value>>, Error>> + Send {
-        async move {
-            let mut entries = Vec::with_capacity(keys.len());
-            for key in keys {
-                entries.push(match self.async_get_cache(&key, &kwargs).await {
-                    Ok(Some(value)) => BatchEntry::Hit(value),
-                    Ok(None) => BatchEntry::Miss,
-                    Err(Error::InvalidEntry) => BatchEntry::Invalid,
-                    Err(error) => return Err(error),
-                });
-            }
-            Ok(entries)
-        }
+        async move { self.get_cache(key, context) }
     }
 
     fn async_set_cache_pipeline(
         &self,
-        cache_list: Vec<(String, Self::Value)>,
-        kwargs: CacheKwargs,
+        entries: Vec<(String, Self::Value)>,
+        context: Self::Context,
     ) -> impl Future<Output = Result<(), Error>> + Send {
         async move {
-            for (key, value) in cache_list {
-                self.async_set_cache(&key, value, kwargs.clone()).await?;
+            for (key, value) in entries {
+                self.async_set_cache(&key, value, context.clone()).await?;
             }
             Ok(())
         }
@@ -116,21 +96,9 @@ pub trait BaseCache: Send + Sync {
         &self,
         key: &str,
         value: Self::Value,
-        kwargs: CacheKwargs,
+        context: Self::Context,
     ) -> impl Future<Output = Result<(), Error>> + Send {
-        self.async_set_cache(key, value, kwargs)
-    }
-
-    fn delete_cache(&self, key: &str) -> Result<(), Error>;
-
-    fn async_delete_cache(&self, key: &str) -> impl Future<Output = Result<(), Error>> + Send {
-        async move { self.delete_cache(key) }
-    }
-
-    fn flush_cache(&self) -> Result<(), Error>;
-
-    fn async_flush_cache(&self) -> impl Future<Output = Result<(), Error>> + Send {
-        async move { self.flush_cache() }
+        self.async_set_cache(key, value, context)
     }
 
     fn disconnect(&self) -> impl Future<Output = Result<(), Error>> + Send;

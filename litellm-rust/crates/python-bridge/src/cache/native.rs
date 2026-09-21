@@ -53,7 +53,7 @@ impl NativeResponseCache {
         }
     }
 
-    pub fn default_ttl(&self) -> Duration {
+    pub fn default_ttl(&self) -> Option<Duration> {
         match self {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
