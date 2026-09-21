@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -43,6 +43,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
+from pydantic.main import IncEx
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
@@ -80,6 +81,25 @@ from .llms.openai import (
     WebSearchOptions,
 )
 from .rerank import RerankResponse as RerankResponse
+
+
+def _nested_selector(
+    selector: IncEx | None,
+    index: int,
+    is_include: bool,
+) -> tuple[bool, IncEx | None]:
+    if selector is None:
+        return True, None
+    if isinstance(selector, Mapping):
+        value: Final = selector.get(index, selector.get("__all__"))
+        keep: Final = value is not None if is_include else value is not True
+        per_item_selector: Final = None if value is True or value is None else value
+        return keep, per_item_selector
+    if isinstance(selector, Collection) and not isinstance(selector, (str, bytes)):
+        if all(isinstance(item, int) for item in selector):
+            return (index in selector if is_include else index not in selector), None
+    return True, selector
+
 
 if TYPE_CHECKING:
     from .vector_stores import VectorStoreSearchResponse
@@ -2565,11 +2585,16 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
             return None
         include: Final = info.include
         exclude: Final = info.exclude
-        return [
-            image.model_dump(
+
+        def _serialize_image(index: int, image: OpenAIImage) -> Mapping[str, object] | None:
+            include_keep, include_selector = _nested_selector(include, index, is_include=True)
+            exclude_keep, exclude_selector = _nested_selector(exclude, index, is_include=False)
+            if not include_keep or not exclude_keep:
+                return None
+            return image.model_dump(
                 mode=info.mode,
-                include=include.get(index, include.get("__all__")) if isinstance(include, Mapping) else include,
-                exclude=exclude.get(index, exclude.get("__all__")) if isinstance(exclude, Mapping) else exclude,
+                include=include_selector,
+                exclude=exclude_selector,
                 context=info.context,
                 exclude_none=info.exclude_none,
                 exclude_unset=info.exclude_unset,
@@ -2577,9 +2602,9 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
                 round_trip=info.round_trip,
                 by_alias=info.by_alias,
             )
-            for index, image in enumerate(data)
-            if not isinstance(include, Mapping) or "__all__" in include or index in include
-        ]
+
+        serialized_images: Final = tuple(_serialize_image(index, image) for index, image in enumerate(data))
+        return [image for image in serialized_images if image is not None]
 
     def __init__(
         self,

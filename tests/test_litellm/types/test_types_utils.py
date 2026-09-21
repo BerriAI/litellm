@@ -797,6 +797,30 @@ def test_image_response_serialization_honors_dump_options():
     assert response.model_dump(include={"data": {"__all__": {"url"}}})["data"] == [
         {"url": "https://example.com/image.png"}
     ]
+    assert response.model_dump(include={"data": {0: True}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+        }
+    ]
+    assert response.model_dump(exclude={"data": {0: True}})["data"] == []
+
+    two_image_response: Final = ImageResponse(
+        data=[
+            ImageObject(url="https://example.com/image.png"),
+            ImageObject(url="https://example.com/second-image.png"),
+        ]
+    )
+    assert two_image_response.model_dump(exclude={"data": {1}})["data"] == [
+        {
+            "b64_json": None,
+            "revised_prompt": None,
+            "url": "https://example.com/image.png",
+            "provider_specific_fields": None,
+        }
+    ]
 
 
 @pytest.mark.parametrize(
