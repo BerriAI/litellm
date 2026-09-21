@@ -238,30 +238,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::RedisCache;
-    use litellm_cache::{BaseCache, CacheCodec, CacheEntry, CacheKwargs, JsonCodec};
+    use litellm_cache::{BaseCache, CacheCodec, CacheKwargs, JsonCodec};
     use redis_test::{MockCmd, MockRedisConnection};
     use serde_json::json;
     use std::time::Duration;
 
-    fn entry() -> CacheEntry {
-        CacheEntry {
-            timestamp: 123.0,
-            response: json!({"choices": [{"text": "cached"}]}),
-        }
+    fn entry() -> serde_json::Value {
+        json!({"deployment": "model-a", "cooldown_seconds": 30})
     }
 
     #[test]
     fn ttl_seconds_rounds_up_and_keeps_expiration_positive() {
         assert_eq!(
-            RedisCache::<JsonCodec<CacheEntry>>::ttl_seconds(Duration::ZERO),
+            RedisCache::<JsonCodec<serde_json::Value>>::ttl_seconds(Duration::ZERO),
             1
         );
         assert_eq!(
-            RedisCache::<JsonCodec<CacheEntry>>::ttl_seconds(Duration::from_millis(1500)),
+            RedisCache::<JsonCodec<serde_json::Value>>::ttl_seconds(Duration::from_millis(1500)),
             2
         );
         assert_eq!(
-            RedisCache::<JsonCodec<CacheEntry>>::ttl_seconds(Duration::from_secs(15)),
+            RedisCache::<JsonCodec<serde_json::Value>>::ttl_seconds(Duration::from_secs(15)),
             15
         );
     }
@@ -269,7 +266,9 @@ mod tests {
     #[test]
     fn redis_commands_round_trip_entries_and_delete_only_namespaced_keys() {
         let value = entry();
-        let payload = JsonCodec::<CacheEntry>::new().encode(&value).unwrap();
+        let payload = JsonCodec::<serde_json::Value>::new()
+            .encode(&value)
+            .unwrap();
         let connection = MockRedisConnection::new([
             MockCmd::new(
                 redis::cmd("SETEX")
@@ -282,8 +281,9 @@ mod tests {
             MockCmd::new(redis::cmd("DEL").arg("litellm-cache:key"), Ok(1u32)),
         ])
         .assert_all_commands_consumed();
-        let cache = RedisCache::with_connection(connection, None, JsonCodec::<CacheEntry>::new())
-            .with_namespace(Some("litellm-cache".into()));
+        let cache =
+            RedisCache::with_connection(connection, None, JsonCodec::<serde_json::Value>::new())
+                .with_namespace(Some("litellm-cache".into()));
 
         cache
             .set_cache("key", value.clone(), CacheKwargs::default())
@@ -308,8 +308,9 @@ mod tests {
             MockCmd::new(redis::cmd("DEL").arg("litellm-cache:key"), Ok(1u32)),
         ])
         .assert_all_commands_consumed();
-        let cache = RedisCache::with_connection(connection, None, JsonCodec::<CacheEntry>::new())
-            .with_namespace(Some("litellm-cache".into()));
+        let cache =
+            RedisCache::with_connection(connection, None, JsonCodec::<serde_json::Value>::new())
+                .with_namespace(Some("litellm-cache".into()));
 
         cache.flush_cache().unwrap();
     }
@@ -318,8 +319,9 @@ mod tests {
     async fn test_connection_runs_ping_off_executor() {
         let connection = MockRedisConnection::new([MockCmd::new(redis::cmd("PING"), Ok("PONG"))])
             .assert_all_commands_consumed();
-        let cache = RedisCache::with_connection(connection, None, JsonCodec::<CacheEntry>::new())
-            .with_namespace(Some("litellm-cache".into()));
+        let cache =
+            RedisCache::with_connection(connection, None, JsonCodec::<serde_json::Value>::new())
+                .with_namespace(Some("litellm-cache".into()));
 
         assert_eq!(
             cache.test_connection().await.unwrap().status,

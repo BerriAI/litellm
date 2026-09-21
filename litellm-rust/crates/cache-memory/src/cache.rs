@@ -3,15 +3,12 @@ use std::collections::{BinaryHeap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use litellm_cache::{
-    BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheEntry, CacheKwargs, Error,
-};
+use litellm_cache::{BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheKwargs, Error};
 
 const DEFAULT_MAX_SIZE_IN_MEMORY: usize = 200;
 const DEFAULT_TTL: Duration = Duration::from_secs(600);
 
 type ValueMeasure<V> = Arc<dyn Fn(&V) -> Result<usize, Error> + Send + Sync>;
-type ValueValidator<V> = Arc<dyn Fn(&V) -> Result<(), Error> + Send + Sync>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CacheWrite {
@@ -32,7 +29,6 @@ pub struct InMemoryCache<V: Clone> {
     default_ttl: Duration,
     max_entry_bytes: Option<usize>,
     measure_value: Option<ValueMeasure<V>>,
-    validate_value: Option<ValueValidator<V>>,
     now: Arc<dyn Fn() -> Duration + Send + Sync>,
 }
 
@@ -76,7 +72,6 @@ impl<V: Clone> InMemoryCache<V> {
             default_ttl: default_ttl.unwrap_or(DEFAULT_TTL),
             max_entry_bytes,
             measure_value,
-            validate_value: None,
             now: Arc::new(now),
         }
     }
@@ -89,9 +84,6 @@ impl<V: Clone> InMemoryCache<V> {
     ) -> Result<CacheWrite, Error> {
         if self.max_size_in_memory == 0 {
             return Ok(CacheWrite::Disabled);
-        }
-        if let Some(validate) = &self.validate_value {
-            validate(&value)?;
         }
         if let (Some(limit), Some(measure)) = (self.max_entry_bytes, &self.measure_value)
             && measure(&value)? > limit
@@ -173,43 +165,6 @@ impl<V: Clone> InMemoryCache<V> {
     fn remove(state: &mut CacheState<V>, key: &str) {
         state.values.remove(key);
         state.expirations.remove(key);
-    }
-}
-
-impl InMemoryCache<CacheEntry> {
-    pub fn response_cache(capacity: usize, ttl: Duration, max_entry_bytes: usize) -> Self {
-        Self::response_cache_with_clock(capacity, ttl, max_entry_bytes, || {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-        })
-    }
-
-    pub fn response_cache_with_clock(
-        capacity: usize,
-        ttl: Duration,
-        max_entry_bytes: usize,
-        now: impl Fn() -> Duration + Send + Sync + 'static,
-    ) -> Self {
-        let mut cache = Self::with_clock_and_size_measurement(
-            Some(capacity),
-            Some(ttl),
-            Some(max_entry_bytes),
-            Some(Arc::new(|entry: &CacheEntry| {
-                serde_json::to_vec(entry)
-                    .map(|bytes| bytes.len())
-                    .map_err(|_| Error::InvalidEntry)
-            })),
-            now,
-        );
-        cache.validate_value = Some(Arc::new(|entry: &CacheEntry| {
-            entry
-                .timestamp
-                .is_finite()
-                .then_some(())
-                .ok_or(Error::InvalidEntry)
-        }));
-        cache
     }
 }
 

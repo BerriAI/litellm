@@ -1,8 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::{
-    BaseCache, CacheControls, CacheEntry, CacheKeyInput, CacheKwargs, Error, cache_key,
-};
+use litellm_cache::{BaseCache, CacheKwargs, Error};
+
+use crate::{CacheControls, CacheEntry, CacheKeyInput, cache_key};
 use serde_json::Value;
 
 #[derive(Clone)]

@@ -1,4 +1,3 @@
-use litellm_cache_response::NativeResponseCache;
 use litellm_host_python::from_py;
 use pyo3::{
     PyTraverseError, PyVisit,
@@ -8,7 +7,7 @@ use pyo3::{
 };
 use serde_json::Value;
 
-use super::NativeCacheHandle;
+use super::{NativeCacheHandle, native::NativeResponseCache};
 
 struct ClassGuard {
     class: Py<PyType>,

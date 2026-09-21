@@ -1,7 +1,10 @@
+mod caching;
 mod codec;
-mod native;
 mod response;
 
+pub use caching::{
+    CacheControls, CacheEntry, CacheKeyContext, CacheKeyField, CacheKeyInput, CacheMode, cache_key,
+    get_cache_key, should_use_cache,
+};
 pub use codec::ResponseCacheCodec;
-pub use native::NativeResponseCache;
 pub use response::{ResponseCache, ResponseCacheRequest};

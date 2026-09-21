@@ -1,17 +1,13 @@
-use litellm_cache::{
-    BaseCache, CacheConnectionResult, CacheControls, CacheEntry, CacheKeyContext, CacheKeyField,
-    CacheKeyInput, CacheKwargs, Error, cache_key, get_cache_key,
-};
-use sha2::{Digest, Sha256};
+use litellm_cache::{BaseCache, CacheConnectionResult, CacheKwargs, Error};
 use std::{sync::Mutex, time::Duration};
 
 struct TestCache {
     default_ttl: Duration,
-    writes: Mutex<Vec<(String, CacheEntry, CacheKwargs)>>,
+    writes: Mutex<Vec<(String, String, CacheKwargs)>>,
 }
 
 impl BaseCache for TestCache {
-    type Value = CacheEntry;
+    type Value = String;
 
     fn default_ttl(&self) -> Duration {
         self.default_ttl
@@ -83,10 +79,7 @@ async fn default_batch_operations_use_async_writes_and_stop_on_failure() {
         default_ttl: Duration::from_secs(60),
         writes: Mutex::default(),
     };
-    let entry = CacheEntry {
-        timestamp: 123.0,
-        response: serde_json::json!("cached"),
-    };
+    let entry = String::from("cached");
     let kwargs = CacheKwargs {
         ttl: Some(Duration::from_secs(5)),
         ..Default::default()
@@ -114,84 +107,5 @@ async fn default_batch_operations_use_async_writes_and_stop_on_failure() {
             ("single".into(), entry.clone(), kwargs.clone()),
             ("first".into(), entry, kwargs),
         ]
-    );
-}
-
-#[test]
-fn keys_match_python_order_groups_files_presets_and_namespaces() {
-    let mut input = CacheKeyInput {
-        fields: vec![
-            CacheKeyField {
-                name: "model".into(),
-                value: Some("deployment".into()),
-                api_parameter: true,
-                internal_parameter: false,
-            },
-            CacheKeyField {
-                name: "file".into(),
-                value: None,
-                api_parameter: true,
-                internal_parameter: false,
-            },
-        ],
-        namespace: Some("team".into()),
-        ..Default::default()
-    };
-    CacheKeyContext {
-        model_group: Some("group".into()),
-        caching_groups: vec![(vec!["group".into()], "['group']".into())],
-        file_checksum: Some("checksum".into()),
-        ..Default::default()
-    }
-    .apply(&mut input);
-    assert_eq!(
-        cache_key(&input),
-        format!(
-            "team:{:x}",
-            Sha256::digest(b"model: ['group']file: checksum")
-        )
-    );
-    input.preset = Some("preset".into());
-    assert_eq!(get_cache_key(&input), "preset");
-}
-
-#[test]
-fn cache_controls_honor_default_modes_and_directives() {
-    let enabled = CacheControls {
-        supported_call_type: true,
-        configured: true,
-        default_on: true,
-        ..Default::default()
-    };
-    assert!(enabled.reads());
-    assert!(enabled.writes());
-    assert!(
-        !CacheControls {
-            default_on: false,
-            ..enabled
-        }
-        .reads()
-    );
-    assert!(
-        CacheControls {
-            default_on: false,
-            use_cache: true,
-            ..enabled
-        }
-        .reads()
-    );
-    assert!(
-        !CacheControls {
-            no_cache: true,
-            ..enabled
-        }
-        .reads()
-    );
-    assert!(
-        !CacheControls {
-            no_store: true,
-            ..enabled
-        }
-        .writes()
     );
 }

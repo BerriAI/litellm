@@ -3,8 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use litellm_cache::{
-    BaseCache, CacheBackend, CacheConnectionStatus, CacheEntry, CacheKwargs, Error, get_cache,
-    set_cache,
+    BaseCache, CacheBackend, CacheConnectionStatus, CacheKwargs, Error, get_cache, set_cache,
 };
 use litellm_cache_memory::{CacheWrite, InMemoryCache};
 use rstest::{fixture, rstest};
@@ -87,66 +86,49 @@ fn capacity_evicts_earliest_and_ignores_stale_heap_entries(clock: Arc<AtomicU64>
 }
 
 #[test]
-fn disabled_size_limited_and_synchronized_response_writes_are_observable() {
-    let disabled = InMemoryCache::<CacheEntry>::response_cache(0, Duration::from_secs(60), 80);
+fn disabled_size_limited_and_validated_writes_are_observable() {
+    let cache = |capacity| {
+        InMemoryCache::with_clock_and_size_measurement(
+            Some(capacity),
+            Some(Duration::from_secs(60)),
+            Some(4),
+            Some(Arc::new(|value: &String| {
+                if value.is_empty() {
+                    return Err(Error::InvalidEntry);
+                }
+                Ok(value.len())
+            })),
+            || Duration::from_secs(100),
+        )
+    };
+    let disabled = cache(0);
     assert_eq!(
-        disabled
-            .set_cache(
-                "a",
-                CacheEntry {
-                    timestamp: 1.0,
-                    response: serde_json::json!("x")
-                },
-                None
-            )
-            .unwrap(),
+        disabled.set_cache("a", "x".into(), None).unwrap(),
         CacheWrite::Disabled
     );
-    let cache = InMemoryCache::<CacheEntry>::response_cache(2, Duration::from_secs(60), 80);
+    let cache = cache(2);
     assert_eq!(
-        cache
-            .set_cache(
-                "large",
-                CacheEntry {
-                    timestamp: 1.0,
-                    response: serde_json::json!("x".repeat(100))
-                },
-                None
-            )
-            .unwrap(),
+        cache.set_cache("large", "oversized".into(), None).unwrap(),
         CacheWrite::TooLarge
     );
-    cache
-        .set_cache(
-            "small",
-            CacheEntry {
-                timestamp: 1.0,
-                response: serde_json::json!("ok"),
-            },
-            None,
-        )
-        .unwrap();
-    assert!(cache.get_cache("small").unwrap().is_some());
+    assert_eq!(cache.get_cache("large").unwrap(), None);
     assert_eq!(
-        cache
-            .set_cache(
-                "invalid",
-                CacheEntry {
-                    timestamp: f64::NAN,
-                    response: serde_json::json!("bad"),
-                },
-                None,
-            )
-            .unwrap_err(),
-        Error::InvalidEntry
+        cache.set_cache("small", "ok".into(), None).unwrap(),
+        CacheWrite::Stored
     );
+    assert_eq!(cache.get_cache("small").unwrap(), Some("ok".into()));
+    assert_eq!(
+        cache.set_cache("invalid", String::new(), None),
+        Err(Error::InvalidEntry)
+    );
+    assert_eq!(cache.get_cache("invalid").unwrap(), None);
     cache.delete_cache("small").unwrap();
-    cache.flush_cache().unwrap();
+    assert_eq!(cache.get_cache("small").unwrap(), None);
 }
 
 #[tokio::test]
 async fn connection_test_matches_python_result_contract() {
-    let cache = InMemoryCache::<CacheEntry>::default();
+    let cache = InMemoryCache::<String>::default();
     let result = BaseCache::test_connection(&cache).await.unwrap();
     assert_eq!(result.status, CacheConnectionStatus::Success);
     assert_eq!(result.message, "In-memory cache connection test successful");

@@ -6,14 +6,22 @@ use std::{
     time::Duration,
 };
 
-use litellm_cache::{BaseCache, CacheCodec, CacheEntry, CacheKeyField, CacheKeyInput, Error};
+use litellm_cache::{BaseCache, CacheCodec, Error};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
-    NativeResponseCache, ResponseCache, ResponseCacheCodec, ResponseCacheRequest,
+    CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheCodec,
+    ResponseCacheRequest,
 };
 use redis_test::{MockCmd, MockRedisConnection};
 use serde_json::json;
+
+fn memory() -> Arc<ResponseCache<InMemoryCache<CacheEntry>>> {
+    Arc::new(ResponseCache::new(Arc::new(InMemoryCache::new(
+        Some(8),
+        Some(Duration::from_secs(600)),
+    ))))
+}
 
 fn request() -> ResponseCacheRequest {
     ResponseCacheRequest::new(CacheKeyInput {
@@ -87,7 +95,7 @@ async fn sync_and_async_consumers_share_keys_ttls_and_freshness() {
 
 #[tokio::test]
 async fn directives_skip_io_and_keep_reads_and_writes_independent() {
-    let cache = NativeResponseCache::memory(8, Duration::from_secs(600), 1024);
+    let cache = memory();
     let mut request = request();
     let now = Duration::from_secs(100);
     request.controls.no_store = true;
@@ -112,7 +120,7 @@ async fn directives_skip_io_and_keep_reads_and_writes_independent() {
 }
 
 #[tokio::test]
-async fn redis_enum_reads_python_sync_and_async_envelopes_and_writes_compatible_json() {
+async fn redis_consumer_reads_python_sync_and_async_envelopes_and_writes_compatible_json() {
     let connection = MockRedisConnection::new([
         MockCmd::new(
             redis::cmd("GET").arg("tenant:key"),
@@ -133,7 +141,7 @@ async fn redis_enum_reads_python_sync_and_async_envelopes_and_writes_compatible_
     .assert_all_commands_consumed();
     let backend = RedisCache::with_connection(connection, None, ResponseCacheCodec)
         .with_namespace(Some("tenant".into()));
-    let cache = NativeResponseCache::Redis(Arc::new(ResponseCache::new(Arc::new(backend))));
+    let cache = ResponseCache::new(Arc::new(backend));
     let request = request();
     let expected = json!({"ok": true, "text": "cached"});
     assert_eq!(
@@ -154,10 +162,10 @@ async fn redis_enum_reads_python_sync_and_async_envelopes_and_writes_compatible_
 }
 
 #[tokio::test]
-async fn captured_enum_keeps_the_selected_backend_for_background_writes() {
-    let original = NativeResponseCache::memory(8, Duration::from_secs(600), 1024);
+async fn captured_service_keeps_the_selected_backend_for_background_writes() {
+    let original = memory();
     let captured = original.clone();
-    let replacement = NativeResponseCache::memory(8, Duration::from_secs(600), 1024);
+    let replacement = memory();
     let request = request();
     let writer = tokio::spawn({
         let request = request.clone();
@@ -186,7 +194,7 @@ async fn captured_enum_keeps_the_selected_backend_for_background_writes() {
 
 #[test]
 fn generated_keys_preserve_namespace_and_explicit_keys() {
-    let cache = NativeResponseCache::memory(8, Duration::from_secs(600), 1024);
+    let cache = memory();
     let key = CacheKeyInput {
         fields: vec![CacheKeyField {
             name: "model".into(),
@@ -199,7 +207,7 @@ fn generated_keys_preserve_namespace_and_explicit_keys() {
     };
     let generated = ResponseCacheRequest::new(key.clone());
     let explicit = ResponseCacheRequest::new(CacheKeyInput {
-        preset: Some(litellm_cache::cache_key(&key)),
+        preset: Some(litellm_cache_response::cache_key(&key)),
         ..Default::default()
     });
     cache
@@ -287,4 +295,16 @@ fn malformed_memory_entries_are_rejected_by_the_response_consumer() {
             .unwrap_err(),
         Error::InvalidEntry
     );
+}
+
+#[test]
+fn response_entries_preserve_the_existing_json_representation() {
+    let codec = ResponseCacheCodec;
+    let entry = CacheEntry {
+        timestamp: 123.0,
+        response: json!({"choices": [{"text": "cached"}]}),
+    };
+    let bytes = codec.encode(&entry).unwrap();
+    assert_eq!(bytes, serde_json::to_vec(&entry).unwrap());
+    assert_eq!(codec.decode(&bytes).unwrap(), entry);
 }

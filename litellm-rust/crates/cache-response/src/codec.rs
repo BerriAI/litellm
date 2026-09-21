@@ -1,4 +1,6 @@
-use litellm_cache::{CacheCodec, CacheEntry, Error};
+use litellm_cache::{CacheCodec, Error};
+
+use crate::CacheEntry;
 use serde_json::Value;
 
 pub struct ResponseCacheCodec;
