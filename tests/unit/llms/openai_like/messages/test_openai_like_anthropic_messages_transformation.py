@@ -272,8 +272,12 @@ def test_passthrough_disables_anthropic_beta_filtering(config):
         AnthropicMessagesConfig,
     )
 
+    from litellm.llms.bedrock.claude_platform.messages_transformation import (
+        BedrockClaudePlatformMessagesConfig,
+    )
+
     assert config.should_filter_anthropic_beta_headers() is False
-    assert AnthropicMessagesConfig().should_filter_anthropic_beta_headers() is True
+    assert BedrockClaudePlatformMessagesConfig().should_filter_anthropic_beta_headers() is True
 
 
 def test_anthropic_beta_survives_provider_filter_on_passthrough_path(config):
