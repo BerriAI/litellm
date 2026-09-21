@@ -5556,6 +5556,59 @@ class TestMCPServerManager:
             )
             mock_inject.assert_awaited_once()
 
+    def test_server_owning_tool_name_prefix_is_known_before_the_server_is_ever_listed(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="lazy-map-1",
+            name="lazy_map",
+            server_name="lazy_map",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+        )
+        manager.registry = {server.server_id: server}
+
+        assert manager._get_mcp_server_from_tool_name("lazy_map-add") is None
+        assert manager.server_owning_tool_name_prefix("lazy_map-add") is server
+        assert manager.server_owning_tool_name_prefix("someone_else-add") is None
+
+        manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+
+        assert manager._get_mcp_server_from_tool_name("lazy_map-add") is server
+
+    def test_server_exposes_tool_is_per_tool_not_per_server(self):
+        """A tool listed for the server does not make its unlisted siblings look exposed."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="lazy-map-2",
+            name="lazy_map",
+            server_name="lazy_map",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.true_passthrough,
+        )
+        manager.registry = {server.server_id: server}
+
+        assert manager.server_exposes_tool(server, "add") is False
+
+        manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+
+        assert manager.server_exposes_tool(server, "add") is True
+        assert manager.server_exposes_tool(server, "lazy_map-add") is True
+        assert manager.server_exposes_tool(server, "multiply") is False
+
+    def test_known_prefix_to_server_keeps_the_first_registered_owner_of_a_shared_prefix(self):
+        manager = MCPServerManager()
+        first = MCPServer(server_id="first-id", name="first", server_name="first", transport=MCPTransport.http)
+        second = MCPServer(
+            server_id="second-id", name="second", server_name="second", alias="first", transport=MCPTransport.http
+        )
+        manager.registry = {"first-id": first, "second-id": second}
+
+        prefix_to_server = manager._known_prefix_to_server()
+
+        assert prefix_to_server["first"] is first
+        assert prefix_to_server["second"] is second
+        assert manager.server_owning_tool_name_prefix("first-add") is first
+
     def test_resolve_mcp_server_for_tool_call_via_prefixed_name(self):
         """Resolution succeeds when the prefixed tool name is in the mapping."""
         manager = MCPServerManager()

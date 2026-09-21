@@ -42,6 +42,7 @@ import {
   type BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
   getClassifierModelError,
+  getHeuristicV2SuccessThresholdError,
   getClassifierReasoningEffortError,
   getKeywordTierRulesError,
   getMissingTiersError,
@@ -127,6 +128,10 @@ export const hydrateComplexityRouterConfig = (
     plan_mode_min_tier: hydratePlanModeMinTier(parsedConfig.plan_mode_min_tier, custom_tier_set),
     tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
     classifier_type: parsedConfig.classifier_type || "heuristic",
+    heuristic_v2_success_threshold:
+      typeof parsedConfig.heuristic_v2_success_threshold === "number"
+        ? parsedConfig.heuristic_v2_success_threshold
+        : undefined,
     capability_classifier_config: capabilitySettingsSchema.safeParse(parsedConfig.capability_classifier_config).data,
     llm_v2_config: fuseSettingsSchema.safeParse(parsedConfig.llm_v2_config).data,
     classifier_llm_config: parsedConfig.classifier_llm_config,
@@ -227,6 +232,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classification_examples",
   "heuristic_first_max_tier",
   "hybrid_boundary_margin",
+  "heuristic_v2_success_threshold",
   "classification_mode",
   "session_affinity",
   "session_affinity_ttl_seconds",
@@ -329,6 +335,7 @@ export const buildUpdatedComplexityRouterConfig = (
     classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
+    heuristicV2SuccessThreshold: value.heuristic_v2_success_threshold,
     capabilityClassifierConfig: value.capability_classifier_config,
     llmV2Config: value.llm_v2_config,
     classifierLlmConfig: value.classifier_llm_config,
@@ -427,6 +434,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
       getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
       getClassifierModelError(complexityRouterConfig) ??
+      getHeuristicV2SuccessThresholdError(complexityRouterConfig.heuristic_v2_success_threshold) ??
       getForecastConfigError(complexityRouterConfig) ??
       (heuristicScoringRole(complexityRouterConfig) === "decides"
         ? customDimensionsError(complexityRouterConfig.custom_dimensions)
@@ -559,6 +567,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       }
       const classifierError =
         getClassifierModelError(complexityRouterConfig) ??
+        getHeuristicV2SuccessThresholdError(complexityRouterConfig.heuristic_v2_success_threshold) ??
         getForecastConfigError(complexityRouterConfig) ??
         (heuristicScoringRole(complexityRouterConfig) === "decides"
           ? customDimensionsError(complexityRouterConfig.custom_dimensions)

@@ -4,7 +4,7 @@ import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, NamedTuple, TypeAlias
 
 import httpx
 from pydantic import (
@@ -403,6 +403,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/models",
         # token counter
         "/utils/token_counter",
+        "/utils/model_info",
         "/utils/transform_request",
         # rerank
         "/rerank",
@@ -872,6 +873,7 @@ class LiteLLMRoutes(enum.Enum):
         "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",
         "/team/{team_id}/member/{user_id}/reset_spend",
+        "/team/{team_id}/member/{user_id}/reset_budget",
         "/team/permissions_list",
         "/team/permissions_update",
         "/team/daily/activity",
@@ -2595,6 +2597,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_google_kms: bool | None = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: bool | None = Field(None, description="load keys from azure key vault")
     master_key: str | None = Field(None, description="require a key for all calls to proxy")
+    dangerously_permit_weak_or_unset_master_key: bool | None = Field(
+        None,
+        description="local development only: start even when master_key is unset, empty, or a publicly known default",
+    )
     coordination_redis: CoordinationRedisParams | None = Field(
         None,
         description=(
@@ -4623,11 +4629,26 @@ class TeamInfoResponseObjectTeamTable(LiteLLM_TeamTable):
     caller_edit_access: TeamEditAccess = Field(default_factory=TeamEditNone)
 
 
+TeamMemberBudgetSource: TypeAlias = Literal["team_default", "custom", "none"]
+
+
+class TeamInfoMembership(LiteLLM_TeamMembership):
+    budget_source: TeamMemberBudgetSource
+
+
 class TeamInfoResponseObject(TypedDict):
     team_id: str
     team_info: TeamInfoResponseObjectTeamTable
     keys: list
-    team_memberships: list[LiteLLM_TeamMembership]
+    team_memberships: ReadOnly[tuple[TeamInfoMembership, ...]]
+
+
+class TeamMemberResetBudgetResponse(BaseModel):
+    team_id: str
+    user_id: str
+    budget_id: str | None
+    previous_budget_id: str | None
+    budget_source: TeamMemberBudgetSource
 
 
 class TeamListResponseObject(LiteLLM_TeamTable):

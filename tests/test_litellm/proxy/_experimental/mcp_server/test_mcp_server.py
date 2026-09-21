@@ -7437,6 +7437,186 @@ async def test_execute_mcp_tool_rest_server_id_authoritative_for_unprefixed_tool
     assert captured["name"] == "echo"
 
 
+def _never_listed_passthrough_server() -> MCPServer:
+    return MCPServer(
+        server_id="lazy-map-1",
+        name="lazy_map",
+        server_name="lazy_map",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.true_passthrough,
+    )
+
+
+@contextlib.contextmanager
+def _worker_that_never_listed(server: MCPServer, upstream_tools: tuple[str, ...]):
+    """A worker whose tool rows for ``server`` are empty, in front of an upstream that answers
+    tools/list with ``upstream_tools`` and a managed dispatch that records what reaches it."""
+    from mcp.types import Tool as MCPTool
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    mcp_module.global_mcp_server_manager.registry[server.server_id] = server
+    dispatched: dict[str, object] = {}
+
+    async def fake_handle_managed_mcp_tool(**kwargs):
+        dispatched.update(kwargs)
+        return CallToolResult(content=[TextContent(type="text", text="ok")], is_error=False)
+
+    async def fake_fetch_tools(client, server_name):
+        return [MCPTool(name=tool_name, inputSchema={}) for tool_name in upstream_tools]
+
+    with (
+        patch.object(  # test-quality-ok: the upstream MCP session is the boundary; a real one needs an initialize handshake over a live server
+            mcp_module.global_mcp_server_manager,
+            "_create_mcp_client",
+            new=AsyncMock(return_value=MagicMock()),
+        ) as create_client,
+        patch.object(  # test-quality-ok: same boundary, this is the tools/list answer the upstream would give
+            mcp_module.global_mcp_server_manager,
+            "_fetch_tools_with_timeout",
+            side_effect=fake_fetch_tools,
+        ) as fetch_tools,
+        patch.object(  # test-quality-ok: records the resolved server and bare name the managed call would forward upstream
+            mcp_module, "_handle_managed_mcp_tool", new=fake_handle_managed_mcp_tool
+        ),
+    ):
+        yield SimpleNamespace(create_client=create_client, fetch_tools=fetch_tools, dispatched=dispatched)
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_lists_never_listed_passthrough_server_with_caller_token_first():
+    """A prefixed tools/call on a worker that has not served tools/list must list that server once
+    with the caller's own credentials and then dispatch, instead of answering 404."""
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    server = _never_listed_passthrough_server()
+    with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
+        await mcp_module.execute_mcp_tool(
+            name="lazy_map-add",
+            arguments={"a": 1, "b": 2},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            mcp_auth_header="Bearer caller-token",
+            raw_headers={"authorization": "Bearer caller-token"},
+        )
+
+    assert worker.fetch_tools.await_count == 1
+    assert "caller-token" in str(worker.create_client.await_args.kwargs.get("mcp_auth_header"))
+    assert worker.dispatched["server_name"] == "lazy_map"
+    assert worker.dispatched["name"] == "add"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_rest_server_id_lists_never_listed_server_first():
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    server = _never_listed_passthrough_server()
+    with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
+        await mcp_module.execute_mcp_tool(
+            name="add",
+            arguments={"a": 1, "b": 2},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            mcp_auth_header="Bearer caller-token",
+            requested_server_id=server.server_id,
+        )
+
+    assert worker.fetch_tools.await_count == 1
+    assert worker.dispatched["server_name"] == "lazy_map"
+    assert worker.dispatched["name"] == "add"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_unknown_tool_on_never_listed_server_lists_once_then_404s():
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    server = _never_listed_passthrough_server()
+    with (
+        _worker_that_never_listed(server, upstream_tools=("add",)) as worker,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="lazy_map-nope",
+            arguments={},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            mcp_auth_header="Bearer caller-token",
+        )
+
+    assert exc_info.value.status_code == 404
+    assert worker.fetch_tools.await_count == 1
+    assert worker.dispatched == {}
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_does_not_relist_a_server_this_worker_already_listed():
+    from mcp.types import Tool as MCPTool
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    server = _never_listed_passthrough_server()
+    with _worker_that_never_listed(server, upstream_tools=("add",)) as worker:
+        mcp_module.global_mcp_server_manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+        await mcp_module.execute_mcp_tool(
+            name="lazy_map-add",
+            arguments={"a": 1, "b": 2},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            mcp_auth_header="Bearer caller-token",
+        )
+
+    assert worker.fetch_tools.await_count == 0
+    assert worker.dispatched["name"] == "add"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_lists_a_tool_this_worker_has_not_yet_seen_on_a_listed_server():
+    """A worker that already holds one of the server's tools must still list when a caller asks
+    for a different tool it has not cached, so callers with wider upstream catalogs are not 404ed."""
+    from mcp.types import Tool as MCPTool
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    server = _never_listed_passthrough_server()
+    with _worker_that_never_listed(server, upstream_tools=("add", "multiply")) as worker:
+        mcp_module.global_mcp_server_manager._create_prefixed_tools([MCPTool(name="add", inputSchema={})], server)
+        await mcp_module.execute_mcp_tool(
+            name="lazy_map-multiply",
+            arguments={"a": 1, "b": 2},
+            allowed_mcp_servers=[server],
+            start_time=datetime.now(),
+            mcp_auth_header="Bearer caller-token",
+        )
+
+    assert worker.fetch_tools.await_count == 1
+    assert worker.dispatched["server_name"] == "lazy_map"
+    assert worker.dispatched["name"] == "multiply"
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_never_lists_a_server_the_caller_cannot_access():
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    server = _never_listed_passthrough_server()
+    other_server = MCPServer(server_id="other-1", name="other", transport=MCPTransport.http)
+    with (
+        _worker_that_never_listed(server, upstream_tools=("add",)) as worker,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="lazy_map-add",
+            arguments={"a": 1, "b": 2},
+            allowed_mcp_servers=[other_server],
+            start_time=datetime.now(),
+            mcp_auth_header="Bearer caller-token",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert worker.fetch_tools.await_count == 0
+    assert worker.dispatched == {}
+
+
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_strips_a_prefix_that_contains_the_separator():
     """A server with no alias publishes its UUID server_id as the tool prefix.

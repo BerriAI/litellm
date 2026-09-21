@@ -67,6 +67,7 @@ from litellm.constants import (
     REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
     TAG_REGISTRY_MAX_SIZE,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
@@ -8889,6 +8890,8 @@ def test_jwt_team_role_reaches_the_gateway_token_endpoint_by_default():
 def test_route_skips_budget_checks_marks_only_spend_free_routes() -> None:
     assert route_skips_budget_checks(route="/v1/models") is True
     assert route_skips_budget_checks(route="/spend/logs") is True
+    assert route_skips_budget_checks(route="/utils/model_info") is True
+    assert RouteChecks.is_llm_api_route(route="/utils/model_info") is True
     assert route_skips_budget_checks(route="/health") is False
     assert route_skips_budget_checks(route="/v1/chat/completions") is False
 

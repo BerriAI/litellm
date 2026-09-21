@@ -8156,7 +8156,7 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
     counter without also advancing reset_at is not durable either: the very
     next request would re-sum the unchanged historical spend and put the
     counter right back above the window's max_budget, so
-    _virtual_key_multi_budget_check kept raising BudgetExceededError (429) on
+    _virtual_key_multi_budget_check kept raising BudgetExceededError (422) on
     every request even though the key's own reported spend read $0.
     """
     mock_prisma_client = MagicMock()
@@ -15832,6 +15832,83 @@ async def test_ghsa_q775_ui_session_token_personal_key_still_capped():
 
 
 @pytest.mark.asyncio
+async def test_ui_session_token_personal_key_ceiling_is_user_budget():
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=100)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=1.0,
+        user_max_budget=500.0,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),  # test-quality-ok: helper reads proxy_server.prisma_client directly
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: helper reads proxy_server.user_api_key_cache directly
+        patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: helper reads proxy_server.llm_router directly
+        patch("litellm.proxy.proxy_server.premium_user", False),  # test-quality-ok: helper reads proxy_server.premium_user directly
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: helper reads proxy_server.litellm_proxy_admin_name directly
+        patch(  # test-quality-ok: helper has no dependency injection seam for key persistence
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
+        ) as mock_generate_key,
+    ):
+        mock_generate_key.return_value = {"key": "sk-test-key", "token_id": "token-id"}
+        try:
+            await _common_key_generation_helper(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+                team_table=None,
+            )
+        except (HTTPException, ProxyException) as err:
+            msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+            assert "cannot exceed" not in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_ui_session_token_personal_key_above_user_budget_rejected():
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=600)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=1.0,
+        user_max_budget=500.0,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),  # test-quality-ok: helper reads proxy_server.prisma_client directly
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),  # test-quality-ok: helper reads proxy_server.user_api_key_cache directly
+        patch("litellm.proxy.proxy_server.llm_router", None),  # test-quality-ok: helper reads proxy_server.llm_router directly
+        patch("litellm.proxy.proxy_server.premium_user", False),  # test-quality-ok: helper reads proxy_server.premium_user directly
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),  # test-quality-ok: helper reads proxy_server.litellm_proxy_admin_name directly
+        patch(  # test-quality-ok: helper has no dependency injection seam for key persistence
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn"
+        ) as mock_generate_key,
+    ):
+        mock_generate_key.return_value = {"key": "sk-test-key", "token_id": "token-id"}
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await _common_key_generation_helper(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+                team_table=None,
+            )
+        err = exc_info.value
+        code = getattr(err, "status_code", None) or getattr(err, "code", None)
+        msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+        assert str(code) == "400"
+        assert "cannot exceed" in msg.lower()
+        assert "500.0" in msg
+
+
+@pytest.mark.asyncio
 async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption():
     """
     Security regression for GHSA-q775: the team-key exemption must key off the
@@ -16593,7 +16670,7 @@ async def test_info_key_fn_reads_the_configured_budget_model_key(monkeypatch):
 
     It used to probe a second, provider-stripped key because the counter was
     written under the request model instead, which is what let a key report zero
-    usage while being blocked at 429.
+    usage while being blocked at 422.
     """
     from unittest.mock import AsyncMock, MagicMock
 
