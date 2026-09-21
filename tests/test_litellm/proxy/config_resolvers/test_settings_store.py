@@ -298,8 +298,8 @@ async def test_load_config_returns_and_binds_the_general_settings_store(tmp_path
 
     assert returned_store is proxy_config.settings
     assert proxy_server.general_settings is proxy_config.settings
-    assert isinstance(config_state["general_settings"], dict)
-    assert config_state["general_settings"]["max_file_size_mb"] == 5
+    assert isinstance(config_state.general_settings, dict)
+    assert config_state.general_settings["max_file_size_mb"] == 5
 
 
 def test_settings_store_starts_with_an_unset_source() -> None:

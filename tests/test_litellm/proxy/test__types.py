@@ -335,3 +335,52 @@ def test_virtual_key_mapping_counts_as_configured_when_any_issuer_sets_the_claim
     )
 
     assert jwt_auth.is_virtual_key_mapping_configured() is is_configured
+
+
+def test_proxy_runtime_config_rejects_field_assignment():
+    from litellm.proxy._types import ProxyRuntimeConfig
+
+    config = ProxyRuntimeConfig.from_resolved({"litellm_settings": {"drop_params": True}})
+
+    with pytest.raises(ValidationError):
+        config.litellm_settings = {}
+
+
+def test_proxy_runtime_config_loads_a_null_section_as_empty():
+    from litellm.proxy._types import ProxyRuntimeConfig
+
+    config = ProxyRuntimeConfig.from_resolved({"litellm_settings": None, "general_settings": {"a": 1}})
+
+    assert config.litellm_settings == {}
+    assert config.general_settings == {"a": 1}
+
+
+def test_proxy_runtime_config_to_mapping_keeps_unknown_sections():
+    from litellm.proxy._types import ProxyRuntimeConfig
+
+    config = ProxyRuntimeConfig.from_resolved({"my_custom_section": {"k": "v"}, "general_settings": {"a": 1}})
+
+    assert config.to_mapping()["my_custom_section"] == {"k": "v"}
+
+
+def test_proxy_runtime_config_with_section_keeps_the_loaded_baseline():
+    from litellm.proxy._types import ProxyRuntimeConfig
+
+    config = ProxyRuntimeConfig.from_resolved({"general_settings": {"a": 1}})
+    updated = config.with_section("general_settings", {"a": 2})
+
+    assert updated.baseline["general_settings"] == {"a": 1}
+    assert updated.to_mapping()["general_settings"] == {"a": 2}
+    assert config.general_settings == {"a": 1}
+
+
+def test_proxy_runtime_config_to_mapping_yaml_dumps_lists_not_tuples():
+    import yaml
+
+    from litellm.proxy._types import ProxyRuntimeConfig
+
+    config = ProxyRuntimeConfig.from_resolved({"model_list": [{"model_name": "m"}], "guardrails": [{"g": 1}]})
+
+    dumped = yaml.safe_dump(dict(config.to_mapping()))
+    assert "!!python/tuple" not in dumped
+    assert yaml.safe_load(dumped) == {"model_list": [{"model_name": "m"}], "guardrails": [{"g": 1}]}

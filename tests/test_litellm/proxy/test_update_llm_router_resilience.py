@@ -11,6 +11,7 @@ catch-all handler in _update_llm_router.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from litellm.proxy._types import ProxyRuntimeConfig
 from litellm.proxy.proxy_server import ProxyConfig
 
 
@@ -89,7 +90,7 @@ class TestUpdateLlmRouterResilience:
                 proxy_config,
                 "get_config",
                 new_callable=AsyncMock,
-                return_value={"model_list": []},
+                return_value=ProxyRuntimeConfig.from_resolved({"model_list": []}),
             ),
             patch.object(proxy_config, "_add_deployment", return_value=1) as mock_add,
             patch.object(
@@ -161,7 +162,7 @@ class TestDeleteDeploymentResilience:
                 proxy_config,
                 "get_config",
                 new_callable=AsyncMock,
-                return_value={
+                return_value=ProxyRuntimeConfig.from_resolved({
                     "model_list": [
                         {
                             "model_name": "gpt-4",
@@ -169,7 +170,7 @@ class TestDeleteDeploymentResilience:
                             "model_info": {"id": "config-id-1"},
                         }
                     ]
-                },
+                }),
             ),
             patch("litellm.proxy.proxy_server.llm_router", mock_router),
             patch("litellm.proxy.proxy_server.premium_user", False),
@@ -265,7 +266,7 @@ class TestDeleteDeploymentKeepsPluginConfigModels:
         }
         proxy_config = ProxyConfig()
         with (
-            patch.object(proxy_config, "get_config", new_callable=AsyncMock, return_value=raw_config),
+            patch.object(proxy_config, "get_config", new_callable=AsyncMock, return_value=ProxyRuntimeConfig.from_resolved(raw_config)),
             patch("litellm.proxy.proxy_server.llm_router", router),
             patch("litellm.proxy.proxy_server.user_config_file_path", config_file_path),
             patch("litellm.proxy.proxy_server.premium_user", False),

@@ -33,6 +33,7 @@ from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import PromptCachingDeploymentCheck
 from litellm.types.router import RetryPolicy, UpdateRouterConfig
+from litellm.proxy._types import ProxyRuntimeConfig
 
 
 @pytest.fixture(autouse=True)
@@ -366,7 +367,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "llm_router", router)
     monkeypatch.setattr(proxy_server.proxy_config, "add_deployment", _apply_router_settings)
-    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({})))
 
     posted = UpdateRouterConfig(
         retry_policy=RetryPolicy(

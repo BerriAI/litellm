@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from .conftest import VOLATILE_KEYS, normalize
+from litellm.proxy._types import ProxyRuntimeConfig
 
 
 def _seed_settings_store(monkeypatch, db_row: dict, yaml_values: dict | None = None) -> None:
@@ -888,7 +889,7 @@ def test_config_callback_delete_happy_admin(client, auth_as, mock_prisma, monkey
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={"litellm_settings": {"success_callback": ["langfuse", "slack"]}}
+        return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {"success_callback": ["langfuse", "slack"]}})
     )
     fake_proxy_config.save_config = AsyncMock()
     fake_proxy_config.add_deployment = AsyncMock()
@@ -933,7 +934,7 @@ def test_config_callback_delete_not_found(client, auth_as, mock_prisma, monkeypa
     monkeypatch.setattr(ps, "store_model_in_db", True)
 
     fake_proxy_config = MagicMock()
-    fake_proxy_config.get_config = AsyncMock(return_value={"litellm_settings": {"success_callback": ["slack"]}})
+    fake_proxy_config.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {"success_callback": ["slack"]}}))
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
@@ -961,11 +962,11 @@ def test_get_config_callbacks_happy(client, auth_as, mock_prisma, monkeypatch):
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"success_callback": []},
             "general_settings": {},
             "environment_variables": {},
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1029,11 +1030,11 @@ def _install_callbacks_config(monkeypatch, mock_prisma):
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"success_callback": ["langfuse", "datadog", "otel"]},
             "general_settings": {"alerting": ["slack"]},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1175,7 +1176,7 @@ def test_get_config_callbacks_redacts_email_alerting_vars_for_view_only_admin(
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"success_callback": []},
             "general_settings": {"alerting": ["email"]},
             "environment_variables": {
@@ -1188,7 +1189,7 @@ def test_get_config_callbacks_redacts_email_alerting_vars_for_view_only_admin(
                 "EMAIL_LOGO_URL": "https://example.com/logo.png",
                 "EMAIL_SUPPORT_CONTACT": "support@example.com",
             },
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1228,11 +1229,11 @@ def test_get_config_callbacks_appends_runtime_only_callbacks(client, auth_as, mo
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"success_callback": ["langfuse"]},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1269,11 +1270,11 @@ def test_get_config_callbacks_accepts_scalar_and_null_yaml_callbacks(client, aut
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"success_callback": "langfuse", "failure_callback": None, "callbacks": None},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1308,11 +1309,11 @@ def test_get_config_callbacks_deduplicates_configured_and_runtime(client, auth_a
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"success_callback": ["langfuse", "arize", "logfire"]},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1353,11 +1354,11 @@ def test_get_config_callbacks_keeps_yaml_otel_family_callbacks_next_to_configure
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"callbacks": ["langfuse_otel"]},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1430,11 +1431,11 @@ def test_get_config_callbacks_deduplicates_dotted_path_callback(
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {config_key: [dotted_path]},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1465,11 +1466,11 @@ def test_get_config_callbacks_lists_dict_shaped_config_callbacks(client, auth_as
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"success_callback": {"langsmith": {"batch_size": 1}}},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1500,11 +1501,11 @@ def test_get_config_callbacks_excludes_internal_runtime_callbacks(client, auth_a
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"success_callback": []},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 
@@ -1585,11 +1586,11 @@ def test_get_config_callbacks_redacts_runtime_only_row_secrets_for_view_only_adm
 
     fake_proxy_config = MagicMock()
     fake_proxy_config.get_config = AsyncMock(
-        return_value={
+        return_value=ProxyRuntimeConfig.from_resolved({
             "litellm_settings": {"success_callback": []},
             "general_settings": {},
             "environment_variables": dict(_CALLBACK_ENV_FIXTURE),
-        }
+        })
     )
     monkeypatch.setattr(ps, "proxy_config", fake_proxy_config)
 

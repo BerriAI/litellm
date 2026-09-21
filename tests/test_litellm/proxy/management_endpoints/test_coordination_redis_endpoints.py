@@ -13,7 +13,7 @@ from fastapi import HTTPException
 import litellm
 from litellm.caching.caching import RedisCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
-from litellm.proxy._types import LitellmTableNames, LitellmUserRoles
+from litellm.proxy._types import LitellmTableNames, LitellmUserRoles, ProxyRuntimeConfig
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.coordination_redis_endpoints import (
     _REDACTED_VALUE,
@@ -59,7 +59,7 @@ def _prisma_with_general_settings(general_settings: dict | None) -> MagicMock:
 def _proxy_config(file_general_settings: dict | None = None) -> MagicMock:
     proxy_config = MagicMock()
     proxy_config.get_config_state = MagicMock(
-        return_value={"general_settings": file_general_settings or {}},
+        return_value=ProxyRuntimeConfig.from_resolved({"general_settings": file_general_settings or {}}),
     )
     return proxy_config
 
@@ -624,7 +624,7 @@ def _real_proxy_config(file_general_settings: dict) -> "object":
     proxy_config = ProxyConfig()
     proxy_config._load_yaml_settings_stores({"general_settings": file_general_settings})
     proxy_config.get_config_state = MagicMock(
-        return_value={"general_settings": file_general_settings}
+        return_value=ProxyRuntimeConfig.from_resolved({"general_settings": file_general_settings})
     )
     return proxy_config
 

@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, ProxyRuntimeConfig
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     get_router_settings,
 )
@@ -104,7 +104,7 @@ class TestRouterSettingsEndpoints:
         monkeypatch.setattr(proxy_server, "llm_router", llm_router)
 
         async def fake_get_config(self, config_file_path=None):
-            return {}
+            return ProxyRuntimeConfig.from_resolved({})
 
         monkeypatch.setattr(
             proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True

@@ -26,6 +26,7 @@ from litellm.proxy import proxy_server
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
 from .conftest import normalize  # type: ignore[import-not-found]
+from litellm.proxy._types import ProxyRuntimeConfig
 
 
 @pytest.mark.parametrize(
@@ -350,7 +351,7 @@ def test_v2_model_info_reports_pricing_overrides_to_the_admin_ui(client, auth_as
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(proxy_server, "user_model", None)
-    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({})))
     monkeypatch.setattr(
         proxy_server,
         "_apply_search_filter_to_models",
@@ -739,7 +740,7 @@ def mixed_auto_router_router(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(proxy_server, "user_model", None)
-    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({})))
     monkeypatch.setattr(
         proxy_server,
         "_apply_search_filter_to_models",
@@ -806,7 +807,7 @@ async def test_model_info_v2_query_sentinel_does_not_filter(monkeypatch, mixed_a
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
-    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({})))
     monkeypatch.setattr(
         proxy_server,
         "_apply_search_filter_to_models",
@@ -871,7 +872,7 @@ def access_group_router(monkeypatch):
     monkeypatch.setattr(proxy_server, "llm_model_list", model_list)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
     monkeypatch.setattr(proxy_server, "user_model", None)
-    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value={}))
+    monkeypatch.setattr(proxy_server.proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({})))
     monkeypatch.setattr(
         proxy_server,
         "_apply_search_filter_to_models",

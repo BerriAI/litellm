@@ -37,6 +37,7 @@ from litellm.proxy._types import (
     ModelAccessDeniedProxyException,
     ProxyErrorTypes,
     ProxyException,
+    ProxyRuntimeConfig,
     TokenCountRequest,
     UserAPIKeyAuth,
 )
@@ -1163,7 +1164,7 @@ def test_get_config_custom_callback_api_env_vars(monkeypatch):
     mock_router = MagicMock()
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
-    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(config_data)))
 
     # Bypass auth dependency
     original_overrides = app.dependency_overrides.copy()
@@ -1213,7 +1214,7 @@ def test_get_config_callbacks_fall_back_to_process_env(mock_env_vars, monkeypatc
     mock_router = MagicMock()
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
-    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(config_data)))
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -1260,7 +1261,7 @@ def test_get_config_callback_env_secrets_redacted_for_non_admin(mock_env_vars, m
     mock_router = MagicMock()
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
-    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(config_data)))
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -1310,7 +1311,7 @@ def test_get_config_returns_email_settings(monkeypatch):
     mock_router = MagicMock()
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
-    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(config_data)))
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -1347,7 +1348,7 @@ def _get_email_alert_variables(monkeypatch, config_data):
     mock_router = MagicMock()
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
-    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(config_data)))
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -1472,7 +1473,7 @@ def test_get_config_returns_slack_webhook(monkeypatch):
     mock_logging.slack_alerting_instance._all_possible_alert_types.return_value = ["budget_alerts"]
     mock_logging.slack_alerting_instance.alert_to_webhook_url = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging)
-    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(config_data)))
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -1522,7 +1523,7 @@ def test_get_config_cleared_slack_webhook_not_overridden_by_os_env(monkeypatch):
     mock_logging.slack_alerting_instance._all_possible_alert_types.return_value = ["budget_alerts"]
     mock_logging.slack_alerting_instance.alert_to_webhook_url = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_logging)
-    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(config_data)))
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -3008,7 +3009,7 @@ async def test_delete_deployment_type_mismatch():
     mock_llm_router.delete_deployment = MagicMock(side_effect=mock_delete_deployment)
 
     async def mock_get_config(config_file_path):
-        return {
+        return ProxyRuntimeConfig.from_resolved({
             "model_list": [
                 {
                     "model_name": "openai-gpt-4o",
@@ -3021,7 +3022,7 @@ async def test_delete_deployment_type_mismatch():
                     "model_info": {"id": 12345679},
                 },
             ]
-        }
+        })
 
     pc.get_config = AsyncMock(side_effect=mock_get_config)
 
@@ -4088,8 +4089,10 @@ async def test_write_config_to_file(monkeypatch):
 
     with patch("builtins.open", mock_file_open), patch("yaml.dump") as mock_yaml_dump:
         # Call save_config with test data
-        test_config = {"key": "value", "model_list": ["model1", "model2"]}
-        await proxy_config.save_config(new_config=test_config)
+        new_config = ProxyRuntimeConfig().model_copy(
+            update={"key": "value", "model_list": [{"model_name": "model1"}, {"model_name": "model2"}]}
+        )
+        await proxy_config.save_config(new_config=new_config)
 
         # Verify that file was NOT opened for writing (since store_model_in_db=True)
         mock_file_open.assert_not_called()
@@ -4135,7 +4138,7 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
     with patch("builtins.open", mock_file_open), patch("yaml.dump") as mock_yaml_dump:
         # Call save_config with test data
         test_config = {"key": "value", "other_key": "other_value"}
-        await proxy_config.save_config(new_config=test_config)
+        await proxy_config.save_config(new_config=ProxyRuntimeConfig.from_resolved(test_config))
 
         # Verify that file WAS opened for writing (since store_model_in_db=False)
         mock_file_open.assert_called_once_with(f"{test_config_path}", "w")
@@ -6993,7 +6996,7 @@ def test_get_config_normalizes_string_callbacks(monkeypatch):
     mock_router = MagicMock()
     mock_router.get_settings.return_value = {}
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
-    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=config_data))
+    monkeypatch.setattr(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(config_data)))
 
     original_overrides = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
@@ -11237,7 +11240,7 @@ class TestDeleteDeploymentSync:
         mock_router.delete_deployment.return_value = MagicMock()
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            with patch.object(proxy_config, "get_config", AsyncMock(return_value={"model_list": []})):
+            with patch.object(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"model_list": []}))):
                 still_desired = await proxy_config._delete_deployment(db_models=[])
 
         mock_router.delete_deployment.assert_called_once_with(id="model-id-to-evict")
@@ -11260,7 +11263,7 @@ class TestDeleteDeploymentSync:
         mock_router = MagicMock()
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
-            with patch.object(proxy_config, "get_config", AsyncMock(return_value={})):
+            with patch.object(proxy_config, "get_config", AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({}))):
                 await proxy_config._update_llm_router(new_models=None, proxy_logging_obj=MagicMock())
 
         mock_router.delete_deployment.assert_not_called()
@@ -11492,7 +11495,7 @@ async def test_update_config_field_throttle_persists_to_litellm_settings(monkeyp
     saved: dict = {}
 
     async def fake_get_config():
-        return {"litellm_settings": {}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {}})
 
     async def fake_save_config(new_config=None):
         saved.update(new_config or {})
@@ -11604,7 +11607,7 @@ async def test_update_config_field_max_ui_session_budget_sets_live_value(monkeyp
     saved: dict = {}
 
     async def fake_get_config():
-        return {"litellm_settings": {}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {}})
 
     async def fake_save_config(new_config=None):
         saved.update(new_config or {})
@@ -11824,7 +11827,7 @@ async def test_update_config_field_prompt_caching_persists_to_litellm_settings(m
     saved: dict = {}
 
     async def fake_get_config():
-        return {"litellm_settings": {}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {}})
 
     async def fake_save_config(new_config=None):
         saved.update(new_config or {})
@@ -11873,7 +11876,7 @@ async def test_update_config_field_prompt_caching_rejects_invalid(monkeypatch, f
     from litellm.proxy.proxy_server import update_config_general_settings
 
     async def fake_get_config():
-        return {"litellm_settings": {}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {}})
 
     monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
     monkeypatch.setattr(ps, "prisma_client", MagicMock())
@@ -11915,7 +11918,7 @@ async def test_reset_config_field_restores_type_default(monkeypatch, field_name,
     saved: dict = {}
 
     async def fake_get_config():
-        return {"litellm_settings": {field_name: "stale"}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {field_name: "stale"}})
 
     async def fake_save_config(new_config=None):
         saved.update(new_config or {})
@@ -11952,7 +11955,7 @@ async def test_update_config_field_throttle_rejects_invalid(monkeypatch, bad_val
     from litellm.proxy.proxy_server import update_config_general_settings
 
     async def fake_get_config():
-        return {"litellm_settings": {}}
+        return ProxyRuntimeConfig.from_resolved({"litellm_settings": {}})
 
     monkeypatch.setattr(ps.proxy_config, "get_config", fake_get_config)
     monkeypatch.setattr(ps, "prisma_client", MagicMock())
@@ -12703,7 +12706,7 @@ def test_delete_callback_audits_litellm_settings_deletion(_update_config_setup, 
     monkeypatch.setattr(
         real_proxy_config,
         "get_config",
-        AsyncMock(return_value={"litellm_settings": {"success_callback": ["langfuse", "datadog"]}}),
+        AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {"success_callback": ["langfuse", "datadog"]}})),
     )
     monkeypatch.setattr(real_proxy_config, "save_config", AsyncMock(return_value=None))
     try:
@@ -12736,7 +12739,7 @@ def test_delete_callback_audits_before_reload_failure(_update_config_setup, monk
     monkeypatch.setattr(
         real_proxy_config,
         "get_config",
-        AsyncMock(return_value={"litellm_settings": {"success_callback": ["langfuse", "datadog"]}}),
+        AsyncMock(return_value=ProxyRuntimeConfig.from_resolved({"litellm_settings": {"success_callback": ["langfuse", "datadog"]}})),
     )
     monkeypatch.setattr(real_proxy_config, "save_config", AsyncMock(return_value=None))
     monkeypatch.setattr(

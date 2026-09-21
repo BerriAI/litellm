@@ -19,6 +19,7 @@ from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
+from litellm.proxy._types import ProxyRuntimeConfig
 
 
 @pytest.fixture(autouse=True)
@@ -870,13 +871,13 @@ class TestProxyInitializationHelpers:
             save_worker_config=MagicMock(),
         )
         mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
-            return_value={
+            return_value=ProxyRuntimeConfig.from_resolved({
                 "general_settings": {
                     "database_url": "postgresql://test:test@localhost:5432/test",
                     "database_connection_pool_limit": 5,
                     **timeout_config,
                 }
-            }
+            })
         )
 
         clean_env = {
@@ -996,7 +997,7 @@ class TestProxyInitializationHelpers:
             save_worker_config=MagicMock(),
         )
         mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
-            return_value={
+            return_value=ProxyRuntimeConfig.from_resolved({
                 "general_settings": {
                     "database_url": "postgresql://test:test@localhost:5432/test",
                     "database_connect_timeout": 15,
@@ -1006,7 +1007,7 @@ class TestProxyInitializationHelpers:
                         "statement_cache_size": 0,
                     },
                 }
-            }
+            })
         )
 
         clean_env = {
@@ -1122,12 +1123,12 @@ class TestProxyInitializationHelpers:
             save_worker_config=MagicMock(),
         )
         mock_proxy_module.ProxyConfig.return_value.get_config = AsyncMock(
-            return_value={
+            return_value=ProxyRuntimeConfig.from_resolved({
                 "general_settings": {
                     "database_url": "postgresql://test:test@localhost:5432/test",
                     "database_disable_prepared_statements": config_value,
                 }
-            }
+            })
         )
 
         clean_env = {
@@ -1773,7 +1774,7 @@ class TestProxyInitializationHelpers:
 
         # Mock the ProxyConfig.get_config method to return a proper async config
         async def mock_get_config(config_file_path=None):
-            return {"general_settings": {}, "litellm_settings": {}}
+            return ProxyRuntimeConfig.from_resolved({"general_settings": {}, "litellm_settings": {}})
 
         mock_proxy_config_instance = MagicMock()
         mock_proxy_config_instance.get_config = mock_get_config
@@ -2664,7 +2665,7 @@ def _run_server_and_capture_urls(
 ) -> dict:
     loaded_config = yaml.safe_load(Path(config_path).read_text())
     mock_proxy_config = MagicMock()
-    mock_proxy_config.return_value.get_config = AsyncMock(return_value=loaded_config)
+    mock_proxy_config.return_value.get_config = AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(loaded_config))
     mock_proxy_module = MagicMock(
         app=MagicMock(),
         ProxyConfig=mock_proxy_config,
