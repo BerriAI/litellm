@@ -4185,6 +4185,45 @@ def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
 
 
+def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    cache_breakpoint: Final = {"mode": "explicit"}
+
+    request: Final = handler.transform_request(
+        model="gpt-5.6-sol",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Stable prefix",
+                        "prompt_cache_breakpoint": cache_breakpoint,
+                    }
+                ],
+            },
+            {"role": "user", "content": "Use a tool"},
+        ],
+        optional_params={"prompt_cache_options": cache_breakpoint},
+        litellm_params={},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert request["input"][0] == {
+        "type": "message",
+        "role": "system",
+        "content": [
+            {
+                "type": "input_text",
+                "text": "Stable prefix",
+                "prompt_cache_breakpoint": cache_breakpoint,
+            }
+        ],
+    }
+    assert request["prompt_cache_options"] == cache_breakpoint
+
+
 def test_mid_conversation_system_string_stays_in_input_after_a_user_turn():
     handler: Final = LiteLLMResponsesTransformationHandler()
 

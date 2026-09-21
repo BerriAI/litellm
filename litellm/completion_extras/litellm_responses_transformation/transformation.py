@@ -26,6 +26,7 @@ from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     responses_reasoning_items_from_thinking_blocks,
+    with_prompt_cache_breakpoint,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
@@ -1060,7 +1061,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     # Handle multimodal content
                     original_type = item.get("type")
                     if original_type == "text":
-                        converted = self._convert_content_str_to_input_text(item.get("text", ""), role)
+                        converted = with_prompt_cache_breakpoint(
+                            self._convert_content_str_to_input_text(item.get("text", ""), role),
+                            item.get("prompt_cache_breakpoint"),
+                        )
                         result.append(converted)
                         verbose_logger.debug("Chat provider:   text -> %s", converted)
                     elif original_type == "image_url":
