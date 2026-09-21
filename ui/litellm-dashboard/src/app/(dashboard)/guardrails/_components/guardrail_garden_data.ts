@@ -445,6 +445,16 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
     providerKey: "Deepkeep",
   },
   {
+    id: "pointguardai",
+    name: "PointGuard AI",
+    description:
+      "PointGuard AI runtime guardrails inspect prompts and responses for prompt injection, sensitive data exposure, harmful content, and policy violations.",
+    category: "partner",
+    logo: guardrailLogoMap["PointGuard AI"],
+    tags: ["Security", "Prompt Injection", "Data Protection", "Policy"],
+    providerKey: "PointguardAi",
+  },
+  {
     id: "repelloai",
     name: "RepelloAI Argus",
     description:

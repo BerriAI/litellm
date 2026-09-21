@@ -41,6 +41,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
     OvalixGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.pointguardai import (
+    PointGuardAIGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
@@ -138,6 +141,7 @@ class SupportedGuardrailIntegrations(Enum):
     STRAIKER = "straiker"
     ALICE = "alice"
     CONDUCT = "conduct"
+    POINTGUARDAI = "pointguard_ai"
 
 
 class Role(Enum):
@@ -1073,6 +1077,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     ZscalerAIGuardConfigModel,
     AktoConfigModel,
     JavelinGuardrailConfigModel,
+    PointGuardAIGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
