@@ -1,7 +1,9 @@
 mod host;
 
 use host::MessagesRouteHost;
-use litellm_callbacks_legacy::{LegacySurface, PassThroughStream, PublicCall, run_legacy_call};
+use litellm_callbacks_legacy_python::{
+    LegacySurface, PassThroughStream, PublicCall, run_legacy_call,
+};
 use litellm_core::messages::route::{messages_machine, supports};
 use pyo3::{
     prelude::*,

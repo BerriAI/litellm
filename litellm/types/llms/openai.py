@@ -512,6 +512,7 @@ class CreateBatchRequest(TypedDict, total=False):
 
 class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
     model: str
+    disable_fallbacks: ReadOnly[bool]
 
 
 class RetrieveBatchRequest(TypedDict, total=False):

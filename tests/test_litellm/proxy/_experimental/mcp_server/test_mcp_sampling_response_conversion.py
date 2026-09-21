@@ -54,13 +54,13 @@ class TestConvertOpenAIResponseToMcpResult:
         assert isinstance(result.content, TextContent)
         assert result.content.text == "hello world"
         assert result.role == "assistant"
-        assert result.stopReason == "endTurn"
+        assert result.stop_reason== "endTurn"
 
     def test_should_map_length_finish_reason_to_max_tokens(self):
         result = _convert_openai_response_to_mcp_result(
             _response(content="truncated", finish_reason="length"), "gpt-4o"
         )
-        assert result.stopReason == "maxTokens"
+        assert result.stop_reason== "maxTokens"
 
     def test_should_prefer_actual_model_from_response(self):
         result = _convert_openai_response_to_mcp_result(
@@ -79,7 +79,7 @@ class TestConvertOpenAIResponseToMcpResult:
             "gpt-4o",
         )
         assert isinstance(result, CreateMessageResultWithTools)
-        assert result.stopReason == "toolUse"
+        assert result.stop_reason== "toolUse"
         tool_uses = [c for c in result.content if isinstance(c, ToolUseContent)]
         assert len(tool_uses) == 1
         assert tool_uses[0].name == "get_weather"
@@ -113,7 +113,7 @@ class TestConvertMcpToolsToOpenAI:
     def test_should_convert_tool_with_schema(self):
         schema = {"type": "object", "properties": {"q": {"type": "string"}}}
         tool = SimpleNamespace(
-            name="search", description="search the web", inputSchema=schema
+            name="search", description="search the web", input_schema=schema
         )
         result = _convert_mcp_tools_to_openai([tool])
         assert result == [
@@ -128,7 +128,7 @@ class TestConvertMcpToolsToOpenAI:
         ]
 
     def test_should_default_description_and_parameters(self):
-        tool = SimpleNamespace(name="noop", description=None, inputSchema=None)
+        tool = SimpleNamespace(name="noop", description=None, input_schema=None)
         result = _convert_mcp_tools_to_openai([tool])
         fn = result[0]["function"]
         assert fn["description"] == ""
@@ -151,7 +151,7 @@ class TestConvertMcpToolChoiceToOpenAI:
 
 class TestConvertImageAndAudioContent:
     def test_should_convert_image_to_data_uri(self):
-        content = SimpleNamespace(type="image", data="aGVsbG8=", mimeType="image/jpeg")
+        content = SimpleNamespace(type="image", data="aGVsbG8=", mime_type="image/jpeg")
         result = _convert_single_content(content)
         assert result == {
             "type": "image_url",
@@ -159,20 +159,20 @@ class TestConvertImageAndAudioContent:
         }
 
     def test_should_map_audio_mime_to_format(self):
-        content = SimpleNamespace(type="audio", data="Zm9v", mimeType="audio/mp3")
+        content = SimpleNamespace(type="audio", data="Zm9v", mime_type="audio/mp3")
         result = _convert_single_content(content)
         assert result["type"] == "input_audio"
         assert result["input_audio"] == {"data": "Zm9v", "format": "mp3"}
 
     def test_should_default_unknown_audio_mime_to_wav(self):
-        content = SimpleNamespace(type="audio", data="Zm9v", mimeType="audio/weird")
+        content = SimpleNamespace(type="audio", data="Zm9v", mime_type="audio/weird")
         result = _convert_single_content(content)
         assert result["input_audio"]["format"] == "wav"
 
     def test_should_flatten_list_content(self):
         items = [
             SimpleNamespace(type="text", text="a"),
-            SimpleNamespace(type="image", data="x", mimeType="image/png"),
+            SimpleNamespace(type="image", data="x", mime_type="image/png"),
         ]
         result = _convert_mcp_content_to_openai(items)
         assert isinstance(result, list)

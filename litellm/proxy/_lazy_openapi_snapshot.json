@@ -34982,6 +34982,12 @@
         "PolicyAttachmentCreateRequest": {
           "description": "Request body for creating a policy attachment.",
           "properties": {
+            "default": {
+              "default": false,
+              "description": "Apply this attachment only when no non-default attachment matches the request.",
+              "title": "Default",
+              "type": "boolean"
+            },
             "keys": {
               "anyOf": [
                 {
@@ -35112,6 +35118,12 @@
               ],
               "description": "Who created the attachment.",
               "title": "Created By"
+            },
+            "default": {
+              "default": false,
+              "description": "Apply this attachment only when no non-default attachment matches the request.",
+              "title": "Default",
+              "type": "boolean"
             },
             "definition_location": {
               "default": "db",
@@ -37141,6 +37153,12 @@
         "PolicyAttachmentCreateRequest": {
           "description": "Request body for creating a policy attachment.",
           "properties": {
+            "default": {
+              "default": false,
+              "description": "Apply this attachment only when no non-default attachment matches the request.",
+              "title": "Default",
+              "type": "boolean"
+            },
             "keys": {
               "anyOf": [
                 {

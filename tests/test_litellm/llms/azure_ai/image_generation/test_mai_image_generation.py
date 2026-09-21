@@ -453,6 +453,38 @@ class TestAzureMAIImageGeneration:
         )
         assert round(cost, 10) == round(expected_cost, 10)
 
+    def test_mai_image_pro_edit_cost_splits_text_and_image_input(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        model = "azure_ai/MAI-Image-2.5-Pro"
+        model_info = litellm.get_model_info(model=model, custom_llm_provider="azure_ai")
+        text_tokens = 37
+        image_tokens = 1024
+        output_image_tokens = 1024
+
+        image_response = ImageResponse(
+            data=[ImageObject(b64_json="img1")],
+            usage=ImageUsage(
+                input_tokens=text_tokens + image_tokens,
+                input_tokens_details=ImageUsageInputTokensDetails(
+                    text_tokens=text_tokens,
+                    image_tokens=image_tokens,
+                ),
+                output_tokens=output_image_tokens,
+                total_tokens=text_tokens + image_tokens + output_image_tokens,
+            ),
+        )
+
+        cost = azure_ai_image_cost_calculator(model=model, image_response=image_response)
+
+        expected_cost = (
+            text_tokens * model_info["input_cost_per_token"]
+            + image_tokens * model_info["input_cost_per_image_token"]
+            + output_image_tokens * model_info["output_cost_per_image_token"]
+        )
+        assert round(cost, 10) == round(expected_cost, 10)
+        assert model_info["input_cost_per_image_token"] != model_info["input_cost_per_token"]
+
     def test_mai_image_cost_calculator_falls_back_to_flat_image_pricing(self, monkeypatch):
         monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
         litellm.model_cost = litellm.get_model_cost_map(url="")

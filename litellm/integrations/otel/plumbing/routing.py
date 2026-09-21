@@ -374,10 +374,8 @@ class TenantTracerCache:
             self._routed_exporter(spec, credential_headers, project_headers, endpoint)
             for spec in self._config.exporters
         ]
-        update: Final = (
-            {"exporters": exporters} if service_name is None else {"exporters": exporters, "service_name": service_name}
-        )
-        return self._config.model_copy(update=update)
+        routed: Final = self._config.model_copy(update={"exporters": exporters, "langfuse_span_scope": "full"})
+        return routed if service_name is None else routed.model_copy(update={"service_name": service_name})
 
     def _routed_exporter(
         self,

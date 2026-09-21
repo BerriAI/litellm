@@ -425,7 +425,10 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
 
     def _build_guard_input_for_response(self, inputs: GenericGuardrailAPIInputs) -> _GuardInput:
         output_texts: Final[list[str]] = inputs.get("texts", [])
-        return _GuardInput(messages=[_Message(role="assistant", content=text) for text in output_texts], tools=[])
+        return _GuardInput(
+            messages=[_Message(role="assistant", content=text) for text in output_texts],
+            tools=inputs.get("tools", []),
+        )
 
     def _extract_transformed_texts(self, guard_output: _GuardInput, num_assistant_messages: int) -> list[str]:
         tail: Final = guard_output.messages[-num_assistant_messages:] if num_assistant_messages > 0 else []

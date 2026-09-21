@@ -4,4 +4,6 @@ pub enum Error {
     Unavailable,
     #[error("invalid cache entry")]
     InvalidEntry,
+    #[error("flushing Redis requires an explicit namespace")]
+    UnscopedFlush,
 }

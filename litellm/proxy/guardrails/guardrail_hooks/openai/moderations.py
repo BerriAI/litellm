@@ -197,7 +197,7 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         text_to_moderate: str | None = None
 
         # Prefer structured_messages if available (has role context)
-        if input_type == "request" and (structured_messages := inputs.get("structured_messages")):
+        if structured_messages := inputs.get("structured_messages"):
             text_to_moderate = self.get_user_prompt(structured_messages)
 
         # Fall back to texts
