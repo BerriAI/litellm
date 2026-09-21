@@ -146,6 +146,10 @@ SDK_MODULE: Final = "litellm"
 SUBPROCESS_SPAWNS: Final = frozenset(("run", "Popen", "check_output", "check_call", "call"))
 INTERPRETER_ISOLATION_FLAGS: Final = frozenset(("-I", "-P"))
 
+RULE_CODES: Final = frozenset((
+    "TQ000", "TQ001", "TQ002", "TQ003", "TQ004", "TQ005", "TQ006", "TQ007", "TQ009",
+))
+
 CREDENTIAL_NAME_RE: Final = re.compile(
     r"(?:API_KEY|_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|DATABASE_URL|ACCESS_KEY_ID)$"
 )

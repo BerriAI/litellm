@@ -5,6 +5,7 @@ import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -17,6 +18,7 @@ import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import ClassifierVisionConfig from "./ClassifierVisionConfig";
+import { getHeuristicV2SuccessThresholdError } from "./build_complexity_router_config";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
@@ -48,13 +50,15 @@ const DEFAULT_SCORING_EXPLANATION =
   "The weighted score determines the tier:";
 
 const HEURISTIC_V2_EXPLANATION =
-  "The router estimates success probability for all four tiers with the bundled calibrated model, then selects " +
-  "the first tier that meets its trained threshold. It runs locally with no classifier API call.";
+  "The router estimates success probability for all four tiers with its calibrated model, then selects " +
+  "the first tier that meets the success threshold. If none qualify, it selects Reasoning. " +
+  "It runs locally with no classifier API call.";
 
 const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
 const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
+const HEURISTIC_V2_SUCCESS_THRESHOLD_ID = "heuristic-v2-success-threshold";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -165,6 +169,39 @@ interface ClassificationMethodConfigProps {
   defaultModel?: string;
 }
 
+export const InactiveHeuristicV2Threshold: React.FC<Pick<ClassificationMethodConfigProps, "value" | "onChange">> = ({
+  value,
+  onChange,
+}) => {
+  const threshold = value.heuristic_v2_success_threshold;
+  if (effectiveClassifierType(value) === "heuristic_v2" || threshold === undefined) return null;
+  const error = getHeuristicV2SuccessThresholdError(threshold);
+  return (
+    <section aria-label="Inactive Heuristic v2 threshold" className="mb-4 space-y-2 rounded-md border p-3">
+      <p className="text-sm font-medium">
+        Heuristic v2 success threshold (inactive):{" "}
+        <output aria-label="Retained Heuristic v2 threshold">
+          {Number.isFinite(threshold) ? threshold : "Invalid value"}
+        </output>
+      </p>
+      <p className="text-sm text-muted-foreground">Only used when Heuristic v2 is selected</p>
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => onChange({ ...value, heuristic_v2_success_threshold: undefined })}
+      >
+        Clear Heuristic v2 threshold
+      </Button>
+    </section>
+  );
+};
+
 const ClassifierTypeRadios: React.FC<{
   value: ComplexityRouterConfigValue;
   classifierType: ClassifierType;
@@ -259,6 +296,12 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   const classifierModel = value.classifier_llm_config?.model ?? "";
   const classifierReasoningEffort = value.classifier_llm_config?.reasoning_effort;
   const explicitlySupportedClassifierEfforts = effortOptionsByModel[classifierModel];
+  const successThresholdError = getHeuristicV2SuccessThresholdError(value.heuristic_v2_success_threshold);
+  const successThresholdDraft =
+    draft?.id === HEURISTIC_V2_SUCCESS_THRESHOLD_ID &&
+    Object.is(value.heuristic_v2_success_threshold, draft.raw.trim() === "" ? undefined : Number(draft.raw))
+      ? draft.raw
+      : null;
 
   const handleClassifierTypeChange = (classifierType: ClassifierType) => {
     onChange(transitionClassifierType(value, classifierType));
@@ -273,6 +316,14 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     const parsed = Number(raw);
     if (raw.trim() === "" || !Number.isFinite(parsed)) return;
     onChange({ ...value, hybrid_boundary_margin: Math.min(1, Math.max(0, parsed)) });
+  };
+
+  const handleSuccessThresholdChange = (raw: string) => {
+    setDraft({ id: HEURISTIC_V2_SUCCESS_THRESHOLD_ID, raw });
+    onChange({
+      ...value,
+      heuristic_v2_success_threshold: raw.trim() === "" ? undefined : Number(raw),
+    });
   };
 
   // One write for everything the prompt dialog owns. The rubric arrives here rather than through the
@@ -406,6 +457,36 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   return (
     <>
       <ClassifierTypeRadios value={value} classifierType={classifierType} onTypeChange={handleClassifierTypeChange} />
+
+      {classifierType === "heuristic_v2" && (
+        <div className="mt-4 space-y-2">
+          <Label htmlFor={HEURISTIC_V2_SUCCESS_THRESHOLD_ID} className="block font-semibold">
+            Success threshold
+          </Label>
+          <Input
+            id={HEURISTIC_V2_SUCCESS_THRESHOLD_ID}
+            type="text"
+            inputMode="decimal"
+            placeholder="Artifact default"
+            value={successThresholdDraft ?? value.heuristic_v2_success_threshold?.toString() ?? ""}
+            onChange={(event) => handleSuccessThresholdChange(event.target.value)}
+            onBlur={() => {
+              if (!successThresholdError) setDraft(null);
+            }}
+            aria-invalid={Boolean(successThresholdError)}
+            aria-describedby={`${HEURISTIC_V2_SUCCESS_THRESHOLD_ID}-help${successThresholdError ? ` ${HEURISTIC_V2_SUCCESS_THRESHOLD_ID}-error` : ""}`}
+          />
+          <p id={`${HEURISTIC_V2_SUCCESS_THRESHOLD_ID}-help`} className="text-sm text-muted-foreground">
+            Minimum predicted success probability, from 0 to 1. Higher values favor more capable tiers. Leave blank to
+            use the artifact default
+          </p>
+          {successThresholdError && (
+            <p id={`${HEURISTIC_V2_SUCCESS_THRESHOLD_ID}-error`} className="text-sm text-destructive" role="alert">
+              {successThresholdError}
+            </p>
+          )}
+        </div>
+      )}
 
       {classifierType === "heuristic_first" && (
         <div className="mt-4 space-y-2">

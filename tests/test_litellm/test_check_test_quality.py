@@ -12,6 +12,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 
@@ -610,6 +612,44 @@ def test_a_fanned_out_run_reports_each_generated_file_exactly_once(tmp_path):
     assert len(reported) == len(paths)
     assert len({line.split(":")[0] for line in reported}) == len(paths)
     assert all(" TQ001 " in line for line in reported)
+
+
+_VIOLATING_SNIPPETS: Final = MappingProxyType(
+    {
+        "TQ000": ("test_snippet.py", "def test_broken(:\n    pass\n"),
+        "TQ001": ("test_snippet.py", "def test_nothing():\n    compute()\n"),
+        "TQ002": (
+            "test_snippet.py",
+            "from unittest.mock import patch\n"
+            "\n"
+            "\n"
+            "def test_echo():\n"
+            "    with patch('litellm.completion') as mock_completion:\n"
+            "        run()\n"
+            "    mock_completion.assert_called_once()\n",
+        ),
+        "TQ003": ("test_snippet.py", "import sys\n\nsys.path.insert(0, '..')\n"),
+        "TQ004": ("test_snippet.py", "import os\n\nos.environ['KEY'] = 'v'\n"),
+        "TQ005": ("test_snippet.py", "import litellm\n\nlitellm.drop_params = True\n"),
+        "TQ006": ("test_snippet.py", _DIRECT_GATE),
+        "TQ007": ("conftest.py", _SNAPSHOT_CONFTEST),
+        "TQ009": (
+            "test_snippet.py",
+            'import subprocess, sys\nsubprocess.run([sys.executable, "-c", "pass"])\n',
+        ),
+    }
+)
+
+
+def test_rule_codes_match_every_code_the_checker_emits(tmp_path):
+    emitted: Final = frozenset(
+        v.code
+        for name, source in _VIOLATING_SNIPPETS.values()
+        for v in checker.check_file(_written(tmp_path, source, name))
+    )
+    for code, (name, source) in _VIOLATING_SNIPPETS.items():
+        assert code in [v.code for v in checker.check_file(_written(tmp_path, source, name))], code
+    assert emitted == checker.RULE_CODES
 
 
 def test_sys_executable_child_without_isolation_flag_is_flagged(tmp_path):

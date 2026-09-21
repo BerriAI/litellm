@@ -1508,7 +1508,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
+            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
 
   installing_litellm_on_python_3_13:
     docker:
@@ -1532,7 +1532,7 @@ jobs:
       - run:
           name: Run tests
           command: |
-            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not v2_resolver"
+            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
 
   installing_litellm_on_python_v2_migration_resolver:
     docker:
@@ -1561,10 +1561,11 @@ jobs:
           url: tcp://localhost:5432
           timeout: "60"
       - run:
-          name: Run v2 migration resolver proxy smoke test
+          name: Run both migration resolvers against Postgres
           command: |
             uv run --no-sync python -m pytest -vv \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_v2_resolver
+              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings \
+              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_legacy_resolver
 
   helm_chart_testing:
     machine:

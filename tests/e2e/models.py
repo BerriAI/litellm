@@ -298,6 +298,7 @@ class ChatBody(BaseModel):
     max_completion_tokens: int | None = None
     temperature: float | None = None
     user: str | None = None
+    safety_identifier: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
@@ -976,6 +977,7 @@ class LiteLLMParamsBody(BaseModel):
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
+    allowed_openai_params: list[str] | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
