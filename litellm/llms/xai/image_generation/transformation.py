@@ -17,6 +17,7 @@ from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
     import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _SIZE_TO_ASPECT_RATIO: Final = {

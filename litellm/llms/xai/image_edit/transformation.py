@@ -153,7 +153,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
             raise ValueError("xAI image edit requires at least one reference image.")
 
         n: Final = image_edit_optional_request_params.get("n")
-        request: Final[dict[str, Any]] = {
+        request: Final[dict[str, object]] = {
             "model": XAIModelInfo.get_base_model(model) or model,
             **({"prompt": prompt} if prompt is not None else {}),
             **({"image": image_payloads[0]} if len(image_payloads) == 1 else {"images": list(image_payloads)}),
