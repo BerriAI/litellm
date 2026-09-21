@@ -446,9 +446,9 @@ function ServerAccessSettings({ mcpServer }: Pick<MCPServerViewProps, "mcpServer
         <div className="col-span-2">
           {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
-              {mcpServer.mcp_access_groups.map((group, index) => (
+              {mcpServer.mcp_access_groups.map((group: string | { name?: string } | null, index) => (
                 <Badge key={index} variant="secondary">
-                  {group}
+                  {typeof group === "string" ? group : group?.name ?? ""}
                 </Badge>
               ))}
             </div>

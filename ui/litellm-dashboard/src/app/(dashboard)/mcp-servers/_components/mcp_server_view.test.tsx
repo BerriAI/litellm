@@ -351,4 +351,12 @@ describe("MCPServerView", () => {
       expect(screen.queryByText("edit form")).not.toBeInTheDocument();
     },
   );
+  it("keeps legacy object-shaped access groups readable in Settings", () => {
+    const legacyGroups = ["developers", { name: "operators" }, {}, null] as unknown as string[];
+    renderView({ mcp_access_groups: legacyGroups }, { initialTabIndex: 2 });
+    const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+    expect(settings.getByText("developers")).toBeVisible();
+    expect(settings.getByText("operators")).toBeVisible();
+    expect(settings.getByRole("button", { name: "Edit Settings" })).toBeEnabled();
+  });
 });
