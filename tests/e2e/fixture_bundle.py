@@ -30,9 +30,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Final, Literal
 
+from fixture_profile import MatchProfile, StrictIdentity
 from pydantic import BaseModel, Field, JsonValue
 
 BUNDLE_FORMAT_VERSION: Final = 4
+STRICT_BUNDLE_FORMAT_VERSION: Final = 5
 MAX_BUNDLE_AGE: Final = timedelta(days=7)
 MANIFEST_FILENAME: Final = "manifest.json"
 
@@ -41,6 +43,7 @@ class Manifest(BaseModel):
     format_version: int
     recorded_at: datetime
     harness_version: str
+    match_profile: MatchProfile = "legacy"
 
 
 class RecordedRequest(BaseModel):
@@ -69,6 +72,7 @@ class RecordedRequest(BaseModel):
     file_name: str | None = None
     file_sha256: str | None = None
     file_bytes: int | None = None
+    strict_identity: StrictIdentity | None = None
 
 
 class RecordedHttpResponse(BaseModel):
@@ -100,9 +104,7 @@ class RecordedStreamedResponse(BaseModel):
     truncated: str | None = None
 
 
-type RecordedResponse = Annotated[
-    RecordedHttpResponse | RecordedStreamedResponse, Field(discriminator="kind")
-]
+type RecordedResponse = Annotated[RecordedHttpResponse | RecordedStreamedResponse, Field(discriminator="kind")]
 
 
 class Interaction(BaseModel):
@@ -152,6 +154,7 @@ class BundleRecorder:
     manifest, so record mode never reads (or merges into) an existing bundle."""
 
     root: Path
+    profile: MatchProfile = "legacy"
     _ordinals: dict[str, int] = field(default_factory=dict)
 
     def record(self, *, test_key: str, request: RecordedRequest, response: RecordedResponse) -> None:
@@ -162,7 +165,12 @@ class BundleRecorder:
         directory.mkdir(parents=True, exist_ok=True)
         interaction = Interaction(request=request, response=response)
         target = directory / interaction_filename(ordinal, request)
-        target.write_text(interaction.model_dump_json(indent=2), encoding="utf-8")
+        target.write_text(
+            interaction.model_dump_json(
+                indent=2, exclude={"request": {"strict_identity"}} if self.profile == "legacy" else None
+            ),
+            encoding="utf-8",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +179,7 @@ class UnsafeBundleDir:
     reason: str
 
 
-def prepare_bundle(root: Path) -> BundleRecorder | UnsafeBundleDir:
+def prepare_bundle(root: Path, *, profile: MatchProfile = "legacy") -> BundleRecorder | UnsafeBundleDir:
     """Start a fresh bundle at ``root`` for record mode: wipe whatever bundle is
     there and write a new manifest. Refuses to wipe a directory that is neither
     empty nor a bundle (no manifest.json), so a mistyped E2E_FIXTURE_DIR can
@@ -188,12 +196,15 @@ def prepare_bundle(root: Path) -> BundleRecorder | UnsafeBundleDir:
         shutil.rmtree(root)
     root.mkdir(parents=True)
     manifest = Manifest(
-        format_version=BUNDLE_FORMAT_VERSION,
+        format_version=BUNDLE_FORMAT_VERSION if profile == "legacy" else STRICT_BUNDLE_FORMAT_VERSION,
+        match_profile=profile,
         recorded_at=datetime.now(timezone.utc),
         harness_version=harness_version(),
     )
-    (root / MANIFEST_FILENAME).write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
-    return BundleRecorder(root=root)
+    (root / MANIFEST_FILENAME).write_text(
+        manifest.model_dump_json(indent=2, exclude={"match_profile"} if profile == "legacy" else None), encoding="utf-8"
+    )
+    return BundleRecorder(root=root, profile=profile)
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,25 +237,30 @@ def _read_manifest(root: Path) -> Manifest | UnreadableBundle:
         return UnreadableBundle(reason=f"{MANIFEST_FILENAME} is invalid: {exc}")
 
 
-def _supported_manifest(root: Path) -> Manifest | UnreadableBundle:
+def _supported_manifest(root: Path, profile: MatchProfile = "legacy") -> Manifest | UnreadableBundle:
     """The manifest, refused when it was written under a different format version.
     A bundle is atomic (record wipes and rewrites the whole directory and never
     merges), so a foreign version is a hard reject rather than a partial read."""
     manifest = _read_manifest(root)
     if isinstance(manifest, UnreadableBundle):
         return manifest
-    if manifest.format_version != BUNDLE_FORMAT_VERSION:
+    expected_version: Final = BUNDLE_FORMAT_VERSION if profile == "legacy" else STRICT_BUNDLE_FORMAT_VERSION
+    if manifest.match_profile != profile:
+        return UnreadableBundle(
+            reason="match profile mismatch; select the recorded E2E_REPLAY_MATCH_PROFILE or re-record"
+        )
+    if manifest.format_version != expected_version:
         return UnreadableBundle(
             reason=(
-                f"format_version {manifest.format_version} != supported {BUNDLE_FORMAT_VERSION}; "
+                f"format_version {manifest.format_version} != supported {expected_version}; "
                 "re-record with E2E_FIXTURE_MODE=record"
             )
         )
     return manifest
 
 
-def check_freshness(root: Path, *, now: datetime) -> BundleFreshness:
-    manifest = _supported_manifest(root)
+def check_freshness(root: Path, *, now: datetime, profile: MatchProfile = "legacy") -> BundleFreshness:
+    manifest = _supported_manifest(root, profile)
     if isinstance(manifest, UnreadableBundle):
         return manifest
     recorded_at = (
@@ -269,16 +285,27 @@ class LoadedBundle:
     interactions: dict[str, tuple[Interaction, ...]]
 
 
-def load_bundle(root: Path) -> LoadedBundle | UnreadableBundle:
-    manifest = _supported_manifest(root)
+def load_bundle(root: Path, *, profile: MatchProfile = "legacy") -> LoadedBundle | UnreadableBundle:
+    manifest = _supported_manifest(root, profile)
     if isinstance(manifest, UnreadableBundle):
         return manifest
-    interactions = {
-        directory.name: tuple(
-            Interaction.model_validate_json(file.read_text(encoding="utf-8"))
-            for file in sorted(directory.glob("*.json"))
-        )
-        for directory in sorted(root.iterdir())
-        if directory.is_dir()
-    }
+    try:
+        interactions = {
+            directory.name: tuple(
+                Interaction.model_validate_json(file.read_text(encoding="utf-8"))
+                for file in sorted(directory.glob("*.json"))
+            )
+            for directory in sorted(root.iterdir())
+            if directory.is_dir()
+        }
+    except (ValueError, OSError):
+        if profile == "legacy":
+            raise
+        return UnreadableBundle(reason="invalid stateless_v1 interaction; re-record with the selected profile")
+    if any(
+        (item.request.strict_identity is not None) != (profile == "stateless_v1")
+        for items in interactions.values()
+        for item in items
+    ):
+        return UnreadableBundle(reason="request identity/profile mismatch; re-record with the selected profile")
     return LoadedBundle(manifest=manifest, interactions=interactions)

@@ -10,9 +10,9 @@ from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
 import litellm
+from litellm.constants import REALTIME_SESSION_FAILURE_LOGGED_KEY, REALTIME_SESSION_SUCCESS_LOGGED_KEY
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
-    REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     RealTimeStreaming,
     client_sent_openai_beta_realtime_header,
 )
@@ -3397,6 +3397,26 @@ async def test_refused_session_does_not_stamp_the_reservation_ownership_marker()
 
     assert session.logging.logged_failures == (upstream_close,)
     assert REALTIME_SESSION_SUCCESS_LOGGED_KEY not in session.logging.model_call_details
+
+
+@pytest.mark.asyncio
+async def test_refused_session_stamps_the_failure_ownership_marker():
+    """LIT-6463: the enqueued failure callback releases the key's max_parallel_requests
+    slot from the logging worker, so a refusal stamps REALTIME_SESSION_FAILURE_LOGGED_KEY.
+    The proxy endpoint reads it to leave the slot to that callback instead of racing it.
+    A session that relayed frames logs a success and must not carry the failure stamp."""
+    upstream_close: Final = ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None)
+    refused: Final = _relay_session(_client_ws_that_never_sends(), _backend_ws_closing_with(upstream_close))
+    session_created: Final = json.dumps({"type": "session.created", "session": {"id": "sess_1"}}).encode()
+    relayed: Final = _relay_session(
+        _client_ws_that_never_sends(), _backend_ws_closing_with(session_created, upstream_close)
+    )
+
+    await refused.run()
+    await relayed.run()
+
+    assert refused.logging.model_call_details.get(REALTIME_SESSION_FAILURE_LOGGED_KEY) is True
+    assert REALTIME_SESSION_FAILURE_LOGGED_KEY not in relayed.logging.model_call_details
 
 
 @pytest.mark.asyncio

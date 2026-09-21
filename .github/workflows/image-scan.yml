@@ -26,6 +26,7 @@ on:
       - ui/Dockerfile
       - ui/nginx.conf
       - .github/workflows/image-scan.yml
+      - .grype.yaml
   schedule:
     - cron: "41 6 * * *"
   workflow_dispatch:
@@ -93,6 +94,7 @@ jobs:
           GRYPE_MATCH_PYTHON_USING_CPES: "true"
         run: |
           "$RUNNER_TEMP/grype" litellm-image-scan:${{ github.sha }} \
+            --config .grype.yaml \
             --only-fixed \
             --fail-on high \
             --output table

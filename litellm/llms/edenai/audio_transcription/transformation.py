@@ -32,6 +32,10 @@ def _form_fields(model: str, optional_params: Mapping[str, object]) -> dict[str,
 
 
 class EdenAIAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
+    @property
+    def has_native_transcription_endpoint(self) -> bool:
+        return True
+
     def get_complete_url(
         self,
         api_base: str | None,

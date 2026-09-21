@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class BedrockKBLocation(TypedDict, total=False):
@@ -127,6 +127,10 @@ class BedrockKBGuardrailConfiguration(TypedDict, total=False):
     guardrailVersion: str | None
 
 
+class BedrockKBUserContext(TypedDict):
+    userId: ReadOnly[str]
+
+
 class BedrockKBRequest(TypedDict, total=False):
     """Complete request structure for Bedrock Knowledge Base retrieval."""
 
@@ -134,6 +138,7 @@ class BedrockKBRequest(TypedDict, total=False):
     nextToken: str | None
     retrievalConfiguration: BedrockKBRetrievalConfiguration | None
     retrievalQuery: BedrockKBRetrievalQuery
+    userContext: ReadOnly[BedrockKBUserContext | None]
 
 
 #########################################################################

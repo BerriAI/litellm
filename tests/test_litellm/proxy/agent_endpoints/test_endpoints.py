@@ -1082,11 +1082,10 @@ class _DbBackedProxyConfig:
         db_param_value: Final[dict[str, object]] = json.loads(self.stored_litellm_settings_json)
         if not db_param_value:
             return config
-        return ProxyConfig()._update_config_fields(
-            current_config=config,
-            param_name="litellm_settings",
-            db_param_value=db_param_value,
-        )
+        proxy_config: Final = ProxyConfig()
+        db_values: Final = proxy_config._prepared_db_settings_values("litellm_settings", db_param_value)
+        proxy_config._apply_litellm_settings_db_values(db_values)
+        return {"litellm_settings": dict(proxy_config.litellm_settings.resolved())}
 
     async def save_config(self, new_config: dict[str, dict[str, object]]) -> None:
         self.stored_litellm_settings_json = json.dumps(new_config.get("litellm_settings") or {})

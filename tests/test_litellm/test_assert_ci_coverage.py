@@ -9,8 +9,12 @@ the question neither covers: whether the job that globs a file then deselects it
 """
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+from typing import Final
+
+import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _MODULE_PATH = _REPO_ROOT / ".github" / "scripts" / "assert_ci_coverage.py"
@@ -18,6 +22,56 @@ _spec = importlib.util.spec_from_file_location("assert_ci_coverage", _MODULE_PAT
 coverage = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = coverage  # @dataclass(slots=True) rebuilds via sys.modules
 _spec.loader.exec_module(coverage)
+
+
+def test_integration_manifest_requires_exclusive_scheduled_circleci_owner(tmp_path: Path) -> None:
+    test_path: Final = "tests/integration/management/test_contract.py"
+    test_file: Final = tmp_path / test_path
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text("def test_contract(): pass\n")
+    (tmp_path / "tests/integration/contracts.json").write_text(
+        json.dumps({"groups": {"management": ["management"]}, "tests": {f"{test_path}::test_contract": ["mgmt.test"]}})
+    )
+    paths, findings = coverage._integration_ownership(tmp_path)
+    assert not paths
+    assert [finding.detail for finding in findings] == ["dedicated CircleCI runner is missing"]
+    circle: Final = tmp_path / ".circleci/config.yml"
+    circle.parent.mkdir()
+    circle.write_text(
+        yaml.safe_dump(
+            {
+                "jobs": {
+                    "integration_contracts": {
+                        "steps": [{"run": {"command": "bash .circleci/scripts/run_integration.sh management"}}]
+                    }
+                },
+                "workflows": {"integration": {"jobs": [{"integration_contracts": {"suite": "management"}}]}},
+            }
+        )
+    )
+    paths, findings = coverage._integration_ownership(tmp_path)
+    assert paths == frozenset({test_path})
+    assert findings == ()
+    configured: Final = yaml.safe_load(circle.read_text())
+    configured["workflows"]["integration"]["jobs"] = [
+        {"integration_contracts": {"matrix": {"parameters": {"suite": ["providers"]}}}}
+    ]
+    circle.write_text(yaml.safe_dump(configured))
+    _, findings = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in findings] == [
+        ("management", "canonical integration group is not scheduled by CircleCI")
+    ]
+    configured["workflows"]["integration"]["jobs"][0]["integration_contracts"]["matrix"]["parameters"]["suite"] = [
+        "management"
+    ]
+    circle.write_text(yaml.safe_dump(configured))
+    workflow: Final = tmp_path / ".github/workflows/test.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(yaml.safe_dump({"jobs": {"tests": {"steps": [{"run": "pytest tests/integration"}]}}}))
+    _, findings = coverage._integration_ownership(tmp_path)
+    assert [(finding.subject, finding.detail) for finding in findings] == [
+        (test_path, "integration contract is also selected by GitHub Actions")
+    ]
 
 
 def test_an_ancestor_directory_covers_a_file_but_does_not_name_it():

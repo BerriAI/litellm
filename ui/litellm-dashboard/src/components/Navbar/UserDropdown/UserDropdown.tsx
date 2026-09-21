@@ -9,9 +9,7 @@ import {
   setLocalStorageItem,
 } from "@/utils/localStorageUtils";
 import { navAccountDisplayName } from "@/components/Navbar/navDisplayName";
-import { uiHref } from "@/utils/uiHref";
-import { ChevronDown, ChevronsUpDown, Crown, KeyRound, LogOut, Mail, ShieldCheck, User } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { ChevronDown, ChevronsUpDown, Crown, LogOut, Mail, ShieldCheck, User } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -65,9 +63,7 @@ interface UserDropdownProps {
 }
 
 const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar", collapsed = false }) => {
-  const { userId, userEmail, userRoleLabel: userRole, premiumUser, loginMethod } = useAuthorized();
-  const router = useRouter();
-  const [open, setOpen] = useState(false);
+  const { userId, userEmail, userRoleLabel: userRole, premiumUser } = useAuthorized();
   const disableShowPrompts = useDisableShowPrompts();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();
@@ -201,7 +197,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
   const displayName = navAccountDisplayName(userEmail, userId);
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover>
       {variant === "sidebar" ? (
         <PopoverTrigger
           render={
@@ -262,19 +258,6 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout, variant = "navbar
       >
         {renderUserInfoSection()}
         <Separator />
-        {loginMethod === "username_password" && (
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              router.push(uiHref("change-password"));
-            }}
-            className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
-          >
-            <KeyRound className="size-4" />
-            Change Password
-          </button>
-        )}
         <button
           type="button"
           onClick={onLogout}

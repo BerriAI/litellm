@@ -213,6 +213,53 @@ async def test_purge_user_oauth_credentials_for_server_invalidates_each_user():
 
 
 @pytest.mark.asyncio
+async def test_list_server_user_credentials_types_each_row_without_leaking_the_secret():
+    """The admin view of one server's stored credentials names the user and the kind of
+    credential (OAuth2 vs BYOK) and echoes OAuth expiry, but never the token or key itself."""
+    from litellm.proxy._experimental.mcp_server.db import list_server_user_credentials
+
+    oauth_row = _legacy_row(
+        json.dumps(
+            {
+                "type": "oauth2",
+                "access_token": "tok-alice",
+                "expires_at": "2026-12-31T00:00:00+00:00",
+                "connected_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+    )
+    oauth_row.user_id = "alice"
+    oauth_row.updated_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    byok_row = _byok_row("carol")
+    byok_row.updated_at = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    prisma = MagicMock()
+    prisma.db.litellm_mcpusercredentials.find_many = AsyncMock(return_value=[oauth_row, byok_row])
+
+    items = await list_server_user_credentials(prisma, "srv-1")
+
+    prisma.db.litellm_mcpusercredentials.find_many.assert_awaited_once_with(where={"server_id": "srv-1"})
+    assert [item.model_dump() for item in items] == [
+        {
+            "user_id": "alice",
+            "credential_type": "oauth2",
+            "expires_at": "2026-12-31T00:00:00+00:00",
+            "connected_at": "2026-01-01T00:00:00+00:00",
+            "updated_at": "2026-01-01T00:00:00+00:00",
+        },
+        {
+            "user_id": "carol",
+            "credential_type": "byok",
+            "expires_at": None,
+            "connected_at": None,
+            "updated_at": "2026-02-01T00:00:00+00:00",
+        },
+    ]
+    serialized = "".join(item.model_dump_json() for item in items)
+    assert "tok-alice" not in serialized
+    assert "sk-byok-carol" not in serialized
+
+
+@pytest.mark.asyncio
 async def test_purge_user_oauth_credentials_for_server_spares_byok_rows():
     """Regression: the purge used to delete_many on server_id alone, wiping BYOK API keys that share
     the LiteLLM_MCPUserCredentials table. Only rows holding an OAuth2 payload may be deleted (one

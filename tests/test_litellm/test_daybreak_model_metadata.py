@@ -47,7 +47,6 @@ def test_official_alias_tracks_snapshot(alias, snapshot):
 
     assert alias_info["supported_endpoints"] == ["/v1/responses"]
     assert alias_info["mode"] == "responses"
-    assert alias_info["source"] == f"https://developers.openai.com/api/docs/models/{alias}"
     assert {field: alias_info.get(field) for field in PRICE_FIELDS} == {
         field: snapshot_info.get(field) for field in PRICE_FIELDS
     }

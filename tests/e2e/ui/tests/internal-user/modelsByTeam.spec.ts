@@ -7,6 +7,7 @@ import {
 import {
   E2E_TEAM_CRUD_ALIAS,
   E2E_TEAM_ORG_ALIAS,
+  E2E_TEAM_ORG_ID,
   INTERNAL_USER_STORAGE_PATH,
 } from "../../constants";
 import { Page } from "../../fixtures/pages";
@@ -179,18 +180,28 @@ test.describe("Models and Endpoints for an internal user", () => {
       `switching to ${ALL_MODELS_VIEW} leaves the table populated rather than blanking it`,
     ).toHaveCount(1, { timeout: 15_000 });
 
+    await expect(page).toHaveURL((url) =>
+      url.searchParams.get("filter_team") === E2E_TEAM_ORG_ID &&
+      url.searchParams.get("view_mode") === "all",
+    );
     await page.reload();
     await expect(
       teamSelector(page),
-      "the team selection is not persisted across a reload, so the table returns to the personal view",
-    ).toContainText(PERSONAL_TEAM, { timeout: 15_000 });
+      "the selected team is restored from the URL after a reload",
+    ).toContainText(E2E_TEAM_ORG_ALIAS, { timeout: 15_000 });
     await expect(
       viewSelector(page),
-      "the view selection is not persisted across a reload either",
-    ).toContainText(CURRENT_TEAM_VIEW, { timeout: 15_000 });
+      "the selected view is restored from the URL after a reload",
+    ).toContainText(ALL_MODELS_VIEW, { timeout: 15_000 });
+    await expect(modelRow(page, CHAT_MODEL_A)).toHaveCount(1, { timeout: 15_000 });
+    await expect(page.getByTestId("pagination-range")).toHaveText("Showing 1-1 of 1");
+    await expect(modelRow(page, CHAT_MODEL_B)).toHaveCount(0);
+    await expect(modelRow(page, ungrantedModelName)).toHaveCount(0);
+
+    await chooseOption(page, teamSelector(page), PERSONAL_TEAM);
     await expect(
       modelRow(page, ungrantedModelName),
-      "the personal view still renders models after a reload rather than coming back empty",
+      "switching back to the personal team restores models outside the selected team",
     ).toHaveCount(1, { timeout: 30_000 });
   });
 });

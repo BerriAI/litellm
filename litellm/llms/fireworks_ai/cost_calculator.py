@@ -2,7 +2,6 @@
 For calculating cost of fireworks ai serverless inference models.
 """
 
-import math
 from datetime import datetime
 from typing import Final
 
@@ -12,11 +11,9 @@ from litellm.constants import (
     FIREWORKS_AI_56_B_MOE,
     FIREWORKS_AI_176_B_MOE,
 )
-from litellm.litellm_core_utils.llm_cost_calc.utils import TokenRates, apply_off_peak_pricing
+from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import ModelInfo, Usage
 from litellm.utils import get_model_info
-
-NO_CACHE_READ_RATE: Final = float("nan")
 
 
 # Extract the number of billion parameters from the model name
@@ -81,28 +78,10 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
     model_info: Final = _resolve_model_info(model)
-    standard_cache_read_rate: Final = model_info.get("cache_read_input_token_cost")
-    rates: Final = apply_off_peak_pricing(
-        model_info,
-        current_time,
-        TokenRates(
-            input_rate=model_info["input_cost_per_token"] or 0.0,
-            output_rate=model_info["output_cost_per_token"] or 0.0,
-            cache_read_rate=standard_cache_read_rate if standard_cache_read_rate is not None else NO_CACHE_READ_RATE,
-            cache_creation_rate=0.0,
-            reasoning_rate=None,
-        ),
+    return generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider="fireworks_ai",
+        model_info=model_info,
+        current_time=current_time,
     )
-    cache_read_rate: Final[float] = rates.input_rate if math.isnan(rates.cache_read_rate) else rates.cache_read_rate
-
-    prompt_tokens_details: Final = usage.prompt_tokens_details
-    cached_tokens: Final[int] = (
-        prompt_tokens_details.cached_tokens
-        if prompt_tokens_details is not None and prompt_tokens_details.cached_tokens is not None
-        else 0
-    )
-    non_cached_prompt_tokens: Final[int] = max(usage.prompt_tokens - cached_tokens, 0)
-    prompt_cost: Final[float] = non_cached_prompt_tokens * rates.input_rate + cached_tokens * cache_read_rate
-    completion_cost: Final[float] = usage.completion_tokens * rates.output_rate
-
-    return prompt_cost, completion_cost

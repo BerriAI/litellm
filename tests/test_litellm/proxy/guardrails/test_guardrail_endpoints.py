@@ -683,6 +683,22 @@ async def test_provider_specific_params_includes_embedding_toggle():
 
 
 @pytest.mark.asyncio
+async def test_provider_specific_params_exposes_bedrock_streaming_flags():
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params = await get_provider_specific_params()
+
+    bedrock = provider_params["bedrock"]
+    assert "guardrailIdentifier" in bedrock
+    assert "guardrailVersion" in bedrock
+    assert bedrock["streaming_buffer_release_on_scan"]["type"] == "boolean"
+    assert bedrock["streaming_buffer_release_on_scan"]["default_value"] is False
+    assert bedrock["streaming_buffer_until_moderated"]["default_value"] is True
+    assert bedrock["streaming_end_of_stream_only"]["type"] == "boolean"
+    assert bedrock["streaming_sampling_rate"]["type"] == "number"
+
+
+@pytest.mark.asyncio
 async def test_provider_specific_params_includes_hide_secrets():
     """hide-secrets lives in the enterprise package so it is not in
     guardrail_class_registry; the endpoint must still advertise it or the

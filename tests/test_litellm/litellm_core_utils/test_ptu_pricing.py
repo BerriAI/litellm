@@ -7,13 +7,15 @@ from unittest.mock import patch
 import pytest
 
 from litellm.litellm_core_utils.ptu_pricing import (
-    ptu_config_error,
-    ptu_identity_error,
     CUSTOM_PRICING_FIELDS,
     PTU_EMPTIED_PRICING_FIELDS,
     PTU_ZEROED_PRICING_FIELDS,
     PTU_ZEROED_TABLE_FIELDS,
     SEARCH_CONTEXT_SIZES,
+    azure_spillover,
+    is_spilled_over_ptu_request,
+    ptu_config_error,
+    ptu_identity_error,
     ptu_terms,
     zeroed_ptu_pricing,
 )
@@ -294,3 +296,63 @@ def test_an_empty_id_is_no_id():
 
     assert error is not None
     assert error.startswith("model_info.id is required")
+
+
+def test_the_spillover_header_marks_the_request_as_pay_as_you_go():
+    with patch.dict(os.environ, {"LITELLM_ENABLE_PTU_COST_ATTRIBUTION": "True"}, clear=False):
+        assert (
+            is_spilled_over_ptu_request(
+                model_info=_VALID,
+                response_headers={"x-ms-is-spilled-over": "True"},
+                additional_headers=None,
+            )
+            is True
+        )
+
+
+def test_no_spillover_marker_keeps_the_zeroed_ptu_rates():
+    with patch.dict(os.environ, {"LITELLM_ENABLE_PTU_COST_ATTRIBUTION": "True"}, clear=False):
+        assert (
+            is_spilled_over_ptu_request(
+                model_info=_VALID,
+                response_headers={"x-ms-is-spilled-over": "false"},
+                additional_headers=None,
+            )
+            is False
+        )
+        assert (
+            is_spilled_over_ptu_request(
+                model_info=_VALID,
+                response_headers=None,
+                additional_headers={"llm_provider-x-ms-is-spilled-over": "absent"},
+            )
+            is False
+        )
+
+
+def test_azure_spillover_carries_the_source_deployment_from_raw_headers():
+    assert azure_spillover(
+        response_headers={
+            "x-ms-is-spilled-over": "true",
+            "x-ms-spillover-from-deployment": "my-ptu",
+        },
+        additional_headers=None,
+    ) == {"from_deployment": "my-ptu"}
+
+
+def test_azure_spillover_from_processed_headers_has_no_source_when_absent():
+    assert azure_spillover(
+        response_headers=None,
+        additional_headers={"llm_provider-x-ms-is-spilled-over": "true"},
+    ) == {"from_deployment": None}
+
+
+def test_no_spillover_marker_returns_none():
+    assert (
+        azure_spillover(
+            response_headers={"x-ms-is-spilled-over": "false"},
+            additional_headers=None,
+        )
+        is None
+    )
+    assert azure_spillover(response_headers=None, additional_headers=None) is None

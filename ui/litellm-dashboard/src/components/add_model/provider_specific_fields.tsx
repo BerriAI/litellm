@@ -13,8 +13,8 @@ import {
   type MountedFieldControlProps,
   type MountedFormValues,
 } from "../common_components/MountedFormField";
-import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
-import { provider_map, Providers } from "../provider_info_helpers";
+import { ProviderCredentialFieldMetadata } from "../networking";
+import { Providers } from "../provider_info_helpers";
 import { labelWithHint } from "@/components/shared/form/LabelWithHint";
 
 interface ProviderSpecificFieldsProps {
@@ -40,11 +40,6 @@ interface ProviderCredentialField {
   type?: "text" | "password" | "select" | "upload" | "textarea";
   options?: string[];
   defaultValue?: string;
-}
-
-export interface CredentialValues {
-  key: string;
-  value: string;
 }
 
 const getApiVersionFromApiBase = (apiBase: string): string | null => {
@@ -83,39 +78,7 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
   };
 };
 
-// In-memory cache of provider credential fields keyed by provider display name.
-// This lets us reuse the data across multiple mounts and also supports
-// non-React helpers like createCredentialFromModel.
 const providerFieldsByDisplayName: Record<string, ProviderCredentialField[]> = {};
-
-export const createCredentialFromModel = (provider: string, modelData: any): CredentialItem => {
-  const enumKey = Object.keys(provider_map).find((key) => provider_map[key].toLowerCase() === provider.toLowerCase());
-  if (!enumKey) {
-    throw new Error(`Provider ${provider} not found in provider_map`);
-  }
-  const providerDisplayName = Providers[enumKey as keyof typeof Providers];
-  const providerFields = providerFieldsByDisplayName[providerDisplayName] || [];
-  const credentialValues: object = {};
-
-  // Go through each field defined for this provider
-  providerFields.forEach((field) => {
-    const value = modelData.litellm_params[field.key];
-    if (value !== undefined) {
-      (credentialValues as Record<string, string>)[field.key] = value.toString();
-    }
-  });
-
-  const credential: CredentialItem = {
-    credential_name: `${provider}-credential-${Math.floor(Math.random() * 1000000)}`,
-    credential_values: credentialValues,
-    credential_info: {
-      custom_llm_provider: provider,
-      description: `Credential for ${provider}. Created from model ${modelData.model_name}`,
-    },
-  };
-
-  return credential;
-};
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider }) => {
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
