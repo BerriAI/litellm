@@ -1686,6 +1686,7 @@ def client(original_function):
                         user_max_tokens=user_max_tokens,
                         buffer_num=None,
                         buffer_perc=None,
+                        deployment_model_info=_deployment_model_info(kwargs),
                     )
                     kwargs["max_tokens"] = modified_max_tokens
                 except Exception as e:
@@ -1962,6 +1963,7 @@ def client(original_function):
                         user_max_tokens=user_max_tokens,
                         buffer_num=None,
                         buffer_perc=None,
+                        deployment_model_info=_deployment_model_info(kwargs),
                     )
                     kwargs["max_tokens"] = modified_max_tokens
                 except Exception as e:
@@ -2224,6 +2226,15 @@ _STREAMING_CALL_TYPES: Final = frozenset(
         CallTypes.agenerate_content_stream.value,
     }
 )
+
+
+def _deployment_model_info(kwargs: dict[str, object]) -> Mapping[str, object] | None:
+    """The model_info of the deployment the router picked for this request, if any.
+
+    A direct litellm.completion() call has no deployment behind it and gets None.
+    """
+    raw: Final = kwargs.get("model_info")
+    return cast(Mapping[str, object], raw) if isinstance(raw, Mapping) else None
 
 
 def _is_streaming_request(
