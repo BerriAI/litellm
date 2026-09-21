@@ -3547,6 +3547,33 @@ def test_completion_cost_mantle_native_messages_prices_claude_from_the_bedrock_r
         ) == pytest.approx(expected)
 
 
+def test_completion_cost_mantle_native_messages_prices_haiku_from_the_mantle_row(_local_model_cost_map):
+    """Mantle serves Anthropic's un-versioned haiku id, which has no bare Bedrock row (Bedrock's carries
+    the -20251001-v1:0 suffix), and Claude Code sends every small-fast-model call to it. Both the plain
+    and the region-prefixed deployment names must price from bedrock_mantle/anthropic.claude-haiku-4-5
+    instead of billing $0."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-haiku-4-5",
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    row = litellm.model_cost["bedrock_mantle/anthropic.claude-haiku-4-5"]
+    expected = 100 * row["input_cost_per_token"] + 10 * row["output_cost_per_token"]
+    assert expected > 0
+
+    for model in (
+        "bedrock_mantle/anthropic.claude-haiku-4-5",
+        "bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5",
+    ):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="bedrock_mantle",
+        ) == pytest.approx(expected), model
+
+
 def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
     """An explicit base_model keeps pricing on that model's own key even when the request carries a
     region with different regional rates, so the private provider model never widens region pricing."""

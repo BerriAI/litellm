@@ -33,7 +33,7 @@ _MANTLE_REQUEST: Final = TypeAdapter(dict[str, object])
 
 
 def build_mantle_native_messages_url(api_base: str | None, litellm_params: Mapping[str, object]) -> str:
-    region: Final = resolve_mantle_region({**litellm_params, "api_base": api_base})
+    region: Final = resolve_mantle_region(MappingProxyType({**litellm_params, "api_base": api_base}))
     configured: Final = (
         api_base or get_secret_str("BEDROCK_MANTLE_API_BASE") or f"https://bedrock-mantle.{region}.api.aws"
     ).rstrip("/")
@@ -96,7 +96,10 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
         )
         if any(name.lower() == "anthropic-version" for name in merged_headers):
             return merged_headers, resolved_api_base
-        return {**merged_headers, "anthropic-version": DEFAULT_ANTHROPIC_API_VERSION}, resolved_api_base
+        return {  # mutable-ok: the base class contract returns a dict the handler signs into in place
+            **merged_headers,
+            "anthropic-version": DEFAULT_ANTHROPIC_API_VERSION,
+        }, resolved_api_base
 
     def transform_anthropic_messages_request(
         self,
@@ -119,4 +122,6 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
         if betas is not None:
             header_betas: Final = ",".join(_ANTHROPIC_BETAS.validate_python(betas))
             headers["anthropic-beta"] = header_betas  # rebind-ok: the handler signs and sends this same dict
-        return {key: value for key, value in request.items() if key not in _BODY_FIELDS_MANTLE_READS_FROM_HEADERS}
+        return {  # mutable-ok: the base class contract returns the dict the handler serializes as the body
+            key: value for key, value in request.items() if key not in _BODY_FIELDS_MANTLE_READS_FROM_HEADERS
+        }
