@@ -10,8 +10,6 @@ if TYPE_CHECKING:
 
 
 class OpenAIVideoGenerationHandler(BaseTranslation):
-    """Scans the text `prompt` of video create, remix, edit and extension requests."""
-
     async def process_input_messages(
         self,
         data: dict[str, object],  # mutable-ok: BaseTranslation contract passes the proxy's request dict through
