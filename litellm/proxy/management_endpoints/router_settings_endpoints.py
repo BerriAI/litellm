@@ -8,7 +8,9 @@ GET /router/fields - Get router settings field definitions without values (for U
 """
 
 import inspect
-from typing import Any, Final, cast, get_args
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Any, Final, get_args
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -127,19 +129,20 @@ async def get_router_settings(
             if field.field_name in current_values:
                 field.field_value = current_values[field.field_name]
 
-        field_defaults: Final[dict[str, object]] = {
-            field.field_name: cast(object, field.field_default)  # cast-ok: Pydantic field defaults are untyped
-            for field in router_fields
-        }
-        source: Final[dict[str, FieldSource]] = {
-            key: _router_setting_source(
-                proxy_config.router_settings,
-                key,
-                cast(object, current_values[key]),  # cast-ok: current values are stored in a typed response map
-                field_defaults.get(key),
-            )
-            for key in current_values
-        }
+        field_defaults: Final[Mapping[str, object]] = MappingProxyType(
+            {field.field_name: field.field_default for field in router_fields}
+        )
+        source: Final[Mapping[str, FieldSource]] = MappingProxyType(
+            {
+                key: _router_setting_source(
+                    proxy_config.router_settings,
+                    key,
+                    current_values[key],
+                    field_defaults.get(key),
+                )
+                for key in current_values
+            }
+        )
         return RouterSettingsResponse(
             fields=router_fields,
             current_values=current_values,
