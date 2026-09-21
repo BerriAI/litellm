@@ -140,10 +140,8 @@ mod tests {
 
     #[tokio::test]
     async fn async_embed_returns_the_seeded_vector_or_unavailable() {
-        let object = Python::attach(|py| {
-            Python::initialize();
-            py.None()
-        });
+        Python::initialize();
+        let object = Python::attach(|py| py.None());
         let embedder = PythonEmbedder::new(object);
         let scoped_embedder = embedder.clone();
         let scoped = with_prepared_embedding(Ok(vec![0.25]), async move {
