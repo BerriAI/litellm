@@ -16,7 +16,6 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
-    cast,  # noqa: TID251  # runtime Mapping checks establish the nested response shapes
     overload,
     runtime_checkable,
 )
@@ -50,6 +49,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
+    redact_nested_match_and_regex_keys,
 )
 from litellm.litellm_core_utils.dd_tracing import NullTracer, tracer
 from litellm.litellm_core_utils.get_supported_openai_params import (
@@ -1376,80 +1376,21 @@ def _override_openai_response_model(
 
 
 _METADATA_BUCKET_KEYS: Final = ("metadata", "litellm_metadata")
-_RESPONSE_REDACTED_KEYS: Final = frozenset({"keyword", "snippet", "match", "regex"})
+_RESPONSE_REDACTED_KEYS: Final = ("keyword", "snippet", "match", "regex")
 
 
 def _request_metadata_buckets(request_data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    return tuple(
-        cast(Mapping[str, object], bucket)  # cast-ok: runtime Mapping check establishes the bucket shape
-        for key in _METADATA_BUCKET_KEYS
-        if isinstance(bucket := request_data.get(key), Mapping)
-    )
+    return tuple(bucket for key in _METADATA_BUCKET_KEYS if isinstance(bucket := request_data.get(key), Mapping))
 
 
 def include_guardrail_response_requested(request_data: Mapping[str, object]) -> bool:
     return any(bucket.get("include_guardrail_response") is True for bucket in _request_metadata_buckets(request_data))
 
 
-def _redact_guardrail_mapping(value: Mapping[str, object], children: tuple[object, ...]) -> dict[str, object]:
-    items: Final = tuple(value.items())
-    return {  # mutable-ok: fresh redacted mapping
-        key: "[REDACTED]" if key in _RESPONSE_REDACTED_KEYS and isinstance(item, str) else child
-        for (key, item), child in zip(items, children, strict=True)
-    }
-
-
-def _redact_guardrail_entry(value: object) -> object:
-    pending: Final[list[tuple[object, bool]]] = [(value, False)]  # mutable-ok: iterative traversal worklist
-    results: Final[list[object]] = []  # mutable-ok: iterative traversal results
-    while pending:
-        current, expanded = pending.pop()
-        if expanded:
-            if isinstance(current, Mapping):
-                results.append(
-                    _redact_guardrail_mapping(
-                        cast(  # cast-ok: runtime Mapping check establishes the entry shape
-                            Mapping[str, object], current
-                        ),
-                        tuple(results.pop() for _ in current)[::-1],
-                    )
-                )
-            elif isinstance(current, list | tuple):
-                results.append(
-                    [  # mutable-ok: response list contract
-                        child for child in tuple(results.pop() for _ in current)[::-1]
-                    ]
-                )
-            continue
-        if isinstance(current, Mapping):
-            pending.append((current, True))
-            pending.extend(
-                (item, False)
-                for _, item in reversed(
-                    tuple(
-                        cast(  # cast-ok: runtime Mapping check establishes the entry shape
-                            Mapping[str, object], current
-                        ).items()
-                    )
-                )
-            )
-        elif isinstance(current, list | tuple):
-            pending.append((current, True))
-            pending.extend(
-                (item, False)
-                for item in reversed(
-                    cast(Sequence[object], current)  # cast-ok: runtime sequence check establishes the child shape
-                )
-            )
-        else:
-            results.append(current)
-    return results[0]
-
-
 def attach_guardrail_information(response: object, request_data: Mapping[str, object]) -> object:
     recorded: Final[Sequence[object]] = next(
         (
-            cast(list[object], entries)  # cast-ok: runtime list check establishes the recorded entries shape
+            entries
             for bucket in _request_metadata_buckets(request_data)
             if isinstance(
                 entries := bucket.get("standard_logging_guardrail_information"),
@@ -1459,7 +1400,9 @@ def attach_guardrail_information(response: object, request_data: Mapping[str, ob
         (),
     )
     guardrail_information: Final = [  # mutable-ok: response list contract
-        _redact_guardrail_entry(entry) for entry in recorded
+        redact_nested_match_and_regex_keys(entry, keys=_RESPONSE_REDACTED_KEYS)
+        for entry in recorded
+        if isinstance(entry, dict)
     ]
     if isinstance(response, dict):
         return response | MappingProxyType({"guardrail_information": guardrail_information})
