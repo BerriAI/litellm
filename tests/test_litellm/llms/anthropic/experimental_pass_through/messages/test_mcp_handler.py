@@ -1,3 +1,4 @@
+from importlib import import_module
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -146,6 +147,7 @@ async def test_anthropic_messages_with_mcp_forwards_the_callers_mcp_credentials(
         request_tags=["team-a"],
         litellm_trace_id="trace-123",
         litellm_call_id="call-456",
+        guardrail_context={"metadata": {"guardrails": ("block-all",)}},
     )
 
     process = AsyncMock(return_value=([], {}))
@@ -163,8 +165,8 @@ async def test_anthropic_messages_with_mcp_forwards_the_callers_mcp_credentials(
         ).LiteLLM_Proxy_MCP_Handler,
         "_process_mcp_tools_without_openai_transform",
         new=process,
-    ), patch(
-        "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._execute_tool_calls",
+    ), patch.object(
+        import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "_execute_tool_calls",
         new=execute,
     ), patch(
         "litellm.anthropic_messages", new=AsyncMock(side_effect=responses)
@@ -192,6 +194,8 @@ async def test_anthropic_messages_with_mcp_forwards_the_callers_mcp_credentials(
     assert execution["litellm_trace_id"] == "trace-123"
     assert execution["request_tags"] == ["team-a"]
 
+    assert execution["guardrail_context"] == {"metadata": {"guardrails": ("block-all",)}}
+
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_with_mcp_stops_when_every_tool_call_is_skipped():
@@ -218,11 +222,11 @@ async def test_anthropic_messages_with_mcp_stops_when_every_tool_call_is_skipped
 
     with patch.object(
         MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth="auth")
-    ), patch(
-        "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform",
+    ), patch.object(
+        import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "_process_mcp_tools_without_openai_transform",
         new=AsyncMock(return_value=([], {})),
-    ), patch(
-        "litellm.responses.mcp.litellm_proxy_mcp_handler.LiteLLM_Proxy_MCP_Handler._execute_tool_calls",
+    ), patch.object(
+        import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler, "_execute_tool_calls",
         new=AsyncMock(return_value=[]),
     ), patch(
         "litellm.anthropic_messages", new=anthropic_messages_mock

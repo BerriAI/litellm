@@ -288,68 +288,55 @@ async def test_json_logs_calls_turn_on_json():
 
 
 class TestYamlStorePromptsDbOverride:
-    """
-    Test that YAML store_prompts_in_spend_logs takes precedence over DB-cached value.
-
-    When store_model_in_db=true, LiteLLM persists general_settings to the DB.
-    On periodic reloads, _update_general_settings() must NOT override
-    YAML-explicit values with stale DB values.
-    """
-
-    def _make_proxy_config_with_yaml_keys(self, yaml_keys: set) -> "ProxyConfig":
-        """Helper: create ProxyConfig with pre-populated _yaml_general_settings_keys."""
-        proxy_config = ProxyConfig()
-        proxy_config._yaml_general_settings_keys = yaml_keys
-        return proxy_config
-
     @pytest.mark.asyncio
     async def test_yaml_value_takes_precedence_over_db(self):
-        """When YAML sets store_prompts_in_spend_logs=false, DB value (true) should be ignored."""
-        proxy_config = self._make_proxy_config_with_yaml_keys({"store_prompts_in_spend_logs"})
+        proxy_config = ProxyConfig()
+        proxy_config.settings.load_yaml({"store_prompts_in_spend_logs": False})
 
-        test_general_settings = {"store_prompts_in_spend_logs": False}
-
-        with mock.patch("litellm.proxy.proxy_server.general_settings", test_general_settings):
+        with mock.patch("litellm.proxy.proxy_server.general_settings", proxy_config.settings):
             await proxy_config._update_general_settings(
                 db_general_settings={"store_prompts_in_spend_logs": True},
             )
 
-        assert test_general_settings["store_prompts_in_spend_logs"] is False
+            from litellm.proxy import proxy_server
+
+            assert proxy_server.general_settings["store_prompts_in_spend_logs"] is False
+            assert proxy_server.general_settings.source("store_prompts_in_spend_logs") == "config"
 
     @pytest.mark.asyncio
     async def test_db_value_used_when_yaml_does_not_set_key(self):
-        """When YAML does NOT set store_prompts_in_spend_logs, DB value should be used."""
-        proxy_config = self._make_proxy_config_with_yaml_keys({"master_key", "database_url"})
+        proxy_config = ProxyConfig()
+        proxy_config.settings.load_yaml({"master_key": "sk-test"})
 
-        test_general_settings = {"master_key": "sk-test"}
-
-        with mock.patch("litellm.proxy.proxy_server.general_settings", test_general_settings):
+        with mock.patch("litellm.proxy.proxy_server.general_settings", proxy_config.settings):
             await proxy_config._update_general_settings(
                 db_general_settings={"store_prompts_in_spend_logs": True},
             )
 
-        assert test_general_settings["store_prompts_in_spend_logs"] is True
+            from litellm.proxy import proxy_server
+
+            assert proxy_server.general_settings["store_prompts_in_spend_logs"] is True
+            assert proxy_server.general_settings.source("store_prompts_in_spend_logs") == "db"
 
     @pytest.mark.asyncio
     async def test_admin_ui_change_works_when_yaml_omits_key(self):
-        """Admin UI change (DB update) should work when YAML doesn't set the key."""
-        proxy_config = self._make_proxy_config_with_yaml_keys({"master_key"})
+        proxy_config = ProxyConfig()
+        proxy_config.settings.load_yaml({"master_key": "sk-test"})
 
-        test_general_settings = {"master_key": "sk-test"}
-
-        with mock.patch("litellm.proxy.proxy_server.general_settings", test_general_settings):
+        with mock.patch("litellm.proxy.proxy_server.general_settings", proxy_config.settings):
             await proxy_config._update_general_settings(
                 db_general_settings={"store_prompts_in_spend_logs": True},
             )
-            assert test_general_settings["store_prompts_in_spend_logs"] is True
-
             await proxy_config._update_general_settings(
                 db_general_settings={"store_prompts_in_spend_logs": False},
             )
 
-        assert test_general_settings["store_prompts_in_spend_logs"] is False
+            from litellm.proxy import proxy_server
 
-    def test_yaml_general_settings_keys_populated_on_load(self):
-        """_yaml_general_settings_keys should be empty on init."""
+            assert proxy_server.general_settings["store_prompts_in_spend_logs"] is False
+            assert proxy_server.general_settings.source("store_prompts_in_spend_logs") == "db"
+
+    def test_proxy_config_settings_start_unset(self):
         proxy_config = ProxyConfig()
-        assert proxy_config._yaml_general_settings_keys == set()
+
+        assert proxy_config.settings.source("store_prompts_in_spend_logs") == "unset"

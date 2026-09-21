@@ -13,7 +13,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     hash_token,
 )
+from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.table_repositories import JWTKeyMappingRepository
 
@@ -25,6 +27,9 @@ class _JWTKeyMappingRecord(Protocol):
 
     @property
     def id(self) -> str: ...
+
+    @property
+    def jwt_issuer(self) -> str: ...
 
     @property
     def jwt_claim_name(self) -> str: ...
@@ -76,6 +81,7 @@ def _to_response(mapping: _JWTKeyMappingRecord) -> JWTKeyMappingResponse:
     """Convert a Prisma mapping object to a safe response (no hashed token)."""
     return JWTKeyMappingResponse(
         id=mapping.id,
+        jwt_issuer=mapping.jwt_issuer or None,
         jwt_claim_name=mapping.jwt_claim_name,
         jwt_claim_value=mapping.jwt_claim_value,
         description=mapping.description,
@@ -107,6 +113,7 @@ async def create_jwt_key_mapping(
     try:
         hashed_key: Final = hash_token(data.key)
         create_data: Final = {
+            "jwt_issuer": data.jwt_issuer or "",
             "jwt_claim_name": data.jwt_claim_name,
             "jwt_claim_value": data.jwt_claim_value,
             "token": hashed_key,
@@ -118,9 +125,8 @@ async def create_jwt_key_mapping(
 
         new_mapping: Final = await _mapping_table(prisma_client).create(data=create_data)
 
-        # Invalidate cache
-        cache_key: Final = f"jwt_key_mapping:{data.jwt_claim_name}:{data.jwt_claim_value}"
-        await user_api_key_cache.async_delete_cache(cache_key)
+        cache_key: Final = jwt_key_mapping_cache_key(data.jwt_claim_name, data.jwt_claim_value, data.jwt_issuer)
+        await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
 
         return _to_response(new_mapping)
     except HTTPException:
@@ -130,7 +136,10 @@ async def create_jwt_key_mapping(
         if "unique" in error_str or "p2002" in error_str:
             raise HTTPException(
                 status_code=409,
-                detail=f"A mapping for claim '{data.jwt_claim_name}' = '{data.jwt_claim_value}' already exists.",
+                detail=(
+                    f"A mapping for claim '{data.jwt_claim_name}' = '{data.jwt_claim_value}' "
+                    f"already exists for issuer '{data.jwt_issuer}'."
+                ),
             )
         if "foreign" in error_str or "p2003" in error_str:
             raise HTTPException(
@@ -160,6 +169,9 @@ async def update_jwt_key_mapping(
     update_data: Final = data.model_dump(exclude_unset=True, exclude={"id", "key"})
     if data.key is not None:
         update_data["token"] = hash_token(data.key)
+    if "jwt_issuer" in update_data:
+        # DB column is NOT NULL (see schema.prisma); "" is the global/unscoped sentinel.
+        update_data["jwt_issuer"] = update_data["jwt_issuer"] or ""
     update_data["updated_by"] = user_api_key_dict.user_id
 
     try:
@@ -169,17 +181,22 @@ async def update_jwt_key_mapping(
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
 
-        cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
-        await user_api_key_cache.async_delete_cache(cache_key)
-
         updated_mapping: Final = await _mapping_table(prisma_client).update(where={"id": data.id}, data=update_data)
 
         if updated_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
 
-        # Invalidate new cache key if claim fields changed
-        cache_key = f"jwt_key_mapping:{updated_mapping.jwt_claim_name}:{updated_mapping.jwt_claim_value}"
-        await user_api_key_cache.async_delete_cache(cache_key)
+        # Evict only after the write commits: a concurrent request between an
+        # early eviction and the commit would re-cache the old mapping and keep
+        # it authorized until TTL.
+        old_cache_key: Final = jwt_key_mapping_cache_key(
+            old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
+        )
+        new_cache_key: Final = jwt_key_mapping_cache_key(
+            updated_mapping.jwt_claim_name, updated_mapping.jwt_claim_value, updated_mapping.jwt_issuer
+        )
+        cache_keys: Final = (old_cache_key,) if old_cache_key == new_cache_key else (old_cache_key, new_cache_key)
+        await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
 
         return _to_response(updated_mapping)
     except HTTPException:
@@ -219,10 +236,14 @@ async def delete_jwt_key_mapping(
         if old_mapping is None:
             raise HTTPException(status_code=404, detail="Mapping not found")
 
-        cache_key: Final = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
-        await user_api_key_cache.async_delete_cache(cache_key)
-
         await _mapping_table(prisma_client).delete(where={"id": data.id})
+
+        # Evict only after the row is gone, else a concurrent request can
+        # re-cache the deleted mapping and keep it authorized until TTL.
+        cache_key: Final = jwt_key_mapping_cache_key(
+            old_mapping.jwt_claim_name, old_mapping.jwt_claim_value, old_mapping.jwt_issuer
+        )
+        await evict_and_broadcast(cache_keys=(cache_key,), user_api_key_cache=user_api_key_cache)
         return {"status": "success"}
     except HTTPException:
         raise

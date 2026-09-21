@@ -13,10 +13,12 @@ jobs:
   sync_together_ai_models:
     if: github.repository == 'BerriAI/litellm'
     runs-on: ubuntu-latest
+    env:
+      BASE_BRANCH: ${{ github.event.repository.default_branch }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
-          ref: litellm_internal_staging
+          ref: ${{ env.BASE_BRANCH }}
           persist-credentials: false
       - name: Set up uv
         uses: ./.github/actions/setup-uv-with-retries
@@ -63,6 +65,6 @@ jobs:
           gh pr create --title "feat(models): sync together_ai model registry" \
             --body-file "$RUNNER_TEMP/pr_body.md" \
             --head "$branch" \
-            --base litellm_internal_staging
+            --base "$BASE_BRANCH"
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}

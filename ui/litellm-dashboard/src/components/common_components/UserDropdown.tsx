@@ -47,8 +47,8 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ value, onChange, disabled, 
     <div data-testid="user-dropdown">
       <PaginatedSearchSelect
         options={options}
-        value={value ?? undefined}
-        onValueChange={(next) => onChange(next === "" ? null : next)}
+        value={value}
+        onValueChange={onChange}
         onSearchChange={setSearch}
         onLoadMore={fetchNextPage}
         hasNextPage={hasNextPage}

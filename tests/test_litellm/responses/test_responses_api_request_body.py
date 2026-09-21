@@ -7,6 +7,7 @@ in expected_responses_api_request/.
 import copy
 import json
 from pathlib import Path
+from importlib import import_module
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -245,8 +246,10 @@ async def test_aresponses_keeps_include_obfuscation_in_stream_options():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, "true"])
 async def test_aresponses_request_level_drop_params_drops_bedrock_mantle_service_tier(
     monkeypatch,
+    drop_params,
 ):
     """
     Request-level drop_params=True (as the proxy injects for agentic CLIs) must
@@ -270,7 +273,7 @@ async def test_aresponses_request_level_drop_params_drops_bedrock_mantle_service
             aws_region_name="us-east-1",
             input="hi",
             service_tier="priority",
-            drop_params=True,
+            drop_params=drop_params,
         )
 
         mock_post.assert_called_once()
@@ -405,8 +408,8 @@ async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_
 
     from litellm.responses.main import _aresponses_websocket
 
-    with patch(
-        "litellm.responses.main.base_llm_http_handler.async_responses_websocket",
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
         await _aresponses_websocket(
@@ -419,6 +422,94 @@ async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_
         mock_ws.assert_awaited_once()
         assert mock_ws.call_args.kwargs["model"] == "gpt-5.6"
         assert mock_ws.call_args.kwargs["custom_llm_provider"] == "openai"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs():  # test-quality-ok: the relay kwargs are the only place a dropped key is observable; the provider socket behind them is the boundary
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import _aresponses_websocket
+
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
+        new_callable=AsyncMock,
+    ) as mock_ws:
+        await _aresponses_websocket(
+            model="openai/gpt-5.6",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=MagicMock(),
+            input=[{"type": "message", "role": "user", "content": "hi"}],
+            previous_response_id="resp_prev",
+        )
+
+        mock_ws.assert_awaited_once()
+        assert "input" not in mock_ws.call_args.kwargs
+        assert "previous_response_id" not in mock_ws.call_args.kwargs
+
+
+_STRIPPED_WS_INPUT = [{"role": "user", "content": "hi"}]
+_ORIGINAL_WS_INPUT = [
+    {"type": "reasoning", "id": "rs_1", "encrypted_content": "blob-from-a-removed-deployment", "summary": []},
+    *_STRIPPED_WS_INPUT,
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True])
+async def test_aresponses_websocket_forwards_the_routed_input_in_the_first_frame(nested: bool):  # test-quality-ok: the first frame handed to the relay is the only place the routed input is observable before the provider socket
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import _aresponses_websocket
+
+    body = {"model": "gpt-5.6", "input": _ORIGINAL_WS_INPUT, "store": False}
+    first_message = json.dumps(
+        {"type": "response.create", "response": body} if nested else {"type": "response.create", **body}
+    )
+
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
+        new_callable=AsyncMock,
+    ) as mock_ws:
+        await _aresponses_websocket(
+            model="openai/gpt-5.6",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=MagicMock(),
+            input=list(_STRIPPED_WS_INPUT),
+            first_message=first_message,
+        )
+
+    forwarded = json.loads(mock_ws.call_args.kwargs["first_message"])
+    container = forwarded["response"] if nested else forwarded
+    assert container["input"] == _STRIPPED_WS_INPUT
+    assert container["store"] is False
+    assert container["model"] == "gpt-5.6"
+    assert forwarded["type"] == "response.create"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_websocket_forwards_the_first_frame_verbatim_when_routing_left_the_input_alone():  # test-quality-ok: the relay kwargs are the boundary; byte-identical passthrough is only observable there
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import _aresponses_websocket
+
+    first_message = '{"type": "response.create", "model": "gpt-5.6",  "input": [{"role": "user", "content": "hi"}]}'
+
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
+        new_callable=AsyncMock,
+    ) as mock_ws:
+        await _aresponses_websocket(
+            model="openai/gpt-5.6",
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=MagicMock(),
+            input=list(_STRIPPED_WS_INPUT),
+            first_message=first_message,
+        )
+
+    assert mock_ws.call_args.kwargs["first_message"] == first_message
 
 
 _INJECTION_POINT_INPUT = [{"role": "system", "content": "You are terse."}, {"role": "user", "content": "hi"}]

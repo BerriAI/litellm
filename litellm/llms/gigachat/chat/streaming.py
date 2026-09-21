@@ -52,7 +52,6 @@ class GigaChatModelResponseIterator:
         tool_use: ChatCompletionToolCallChunk | None = None  # rebind-ok: conditionally assigned on function_call
         finish_reason: str | None = chunk_finish_reason
 
-        # Handle function_call in stream
         raw_function_call: Final = delta.get("function_call")
         if chunk_finish_reason == "function_call" and isinstance(raw_function_call, Mapping) and raw_function_call:
             func_call: Final[Mapping[str, object]] = raw_function_call

@@ -26,7 +26,7 @@ spec:
     {{- toYaml .namespaceSelector.matchNames | nindent 4 }}
     {{- end }}
   endpoints:
-  - port: http
+  - port: {{ ternary "metrics" "http" $.Values.metricsServer.enabled }}
     path: /metrics/
     interval: {{ .interval }}
     scrapeTimeout: {{ .scrapeTimeout }}

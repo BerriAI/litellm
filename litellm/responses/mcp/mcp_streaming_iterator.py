@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
@@ -104,8 +105,8 @@ async def create_mcp_list_tools_events(
                 "description": getattr(tool, "description", ""),
                 "annotations": {"read_only": False},
                 **dict.fromkeys(
-                    ("input_schema",) if hasattr(tool, "inputSchema") or hasattr(tool, "input_schema") else (),
-                    getattr(tool, "inputSchema", getattr(tool, "input_schema", None)),
+                    ("input_schema",) if hasattr(tool, "input_schema") else (),
+                    getattr(tool, "input_schema", None),
                 ),
             }
             for tool in filtered_mcp_tools
@@ -609,7 +610,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         """Create the initial response iterator by making the first LLM call"""
         try:
             # Import the core aresponses function that doesn't have MCP logic
-            from litellm.responses.main import aresponses
+            from litellm.responses.main import aresponses  # noqa: TID251  # core call without MCP logic
 
             # Make the initial response API call - but avoid the MCP wrapper
             params: Final[dict[str, object]] = self.original_request_params.copy()
@@ -698,6 +699,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 litellm_call_id=self.litellm_call_id,
                 litellm_trace_id=self.litellm_trace_id,
                 request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(self.original_request_params),
+                guardrail_context=MCPRequestContext.resolve_guardrail_context(self.original_request_params),
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -773,7 +775,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             self.base_iterator = None
             return
 
-        from litellm.responses.main import aresponses
+        from litellm.responses.main import aresponses  # noqa: TID251  # follow-up call without MCP logic
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
         )
@@ -781,10 +783,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         try:
             # Create follow-up input
             if self.collected_response is not None:
+                persistence_disabled: Final = LiteLLM_Proxy_MCP_Handler._is_persistence_disabled(
+                    self.original_request_params
+                )
+
                 follow_up_input: Final = LiteLLM_Proxy_MCP_Handler._create_follow_up_input(
                     response=self.collected_response,
                     tool_results=self.tool_results,
                     original_input=self.original_request_params.get("input"),
+                    preserve_reasoning=persistence_disabled,
                 )
 
                 # Make follow-up call with streaming
