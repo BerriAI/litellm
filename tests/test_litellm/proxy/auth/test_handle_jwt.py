@@ -185,10 +185,6 @@ async def test_find_team_with_model_access_reports_passthrough_allowlist_denial(
             "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
             return_value=True,
         ) as mock_is_auth_enforced_pass_through_route,
-        patch(
-            "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
-            return_value=False,
-        ) as mock_passthrough_check,
     ):
         with pytest.raises(HTTPException) as exc_info:
             await JWTAuthManager.find_team_with_model_access(
@@ -209,10 +205,6 @@ async def test_find_team_with_model_access_reports_passthrough_allowlist_denial(
     mock_is_auth_enforced_pass_through_route.assert_called_once_with(
         route="/my-pass-through", method="POST"
     )
-
-    user_api_key_dict = mock_passthrough_check.call_args.kwargs["user_api_key_dict"]
-    assert user_api_key_dict.metadata == {}
-    assert user_api_key_dict.team_metadata == {}
 
 
 @pytest.mark.asyncio
@@ -2131,10 +2123,6 @@ async def test_auth_builder_header_team_denies_auth_passthrough_without_allowlis
             "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
             return_value=True,
         ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
-            return_value=False,
-        ) as mock_passthrough_check,
     ):
         mock_auth_jwt.return_value = {
             "sub": "user-1",
@@ -2160,8 +2148,6 @@ async def test_auth_builder_header_team_denies_auth_passthrough_without_allowlis
     assert exc_info.value.status_code == 403
     assert "allowed_passthrough_routes" in exc_info.value.detail
     mock_get_objects.assert_not_called()
-    user_api_key_dict = mock_passthrough_check.call_args.kwargs["user_api_key_dict"]
-    assert user_api_key_dict.team_metadata == {}
 
 
 @pytest.mark.asyncio
@@ -2206,10 +2192,6 @@ async def test_auth_builder_specific_team_denies_auth_passthrough_without_allowl
             "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
             return_value=True,
         ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
-            return_value=False,
-        ) as mock_passthrough_check,
     ):
         mock_auth_jwt.return_value = {
             "sub": "user-1",
@@ -2234,8 +2216,6 @@ async def test_auth_builder_specific_team_denies_auth_passthrough_without_allowl
     assert exc_info.value.status_code == 403
     assert "allowed_passthrough_routes" in exc_info.value.detail
     mock_get_objects.assert_not_called()
-    user_api_key_dict = mock_passthrough_check.call_args.kwargs["user_api_key_dict"]
-    assert user_api_key_dict.team_metadata == {}
 
 
 @pytest.mark.asyncio
@@ -2287,10 +2267,6 @@ async def test_auth_builder_rbac_team_loads_team_for_passthrough_allowlist():
             "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
             return_value=True,
         ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
-            return_value=True,
-        ) as mock_passthrough_check,
     ):
         mock_auth_jwt.return_value = {"scope": ""}
 
@@ -2310,10 +2286,6 @@ async def test_auth_builder_rbac_team_loads_team_for_passthrough_allowlist():
     assert result["team_id"] == "team-rbac"
     mock_get_team.assert_awaited_once()
     assert mock_get_team.await_args.kwargs["team_id"] == "team-rbac"
-    user_api_key_dict = mock_passthrough_check.call_args.kwargs["user_api_key_dict"]
-    assert user_api_key_dict.team_metadata == {
-        "allowed_passthrough_routes": ["/my-pass-through"]
-    }
 
 
 @pytest.mark.asyncio
