@@ -10,8 +10,8 @@ use qdrant_client::qdrant::{
     CollectionOperationResponse, CreateCollection, CreateFieldIndexCollection, Filter, PointId,
     PointsOperationResponse, ScoredPoint, SearchPoints, SearchResponse, Value, Vector, Vectors,
     collections_server::Collections,
-    value::Kind,
     points_server::{Points, PointsServer},
+    value::Kind,
 };
 use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;

@@ -124,14 +124,17 @@ impl<E: Embedder, C: CacheCodec> QdrantSemanticCache<E, C> {
         }))
         .map_err(|_| Error::InvalidEntry)?;
         self.client
-            .upsert_points(UpsertPointsBuilder::new(
-                self.collection_name(),
-                vec![PointStruct::new(
-                    Uuid::new_v4().to_string(),
-                    vector,
-                    payload,
-                )],
-            ).wait(true))
+            .upsert_points(
+                UpsertPointsBuilder::new(
+                    self.collection_name(),
+                    vec![PointStruct::new(
+                        Uuid::new_v4().to_string(),
+                        vector,
+                        payload,
+                    )],
+                )
+                .wait(true),
+            )
             .await
             .map_err(|_| Error::Unavailable)?;
         Ok(())

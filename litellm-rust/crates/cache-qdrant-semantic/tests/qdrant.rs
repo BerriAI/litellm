@@ -384,7 +384,10 @@ async fn response_payloads_decode_and_invalid_entries_fail() {
         server.insert_point(StoredPoint {
             id: Some(PointId::from(key.len() as u64)),
             vector: vec![1.0, 0.0],
-            payload: payload.into_iter().map(|(key, value)| (key, json_to_qdrant(value))).collect(),
+            payload: payload
+                .into_iter()
+                .map(|(key, value)| (key, json_to_qdrant(value)))
+                .collect(),
         });
     }
     assert_eq!(
