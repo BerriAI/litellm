@@ -1150,7 +1150,7 @@ if MCP_AVAILABLE:
             },
         )
 
-    @router.get("/prompts/list", dependencies=[Depends(user_api_key_auth)])
+    @router.get("/prompts/list", dependencies=(Depends(user_api_key_auth),))
     async def list_prompts_rest_api(
         request: Request,
         server_id: Annotated[str, Query(description="The MCP server id, name, or alias to list prompts for")],
@@ -1176,7 +1176,7 @@ if MCP_AVAILABLE:
             raise _catalog_list_http_exception(e, context.server, "prompts") from e
         return ListMCPPromptsRestAPIResponse.from_prompts(prompts)
 
-    @router.get("/resources/list", dependencies=[Depends(user_api_key_auth)])
+    @router.get("/resources/list", dependencies=(Depends(user_api_key_auth),))
     async def list_resources_rest_api(
         request: Request,
         server_id: Annotated[str, Query(description="The MCP server id, name, or alias to list resources for")],

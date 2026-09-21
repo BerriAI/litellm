@@ -1438,8 +1438,14 @@ def _raise_single_server_list_failure(error: Exception, server: MCPServer) -> No
         case MCPUpstreamAuthError() | MCPServerListError():
             raise error
         case HTTPException() if error.status_code in (401, 403):
-            headers: Final = error.headers or {}
-            challenge_header: Final = headers.get("WWW-Authenticate") or headers.get("www-authenticate")
+            challenge_header: Final = next(
+                (
+                    value
+                    for name, value in (error.headers.items() if error.headers else ())
+                    if name.lower() == "www-authenticate"
+                ),
+                None,
+            )
             raise MCPUpstreamAuthError(
                 status_code=error.status_code,
                 www_authenticate=None if server.is_dcr_bridge else challenge_header,
@@ -4527,10 +4533,10 @@ class MCPServerManager:
         )
 
         has_static_authorization: Final = any(
-            isinstance(k, str) and k.lower() == "authorization" for k in (server.static_headers or {})
+            isinstance(k, str) and k.lower() == "authorization" for k in (server.static_headers or ())
         )
         has_extra_authorization: Final = any(
-            isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or {})
+            isinstance(k, str) and k.lower() == "authorization" for k in (extra_headers or ())
         )
         if get_mcp_jwt_signer() is None or has_static_authorization or mcp_auth_header or has_extra_authorization:
             return _ListHeaders(headers, signed_for_user=False)
@@ -4540,7 +4546,7 @@ class MCPServerManager:
             raw_headers=raw_headers,
             for_list_tools=True,
         )
-        unsigned_items: Final = frozenset((headers or {}).items())
+        unsigned_items: Final = frozenset(headers.items() if headers else ())
         return _ListHeaders(
             signed,
             signed_for_user=True,
