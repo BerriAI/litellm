@@ -22,6 +22,7 @@ from starlette.routing import Route
 
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
 from integration.cost_calculation.cost_tracking_case import (
+    BinaryResponse,
     EventStreamResponse,
     JsonResponse,
     SseResponse,
@@ -211,6 +212,11 @@ class Provider:
                     ).encode(),
                     media_type=response.content_type,
                     status_code=response.status,
+                )
+            case BinaryResponse():
+                return Response(
+                    content=b"\x00" * response.length,
+                    media_type=response.content_type,
                 )
             case SseResponse():
                 stream_body: Final = ("\n\n".join(response.frames) + "\n\n").replace(

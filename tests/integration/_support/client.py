@@ -67,6 +67,21 @@ class Gateway:
             headers={"Authorization": f"Bearer {self.key if key is None else key}"},
         )
 
+    def request_multipart(
+        self,
+        path: str,
+        fields: Mapping[str, str],
+        files: Mapping[str, tuple[str, bytes, str]],
+        *,
+        key: str | None = None,
+    ) -> httpx.Response:
+        return self.client.post(
+            path,
+            data=fields,
+            files=files,
+            headers={"Authorization": f"Bearer {self.key if key is None else key}"},
+        )
+
     def post(self, path: str, body: Mapping[str, JsonValue], *, key: str | None = None) -> dict[str, JsonValue]:
         response: Final = self.request("POST", path, body, key=key)
         assert response.status_code == 200, f"POST {path}: {response.status_code} {response.text}"
