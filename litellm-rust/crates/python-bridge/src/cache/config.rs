@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use pyo3::{
-    exceptions::{PyOverflowError, PyTypeError, PyValueError},
+    exceptions::{PyTypeError, PyValueError},
     prelude::*,
     types::{PyAny, PyDict},
 };
@@ -43,7 +43,7 @@ pub(super) struct RedisTlsConfig {
     pub(super) certificate_requirement: CertificateRequirement,
     pub(super) check_hostname: bool,
     pub(super) ca_certificate: Option<String>,
-    pub(super) ca_data: Option<Vec<u8>>,
+    pub(super) ca_data: Option<String>,
     pub(super) client_certificate: Option<String>,
     pub(super) client_key: Option<String>,
 }
@@ -86,21 +86,21 @@ pub(super) struct NativeCacheConfig {
 }
 
 pub(super) enum UnsupportedCacheConfig {
-    Backend(String),
-    RedisMode(&'static str),
-    RedisOption(String),
+    Backend,
+    RedisTopology,
+    RedisCredentials,
+    RedisConnection,
+    RedisOption,
 }
 
 impl UnsupportedCacheConfig {
-    pub(super) fn message(&self) -> String {
+    pub(super) fn message(&self) -> &'static str {
         match self {
-            Self::Backend(backend) => {
-                format!("native cache backend {backend:?} is not implemented")
-            }
-            Self::RedisMode(mode) => format!("native Redis {mode} mode is not implemented"),
-            Self::RedisOption(option) => {
-                format!("native Redis option {option:?} is not implemented")
-            }
+            Self::Backend => "native cache backend is not implemented",
+            Self::RedisTopology => "native Redis topology is not implemented",
+            Self::RedisCredentials => "native Redis credentials require Python",
+            Self::RedisConnection => "native Redis connection type is not implemented",
+            Self::RedisOption => "native Redis configuration requires Python",
         }
     }
 }
@@ -143,7 +143,7 @@ impl NativeCacheConfig {
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
             _ => Ok(CacheConfigProjection::Unsupported(
-                UnsupportedCacheConfig::Backend(backend_name),
+                UnsupportedCacheConfig::Backend,
             )),
         }
     }
@@ -187,7 +187,7 @@ fn project_memory(backend: &Bound<'_, PyAny>) -> PyResult<MemoryCacheConfig> {
         capacity: backend.getattr("max_size_in_memory")?.extract::<usize>()?,
         max_entry_bytes: max_size_kib
             .checked_mul(1024)
-            .ok_or_else(|| PyOverflowError::new_err("memory cache item limit is too large"))?,
+            .ok_or_else(|| PyValueError::new_err("memory cache item limit is too large"))?,
     })
 }
 
@@ -196,19 +196,18 @@ fn project_redis(
 ) -> PyResult<Result<RedisCacheConfig, UnsupportedCacheConfig>> {
     let source = backend.getattr("redis_kwargs")?.cast_into::<PyDict>()?;
     if has_value(&source, "startup_nodes")? {
-        return Ok(Err(UnsupportedCacheConfig::RedisMode("cluster")));
+        return Ok(Err(UnsupportedCacheConfig::RedisTopology));
     }
     if has_value(&source, "sentinel_nodes")? {
-        return Ok(Err(UnsupportedCacheConfig::RedisMode("sentinel")));
+        return Ok(Err(UnsupportedCacheConfig::RedisTopology));
     }
-    for key in [
-        "credential_provider",
-        "redis_connect_func",
-        "connection_pool",
-    ] {
+    for key in ["credential_provider", "redis_connect_func"] {
         if has_value(&source, key)? {
-            return Ok(Err(UnsupportedCacheConfig::RedisOption(key.to_owned())));
+            return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
         }
+    }
+    if has_value(&source, "connection_pool")? {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
     }
     for key in [
         "retry",
@@ -228,12 +227,12 @@ fn project_redis(
         "ssl_ocsp_expected_cert",
     ] {
         if has_value(&source, key)? {
-            return Ok(Err(UnsupportedCacheConfig::RedisOption(key.to_owned())));
+            return Ok(Err(UnsupportedCacheConfig::RedisOption));
         }
     }
     for key in ["retry_on_timeout", "single_connection_client"] {
         if optional_coerced_bool(&source, key)?.unwrap_or(false) {
-            return Ok(Err(UnsupportedCacheConfig::RedisOption(key.to_owned())));
+            return Ok(Err(UnsupportedCacheConfig::RedisOption));
         }
     }
 
@@ -241,12 +240,12 @@ fn project_redis(
     let pool = client.getattr("connection_pool")?;
     let pool_class = class_identity(&pool)?;
     if pool_class != ("redis.connection".to_owned(), "ConnectionPool".to_owned()) {
-        return Ok(Err(UnsupportedCacheConfig::RedisMode("custom pool")));
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
     }
     let resolved = pool.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
     for key in ["credential_provider", "redis_connect_func"] {
         if has_value(&resolved, key)? {
-            return Ok(Err(UnsupportedCacheConfig::RedisOption(key.to_owned())));
+            return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
         }
     }
     let connection_class = resolved
@@ -265,17 +264,13 @@ fn project_redis(
         (module, name) if module == "redis.connection" && name == "SSLConnection" => {
             Some(project_tls(&resolved)?)
         }
-        _ => return Ok(Err(UnsupportedCacheConfig::RedisMode("custom connection"))),
+        _ => return Ok(Err(UnsupportedCacheConfig::RedisConnection)),
     };
 
     let protocol = match optional_u8(&resolved, "protocol")?.unwrap_or(2) {
         2 => RedisProtocol::Resp2,
         3 => RedisProtocol::Resp3,
-        value => {
-            return Err(PyValueError::new_err(format!(
-                "unsupported Redis protocol version {value}"
-            )));
-        }
+        _ => return Err(PyValueError::new_err("unsupported Redis protocol version")),
     };
     let health_check_interval =
         duration(optional_f64(&resolved, "health_check_interval")?.unwrap_or(0.0))?;
@@ -306,7 +301,7 @@ fn project_tls(values: &Bound<'_, PyDict>) -> PyResult<RedisTlsConfig> {
         certificate_requirement: certificate_requirement(values)?,
         check_hostname: optional_bool(values, "ssl_check_hostname")?.unwrap_or(false),
         ca_certificate: optional_dict_string(values, "ssl_ca_certs")?,
-        ca_data: optional_bytes(values, "ssl_ca_data")?,
+        ca_data: optional_dict_string(values, "ssl_ca_data")?,
         client_certificate: optional_dict_string(values, "ssl_certfile")?,
         client_key: optional_dict_string(values, "ssl_keyfile")?,
     })
@@ -374,14 +369,14 @@ fn has_value(values: &Bound<'_, PyDict>, key: &str) -> PyResult<bool> {
 fn required_string(values: &Bound<'_, PyDict>, key: &str) -> PyResult<String> {
     values
         .get_item(key)?
-        .ok_or_else(|| PyTypeError::new_err(format!("Redis connection is missing {key:?}")))?
+        .ok_or_else(|| PyTypeError::new_err("Redis connection is incomplete"))?
         .extract::<String>()
 }
 
 fn required_u16(values: &Bound<'_, PyDict>, key: &str) -> PyResult<u16> {
     values
         .get_item(key)?
-        .ok_or_else(|| PyTypeError::new_err(format!("Redis connection is missing {key:?}")))?
+        .ok_or_else(|| PyTypeError::new_err("Redis connection is incomplete"))?
         .extract::<u16>()
 }
 
@@ -390,19 +385,6 @@ fn optional_dict_string(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Optio
         Some(value) if !value.is_none() => optional_string(value),
         _ => Ok(None),
     }
-}
-
-fn optional_bytes(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<Vec<u8>>> {
-    let Some(value) = values.get_item(key)? else {
-        return Ok(None);
-    };
-    if value.is_none() {
-        return Ok(None);
-    }
-    if let Ok(bytes) = value.extract::<Vec<u8>>() {
-        return Ok(Some(bytes));
-    }
-    Ok(Some(value.extract::<String>()?.into_bytes()))
 }
 
 fn optional_f64(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f64>> {
@@ -560,7 +542,7 @@ mod tests {
             );
             assert!(tls.check_hostname);
             assert_eq!(tls.ca_certificate.as_deref(), Some("/ca.pem"));
-            assert_eq!(tls.ca_data.as_deref(), Some(b"CA DATA".as_slice()));
+            assert_eq!(tls.ca_data.as_deref(), Some("CA DATA"));
             assert_eq!(tls.client_certificate.as_deref(), Some("/client.pem"));
             assert_eq!(tls.client_key.as_deref(), Some("/client.key"));
         });
@@ -580,7 +562,7 @@ mod tests {
             else {
                 panic!("dynamic authentication must stay on Python");
             };
-            assert!(reason.message().contains("credential_provider"));
+            assert_eq!(reason.message(), "native Redis credentials require Python");
         });
     }
 }
