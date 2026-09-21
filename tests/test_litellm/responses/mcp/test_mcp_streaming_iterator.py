@@ -11,7 +11,11 @@ from litellm.responses.mcp.mcp_streaming_iterator import (
     MAX_MCP_TOOL_CALL_ROUNDS,
     MCPEnhancedStreamingIterator,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 
 # `litellm.__init__` re-exports a function named `responses`, which shadows the
 # `litellm.responses` subpackage as an attribute — `import litellm.responses.main`
@@ -57,8 +61,8 @@ def _text_message(text: str):
     return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
 
 
-def _item_type(item) -> str:
-    return item["type"] if isinstance(item, dict) else item.type
+def _item_type(item: dict[str, object] | BaseLiteLLMOpenAIResponseObject) -> str:
+    return str(item["type"]) if isinstance(item, dict) else str(item.type)
 
 
 def _tool_call_stream(call_id: str, tool_name: str, response_id: str = "resp-1") -> _FakeAsyncStream:
@@ -354,11 +358,11 @@ async def test_streaming_follow_up_keeps_previous_response_id_when_stored(monkey
     assert not [item for item in follow_up_kwargs["input"] if item.get("type") == "reasoning"]
 
 
-def _event(event_type, **fields):
+def _event(event_type: ResponsesAPIStreamEvents, **fields: object) -> SimpleNamespace:
     return SimpleNamespace(type=event_type, **fields)
 
 
-def _lifecycle_round(response_id: str, item: dict, sequence_start: int = 0):
+def _lifecycle_round(response_id: str, item: dict[str, object], sequence_start: int = 0) -> list[SimpleNamespace]:
     """One upstream Responses round as a provider streams it: its own id, indexes from 0, numbering from 0."""
     return [
         _event(
