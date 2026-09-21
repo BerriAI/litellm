@@ -2116,9 +2116,10 @@ class CustomStreamWrapper:
                     complete_streaming_response = None
 
             if complete_streaming_response is not None and isinstance(self.model, str) and self.model:
-                litellm_params = self.logging_obj.model_call_details.get("litellm_params", {})
-                proxy_request = litellm_params.get("proxy_server_request", {})
-                request_body = proxy_request.get("body", {}) if isinstance(proxy_request, dict) else {}
+                litellm_params = self.logging_obj.model_call_details.get("litellm_params")
+                proxy_request = litellm_params.get("proxy_server_request") if isinstance(litellm_params, dict) else None
+                request_body = proxy_request.get("body") if isinstance(proxy_request, dict) else None
+
                 client_requested_model = request_body.get("model") if isinstance(request_body, dict) else None
 
                 assembled_model = complete_streaming_response.model
