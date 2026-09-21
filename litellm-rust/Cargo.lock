@@ -2697,6 +2697,7 @@ dependencies = [
  "jsonwebtoken",
  "litellm-core-utils",
  "litellm-secrets-aws",
+ "litellm-secrets-azure",
  "litellm-secrets-google",
  "litellm-secrets-types",
  "moka",
@@ -2727,6 +2728,26 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "veil",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-secrets-azure"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth-azure",
+ "litellm-auth-types",
+ "litellm-core-utils",
+ "litellm-secrets-types",
+ "percent-encoding",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tokio",
  "veil",
  "wiremock",
 ]
