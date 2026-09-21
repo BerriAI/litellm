@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use litellm_cache::CacheType;
 use litellm_cache_redis::{RedisNode, RedisTopology};
@@ -24,6 +24,10 @@ pub(super) struct MemoryCacheConfig {
     pub(super) default_ttl: Duration,
     pub(super) capacity: usize,
     pub(super) max_entry_bytes: usize,
+}
+
+pub(super) struct DiskCacheConfig {
+    pub(super) directory: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
@@ -102,6 +106,7 @@ pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
     Gcs(GcsCacheConfig),
+    Disk(DiskCacheConfig),
     AzureBlob(AzureBlobCacheConfig),
 }
 
@@ -118,6 +123,7 @@ pub(super) enum UnsupportedCacheConfig {
     RedisConnection,
     RedisOption,
     GcsBucket,
+    DiskStore,
 }
 
 impl UnsupportedCacheConfig {
@@ -129,6 +135,7 @@ impl UnsupportedCacheConfig {
             Self::RedisConnection => "native Redis connection type is not implemented",
             Self::RedisOption => "native Redis configuration requires Python",
             Self::GcsBucket => "native GCS cache requires a configured bucket name",
+            Self::DiskStore => "native disk cache requires the built-in diskcache store",
         }
     }
 }
@@ -178,6 +185,13 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::Disk) => match project_disk(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::Disk(backend),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
             Some(CacheType::AzureBlob) => project_azure_blob(&backend).map(|backend| {
                 CacheConfigProjection::Native(Box::new(Self {
                     policy,
@@ -188,7 +202,6 @@ impl NativeCacheConfig {
                 CacheType::RedisSemantic
                 | CacheType::ValkeySemantic
                 | CacheType::S3
-                | CacheType::Disk
                 | CacheType::QdrantSemantic,
             )
             | None => Ok(CacheConfigProjection::Unsupported(
@@ -201,7 +214,9 @@ impl NativeCacheConfig {
         let default_ttl = match &self.backend {
             CacheBackendConfig::Memory(config) => Some(config.default_ttl),
             CacheBackendConfig::Redis(config) => Some(config.default_ttl),
-            CacheBackendConfig::AzureBlob(_) | CacheBackendConfig::Gcs(_) => None,
+            CacheBackendConfig::Disk(_)
+            | CacheBackendConfig::AzureBlob(_)
+            | CacheBackendConfig::Gcs(_) => None,
         };
         if service.default_ttl() != default_ttl {
             return Some("facade and native backend default TTLs must match");
@@ -253,6 +268,17 @@ impl NativeCacheConfig {
                 Some("facade and native backend credentials must match")
             }
             CacheBackendConfig::Gcs(_) => None,
+            CacheBackendConfig::Disk(_) if service.kind() != "disk" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::Disk(config) => {
+                let Some(directory) = service.directory() else {
+                    return Some("facade and native backend types must match");
+                };
+                let native = std::fs::canonicalize(directory).ok();
+                let facade = std::fs::canonicalize(&config.directory).ok();
+                (native != facade).then_some("facade and native backend directories must match")
+            }
             CacheBackendConfig::AzureBlob(config) => match service.azure_blob_identity() {
                 None => Some("facade and native backend types must match"),
                 Some((account_url, container))
@@ -307,6 +333,21 @@ fn project_gcs(
         path_service_account: backend
             .getattr("path_service_account")?
             .extract::<Option<String>>()?,
+    }))
+}
+
+#[inline(never)]
+fn project_disk(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<DiskCacheConfig, UnsupportedCacheConfig>> {
+    let store = backend.getattr("disk_cache")?;
+    if !instance_class_is(&store, "diskcache.core", "Cache")?
+        || !instance_class_is(&store.getattr("_disk")?, "diskcache.core", "Disk")?
+    {
+        return Ok(Err(UnsupportedCacheConfig::DiskStore));
+    }
+    Ok(Ok(DiskCacheConfig {
+        directory: PathBuf::from(store.getattr("directory")?.extract::<String>()?),
     }))
 }
 
@@ -697,8 +738,8 @@ mod tests {
     use litellm_cache_redis::{RedisNode, RedisTopology};
 
     use super::{
-        CacheBackendConfig, CacheConfigProjection, CertificateRequirement, GcsCacheConfig,
-        NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
+        CacheBackendConfig, CacheConfigProjection, CachePolicy, CertificateRequirement,
+        DiskCacheConfig, GcsCacheConfig, NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
     };
     use crate::cache::native::NativeResponseCache;
 
@@ -896,6 +937,85 @@ mod tests {
                 panic!("dynamic authentication must stay on Python");
             };
             assert_eq!(reason.message(), "native Redis credentials require Python");
+        });
+    }
+    #[test]
+    fn projects_builtin_disk_configuration_and_rejects_custom_stores() {
+        Python::initialize();
+        Python::attach(|py| {
+            let root =
+                std::env::temp_dir().join(format!("litellm-disk-config-{}", std::process::id()));
+            let directory = root.to_string_lossy();
+            let disk_facade = facade(
+                py,
+                &format!(
+                    "Cache = type('Cache', (), {{'__module__': 'diskcache.core'}})\n\
+                     Disk = type('Disk', (), {{'__module__': 'diskcache.core'}})\n\
+                     store = Cache()\n\
+                     store._disk = Disk()\n\
+                     store.directory = {directory:?}\n\
+                     backend = SimpleNamespace(disk_cache=store)\n\
+                     facade = SimpleNamespace(type='disk', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)"
+                ),
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&disk_facade).unwrap()
+            else {
+                panic!("disk cache should be supported");
+            };
+            let CacheBackendConfig::Disk(disk) = config.backend else {
+                panic!("expected disk configuration");
+            };
+            assert_eq!(disk.directory, root);
+            let matching = NativeResponseCache::disk(&directory).unwrap();
+            assert_eq!(
+                (NativeCacheConfig {
+                    policy: config.policy,
+                    backend: CacheBackendConfig::Disk(disk),
+                })
+                .service_mismatch(&matching),
+                None
+            );
+            let other = NativeResponseCache::disk(&root.join("other").to_string_lossy()).unwrap();
+            let mismatch = NativeCacheConfig {
+                policy: CachePolicy {
+                    mode: "default-on".into(),
+                    ttl: None,
+                    namespace: None,
+                    supported_call_types: None,
+                    redis_flush_size: None,
+                    semantic_cache_scope: "key".into(),
+                },
+                backend: CacheBackendConfig::Disk(DiskCacheConfig {
+                    directory: root.clone(),
+                }),
+            };
+            assert_eq!(
+                mismatch.service_mismatch(&other),
+                Some("facade and native backend directories must match")
+            );
+
+            let custom = facade(
+                py,
+                &format!(
+                    "CustomCache = type('CustomCache', (), {{'__module__': 'mypkg'}})\n\
+                     CustomDisk = type('CustomDisk', (), {{'__module__': 'mypkg'}})\n\
+                     store = CustomCache()\n\
+                     store._disk = CustomDisk()\n\
+                     store.directory = {directory:?}\n\
+                     backend = SimpleNamespace(disk_cache=store)\n\
+                     facade = SimpleNamespace(type='disk', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)"
+                ),
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&custom).unwrap()
+            else {
+                panic!("custom disk store must stay on Python");
+            };
+            assert_eq!(
+                reason.message(),
+                "native disk cache requires the built-in diskcache store"
+            );
         });
     }
 

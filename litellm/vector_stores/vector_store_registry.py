@@ -112,9 +112,8 @@ class VectorStoreRegistry:
         Dynamically extracts all parameters defined in VECTOR_STORE_OPENAI_PARAMS.
         """
         # Get the list of supported param names from the Literal type
-        supported_params: Final = tuple(
-            param for param in get_args(VECTOR_STORE_OPENAI_PARAMS) if isinstance(param, str)
-        )
+        declared_params: Final[tuple[object, ...]] = get_args(VECTOR_STORE_OPENAI_PARAMS)
+        supported_params: Final = tuple(param for param in declared_params if isinstance(param, str))
 
         # Extract only the params that exist in the tool
         kwargs: Final = {param: tool.get(param) for param in supported_params if param in tool}

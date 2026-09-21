@@ -1,3 +1,4 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 import asyncio
 import inspect
 import json
@@ -1253,6 +1254,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["called"] = True
             captured["server"] = server
@@ -1338,6 +1340,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["user_api_key_auth"] = user_api_key_auth
             return ["tool-1"]
@@ -1891,6 +1894,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["called"] = True
             captured["server_arg"] = server
@@ -2027,6 +2031,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["called"] = True
             captured["server_arg"] = server
@@ -2112,6 +2117,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             return ["scoped-tool"]
 
@@ -2319,6 +2325,7 @@ class TestListToolsRestAPI:
             user_api_key_auth=None,
             extra_headers=None,
             apply_tool_filters=True,
+            client_ip=None,
         ):
             captured["server"] = server
             captured["auth_header"] = server_auth_header
@@ -3145,10 +3152,10 @@ async def test_request_selected_tool_specific_guardrail_applies_to_virtual_execu
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
-    monkeypatch.setattr(server, "global_mcp_tool_registry", registry)
-    monkeypatch.setattr(server, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mcp_operations, "global_mcp_tool_registry", registry)
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
     monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
-    monkeypatch.setattr(server, "_get_allowed_mcp_servers", AsyncMock(return_value=[managed_server]))
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[managed_server]))
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
     monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", passthrough_request_data)
     monkeypatch.setattr(proxy_server, "proxy_config", {})
