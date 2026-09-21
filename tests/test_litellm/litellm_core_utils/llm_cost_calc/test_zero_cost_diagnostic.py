@@ -93,6 +93,13 @@ def test_calculator_failure_on_a_priced_entry_is_cost_calculation_error():
     assert diagnostic == {"reason": "cost_calculation_error", "pricing_model": "dep-1", "missing_pricing_keys": ()}
 
 
+def test_calculator_failure_on_a_free_entry_stays_silent():
+    assert (
+        diagnose_zero_cost(usage=TEXT_USAGE, pricing_model="dep-1", pricing_entry=FREE_ENTRY, calculation_failed=True)
+        is None
+    )
+
+
 def test_audio_tokens_need_the_audio_rates():
     usage = Usage(
         prompt_tokens=10,

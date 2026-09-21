@@ -53,13 +53,12 @@ def _is_rate_key(key: str) -> bool:
 
 
 def _rate_values(value: object) -> tuple[object, ...]:
-    match _nested_pricing(value):
-        case Mapping() as entry:
-            return tuple(nested for key, nested in entry.items() if _is_rate_key(key))
-        case tuple() as items:
-            return items
-        case None:
-            return (value,)
+    nested: Final = _nested_pricing(value)
+    if isinstance(nested, Mapping):
+        return tuple(child for key, child in nested.items() if _is_rate_key(key))
+    if nested is None:
+        return (value,)
+    return nested
 
 
 def _expand_rate_values(values: tuple[object, ...], _depth: int) -> tuple[object, ...]:
@@ -88,19 +87,19 @@ def diagnose_zero_cost(
     used_keys: Final = used_pricing_keys(usage)
     if not used_keys:
         return None
+    missing_keys: Final = tuple(key for key in used_keys if pricing_entry.get(key) is None)
+    if not missing_keys and all(_is_explicit_zero(pricing_entry[key]) for key in used_keys):
+        return None
     if calculation_failed:
         return StandardLoggingZeroCostDiagnostic(
             reason="cost_calculation_error", pricing_model=pricing_model, missing_pricing_keys=()
         )
-    missing_keys: Final = tuple(key for key in used_keys if pricing_entry.get(key) is None)
     if missing_keys:
         if not _declares_a_rate(pricing_entry):
             return None
         return StandardLoggingZeroCostDiagnostic(
             reason="missing_pricing_key", pricing_model=pricing_model, missing_pricing_keys=missing_keys
         )
-    if all(_is_explicit_zero(pricing_entry[key]) for key in used_keys):
-        return None
     return StandardLoggingZeroCostDiagnostic(
         reason="pricing_not_applied", pricing_model=pricing_model, missing_pricing_keys=()
     )
@@ -126,7 +125,7 @@ def _cause(diagnostic: StandardLoggingZeroCostDiagnostic) -> str:
                 "see response_cost_failure_debug_information"
             )
         case _:
-            assert_never(reason)
+            return assert_never(reason)
 
 
 def zero_cost_warning(

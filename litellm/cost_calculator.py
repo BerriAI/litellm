@@ -2051,7 +2051,8 @@ def pricing_entry_for_cost_calc(
     deployment_entry: Final = _deployment_model_info(litellm_logging_obj, custom_pricing, router_model_id)
     deployment_key: Final = router_model_id or model
     if deployment_entry is not None and deployment_key is not None:
-        return deployment_key, _raw_cost_map_entry(deployment_key) or deployment_entry
+        registered_entry: Final = _raw_cost_map_entry(router_model_id) if router_model_id is not None else None
+        return deployment_key, registered_entry or deployment_entry
     selected_model: Final = _select_model_name_for_cost_calc(
         model=model,
         completion_response=completion_response,

@@ -324,7 +324,7 @@ class TestZeroCostDiagnostic:
         stream: bool = False,
         model: str = "openai/gpt-5.4-nano",
         call_type: str = "completion",
-        deployment_id: str = DEPLOYMENT_ID,
+        deployment_id: str | None = DEPLOYMENT_ID,
     ) -> LitellmLogging:
         logging_obj: Final = LitellmLogging(
             model=model,
@@ -339,13 +339,18 @@ class TestZeroCostDiagnostic:
         return logging_obj
 
     def _route_to_deployment(
-        self, logging_obj: LitellmLogging, pricing: dict, model: str = "openai/gpt-5.4-nano", deployment_id: str = DEPLOYMENT_ID
+        self,
+        logging_obj: LitellmLogging,
+        pricing: dict,
+        model: str = "openai/gpt-5.4-nano",
+        deployment_id: str | None = DEPLOYMENT_ID,
     ) -> None:
+        model_info: Final = pricing if deployment_id is None else {"id": deployment_id, **pricing}
         logging_obj.update_environment_variables(
             model=model,
             user="",
             optional_params={},
-            litellm_params={"metadata": {"model_group": self.MODEL_GROUP, "model_info": {"id": deployment_id, **pricing}}},
+            litellm_params={"metadata": {"model_group": self.MODEL_GROUP, "model_info": model_info}},
             custom_llm_provider="openai",
         )
 
@@ -531,6 +536,32 @@ class TestZeroCostDiagnostic:
         finally:
             litellm.model_cost.pop(dated_model, None)
             litellm.model_cost.pop(requested_model, None)
+
+    def test_free_deployment_without_a_router_id_is_judged_by_its_own_pricing(self, caplog):
+        global_model: Final = "lit7898-priced-global"
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        litellm.register_model(
+            model_cost={
+                global_model: {
+                    "litellm_provider": "openai",
+                    "mode": "chat",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                }
+            },
+            persist_across_reloads=False,
+        )
+        try:
+            logging_obj: Final = self._logging_obj(self.FREE_PRICING, model=global_model, deployment_id=None)
+            response: Final = self._response(usage, model=global_model, response_cost=0.0)
+            with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+                logging_obj._process_hidden_params_and_response_cost(
+                    response, start_time=datetime.datetime.now(), end_time=datetime.datetime.now()
+                )
+            assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+            assert self._zero_cost_warnings(caplog) == []
+        finally:
+            litellm.model_cost.pop(global_model, None)
 
 
 class TestGetRouterModelId:
