@@ -576,9 +576,12 @@ class TestCoralBricksPricing:
     EXPECTED = {
         "coralbricks/glm-5.3-fp4": (1.12e-06, 4.4e-06),
         "coralbricks/glm-5.3-flash-fp4": (1.5e-07, 5e-07),
-        "coralbricks/deepseek-v4.1-flash-fast-fp4": (2.2e-07, 6.6e-07),
+        "coralbricks/deepseek-v4.1-flash-fast-fp4": (3e-07, 1.2e-06),
         "coralbricks/gpt-oss-120b": (1.2e-07, 6e-07),
     }
+    # First-time prompt tokens come back as cache writes. DeepSeek V4.1 Flash
+    # prices them at its own write rate, 0.3x input; the other rows use input.
+    CACHE_WRITE = {"coralbricks/deepseek-v4.1-flash-fast-fp4": 9e-08}
 
     def test_pricing_records_present(self):
         """The shipped cost map carries all four models with free cache reads."""
@@ -593,9 +596,7 @@ class TestCoralBricksPricing:
             assert row["input_cost_per_token"] == inp
             assert row["output_cost_per_token"] == out
             assert row["cache_read_input_token_cost"] == 0.0
-            # The gateway reports first-time prompt tokens as cache writes and
-            # bills them at the regular input rate.
-            assert row["cache_creation_input_token_cost"] == inp
+            assert row["cache_creation_input_token_cost"] == self.CACHE_WRITE.get(model, inp)
             assert row["mode"] == "chat"
 
     def test_completion_cost_with_free_cached_reads(self):
@@ -666,6 +667,43 @@ class TestCoralBricksPricing:
         cost = completion_cost(completion_response=resp)
         expected = 1000 * inp + 100 * out
         assert abs(cost - expected) < 1e-12, (cost, expected)
+
+    def test_completion_cost_bills_deepseek_cache_writes_at_the_write_rate(self):
+        """DeepSeek V4.1 Flash prices first-time prompt tokens at its cache-write
+        rate instead of input: 1,691 fresh tokens and 2 output tokens cost
+        $0.00015459, the figure the endpoint reported for the same usage."""
+        from litellm import ModelResponse, Usage, completion_cost
+
+        model = "coralbricks/deepseek-v4.1-flash-fast-fp4"
+        inp, out = self.EXPECTED[model]
+        write = self.CACHE_WRITE[model]
+        litellm.register_model(
+            {
+                model: {
+                    "litellm_provider": "coralbricks",
+                    "mode": "chat",
+                    "input_cost_per_token": inp,
+                    "output_cost_per_token": out,
+                    "cache_read_input_token_cost": 0.0,
+                    "cache_creation_input_token_cost": write,
+                }
+            }
+        )
+        resp = ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=1691,
+                completion_tokens=2,
+                prompt_tokens_details={
+                    "cached_tokens": 0,
+                    "cache_write_tokens": 1691,
+                    "cache_creation_tokens": 1691,
+                },
+            ),
+        )
+        resp._hidden_params["custom_llm_provider"] = "coralbricks"
+        cost = completion_cost(completion_response=resp)
+        assert abs(cost - 0.00015459) < 1e-12, cost
 
     def test_add_known_models_registers_coralbricks(self):
         """Covers the coralbricks branch in add_known_models: cost-map rows
