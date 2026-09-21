@@ -4,8 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use litellm_cache::{
-    BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheEntry, CacheFuture, CacheKwargs,
-    Error,
+    BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheEntry, CacheKwargs, Error,
 };
 
 const DEFAULT_MAX_SIZE_IN_MEMORY: usize = 200;
@@ -214,8 +213,8 @@ impl InMemoryCache<CacheEntry> {
     }
 }
 
-impl BaseCache for InMemoryCache<CacheEntry> {
-    type Value = CacheEntry;
+impl<V: Clone + Send + Sync + 'static> BaseCache for InMemoryCache<V> {
+    type Value = V;
 
     fn default_ttl(&self) -> Duration {
         self.default_ttl
@@ -238,17 +237,15 @@ impl BaseCache for InMemoryCache<CacheEntry> {
         self.flush_cache()
     }
 
-    fn disconnect(&self) -> CacheFuture<'_, ()> {
-        Box::pin(async { Ok(()) })
+    async fn disconnect(&self) -> Result<(), Error> {
+        Ok(())
     }
 
-    fn test_connection(&self) -> CacheFuture<'_, CacheConnectionResult> {
-        Box::pin(async {
-            Ok(CacheConnectionResult {
-                status: CacheConnectionStatus::Success,
-                message: "In-memory cache connection test successful".into(),
-                error: None,
-            })
+    async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
+        Ok(CacheConnectionResult {
+            status: CacheConnectionStatus::Success,
+            message: "In-memory cache connection test successful".into(),
+            error: None,
         })
     }
 }
