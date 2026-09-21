@@ -1,7 +1,7 @@
 import asyncio
 import copy
 import functools
-from typing import cast
+from typing import Final, cast
 
 import pytest
 
@@ -20,6 +20,23 @@ from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_p
 
 MODEL_GROUP_ALIAS = "my-claude-group"
 OPUS_4_6_MIN_TOKENS = 4096
+CALLBACK_REGISTRIES: Final = (
+    "input_callback",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "callbacks",
+)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_callback_registries(monkeypatch):
+    """`litellm.logging_callback_manager` keeps one callback per class, so a
+    `PromptCachingDeploymentCheck` or `_SentMessagesCapture` left behind by an
+    earlier test would swallow the next test's success events."""
+    for registry in CALLBACK_REGISTRIES:
+        monkeypatch.setattr(litellm, registry, [])
 
 
 @pytest.fixture
