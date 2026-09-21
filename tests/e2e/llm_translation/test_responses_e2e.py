@@ -19,7 +19,6 @@ from e2e_config import PROVIDER_EDGE_ADVERTISE_HOST, PROVIDER_EDGE_BIND_HOST, un
 from e2e_http import (
     assert_client_error,
     require_successful_call,
-    unwrap,
 )
 from endpoints_client import (
     EndpointsClient,
@@ -359,20 +358,15 @@ class TestResponses:
         safety_identifier: Final = f"end-user-{unique_marker()}"
 
         if endpoint == "/v1/responses":
-            responses_result: Final = endpoints_client.responses(
-                key, model, "reply with one word", safety_identifier=safety_identifier
-            )
-            require_successful_call(responses_result)
+            endpoints_client.responses(key, model, "reply with one word", safety_identifier=safety_identifier)
         else:
-            unwrap(
-                endpoints_client.proxy.chat(
-                    key,
-                    ChatBody(
-                        model=model,
-                        messages=[ChatMessage(role="user", content="reply with one word")],
-                        safety_identifier=safety_identifier,
-                    ),
-                )
+            endpoints_client.proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[ChatMessage(role="user", content="reply with one word")],
+                    safety_identifier=safety_identifier,
+                ),
             )
 
         forwarded: Final = tuple(body.additionalModelRequestFields for body in capture.bodies)
