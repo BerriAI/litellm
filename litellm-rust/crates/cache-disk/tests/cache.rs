@@ -61,6 +61,25 @@ impl Sandbox {
     }
 }
 
+#[rstest]
+fn relative_store_directory_is_absolutized(sandbox: Sandbox) {
+    let relative = PathBuf::from(format!(
+        ".litellm-cache-disk-{}",
+        sandbox
+            .directory
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+    ));
+    let store = DiskcacheSqliteStore::open(&relative).unwrap();
+    assert!(store.directory().is_absolute());
+    assert!(store.directory().ends_with(&relative));
+    let directory = store.directory().to_path_buf();
+    drop(store);
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct TextAdapter;
 
