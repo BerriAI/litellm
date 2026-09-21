@@ -98,6 +98,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.html_forms.native_client_consent import (
+    render_mcp_connection_consent_page,
     render_native_client_consent_page,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -1668,8 +1669,6 @@ async def authorize_connection(
     resource: str | None,
     scope: str | None,
 ) -> Response:
-    from html import escape
-
     rejected: Final = _rejected_authorize_request(
         client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
     )
@@ -1700,23 +1699,23 @@ async def authorize_connection(
         exp=int(datetime.now(timezone.utc).timestamp()) + CONNECT_FLOW_TTL_SECONDS,
     )
     action: Final = f"{get_request_base_url(request)}/authorize/connection/complete"
+    style_nonce: Final = secrets.token_urlsafe(18)
     response: Final = HTMLResponse(
-        '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1"><title>Authorize MCP connection</title>'
-        "<h1>Authorize MCP connection</h1>"
-        f"<p><strong>{escape(client.client_name or 'MCP client')}</strong> wants access to "
-        f"<strong>{escape(server.name)}</strong>.</p><p>Return address: <code>{escape(redirect_uri)}</code></p>"
-        f"<p>Requested permissions: {escape(scopes or 'provider defaults')}</p>"
-        "<p>Only approve if you started this connection. You will continue to the provider to sign in.</p>"
-        f'<form method="post" action="{escape(action)}"><input type="hidden" name="flow" value="{escape(handle)}">'
-        '<button name="decision" value="deny">Deny</button> <button name="decision" value="approve">Continue</button>'
-        "</form></html>",
+        render_mcp_connection_consent_page(
+            client_name=client.client_name or "MCP client",
+            server_name=server.name,
+            scopes=tuple(scopes.split()),
+            redirect_uri=redirect_uri,
+            flow_handle=handle,
+            complete_url=action,
+            style_nonce=style_nonce,
+        ),
         headers=MappingProxyType(
             {
                 **TOKEN_NO_CACHE_HEADERS,
                 "Referrer-Policy": "no-referrer",
                 "X-Frame-Options": "DENY",
-                "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+                "Content-Security-Policy": f"default-src 'none'; style-src 'nonce-{style_nonce}'; frame-ancestors 'none'",
             }
         ),
     )

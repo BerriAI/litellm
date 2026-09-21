@@ -12422,6 +12422,7 @@ def keyed_oauth_client(monkeypatch):
 
 
 def _start_keyed_oauth(harness):
+    import re
     from urllib.parse import parse_qs, urlparse
 
     client = harness.client
@@ -12461,12 +12462,52 @@ def _start_keyed_oauth(harness):
     assert "http://localhost:33418/callback" in consent.text
     assert "read:user" in consent.text
     assert "/sso/" not in consent.text
+    style_nonce = re.search(r'<style nonce="([A-Za-z0-9_-]+)">', consent.text)
+    assert style_nonce is not None, "The consent page needs styling permitted by its CSP"
+    assert f"style-src 'nonce-{style_nonce.group(1)}'" in consent.headers["content-security-policy"]
+    assert "default-src 'none'" in consent.headers["content-security-policy"]
+    assert "frame-ancestors 'none'" in consent.headers["content-security-policy"]
+    assert "unsafe-inline" not in consent.headers["content-security-policy"]
+    assert "form-action" not in consent.headers["content-security-policy"]
     handle = next(
         cookie.name.removeprefix("mcp_connection_")
         for cookie in client.cookies.jar
         if cookie.name.startswith("mcp_connection_")
     )
     return client_id, verifier, handle
+
+
+@pytest.mark.parametrize("server_name", ["Calendar", "Documents <untrusted>"])
+def test_keyed_connection_consent_discloses_selected_server_without_provider_assumptions(
+    keyed_oauth_client, server_name
+):
+    from html import escape
+
+    harness = keyed_oauth_client
+    harness.validate.return_value = harness.server.model_copy(update={"name": server_name})
+    client_id, _, _ = _start_keyed_oauth(harness)
+    page = harness.client.get(
+        "/authorize",
+        params={
+            "client_id": client_id,
+            "redirect_uri": "http://localhost:33418/callback",
+            "response_type": "code",
+            "state": "client-state",
+            "code_challenge": "c" * 43,
+            "code_challenge_method": "S256",
+            "resource": harness.binding.resource,
+            "scope": "read:user",
+        },
+    )
+    assert page.status_code == 200
+    assert escape(server_name) in page.text
+    assert "GitHub" not in page.text
+    assert "<untrusted>" not in page.text
+    assert "Cancel</button>" in page.text
+    assert "Continue</button>" in page.text
+    assert 'type="password"' not in page.text
+    harness.upstream.post.assert_not_awaited()
+    harness.vault.assert_not_awaited()
 
 
 def _complete_keyed_oauth(harness):
