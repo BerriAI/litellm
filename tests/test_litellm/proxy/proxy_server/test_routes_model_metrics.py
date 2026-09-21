@@ -183,37 +183,39 @@ def test_model_settings_method_not_allowed(client, auth_as):
 # ---------------------------------------------------------------------------
 
 
-def test_alerting_settings_reports_sources(client, auth_as, monkeypatch):
+def _alerting_client(monkeypatch, *, yaml_values, db_row, live_args):
     from litellm.proxy.config_resolvers import SettingsStore
-
-    db_alerting_args = {
-        "daily_report_frequency": 7,
-        "outage_alert_ttl": 99,
-        "region_outage_alert_ttl": [],
-    }
 
     pc = MagicMock()
     row = MagicMock()
-    row.param_value = {"alerting_args": db_alerting_args}
+    row.param_value = db_row
     pc.db.litellm_config.find_first = AsyncMock(return_value=row)
     monkeypatch.setattr(proxy_server, "prisma_client", pc)
 
     logging_obj = MagicMock()
     args_model = MagicMock()
-    args_model.model_dump = MagicMock(return_value={"daily_report_frequency": 3})
+    args_model.model_dump = MagicMock(return_value=live_args)
     logging_obj.slack_alerting_instance.alerting_args = args_model
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging_obj)
 
     store = SettingsStore("general_settings")
-    store.load_yaml(
-        {
-            "alerting": ["slack"],
-            "alerting_args": {"daily_report_frequency": 3, "report_check_interval": 300},
-        }
-    )
-    store.apply_db_row("general_settings", {"alerting_args": db_alerting_args})
+    store.load_yaml(yaml_values)
+    store.apply_db_row("general_settings", db_row)
     monkeypatch.setattr(proxy_server.proxy_config, "settings", store)
     monkeypatch.setattr(proxy_server, "general_settings", store)
+    return store
+
+
+def test_alerting_settings_reports_sources(client, auth_as, monkeypatch):
+    _alerting_client(
+        monkeypatch,
+        yaml_values={
+            "alerting": ["slack"],
+            "alerting_args": {"daily_report_frequency": 3, "report_check_interval": 300},
+        },
+        db_row={"alerting_args": {"daily_report_frequency": 7, "outage_alert_ttl": 4242}},
+        live_args={"daily_report_frequency": 3},
+    )
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/alerting/settings")
@@ -224,6 +226,25 @@ def test_alerting_settings_reports_sources(client, auth_as, monkeypatch):
     assert by_name["slack_alerting"]["source"] == "config"
     assert by_name["daily_report_frequency"]["source"] == "config"
     assert by_name["report_check_interval"]["source"] == "config"
+    assert by_name["outage_alert_ttl"]["source"] == "default"
+    assert by_name["budget_alert_ttl"]["source"] == "default"
+
+
+def test_alerting_settings_reports_db_source_when_the_file_omits_alerting_args(client, auth_as, monkeypatch):
+    store = _alerting_client(
+        monkeypatch,
+        yaml_values={"alerting": ["slack"]},
+        db_row={"alerting_args": {"outage_alert_ttl": 4242, "region_outage_alert_ttl": []}},
+        live_args={"outage_alert_ttl": 4242},
+    )
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/alerting/settings")
+
+    assert response.status_code == 200
+    by_name = {entry["field_name"]: entry for entry in response.json()}
+
+    assert store.owned_by_config("alerting_args") is False
     assert by_name["outage_alert_ttl"]["source"] == "db"
     assert by_name["region_outage_alert_ttl"]["source"] == "default"
     assert by_name["budget_alert_ttl"]["source"] == "default"
