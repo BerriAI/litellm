@@ -48,6 +48,7 @@ from litellm.proxy.agent_endpoints.auth.agent_access_groups import (
     CeilingResolver,
     resolve_agent_access_group_ceiling,
 )
+from litellm.proxy.agent_endpoints.auth.agent_caller import agent_caller_auth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import (
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
@@ -1578,13 +1579,20 @@ class MCPRequestHandler:
                     )
 
             #########################################################
+            # Cap an agent key at what the user and team that invoked the agent may reach
+            #########################################################
+            caller_capped, caller_restricts = await MCPRequestHandler._apply_agent_caller_ceiling(
+                allowed_mcp_servers, user_api_key_auth
+            )
+
+            #########################################################
             # Apply the internal user's own ceiling (the entitlement attached to the human)
             #########################################################
             capped, user_restricts = await MCPRequestHandler._apply_user_server_ceiling(
-                allowed_mcp_servers, user_api_key_auth, keyless_source=keyless_source
+                caller_capped, user_api_key_auth, keyless_source=keyless_source
             )
             allowed_mcp_servers = list(capped)
-            has_lower_level_mcp_restrictions = has_lower_level_mcp_restrictions or user_restricts
+            has_lower_level_mcp_restrictions = has_lower_level_mcp_restrictions or caller_restricts or user_restricts
 
             #########################################################
             # Apply org-level ceiling if org_id is set
@@ -2926,6 +2934,28 @@ class MCPRequestHandler:
         capped: Final = tuple(server for server in allowed_mcp_servers if server in set(entitled))
         verbose_logger.debug("Applied user ceiling filter. Final allowed servers: %s", capped)
         return capped, True
+
+    @staticmethod
+    async def _apply_agent_caller_ceiling(
+        allowed_mcp_servers: Sequence[str],
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+    ) -> tuple[tuple[str, ...], bool]:
+        """Narrow an agent key's servers to those the invoking user and team (echoed back by the agent
+        as ``x-litellm-user-id`` / ``x-litellm-team-id``) may reach: the echoed team's grants when it
+        names any, then the echoed user's own entitlement. Raises like the user ceiling when that
+        entitlement is known but unreadable, so the resolver denies rather than widens."""
+        caller_auth: Final = agent_caller_auth(user_api_key_auth) if user_api_key_auth else None
+        if caller_auth is None:
+            return tuple(allowed_mcp_servers), False
+        team_servers: Final = frozenset(await MCPRequestHandler._get_allowed_mcp_servers_for_team(caller_auth))
+        team_capped: Final = (
+            tuple(server for server in allowed_mcp_servers if server in team_servers)
+            if team_servers
+            else tuple(allowed_mcp_servers)
+        )
+        user_capped, user_restricts = await MCPRequestHandler._apply_user_server_ceiling(team_capped, caller_auth)
+        verbose_logger.debug("Applied agent caller ceiling. Final allowed servers: %s", user_capped)
+        return user_capped, bool(team_servers) or user_restricts
 
     @staticmethod
     async def _user_places_mcp_ceiling(user_api_key_auth: UserAPIKeyAuth | None = None) -> bool:

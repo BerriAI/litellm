@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from pydantic import BaseModel, PrivateAttr, StrictInt
+from pydantic import BaseModel, ConfigDict, PrivateAttr, StrictInt
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -204,6 +204,20 @@ class PatchAgentRequest(TypedDict, total=False):
     static_headers: dict[str, str] | None
     extra_headers: list[str] | None
     access_group_ids: ReadOnly[Sequence[str] | None]
+
+
+AGENT_CALLER_USER_ID_HEADER: Final = "x-litellm-user-id"
+AGENT_CALLER_TEAM_ID_HEADER: Final = "x-litellm-team-id"
+
+
+class AgentCaller(BaseModel):
+    """The user and team that invoked an agent, echoed back by the agent on its own proxy calls.
+    Only ever narrows what the agent's key may do."""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str | None = None
+    team_id: str | None = None
 
 
 # Request/Response models for CRUD endpoints
