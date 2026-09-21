@@ -1,6 +1,11 @@
-use std::{num::NonZero, sync::Arc, thread::available_parallelism};
+use std::sync::Arc;
 
-use litellm_host_python::{release_gil, run_async};
+#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
+use std::{num::NonZero, thread::available_parallelism};
+
+#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
+use litellm_host_python::release_gil;
+use litellm_host_python::run_async;
 use litellm_token_counter::{
     CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
 };
@@ -28,17 +33,66 @@ pub(crate) struct TokenCounter {
 impl TokenCounter {
     #[new]
     fn new(py: Python<'_>, tokenizer_json: &str) -> PyResult<Self> {
-        Self::load(py, || CoreTokenCounter::from_json(tokenizer_json))
+        #[cfg(feature = "fast")]
+        {
+            Self::load(py, || CoreTokenCounter::from_json_fast(tokenizer_json))
+        }
+        #[cfg(all(not(feature = "fast"), feature = "huggingface"))]
+        {
+            Self::load(py, || CoreTokenCounter::from_json(tokenizer_json))
+        }
+        #[cfg(not(any(feature = "fast", feature = "huggingface")))]
+        {
+            let _ = (py, tokenizer_json);
+            Err(RustBridgeDeclined::new_err(
+                "tokenizer backend requires the fast or huggingface feature",
+            ))
+        }
     }
 
     #[staticmethod]
     fn from_cl100k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
-        Self::load(py, || CoreTokenCounter::from_cl100k_ranks(rank_file))
+        #[cfg(feature = "fast")]
+        {
+            Self::load(py, || CoreTokenCounter::from_cl100k_ranks(rank_file))
+        }
+        #[cfg(not(feature = "fast"))]
+        {
+            let _ = (py, rank_file);
+            Err(RustBridgeDeclined::new_err(
+                "tokenizer backend requires the fast feature",
+            ))
+        }
     }
 
     #[staticmethod]
     fn from_o200k_ranks(py: Python<'_>, rank_file: &str) -> PyResult<Self> {
-        Self::load(py, || CoreTokenCounter::from_o200k_ranks(rank_file))
+        #[cfg(feature = "fast")]
+        {
+            Self::load(py, || CoreTokenCounter::from_o200k_ranks(rank_file))
+        }
+        #[cfg(not(feature = "fast"))]
+        {
+            let _ = (py, rank_file);
+            Err(RustBridgeDeclined::new_err(
+                "tokenizer backend requires the fast feature",
+            ))
+        }
+    }
+
+    #[staticmethod]
+    fn from_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<Self> {
+        #[cfg(feature = "tiktoken")]
+        {
+            Self::load(py, || CoreTokenCounter::from_tiktoken(encoding))
+        }
+        #[cfg(not(feature = "tiktoken"))]
+        {
+            let _ = (py, encoding);
+            Err(RustBridgeDeclined::new_err(
+                "tokenizer backend requires the tiktoken feature",
+            ))
+        }
     }
 
     fn acount_request<'py>(&self, py: Python<'py>, body: &[u8]) -> PyResult<Bound<'py, PyAny>> {
@@ -62,6 +116,7 @@ impl TokenCounter {
 }
 
 impl TokenCounter {
+    #[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
     fn load(
         py: Python<'_>,
         load: impl FnOnce() -> Result<CoreTokenCounter, Error> + Send,
@@ -74,6 +129,7 @@ impl TokenCounter {
     }
 }
 
+#[cfg(any(feature = "fast", feature = "huggingface", feature = "tiktoken"))]
 fn encode_parallelism() -> usize {
     available_parallelism().map_or(1, NonZero::get)
 }
@@ -86,7 +142,10 @@ fn count_body(counter: &CoreTokenCounter, body: &[u8]) -> Result<InputTokenCount
 fn token_count_error_to_pyerr(error: Error) -> PyErr {
     let message = error.to_string();
     match error {
-        Error::Load(_) | Error::Ranks(_) | Error::UnicodeClasses => PyValueError::new_err(message),
+        Error::Load(_)
+        | Error::Ranks(_)
+        | Error::UnicodeClasses
+        | Error::UnsupportedTokenizer(_) => PyValueError::new_err(message),
         Error::RequestParse(_)
         | Error::MissingInput
         | Error::FloatText
