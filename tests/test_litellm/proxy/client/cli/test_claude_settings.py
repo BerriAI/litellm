@@ -5,14 +5,16 @@ import shlex
 import stat
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from pathlib import Path
+from threading import Event
 from typing import Final
 from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
-from litellm.litellm_core_utils.private_json import commit_staged_json
+from litellm.litellm_core_utils.private_json import commit_staged_json, write_private_bytes
 from litellm.proxy.client.cli.commands.claude_settings import (
     ANTHROPIC_DEFAULT_MODEL_ENV_KEYS,
     AUTOROUTE_BACKUP_PATH,
@@ -790,7 +792,7 @@ class TestStatusLine:
         with script.open("rb") as running:
             install_statusline_script(script)
             assert running.read() == bundled
-        assert [child.name for child in script.parent.iterdir()] == ["statusline.py"]
+        assert {child.name for child in script.parent.iterdir()} <= {"statusline.py", "statusline.py.lock"}
 
         if os.geteuid() != 0:
             script.parent.chmod(0o500)
@@ -861,6 +863,80 @@ class TestStatusLine:
         assert rig.read()["statusLine"]["command"] == statusline_command(script)
         assert rig.read()["env"]["ANTHROPIC_BASE_URL"] == PROXY
         assert "Keeping the status line" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("package_version", ("unknown", "", "invalid-version"))
+    @pytest.mark.parametrize("existing", (None, b"print('legacy footer')\n", b"# litellm-statusline-version: invalid\n"))
+    def test_an_unknown_cli_version_can_install_and_refresh_an_unversioned_footer(
+        self, tmp_path: Path, package_version: str, existing: bytes | None
+    ) -> None:
+        from litellm.proxy.client.cli.commands import statusline_script
+
+        script: Final = tmp_path / "statusline.py"
+        if existing is not None:
+            script.write_bytes(existing)
+
+        assert install_statusline_script(script, package_version=package_version) == statusline_command(script)
+        assert script.read_bytes() == Path(statusline_script.__file__).read_bytes()
+
+    def test_an_unknown_cli_version_preserves_a_versioned_footer(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        script: Final = tmp_path / "statusline.py"
+        command: Final = install_statusline_script(script, package_version="2.1.0")
+        installed: Final = script.read_bytes()
+
+        assert install_statusline_script(script, package_version="unknown") == command
+        assert script.read_bytes() == installed
+        assert "Keeping the status line from LiteLLM 2.1.0" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(("first_version", "second_version"), (("2.0", "3.0"), ("3.0", "2.0")))
+    def test_overlapping_installs_keep_the_newest_footer(
+        self, tmp_path: Path, first_version: str, second_version: str
+    ) -> None:
+        from litellm.proxy.client.cli.commands import statusline_script
+
+        script: Final = tmp_path / "statusline.py"
+        first_writing: Final = Event()
+        release_first: Final = Event()
+        second_started: Final = Event()
+
+        def paused_write(path: str, data: bytes) -> None:
+            first_writing.set()
+            assert release_first.wait(5), "First installer was never released"
+            write_private_bytes(path, data)
+
+        def second_install() -> str:
+            second_started.set()
+            return install_statusline_script(script, package_version=second_version)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first: Final = pool.submit(install_statusline_script, script, package_version=first_version, write=paused_write)
+            try:
+                assert first_writing.wait(5), "First installer did not reach the write"
+                second: Final = pool.submit(second_install)
+                assert second_started.wait(5), "Second installer did not start"
+                with pytest.raises(FutureTimeoutError):
+                    second.result(timeout=0.5)
+            finally:
+                release_first.set()
+            assert first.result(timeout=5) == statusline_command(script)
+            assert second.result(timeout=5) == statusline_command(script)
+
+        assert script.read_bytes() == b"# litellm-statusline-version: 3.0\n" + Path(statusline_script.__file__).read_bytes()
+
+    def test_a_failed_install_keeps_the_footer_and_releases_the_lock(self, tmp_path: Path) -> None:
+        script: Final = tmp_path / "statusline.py"
+        install_statusline_script(script, package_version="2.0")
+        installed: Final = script.read_bytes()
+
+        def failed_write(path: str, data: bytes) -> None:
+            raise OSError("disk full")
+
+        with pytest.raises(ClaudeSettingsError, match="disk full"):
+            install_statusline_script(script, package_version="3.0", write=failed_write)
+        assert script.read_bytes() == installed
+        assert install_statusline_script(script, package_version="3.0") == statusline_command(script)
+        assert script.read_bytes().startswith(b"# litellm-statusline-version: 3.0\n")
 
     def test_configure_installs_it_and_unconfigure_removes_only_ours(self, tmp_path):
         rig = _Rig(tmp_path, {"theme": "dark"})
