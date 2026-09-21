@@ -1666,8 +1666,9 @@ def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_ad
             58352,
         ),
         ({"output_tokens": 408}, 58352, 0),
+        ({"input_tokens": 2, "output_tokens": 408}, 58352, 0),
     ],
-    ids=["delta_restates_cache_counts", "delta_reports_output_only"],
+    ids=["delta_restates_cache_counts", "delta_reports_output_only", "delta_reports_input_and_output_only"],
 )
 def test_anthropic_stream_usage_takes_cache_counts_from_last_event_that_reports_them(
     message_delta_usage: Mapping[str, int], expected_cache_creation: int, expected_cache_read: int
@@ -1706,3 +1707,11 @@ def test_anthropic_stream_usage_takes_cache_counts_from_last_event_that_reports_
     assert response.usage.cache_creation_input_tokens == expected_cache_creation
     assert response.usage.cache_read_input_tokens == expected_cache_read
     assert response.usage.prompt_tokens == 58354
+    assert response.usage.prompt_tokens_details.cache_creation_tokens == expected_cache_creation
+    assert response.usage.prompt_tokens_details.cached_tokens == expected_cache_read
+    assert (
+        response.usage.prompt_tokens
+        - response.usage.cache_read_input_tokens
+        - response.usage.cache_creation_input_tokens
+        == 2
+    )
