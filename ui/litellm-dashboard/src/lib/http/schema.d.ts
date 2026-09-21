@@ -16316,6 +16316,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/{team_id}/member/{user_id}/reset_budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Team Member Budget Fn
+         * @description Put a team member back on the team's shared default member budget (`team_member_budget`).
+         *
+         *     Drops the member's own budget row link so team-wide changes made through /team/update
+         *     reach them again. Leaves the member with no budget when the team has no default. Spend is untouched.
+         */
+        post: operations["reset_team_member_budget_fn_team__team_id__member__user_id__reset_budget_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/{team_id}/member/{user_id}/reset_spend": {
         parameters: {
             query?: never;
@@ -17419,6 +17442,34 @@ export interface paths {
          *     Returns the JSON structure with 'content' and 'metadata' fields.
          */
         post: operations["convert_prompt_file_to_json_utils_dotprompt_json_converter_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/utils/model_info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Info Lookup
+         * @description Returns the model cost map entry (token limits, pricing, supports_* capabilities) for any model
+         *     in the cost map, whether or not it is registered on this proxy. `model_info` carries every
+         *     field of the raw cost map entry plus the typed fields `litellm.get_model_info` derives from it
+         *     (`key`, `supported_openai_params`).
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_info_lookup_utils_model_info_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -26830,6 +26881,11 @@ export interface components {
              * @description override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth
              */
             custom_auth?: string | null;
+            /**
+             * Dangerously Permit Weak Or Unset Master Key
+             * @description local development only: start even when master_key is unset, empty, or a publicly known default
+             */
+            dangerously_permit_weak_or_unset_master_key?: boolean | null;
             /** @description custom args for instantiating dynamodb client - e.g. billing provision */
             database_args?: components["schemas"]["DynamoDBArgs"] | null;
             /**
@@ -30898,6 +30954,8 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost */
+            cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
@@ -36678,6 +36736,11 @@ export interface components {
              */
             heuristic_v2_artifact: components["schemas"]["TrainedTierArtifact"] | "ultrafeedback";
             /**
+             * Heuristic V2 Success Threshold
+             * @description Minimum predicted success probability for classifier_type 'heuristic_v2' to select a tier. The first tier meeting this threshold is selected, or REASONING if none meets it. When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). Other classifier types ignore this setting
+             */
+            heuristic_v2_success_threshold?: number | null;
+            /**
              * Housekeeping Patterns
              * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
              */
@@ -36909,6 +36972,8 @@ export interface components {
             DefaultRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
+            /** Notfounderrorretries */
+            NotFoundErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
             /** Serviceunavailableerrorretries */
@@ -38762,6 +38827,22 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id?: string | null;
+        };
+        /** TeamMemberResetBudgetResponse */
+        TeamMemberResetBudgetResponse: {
+            /** Budget Id */
+            budget_id: string | null;
+            /**
+             * Budget Source
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "none";
+            /** Previous Budget Id */
+            previous_budget_id: string | null;
+            /** Team Id */
+            team_id: string;
+            /** User Id */
+            user_id: string;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -41613,6 +41694,8 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost */
+            cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
@@ -62037,6 +62120,38 @@ export interface operations {
             };
         };
     };
+    reset_team_member_budget_fn_team__team_id__member__user_id__reset_budget_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamMemberResetBudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post: {
         parameters: {
             query?: never;
@@ -63547,6 +63662,38 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_info_lookup_utils_model_info_get: {
+        parameters: {
+            query: {
+                model: string;
+                custom_llm_provider?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
