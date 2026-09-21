@@ -294,14 +294,16 @@ def _models_this_test_can_call(config: RequestComplexityRouterConfig) -> tuple[s
     Excludes every tier's models: the prompt is never sent to the model it routed to.
     """
     return tuple(
-        model
-        for model in (
-            config.classifier_llm_config.model
-            if config.uses_llm_classifier and config.classifier_llm_config is not None
-            else None,
-            config.embedding_model if config.semantic_keyword_matching else None,
+        dependency.model_name
+        for dependency in strategy_router_dependencies(
+            MappingProxyType(
+                {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": config.model_dump(exclude_none=True),
+                }
+            )
         )
-        if model is not None
+        if dependency.role in ("classifier", "embedding", "evaluation")
     )
 
 
@@ -390,6 +392,40 @@ async def validate_complexity_router_config(
     return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
 
 
+async def _resolve_saved_routing_test(
+    data: AutoRouterRoutingTestRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router",
+) -> AutoRouterRoutingTestRequest:
+    if data.saved_model_id is None:
+        return data
+    deployment: Final = llm_router.get_deployment(data.saved_model_id)
+    if deployment is None or deployment.model_info.blocked:
+        raise HTTPException(status_code=404, detail="Saved auto router is unavailable")
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and deployment.model_info.team_id != data.team_id:
+        raise HTTPException(status_code=403, detail="Saved auto router belongs to a different team")
+    await can_key_call_resolved_model(
+        model=deployment.model_info.team_public_model_name or deployment.model_name,
+        llm_model_list=llm_router.model_list,
+        valid_token=user_api_key_dict,
+        llm_router=llm_router,
+    )
+    params: Final = deployment.litellm_params
+    if classify_strategy_router_model(params.model or "") != "complexity" or params.complexity_router_config is None:
+        raise HTTPException(status_code=400, detail="Saved deployment is not a complexity auto router")
+    return data.model_copy(
+        update=MappingProxyType(
+            {
+                "complexity_router_config": RequestComplexityRouterConfig.model_validate(
+                    params.complexity_router_config
+                ),
+                "default_model": params.complexity_router_default_model,
+                "router_name": deployment.model_name,
+            }
+        )
+    )
+
+
 @router.post(
     "/auto_router/test_routing",
     tags=["model management"],  # mutable-ok: fastapi's decorator signature types tags as a list
@@ -445,10 +481,18 @@ async def preview_auto_router_routing(
     from litellm.proxy.utils import get_available_models_for_user
 
     member_team: Final = await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
+    if llm_router is None:
+        raise HTTPException(
+            status_code=500,
+            detail={  # mutable-ok: HTTPException detail must be a plain mapping
+                "error": CommonProxyErrors.no_llm_router.value
+            },
+        )
+    resolved: Final = await _resolve_saved_routing_test(data, user_api_key_dict, llm_router)
     actor: Final = (
         await _authorize_member_dry_run_config(
-            config=data.complexity_router_config.model_dump(exclude_none=True),
-            default_model=data.default_model,
+            config=resolved.complexity_router_config.model_dump(exclude_none=True),
+            default_model=resolved.default_model,
             user_api_key_dict=user_api_key_dict,
             team=member_team,
         )
@@ -456,12 +500,12 @@ async def preview_auto_router_routing(
         else user_api_key_dict
     )
     request_data: Final[dict[str, object]] = {  # mutable-ok: auth and routing enrich this request in place
-        **data.wire_body(),
+        **resolved.wire_body(),
         "metadata": {},  # mutable-ok: centralized auth and identity stamping share this metadata bucket
         "proxy_server_request": {"body": None},  # mutable-ok: the snapshot owner fills this body in place
     }
 
-    if member_team is not None and _models_this_test_can_call(data.complexity_router_config):
+    if member_team is not None and _models_this_test_can_call(resolved.complexity_router_config):
         from litellm.proxy.auth.user_api_key_auth import (
             _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
         )
@@ -473,25 +517,17 @@ async def preview_auto_router_routing(
             route="/auto_router/test_routing",
         )
 
-    if llm_router is None:
-        raise HTTPException(
-            status_code=500,
-            detail={  # mutable-ok: HTTPException detail must be a plain mapping
-                "error": CommonProxyErrors.no_llm_router.value
-            },
-        )
-
     await _authorize_models_this_test_can_call(
-        config=data.complexity_router_config,
+        config=resolved.complexity_router_config,
         user_api_key_dict=actor,
         llm_router=llm_router,
     )
 
     complexity_router: Final = ComplexityRouter(
-        model_name=data.router_name,
+        model_name=resolved.router_name,
         litellm_router_instance=llm_router,
-        complexity_router_config=data.complexity_router_config.model_dump(exclude_none=True),
-        default_model=data.default_model,
+        complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
+        default_model=resolved.default_model,
         derive_savings_baseline=False,
     )
 
@@ -504,7 +540,7 @@ async def preview_auto_router_routing(
 
     try:
         hook_response: Final = await complexity_router.async_pre_routing_hook(
-            model=data.router_name,
+            model=resolved.router_name,
             request_kwargs=request_kwargs,
             messages=request_kwargs["messages"],
         )

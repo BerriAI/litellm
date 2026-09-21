@@ -400,6 +400,7 @@ default_redis_batch_cache_expiry: Optional[float] = None
 model_alias_map: Dict[str, str] = {}
 model_group_settings: Optional["ModelGroupSettings"] = None
 max_budget: float = 0.0  # set the max budget across all providers
+budget_exceeded_status_code: int = 422  # set to 429 to restore the pre-422 budget_exceeded response code
 budget_duration: Optional[str] = (
     None  # proxy only - resets budget after fixed duration. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
 )
@@ -1682,6 +1683,9 @@ if TYPE_CHECKING:
     )
     from .llms.bedrock.messages.mantle_transformation import (
         AmazonMantleMessagesConfig as AmazonMantleMessagesConfig,
+    )
+    from .llms.bedrock_mantle.messages.transformation import (
+        BedrockMantleAnthropicMessagesConfig as BedrockMantleAnthropicMessagesConfig,
     )
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
     from .llms.together_ai.chat.transformation import (

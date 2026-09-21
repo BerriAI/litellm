@@ -58,7 +58,7 @@ class GenericPromptManager(CustomPromptManagement):
         api_key: str | None = None,
         timeout: int = 30,
         prompt_id: str | None = None,
-        additional_provider_specific_query_params: dict[str, Any] | None = None,
+        additional_provider_specific_query_params: Mapping[str, object] | None = None,
         **kwargs,
     ):
         """
