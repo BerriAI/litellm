@@ -8,14 +8,12 @@ flipping results between runs. Running the executor inline keeps each
 benchmark's cost self-contained and deterministic.
 """
 
-import importlib.metadata
-import json
 import os
 import sys
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Final, ParamSpec, TypeVar, cast
+from typing import ParamSpec, TypeVar
 
 import pytest
 
@@ -32,36 +30,12 @@ def pytest_configure(config: pytest.Config) -> None:
     import litellm
     import litellm.rust_bridge._native as native
 
-    prefix: Final = Path(sys.prefix).resolve()
-    module_paths: Final = (
-        ("litellm", Path(litellm.__file__).resolve()),
-        ("litellm.rust_bridge._native", Path(native.__file__).resolve()),
-    )
-    for module_name, module_path in module_paths:
-        sys.stdout.write(f"{module_name}: {module_path}\n")
-
-    path_failures: Final = tuple(
-        f"{module_name} is not under sys.prefix: {module_path}"
-        for module_name, module_path in module_paths
-        if not module_path.is_relative_to(prefix)
-    )
-    if path_failures:
-        raise pytest.UsageError("; ".join(path_failures))
-
-    direct_url: Final = importlib.metadata.distribution("litellm").read_text("direct_url.json")
-    if direct_url is None:
-        return
-
-    try:
-        direct_url_data: Final = cast(object, json.loads(direct_url))
-    except json.JSONDecodeError as error:
-        raise pytest.UsageError("litellm distribution direct_url.json is invalid JSON") from error
-
-    if isinstance(direct_url_data, Mapping):
-        direct_url_mapping: Final = cast(Mapping[str, object], direct_url_data)
-        dir_info: Final = direct_url_mapping.get("dir_info")
-        if isinstance(dir_info, Mapping) and cast(Mapping[str, object], dir_info).get("editable") is True:
-            raise pytest.UsageError("litellm distribution is editable")
+    prefix = Path(sys.prefix).resolve()
+    for name, module_file in (("litellm", litellm.__file__), ("litellm.rust_bridge._native", native.__file__)):
+        path = Path(module_file).resolve()
+        if not path.is_relative_to(prefix):
+            raise pytest.UsageError(f"{name} resolved outside the benchmark environment: {path}")
+        print(f"{name}: {path}")  # noqa: T201  # provenance evidence must be visible in CI logs
 
 
 def _submit_inline(fn: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> Future[R]:

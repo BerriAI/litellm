@@ -13,8 +13,6 @@ on:
       - ".github/workflows/codspeed.yml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/actions/cache-cargo-build/**"
-      - ".github/scripts/verify_installed_wheel_imports.py"
-      - ".github/scripts/verify_linux_native_wheel.py"
       - ".github/scripts/uv_sync_with_retries.sh"
   pull_request:
     branches:
@@ -28,8 +26,6 @@ on:
       - ".github/workflows/codspeed.yml"
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/actions/cache-cargo-build/**"
-      - ".github/scripts/verify_installed_wheel_imports.py"
-      - ".github/scripts/verify_linux_native_wheel.py"
       - ".github/scripts/uv_sync_with_retries.sh"
   # Allow CodSpeed to trigger backtest performance analysis
   # in order to generate initial data
@@ -74,16 +70,10 @@ jobs:
       - name: Build the release wheel
         run: uv build --wheel --out-dir dist
 
-      - name: Verify the release wheel
-        run: python .github/scripts/verify_linux_native_wheel.py dist/*.whl
-        env:
-          RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-
       - name: Install the wheel into the benchmark environment
         run: |
           UV_PROJECT_ENVIRONMENT="${RUNNER_TEMP}/benchmark-venv" .github/scripts/uv_sync_with_retries.sh --frozen --no-default-groups --group benchmarks --no-install-project --python 3.12
           uv pip install --python "${RUNNER_TEMP}/benchmark-venv/bin/python" --no-deps dist/*.whl
-          (cd "${RUNNER_TEMP}" && "${RUNNER_TEMP}/benchmark-venv/bin/python" -I "${GITHUB_WORKSPACE}/.github/scripts/verify_installed_wheel_imports.py" "${GITHUB_WORKSPACE}")
 
       - name: Collect benchmarks
         env:

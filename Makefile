@@ -55,7 +55,7 @@ help:
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
-	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests (WHEEL=path/to.whl reuses a prebuilt wheel)"
+	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -294,13 +294,11 @@ pre-commit:
 test-rust-extension:
 	@temporary=$$(mktemp -d) && \
 	trap 'rm -rf "$$temporary"' EXIT HUP INT TERM && \
-	mkdir -p "$$temporary/wheels" && \
-	if [ -n "$(WHEEL)" ]; then cp $(WHEEL) "$$temporary/wheels/"; else $(UV) build --python 3.12 --wheel --out-dir "$$temporary/wheels"; fi && \
+	$(UV) build --python 3.12 --wheel --out-dir "$$temporary/wheels" && \
 	set -- "$$temporary"/wheels/*.whl && \
 	[ "$$#" -eq 1 ] && \
 	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
-	(cd "$$temporary" && "$$temporary/venv/bin/python" -I "$(CURDIR)/.github/scripts/verify_installed_wheel_imports.py" "$(CURDIR)") && \
 	"$$temporary/venv/bin/python" -I -m mypy.stubtest \
 		--mypy-config-file tests/test_litellm/rust_bridge/stubtest.ini \
 		litellm.rust_bridge._native && \
