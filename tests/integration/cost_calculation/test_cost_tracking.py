@@ -147,14 +147,15 @@ def _assert_breakdown(
     ):
         if expected_component is None:
             continue
-        assert actual_component is not None and approx_equal(actual_component, expected_component), (
-            f"{case.name}: {field} {actual_component} != expected {expected_component}"
-        )
+        omitted_component_allowed: Final = expected_component == 0.0
+        assert (actual_component is None and omitted_component_allowed) or (
+            actual_component is not None and approx_equal(actual_component, expected_component)
+        ), f"{case.name}: {field} {actual_component} != expected {expected_component}"
         if expected.cost_header and case.response.content_type == "application/json":
             header: Final = response.headers.get(header_name)
-            assert header is not None and approx_equal(float(header), expected_component), (
-                f"{case.name}: {header_name} {header} != expected {expected_component}"
-            )
+            assert (header is None and omitted_component_allowed) or (
+                header is not None and approx_equal(float(header), expected_component)
+            ), f"{case.name}: {header_name} {header} != expected {expected_component}"
     if expected.cost_header and case.response.content_type == "application/json" and any(
         component is not None
         for component in (

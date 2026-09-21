@@ -25,6 +25,14 @@ class ProviderSpecificEntry(BaseModel):
     us: float | None = None
 
 
+class TieredPrice(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    range: tuple[float, float]
+    input_cost_per_token: float
+    output_cost_per_token: float
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -37,13 +45,19 @@ class CostMapEntry(BaseModel):
     input_cost_per_token: float | None = None
     input_cost_per_query: float | None = None
     output_cost_per_token: float | None = None
+    input_cost_per_token_above_128k_tokens: float | None = None
+    output_cost_per_token_above_128k_tokens: float | None = None
     output_vector_size: int | None = None
     input_cost_per_token_batches: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_1hr_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
+    input_cost_per_token_above_200k_tokens: float | None = None
+    output_cost_per_token_above_200k_tokens: float | None = None
+    tiered_pricing: tuple[TieredPrice, ...] | None = None
     output_cost_per_reasoning_token: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_second: float | None = None
@@ -56,8 +70,6 @@ class CostMapEntry(BaseModel):
     input_cost_per_image_token: float | None = None
     output_cost_per_image_token: float | None = None
     input_cost_per_video_token: float | None = None
-    input_cost_per_token_above_200k_tokens: float | None = None
-    output_cost_per_token_above_200k_tokens: float | None = None
     input_cost_per_token_flex: float | None = None
     output_cost_per_token_flex: float | None = None
     input_cost_per_token_priority: float | None = None
@@ -254,6 +266,13 @@ class CostTrackingTestCase(BaseModel):
             return "bedrock"
         return None
 
+    @property
+    def reports_provider_cost(self) -> bool:
+        if not isinstance(self.response, JsonResponse):
+            return False
+        usage: Final = self.response.body.get("usage")
+        return isinstance(usage, dict) and isinstance(usage.get("cost"), (int, float))
+
 
 class _CasesFile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -277,6 +296,11 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
         "together_ai": "",
         "fireworks_ai": "",
         "azure": "",
+        "dashscope": "",
+        "openrouter": "",
+        "perplexity": "",
+        "deepseek": "",
+        "xai": "",
     }
 )
 _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
@@ -313,6 +337,11 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "fireworks_ai": MappingProxyType({}),
         "azure": MappingProxyType({"api_version": "2025-04-01-preview"}),
         "openai": MappingProxyType({}),
+        "dashscope": MappingProxyType({}),
+        "openrouter": MappingProxyType({}),
+        "perplexity": MappingProxyType({}),
+        "deepseek": MappingProxyType({}),
+        "xai": MappingProxyType({}),
     }
 )
 
@@ -398,6 +427,7 @@ def data_errors() -> tuple[str, ...]:
                 not case.expected.breakdown_persisted
                 and case.passthrough_provider is None
                 and case.rates.mode != "image_generation"
+                and not case.reports_provider_cost
             )
             or (not case.expected.cost_header and case.passthrough_provider is None)
         )
