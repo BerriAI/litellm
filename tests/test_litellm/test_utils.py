@@ -61,6 +61,7 @@ from litellm.utils import (
     _snapshot_exception_for_hook,
     async_post_call_failure_deployment_hook,
     async_post_call_success_deployment_hook,
+    calculate_max_parallel_requests,
     client,
     get_non_default_completion_params,
     get_optional_params_image_gen,
@@ -180,6 +181,42 @@ def test_potential_model_names_keeps_provider_prefixed_candidate():
 def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local_model_cost_map):
     info = litellm.get_model_info(model="ft:gpt-4o-2024-08-06:my-org::abc123", custom_llm_provider="openai")
     assert info["key"] == "ft:gpt-4o-2024-08-06"
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_key"),
+    [
+        ("gpt-5.6-luna-2099-01-01", "openai", "gpt-5.6-luna"),
+        ("gpt-5.6-luna-2099-01-01", "azure", "azure/gpt-5.6-luna"),
+    ],
+)
+def test_get_model_info_falls_back_from_dated_snapshot_to_undated_entry(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    custom_llm_provider: str,
+    expected_key: str,
+) -> None:
+    monkeypatch.delitem(litellm.model_cost, model, raising=False)
+    monkeypatch.delitem(litellm.model_cost, f"{custom_llm_provider}/{model}", raising=False)
+    assert expected_key in litellm.model_cost
+    info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    assert info["key"] == expected_key
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_key"),
+    [
+        ("gpt-4o-2024-08-06", "openai", "gpt-4o-2024-08-06"),
+        ("gpt-5.6-luna-2026-07-09", "azure", "azure/gpt-5.6-luna-2026-07-09"),
+    ],
+)
+def test_get_model_info_prefers_exact_dated_key_over_stripped(
+    local_model_cost_map: None, model: str, custom_llm_provider: str, expected_key: str
+) -> None:
+    assert expected_key in litellm.model_cost
+    info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    assert info["key"] == expected_key
 
 
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
@@ -615,6 +652,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
+        "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
         "output_db_cost_per_token",
         "output_dbu_cost_per_token",
@@ -703,6 +741,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -754,7 +793,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_video_per_second_above_128k_tokens": {"type": "number"},
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
+                "annotation_cost_per_page_batches": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
+                "ocr_cost_per_page_batches": {"type": "number"},
                 "ocr_cost_per_credit": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
                 "inference_geo": {"type": "string"},
@@ -830,6 +871,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
+                "supports_thinking_cache_preservation": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
@@ -901,7 +943,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/v1/videos",
                             "/vertex_ai/live",
+                            "/v1/listen",
                             "/v1beta/interactions",
                         ],
                     },
@@ -948,6 +992,38 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
+                "off_peak_pricing": {
+                    "type": "object",
+                    "properties": {
+                        "hours_utc": {
+                            "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        },
+                        "windows": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "hours_utc": {
+                                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                                    },
+                                    "weekdays": {
+                                        "type": "array",
+                                        "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                                    },
+                                },
+                                "required": ["hours_utc"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "weekday_timezone": {"type": "string"},
+                        "input_cost_per_token": {"type": "number"},
+                        "output_cost_per_token": {"type": "number"},
+                        "output_cost_per_reasoning_token": {"type": "number"},
+                        "cache_read_input_token_cost": {"type": "number"},
+                        "cache_creation_input_token_cost": {"type": "number"},
+                    },
+                    "additionalProperties": False,
+                },
                 "tiered_pricing": {
                     "type": "array",
                     "items": {
@@ -997,6 +1073,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -1058,7 +1137,7 @@ def test_max_tokens_consistency():
         if len(inconsistencies) > 10:
             error_msg += f"\n  ... and {len(inconsistencies) - 10} more\n"
 
-        error_msg += "\nTo fix these inconsistencies, run: poetry run python fix_max_tokens_inconsistencies.py"
+        error_msg += "\nTo fix these inconsistencies, run: uv run python fix_max_tokens_inconsistencies.py"
         raise AssertionError(error_msg)
 
 
@@ -5692,3 +5771,30 @@ def test_get_model_info_gemini(monkeypatch):
             assert info.get("rpm") is not None, f"{model} does not have rpm"
 
 
+@pytest.mark.parametrize(
+    ("max_parallel_requests", "rpm", "tpm", "default_max_parallel_requests", "expected"),
+    [
+        (3, 100, 100_000, 7, 3),
+        (None, 100, 100_000, 7, 100),
+        (None, None, 100_000, 7, 600),
+        (None, None, 50, 7, 1),
+        (None, None, None, 7, 7),
+        (None, None, None, None, None),
+    ],
+)
+def test_calculate_max_parallel_requests_precedence(
+    max_parallel_requests: int | None,
+    rpm: int | None,
+    tpm: int | None,
+    default_max_parallel_requests: int | None,
+    expected: int | None,
+) -> None:
+    assert (
+        calculate_max_parallel_requests(
+            max_parallel_requests=max_parallel_requests,
+            rpm=rpm,
+            tpm=tpm,
+            default_max_parallel_requests=default_max_parallel_requests,
+        )
+        == expected
+    )
