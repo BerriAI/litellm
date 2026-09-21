@@ -126,6 +126,12 @@ class CacheBinding:
         *,
         callback_kwargs: dict[str, object] | None = None,
     ) -> None: ...
+    def lookup_batch(
+        self,
+        requests: Sequence[Mapping[str, object]],
+        *,
+        callback_kwargs: dict[str, object] | None = None,
+    ) -> object: ...
     def async_lookup(
         self, request: Mapping[str, object] | None, *, callback_kwargs: dict[str, object] | None = None
     ) -> Awaitable[object]: ...
@@ -136,6 +142,21 @@ class CacheBinding:
         *,
         callback_kwargs: dict[str, object] | None = None,
     ) -> Awaitable[object]: ...
+    def async_lookup_batch(
+        self,
+        requests: Sequence[Mapping[str, object]],
+        *,
+        callback_kwargs: dict[str, object] | None = None,
+    ) -> Awaitable[object]: ...
+    def async_store_batch(
+        self,
+        requests: Sequence[Mapping[str, object]],
+        responses: Sequence[object],
+        *,
+        callback_kwargs: dict[str, object] | None = None,
+    ) -> Awaitable[object]: ...
+    def async_flush(self) -> Awaitable[None]: ...
+    def ping(self) -> Awaitable[dict[str, object] | None]: ...
 
 @final
 class TokenCounter:

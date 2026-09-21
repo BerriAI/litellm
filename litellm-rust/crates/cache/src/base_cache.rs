@@ -6,6 +6,13 @@ use serde_json::{Map, Value};
 
 use crate::Error;
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum BatchEntry<V> {
+    Hit(V),
+    Miss,
+    Invalid,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CacheKwargs {
     pub ttl: Option<Duration>,
@@ -42,6 +49,21 @@ pub trait BaseCache: Send + Sync {
 
     fn get_cache(&self, key: &str, kwargs: &CacheKwargs) -> Result<Option<Self::Value>, Error>;
 
+    fn get_cache_batch(
+        &self,
+        keys: &[String],
+        kwargs: &CacheKwargs,
+    ) -> Result<Vec<BatchEntry<Self::Value>>, Error> {
+        keys.iter()
+            .map(|key| match self.get_cache(key, kwargs) {
+                Ok(Some(value)) => Ok(BatchEntry::Hit(value)),
+                Ok(None) => Ok(BatchEntry::Miss),
+                Err(Error::InvalidEntry) => Ok(BatchEntry::Invalid),
+                Err(error) => Err(error),
+            })
+            .collect()
+    }
+
     fn async_set_cache(
         &self,
         key: &str,
@@ -57,6 +79,25 @@ pub trait BaseCache: Send + Sync {
         kwargs: &CacheKwargs,
     ) -> impl Future<Output = Result<Option<Self::Value>, Error>> + Send {
         async move { self.get_cache(key, kwargs) }
+    }
+
+    fn async_get_cache_batch(
+        &self,
+        keys: Vec<String>,
+        kwargs: CacheKwargs,
+    ) -> impl Future<Output = Result<Vec<BatchEntry<Self::Value>>, Error>> + Send {
+        async move {
+            let mut entries = Vec::with_capacity(keys.len());
+            for key in keys {
+                entries.push(match self.async_get_cache(&key, &kwargs).await {
+                    Ok(Some(value)) => BatchEntry::Hit(value),
+                    Ok(None) => BatchEntry::Miss,
+                    Err(Error::InvalidEntry) => BatchEntry::Invalid,
+                    Err(error) => return Err(error),
+                });
+            }
+            Ok(entries)
+        }
     }
 
     fn async_set_cache_pipeline(
@@ -88,6 +129,10 @@ pub trait BaseCache: Send + Sync {
     }
 
     fn flush_cache(&self) -> Result<(), Error>;
+
+    fn async_flush_cache(&self) -> impl Future<Output = Result<(), Error>> + Send {
+        async move { self.flush_cache() }
+    }
 
     fn disconnect(&self) -> impl Future<Output = Result<(), Error>> + Send;
 

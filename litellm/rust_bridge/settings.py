@@ -36,6 +36,11 @@ class SecretManager:
     readable: bool
 
 
+@dataclass(frozen=True, slots=True)
+class CacheSettings:
+    default_redis_ttl: float | None
+
+
 def warn(message: str) -> None:
     from litellm._logging import verbose_logger
 
@@ -48,6 +53,12 @@ def secret_manager() -> SecretManager:
     )
 
     return SecretManager(readable=_should_read_secret_from_secret_manager())
+
+
+def cache_settings() -> CacheSettings:
+    import litellm
+
+    return CacheSettings(default_redis_ttl=litellm.default_redis_ttl)
 
 
 def provider_defaults() -> ProviderDefaults:

@@ -9,7 +9,10 @@ impl CacheCodec for ResponseCacheCodec {
     type Value = CacheEntry;
 
     fn encode(&self, value: &CacheEntry) -> Result<Vec<u8>, Error> {
-        if !value.timestamp.is_finite() {
+        if value
+            .timestamp
+            .is_some_and(|timestamp| !timestamp.is_finite())
+        {
             return Err(Error::InvalidEntry);
         }
         serde_json::to_vec(value).map_err(|_| Error::InvalidEntry)
@@ -17,12 +20,21 @@ impl CacheCodec for ResponseCacheCodec {
 
     fn decode(&self, bytes: &[u8]) -> Result<CacheEntry, Error> {
         let text = std::str::from_utf8(bytes).map_err(|_| Error::InvalidEntry)?;
-        let entry: CacheEntry =
-            serde_json::from_value(decode_value(text)?).map_err(|_| Error::InvalidEntry)?;
-        if !entry.timestamp.is_finite() {
+        let value = decode_value(text)?;
+        let Some(timestamp) = value.get("timestamp") else {
+            return Ok(CacheEntry {
+                timestamp: None,
+                response: value,
+            });
+        };
+        let Some(timestamp) = timestamp.as_f64().filter(|timestamp| timestamp.is_finite()) else {
             return Err(Error::InvalidEntry);
-        }
-        Ok(entry)
+        };
+        let response = value.get("response").cloned().ok_or(Error::InvalidEntry)?;
+        Ok(CacheEntry {
+            timestamp: Some(timestamp),
+            response,
+        })
     }
 }
 
