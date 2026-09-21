@@ -41,15 +41,6 @@ pub struct RedisSemanticConfig {
     pub similarity_threshold: f32,
 }
 
-impl Default for RedisSemanticConfig {
-    fn default() -> Self {
-        Self {
-            index_name: DEFAULT_INDEX_NAME.into(),
-            similarity_threshold: 0.9,
-        }
-    }
-}
-
 struct Inner {
     index_name: String,
     distance_threshold: f64,
@@ -245,6 +236,18 @@ impl<E: Embedder, C: redis::ConnectionLike + Send + 'static> RedisSemanticCache<
             }),
             ..self
         }
+    }
+
+    pub fn embedder(&self) -> &E {
+        &self.embedder
+    }
+
+    pub fn index_name(&self) -> &str {
+        &self.inner.index_name
+    }
+
+    pub fn similarity_threshold(&self) -> f32 {
+        (1.0 - self.inner.distance_threshold) as f32
     }
 
     fn tag<'a>(key: &'a str, context: &'a SemanticCacheContext) -> &'a str {
