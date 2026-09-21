@@ -116,6 +116,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.91"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -597,6 +619,37 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "azure_storage_blob"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17b10207ecf7d666df6940b50051f433b3cd5d2b9b1dd190613208d7a84e7eed"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "azure_core",
+ "azure_storage_common",
+ "bytes",
+ "futures",
+ "percent-encoding",
+ "pin-project",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+]
+
+[[package]]
+name = "azure_storage_common"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0af2e6aeb8d76b17fc998f453c320913f73787b944e3cc29509d19411fa0321d"
+dependencies = [
+ "azure_core",
+ "serde",
+ "time",
 ]
 
 [[package]]
@@ -2471,6 +2524,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cache-azure-blob"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "azure_storage_blob",
+ "futures-util",
+ "litellm-auth-azure",
+ "litellm-auth-types",
+ "litellm-cache",
+ "litellm-cache-response",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "litellm-cache-gcs"
 version = "0.1.0"
 dependencies = [
@@ -2687,6 +2757,7 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-gcp",
  "litellm-cache",
+ "litellm-cache-azure-blob",
  "litellm-cache-gcs",
  "litellm-cache-memory",
  "litellm-cache-redis",
@@ -2720,6 +2791,7 @@ dependencies = [
  "jsonwebtoken",
  "litellm-core-utils",
  "litellm-secrets-aws",
+ "litellm-secrets-azure",
  "litellm-secrets-cyberark",
  "litellm-secrets-google",
  "litellm-secrets-types",
@@ -2751,6 +2823,26 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tracing",
+ "veil",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-secrets-azure"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth-azure",
+ "litellm-auth-types",
+ "litellm-core-utils",
+ "litellm-secrets-types",
+ "percent-encoding",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tokio",
  "veil",
  "wiremock",
 ]
@@ -3530,6 +3622,16 @@ name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
+
+[[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+dependencies = [
+ "memchr",
+ "serde",
+]
 
 [[package]]
 name = "quinn"
@@ -5076,6 +5178,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures",
+ "quick-xml",
  "serde",
  "serde_json",
  "url",
