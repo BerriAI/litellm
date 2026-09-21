@@ -940,12 +940,13 @@ class ResponsesAPIRequestUtils:
                 remove. A bare ValueError would surface through exception_type() as
                 APIConnectionError, reporting malformed input as a network fault.
         """
+        from types import MappingProxyType
+
         from litellm.llms.base_llm.base_utils import type_to_response_format_param
 
         # Normalizes a Pydantic model into a response_format dict; passes a dict through.
-        converted: Final = type_to_response_format_param(response_format) or {}
-        format_type: Final = converted.get("type")
-        if format_type is None:
+        converted: Final = type_to_response_format_param(response_format)
+        if converted is None or converted.get("type") is None:
             raise litellm.BadRequestError(
                 message=(
                     f"Could not read a `type` from the supplied response format: {response_format!r}. "
@@ -955,18 +956,23 @@ class ResponsesAPIRequestUtils:
                 model=None,
                 llm_provider=None,
             )
+        format_type: Final = converted["type"]
         if format_type != "json_schema":
-            return {"format": {"type": format_type}}
+            schema_less: Final[ResponseText] = {"format": {"type": format_type}}
+            return schema_less
 
-        json_schema: Final = converted.get("json_schema") or {}
+        json_schema: Final = converted.get("json_schema") or MappingProxyType({})
         # Only `strict`/`description` are optional; a missing `name`/`schema` is the
         # provider's error to report, not ours to guess at.
-        schema_fields: Final = {
-            key: json_schema[key]
-            for key in ("name", "schema", "strict", "description")
-            if json_schema.get(key) is not None
-        }
-        return {"format": {"type": format_type, **schema_fields}}
+        schema_fields: Final = MappingProxyType(
+            {
+                key: json_schema[key]
+                for key in ("name", "schema", "strict", "description")
+                if json_schema.get(key) is not None
+            }
+        )
+        text_param: Final[ResponseText] = {"format": {"type": format_type, **schema_fields}}
+        return text_param
 
     @staticmethod
     def convert_text_format_to_text_param(
