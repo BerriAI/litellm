@@ -7,7 +7,7 @@ with guardrail transformations, including tool calls.
 
 import json
 from collections.abc import Mapping
-from typing import Any, Literal, Optional
+from typing import Any, Final, Literal, Optional
 
 import pytest
 
@@ -1400,24 +1400,21 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         ] == [("call_1", '{"fruit": "persimmon"}'), ("call_2", '{"fruit": "durian"}')]
 
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_tool_call_rewrite_on_multi_choice_stream_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
-        handler = OpenAIChatCompletionsHandler()
-        chunks = self._two_choice_tool_call_stream_chunks()
-
-        with pytest.raises(UndeliverableStreamRewrite, match="the stream carries 2 choices") as raised:
-            await handler.process_output_streaming_response(
-                responses_so_far=chunks,
-                guardrail_to_apply=MockGuardrail(guardrail_name="test"),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
-            )
-
-        assert raised.value.guardrail_name == "test"
-        assert raised.value.reason == (
-            "the stream carries 2 choices and tool-call rewrites are only written back on single-choice streams"
+    async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:
+        handler: Final = OpenAIChatCompletionsHandler()
+        chunks: Final = self._two_choice_tool_call_stream_chunks()
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
         )
+        arguments: Final = tuple(
+            "".join(call.function.arguments for chunk in chunks for choice in chunk.choices
+                    if choice.index == index for call in choice.delta.tool_calls or ())
+            for index in range(2)
+        )
+        assert arguments == ('{"fruit": "PERSIMMON"}', '{"fruit": "DURIAN"}')
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_clean_multi_choice_stream_released_untouched(self):

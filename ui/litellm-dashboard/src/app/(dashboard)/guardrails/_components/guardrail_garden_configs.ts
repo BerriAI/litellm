@@ -216,6 +216,12 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  neuraltrust: {
+    provider: "Neuraltrust",
+    guardrailNameSuggestion: "NeuralTrust TrustGuard",
+    mode: "pre_call",
+    defaultOn: false,
+  },
   noma: {
     provider: "Noma",
     guardrailNameSuggestion: "Noma Security",

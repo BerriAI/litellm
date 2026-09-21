@@ -2,7 +2,10 @@
 
 import logging
 from types import SimpleNamespace
-from typing import Final
+from typing import Final, Literal
+from collections.abc import AsyncIterator
+
+from pydantic import TypeAdapter
 
 import pytest
 
@@ -41,7 +44,10 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CallTypes, Delta, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    CallTypes, ChatCompletionMessageToolCall, Delta, GenericGuardrailAPIInputs,
+    ModelResponseStream, StreamingChoices,
+)
 
 
 class RecordingGuardrail(CustomGuardrail):
@@ -947,6 +953,36 @@ def _delta_text(item):
     return item.choices[0].delta.content or ""
 
 
+class _ToolRedactingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="tool-redactor", event_hook=GuardrailEventHooks.post_call, default_on=True)
+        self.streaming_transform_mode = "incremental_diff"
+        self.streaming_sampling_rate = 1
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        calls: Final = TypeAdapter(tuple[ChatCompletionMessageToolCall, ...]).validate_python(
+            inputs.get("tool_calls", ())
+        )
+        texts: Final = tuple("checked:" + text.replace("SECRET", "MASKED") for text in inputs.get("texts", ()))
+        return {
+            **inputs,
+            "texts": list(texts),
+            "stream_holdback_chars": [len(text) for text in texts],
+            "tool_calls": [
+                call.model_copy(update={"function": call.function.model_copy(update={
+                    "arguments": call.function.arguments.replace("SECRET", "MASKED"),
+                })})
+                for call in calls
+            ],
+        }
+
+
 class TestStreamingTransform:
     """Streaming text-transformation (incremental_diff) path on the OpenAI chat
     completions streaming surface."""
@@ -954,6 +990,77 @@ class TestStreamingTransform:
     @pytest.fixture(autouse=True)
     def _use_openai_handler_mapping(self, monkeypatch):
         _patch_translation_mappings(monkeypatch, {CallTypes.acompletion: OpenAIChatCompletionsHandler})
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("include_text", [False, True])
+    @pytest.mark.parametrize("tool_count", [1, 2])
+    async def test_buffered_tool_arguments_are_rewritten_before_delivery(
+        self, include_text: bool, tool_count: int
+    ) -> None:
+        chunks: Final = (
+            *([_stream_chunk("hello SECRET")] if include_text else []),
+            ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                {"index": index, "id": f"call_{index}", "type": "function",
+                 "function": {"name": "contact", "arguments": '{"contact":"SEC'}}
+                for index in range(tool_count)
+            ]))]),
+            ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[
+                {"index": index, "function": {"arguments": 'RET"}'}} for index in range(tool_count)
+            ]), finish_reason="tool_calls")]),
+            ModelResponseStream(choices=[], usage={"prompt_tokens": 7, "completion_tokens": 11, "total_tokens": 18}),
+        )
+        out: Final = await _drive_stream(UnifiedLLMGuardrails(), _ToolRedactingGuardrail(), chunks)
+        calls: Final = tuple(
+            call for chunk in out for choice in chunk.choices for call in choice.delta.tool_calls or ()
+        )
+        for index in range(tool_count):
+            arguments: Final = "".join(call.function.arguments or "" for call in calls if call.index == index)
+            assert arguments == '{"contact":"MASKED"}'
+            assert next(call.id for call in calls if call.index == index and call.id) == f"call_{index}"
+        assert "".join(_delta_text(chunk) for chunk in out) == ("checked:hello MASKED" if include_text else "")
+        assert any(choice.finish_reason == "tool_calls" for chunk in out for choice in chunk.choices)
+        assert out[-1].usage.total_tokens == 18
+        assert all("SECRET" not in chunk.model_dump_json() for chunk in out)
+
+    @pytest.mark.asyncio
+    async def test_tool_rewrites_keep_completion_choices_separate(self) -> None:
+        async def response() -> AsyncIterator[ModelResponseStream]:
+            yield ModelResponseStream(choices=[StreamingChoices(
+                index=index,
+                delta=Delta(tool_calls=[{"index": 0, "id": f"call_{index}", "type": "function",
+                                        "function": {"name": "contact", "arguments": '{"contact":"SECRET"}'}}]),
+                finish_reason="tool_calls",
+            ) for index in range(2)])
+
+        iterator: Final = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            response=response(), request_data={"guardrail_to_apply": _ToolRedactingGuardrail()},
+        )
+        chunks: Final = tuple([chunk async for chunk in iterator])
+        calls: Final = tuple(
+            (choice.index, call.id, call.function.arguments)
+            for chunk in chunks for choice in chunk.choices for call in choice.delta.tool_calls or ()
+        )
+        assert calls == ((0, "call_0", '{"contact":"MASKED"}'), (1, "call_1", '{"contact":"MASKED"}'))
+
+    @pytest.mark.asyncio
+    async def test_undeliverable_rewrite_is_a_closed_failure(self) -> None:
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        class UndeliverableTranslation(OpenAIChatCompletionsHandler):
+            async def process_output_streaming_response(
+                self, *args: object, **kwargs: object
+            ) -> list[ModelResponseStream]:
+                raise UndeliverableStreamRewrite("tool-redactor", "unmappable tool fragments")
+
+        iterator: Final = UnifiedLLMGuardrails()._inspect_full_response(
+            endpoint_translation=UndeliverableTranslation(), guardrail_to_apply=_ToolRedactingGuardrail(),
+            request_data={}, user_api_key_dict=UserAPIKeyAuth(), responses_so_far=(), responses_yielded=(),
+        )
+        with pytest.raises(unified_module.HTTPException) as error:
+            await anext(iterator)
+        assert error.value.status_code == 400
+        assert error.value.detail == "Guardrail stream rewrite could not be applied"
 
     @pytest.mark.asyncio
     async def test_block_only_drops_text_rewrites(self):
@@ -1375,14 +1482,15 @@ class TestStreamingTransform:
         assert out[-2].choices[0].finish_reason == "stop"
 
     @pytest.mark.asyncio
-    async def test_tool_call_blocking_guardrail_is_enforced(self):
+    @pytest.mark.parametrize(("content", "allowed_scans"), [(None, 0), ("proposal", 0), ("proposal", 1)])
+    async def test_tool_call_blocking_guardrail_is_enforced(self, content: str | None, allowed_scans: int):
         """A guardrail that blocks on tool calls must terminate the incremental_diff
         stream: tool calls go through the block decision, not bypass it."""
         from litellm.exceptions import GuardrailRaisedException
 
         class _ToolCallBlocker(_StreamingTextGuardrail):
             async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
-                if input_type == "response" and inputs.get("tool_calls"):
+                if input_type == "response" and self.response_calls >= allowed_scans:
                     raise GuardrailRaisedException(
                         guardrail_name="tc-block",
                         message="blocked tool call",
@@ -1395,7 +1503,7 @@ class TestStreamingTransform:
                 StreamingChoices(
                     index=0,
                     delta=Delta(
-                        content=None,
+                        content=content,
                         tool_calls=[
                             {
                                 "index": 0,
@@ -1410,8 +1518,21 @@ class TestStreamingTransform:
             ],
         )
 
+        async def upstream():
+            yield tool_chunk
+
+        stream: Final = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+            response=upstream(),
+            request_data={"guardrail_to_apply": _ToolCallBlocker(), "model": "gpt-4"},
+        )
+        async def consume_checked_stream() -> None:
+            async for chunk in stream:
+                assert isinstance(chunk, ModelResponseStream)
+                assert all(not choice.delta.tool_calls and choice.finish_reason is None for choice in chunk.choices)
+
         with pytest.raises(GuardrailRaisedException):
-            await _drive_stream(UnifiedLLMGuardrails(), _ToolCallBlocker(), [tool_chunk])
+            await consume_checked_stream()
 
     @pytest.mark.asyncio
     async def test_mixed_content_and_tool_call_chunk_does_not_leak_text(self):

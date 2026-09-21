@@ -708,40 +708,10 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         try:
             async for item in response:
-                # v1 transforms only text. A chunk carrying tool_calls is passed
-                # through raw so function-calling turns are not dropped, but ONLY
-                # its tool-call fields are forwarded: content is stripped so any
-                # response text (in the same delta, or in another choice of an n>1
-                # chunk) can never bypass the transform. The original chunk is kept
-                # in responses_so_far so its text is still accumulated + redacted +
-                # emitted as synthetic deltas, and so the guardrail inspects the
-                # assembled tool calls at end of stream (see the block inspection
-                # below), matching block_only. finish_reason rides on the raw
-                # tool-only chunk, so it is not recorded for the text flush.
                 if self._chunk_has_tool_calls(item):
                     saw_tool_calls = True
                     responses_so_far.append(item)
                     last_chunk = item
-                    # Fix #3 — flush accumulated text BEFORE the tool-call
-                    # passthrough. Without this, a stream of text chunks that
-                    # hasn't yet hit a sampled round can be trailed by a
-                    # tool-call chunk carrying finish_reason="tool_calls"; an
-                    # SSE-compliant client stops reading at that finish_reason
-                    # and drops the end-of-stream text flush that would follow.
-                    if saw_text_content:
-                        async for out in _round(item, is_final=False):
-                            yield out
-                    # Fix #1 — pass finish_reason_per_choice into the
-                    # passthrough so a mixed content+tool_call chunk defers its
-                    # finish_reason to the final text terminator (see the
-                    # _tool_call_passthrough_chunk docstring).
-                    tool_only = self._tool_call_passthrough_chunk(
-                        item,
-                        finish_reason_per_choice=finish_reason_per_choice,
-                        held_choices=_held_choices(held_chars_per_choice),
-                    )
-                    responses_yielded.append(tool_only)
-                    yield tool_only
                     continue
 
                 if self._is_trailing_metadata_chunk(item):
@@ -759,37 +729,61 @@ class UnifiedLLMGuardrails(CustomLogger):
                 # sampled round here would guardrail the same content twice.
                 if (
                     not end_of_stream_only
+                    and not saw_tool_calls
                     and not self._chunk_has_finish_reason(item)
                     and chunk_counter % sampling_rate == 0
                 ):
                     async for out in _round(item, is_final=False):
                         yield out
 
-            # v1 does not transform streamed tool calls, but they must still go
-            # through the guardrail's block decision. Run the block_only inspection
-            # over the full assembled response so tool calls cannot bypass it.
-            #
-            # Pass a deep copy of responses_so_far — the block path routes through
-            # ``_process_streaming_block_only`` which mutates ``delta.content``
-            # in-place on the chunk objects it receives. For an n>1 chunk carrying
-            # text on one choice and tool_calls (with finish_reason) on another,
-            # ``has_stream_ended`` reads ``choices[0]`` alone and can miss the
-            # terminal signal, letting the block path rewrite the raw accumulator.
-            # The subsequent final ``_round`` would then re-read the already-mutated
-            # text, producing double-application for a non-idempotent guardrail or a
-            # ``stream_transform_underflow`` 400 from mismatched prefixes. A shallow
-            # list copy wouldn't help — the mutation is on the chunk objects
-            # themselves — so we deepcopy.
             if saw_tool_calls:
-                async for out in self._inspect_full_response_for_block(
+                inspected_responses: Final = copy.deepcopy(responses_so_far)
+                async for out in self._inspect_full_response(
                     endpoint_translation=endpoint_translation,
                     guardrail_to_apply=guardrail_to_apply,
                     request_data=request_data,
                     user_api_key_dict=user_api_key_dict,
-                    responses_so_far=copy.deepcopy(responses_so_far),
+                    responses_so_far=inspected_responses,
                     responses_yielded=responses_yielded,
                 ):
                     yield out
+
+                if saw_text_content:
+                    async for out in _round(last_chunk, is_final=False):
+                        yield out
+                tool_chunks: Final = tuple(
+                    self._tool_call_passthrough_chunk(
+                        buffered_item,
+                        finish_reason_per_choice=finish_reason_per_choice,
+                        held_choices=_held_choices(held_chars_per_choice),
+                    )
+                    for buffered_item in inspected_responses
+                    if self._chunk_has_tool_calls(buffered_item)
+                )
+
+                async def checked_tail() -> AsyncGenerator[object, None]:
+                    try:
+                        async for tail_chunk in self._emit_stream_tail(
+                            last_chunk=last_chunk,
+                            final_round=_round,
+                            responses_so_far=responses_so_far,
+                            responses_yielded=responses_yielded,
+                        ):
+                            yield tail_chunk
+                    except _StreamTerminated as exc:
+                        yield exc
+
+                tail_chunks: Final = tuple([chunk async for chunk in checked_tail()])
+                if tail_chunks and isinstance(tail_chunks[-1], _StreamTerminated):
+                    for error_chunk in tail_chunks[:-1]:
+                        yield error_chunk
+                    return
+                for tool_only in tool_chunks:
+                    responses_yielded.append(tool_only)
+                    yield tool_only
+                for tail_chunk in tail_chunks:
+                    yield tail_chunk
+                return
 
             async for out in self._emit_stream_tail(
                 last_chunk=last_chunk,
@@ -818,7 +812,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             responses_yielded.append(trailing)
             yield trailing
 
-    async def _inspect_full_response_for_block(
+    async def _inspect_full_response(
         self,
         *,
         endpoint_translation: _EndpointTranslation,
@@ -828,16 +822,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_so_far: Sequence[object],
         responses_yielded: Sequence[object],
     ) -> AsyncGenerator[object, None]:
-        """Run the block-only guardrail inspection over the full assembled
-        response (text + tool calls) so nothing bypasses the block decision.
-
-        The guardrail's returned transforms are discarded here (v1 does not
-        transform tool calls); only its block decision matters. A block is
-        surfaced the same way as elsewhere: ModifyResponseException terminates the
-        stream via the shared block handler; a GenericGuardrailAPI block raises and
-        propagates, matching block_only.
-        """
         from litellm.integrations.custom_guardrail import ModifyResponseException
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
         try:
             await endpoint_translation.process_output_streaming_response(
@@ -847,7 +833,10 @@ class UnifiedLLMGuardrails(CustomLogger):
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
                 stream_transform_sink=None,
+                deliver_ended_stream_rewrites=True,
             )
+        except UndeliverableStreamRewrite as exc:
+            raise HTTPException(status_code=400, detail="Guardrail stream rewrite could not be applied") from exc
         except ModifyResponseException as e:
             if e.original_response is None:
                 e.original_response = responses_so_far

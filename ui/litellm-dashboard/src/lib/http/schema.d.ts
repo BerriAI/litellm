@@ -24548,6 +24548,11 @@ export interface components {
              */
             sticky_session_routing: boolean | null;
             /**
+             * Streaming Transform Mode
+             * @description Whether a guardrail's text rewrite reaches a streaming client. Implemented by guardrail='prompt_security' and 'neuraltrust'; generic_guardrail_api takes the same setting under optional_params. 'block_only' (default) streams the raw model chunks, so a block still ends the stream but rewrites are dropped. 'incremental_diff' withholds those chunks and streams the guardrail's rewritten text instead. OpenAI chat completions streaming only.
+             */
+            streaming_transform_mode?: ("block_only" | "incremental_diff") | null;
+            /**
              * Template Id
              * @description The ID of your Model Armor template
              */
@@ -24559,7 +24564,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', 'typesafe', and 'neuraltrust'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
              * @default fail_closed
              * @enum {string}
              */
@@ -32116,6 +32121,11 @@ export interface components {
              */
             client_secret?: string | null;
             /**
+             * Collector Key
+             * @description TrustGuard collector key (tgcol_...). Optional when the API key is bound to a collector. Env: TRUSTGUARD_COLLECTOR_KEY.
+             */
+            collector_key?: string | null;
+            /**
              * Confidence Threshold
              * @description Only block or mask when detection confidence >= this value; below threshold, allow or log_only.
              * @default 0.5
@@ -32655,6 +32665,11 @@ export interface components {
              * @default true
              */
             sticky_session_routing: boolean | null;
+            /**
+             * Streaming Transform Mode
+             * @description Whether a guardrail's text rewrite reaches a streaming client. Implemented by guardrail='prompt_security' and 'neuraltrust'; generic_guardrail_api takes the same setting under optional_params. 'block_only' (default) streams the raw model chunks, so a block still ends the stream but rewrites are dropped. 'incremental_diff' withholds those chunks and streams the guardrail's rewritten text instead. OpenAI chat completions streaming only.
+             */
+            streaming_transform_mode?: ("block_only" | "incremental_diff") | null;
             /**
              * Template Id
              * @description The ID of your Model Armor template

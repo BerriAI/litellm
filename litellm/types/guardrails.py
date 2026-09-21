@@ -41,6 +41,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.neuraltrust import (
+    NeuralTrustGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
     OvalixGuardrailConfigModel,
 )
@@ -78,7 +81,7 @@ Pydantic object defining how to set guardrails on litellm proxy
 guardrails:
   - guardrail_name: "bedrock-pre-guard"
     litellm_params:
-      guardrail: bedrock  # supported values: "akto", "aporia", "bedrock", "lakera", "zscaler_ai_guard"
+      guardrail: bedrock  # supported values: "akto", "aporia", "bedrock", "lakera", "neuraltrust", "zscaler_ai_guard"
       mode: "during_call"
       guardrailIdentifier: ff6ujrregl1q
       guardrailVersion: "DRAFT"
@@ -96,6 +99,7 @@ class SupportedGuardrailIntegrations(Enum):
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
     HIDDENLAYER = "hiddenlayer"
+    NEURALTRUST = "neuraltrust"
     AIM = "aim"
     CATO_NETWORKS = "cato_networks"
     PANGEA = "pangea"
@@ -1059,8 +1063,19 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         default="fail_closed",
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
-            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
+            "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', 'typesafe', and 'neuraltrust'. "
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+        ),
+    )
+
+    streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = Field(
+        default=None,
+        description=(
+            "Whether a guardrail's text rewrite reaches a streaming client. "
+            "Implemented by guardrail='prompt_security' and 'neuraltrust'; generic_guardrail_api takes the "
+            "same setting under optional_params. 'block_only' (default) streams the raw model chunks, so a "
+            "block still ends the stream but rewrites are dropped. 'incremental_diff' withholds those chunks "
+            "and streams the guardrail's rewritten text instead. OpenAI chat completions streaming only."
         ),
     )
 
@@ -1195,6 +1210,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
+    NeuralTrustGuardrailConfigModel,
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
     SingulrGuardrailConfigModel,
