@@ -40,7 +40,7 @@
     "perplexity/sonar-next": {
       "litellm_provider": "perplexity",
       "mode": "chat",
-      "input_cost_per_token": 1.05e-06,
+      "input_cost_per_token": 1.13e-06,
       "output_cost_per_token": 1.05e-06,
       "search_context_cost_per_query": {
         "search_context_size_low": 0.005,
@@ -29077,7 +29077,7 @@
           "usage": {"prompt_tokens": 1840, "completion_tokens": 412, "total_tokens": 2252}
         }
       },
-      "expected": {"spend": 0.0023646, "input_cost": 0.001932, "output_cost": 0.0004326, "prompt_tokens": 1840, "completion_tokens": 412}
+      "expected": {"spend": 0.0025118, "input_cost": 0.0020792, "output_cost": 0.0004326, "prompt_tokens": 1840, "completion_tokens": 412}
     },
     {
       "name": "deepseek-deepseek-v4-chat-prompt_cache_hit",
