@@ -2103,44 +2103,48 @@ class TestStoreBackgroundResponseInManagedObjects:
         managed_files_obj.store_unified_object_id.assert_not_awaited()
 
     @pytest.mark.asyncio
-    @patch("litellm.proxy.proxy_server.llm_router")
-    @patch("litellm.proxy.proxy_server.user_api_key_auth")
-    @patch(
-        "litellm.proxy.response_api_endpoints.endpoints._store_background_response_in_managed_objects",
-        new_callable=AsyncMock,
-    )
-    async def test_responses_endpoint_wires_store_for_queued_background(
-        self,
-        mock_store: AsyncMock,
-        mock_auth: MagicMock,
-        mock_router: MagicMock,
-    ) -> None:
-        mock_auth.return_value = MagicMock(
-            token="test_token",
-            user_id="test_user",
-            team_id=None,
-            spend=0.0,
-            tpm_limit=None,
-            rpm_limit=None,
-            max_budget=None,
-            allowed_model_region=None,
-            api_key="sk-test-key",
-            metadata={},
-        )
+    async def test_responses_endpoint_wires_store_for_queued_background(self) -> None:
+        """Behavioral regression: queued background POST must await managed-object store.
+
+        Auth must be bound via FastAPI dependency_overrides — patching
+        proxy_server.user_api_key_auth does not replace the Depends() object
+        captured when the route was registered.
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        import litellm.proxy.proxy_server as ps
 
         mock_response = self._response()
+        mock_router = MagicMock()
         mock_router.aresponses = AsyncMock(return_value=mock_response)
+        mock_store = AsyncMock()
 
-        client = TestClient(app)
-        response = client.post(
-            "/v1/responses",
-            json={
-                "model": "gpt-4o",
-                "input": "Tell me about AI",
-                "background": True,
-            },
-            headers={"Authorization": "Bearer sk-test-key"},
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            api_key="sk-test-key",
+            user_id="test_user",
+            token="test_token",
         )
+        try:
+            with (
+                patch.object(ps, "llm_router", mock_router),
+                patch(
+                    "litellm.proxy.response_api_endpoints.endpoints._store_background_response_in_managed_objects",
+                    new=mock_store,
+                ),
+            ):
+                client = TestClient(app)
+                response = client.post(
+                    "/v1/responses",
+                    json={
+                        "model": "gpt-4o",
+                        "input": "Tell me about AI",
+                        "background": True,
+                    },
+                    headers={"Authorization": "Bearer sk-test-key"},
+                )
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
 
         assert response.status_code == 200, response.text
         mock_store.assert_awaited_once()
