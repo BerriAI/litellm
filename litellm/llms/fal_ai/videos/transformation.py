@@ -1,6 +1,8 @@
 import math
+import sys
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -36,11 +38,33 @@ class FalAIVideoError(BaseLLMException):
 
 
 _ALLOWED_ASPECT_RATIOS: Final[frozenset[str]] = frozenset({"auto", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"})
-_ALLOWED_RESOLUTIONS: Final[frozenset[str]] = frozenset({"480p", "720p", "1080p", "4k"})
-_RESOLUTION_TIERS: Final[tuple[tuple[int, str], ...]] = (
-    (480, "480p"),
-    (720, "720p"),
-    (1080, "1080p"),
+
+
+@dataclass(frozen=True, slots=True)
+class _ModelProfile:
+    resolutions: frozenset[str]
+    resolution_tiers: tuple[tuple[int, str], ...]
+    default_resolution: str
+    integer_duration: bool
+    reference_key: str
+    reference_as_list: bool
+
+
+_SEEDANCE_PROFILE: Final[_ModelProfile] = _ModelProfile(
+    resolutions=frozenset({"480p", "720p", "1080p", "4k"}),
+    resolution_tiers=((480, "480p"), (720, "720p"), (1080, "1080p"), (sys.maxsize, "4k")),
+    default_resolution="720p",
+    integer_duration=False,
+    reference_key="image_url",
+    reference_as_list=False,
+)
+_H3_PROFILE: Final[_ModelProfile] = _ModelProfile(
+    resolutions=frozenset({"480P", "768P", "2K", "4K"}),
+    resolution_tiers=((480, "480P"), (768, "768P"), (1440, "2K"), (sys.maxsize, "4K")),
+    default_resolution="2K",
+    integer_duration=True,
+    reference_key="reference_image_urls",
+    reference_as_list=True,
 )
 _QUEUE_NAMESPACES: Final[frozenset[str]] = frozenset(("workflows", "comfy"))
 _STATUS_MAP: Final[Mapping[str, str]] = MappingProxyType(
@@ -75,8 +99,12 @@ def _duration_value(value: object) -> str | None:
         return None
 
 
-def _resolution_for_short_side(short_side: int) -> str:
-    return next((resolution for threshold, resolution in _RESOLUTION_TIERS if short_side <= threshold), "4k")
+def _profile_for_model(model: str) -> _ModelProfile:
+    return _H3_PROFILE if model.startswith("minimax/h3/") else _SEEDANCE_PROFILE
+
+
+def _resolution_for_short_side(short_side: int, profile: _ModelProfile) -> str:
+    return next(resolution for threshold, resolution in profile.resolution_tiers if short_side <= threshold)
 
 
 def _model_path_from_request_url(raw_response: httpx.Response) -> str | None:
@@ -97,14 +125,19 @@ def _request_id_from_request_url(raw_response: httpx.Response) -> str | None:
     return segments[request_id_index] if len(segments) > request_id_index else None
 
 
-def _size_params(size: object) -> Mapping[str, str]:
+def _size_params(size: object, profile: _ModelProfile) -> Mapping[str, str]:
     if not isinstance(size, str):
         return MappingProxyType({})
-    if size in _ALLOWED_RESOLUTIONS:
-        return MappingProxyType({"resolution": size})
-    if size.count("x") != 1:
+    normalized_size: Final[str] = size.lower()
+    canonical_resolution: Final[str | None] = next(
+        (resolution for resolution in profile.resolutions if resolution.lower() == normalized_size),
+        None,
+    )
+    if canonical_resolution is not None:
+        return MappingProxyType({"resolution": canonical_resolution})
+    if normalized_size.count("x") != 1:
         return MappingProxyType({})
-    width_text, height_text = size.split("x")
+    width_text, height_text = normalized_size.split("x")
     if not (width_text.isdigit() and height_text.isdigit()):
         return MappingProxyType({})
     width: Final[int] = int(width_text)
@@ -113,7 +146,7 @@ def _size_params(size: object) -> Mapping[str, str]:
         return MappingProxyType({})
     reduced_gcd: Final[int] = math.gcd(width, height)
     aspect_ratio: Final[str] = f"{width // reduced_gcd}:{height // reduced_gcd}"
-    resolution: Final[str] = _resolution_for_short_side(min(width, height))
+    resolution: Final[str] = _resolution_for_short_side(min(width, height), profile)
     if aspect_ratio in _ALLOWED_ASPECT_RATIOS:
         return MappingProxyType({"resolution": resolution, "aspect_ratio": aspect_ratio})
     return MappingProxyType({"resolution": resolution})
@@ -158,18 +191,27 @@ class FalAIVideoConfig(BaseVideoConfig):
         input_reference: Final[object] = video_create_optional_params.get("input_reference")
         if "input_reference" in video_create_optional_params and not isinstance(input_reference, str):
             raise ValueError("fal.ai needs a public image URL for input_reference")
-        input_reference_params: Final[Mapping[str, str]] = (
+        profile: Final[_ModelProfile] = _profile_for_model(model)
+        input_reference_params: Final[Mapping[str, object]] = (
             MappingProxyType({})
             if not isinstance(input_reference, str)
-            else MappingProxyType({"image_url": input_reference})
+            else MappingProxyType(
+                {
+                    profile.reference_key: (
+                        [input_reference]  # mutable-ok: fal.ai expects a list for H3 references
+                        if profile.reference_as_list
+                        else input_reference
+                    ),
+                }
+            )
         )
-        duration_params: Final[Mapping[str, str]] = (
+        duration_params: Final[Mapping[str, object]] = (
             MappingProxyType({})
             if "seconds" not in video_create_optional_params
-            else self._duration_params(video_create_optional_params["seconds"])
+            else self._duration_params(video_create_optional_params["seconds"], profile)
         )
         size_params: Final[Mapping[str, str]] = (
-            _size_params(video_create_optional_params["size"])
+            _size_params(video_create_optional_params["size"], profile)
             if "size" in video_create_optional_params
             else MappingProxyType({})
         )
@@ -190,11 +232,11 @@ class FalAIVideoConfig(BaseVideoConfig):
         return mapped_params
 
     @staticmethod
-    def _duration_params(seconds: object) -> Mapping[str, str]:
+    def _duration_params(seconds: object, profile: _ModelProfile) -> Mapping[str, object]:
         duration: Final[str | None] = _duration_value(seconds)
         if duration is None:
             raise ValueError("fal.ai seconds must be a numeric value")
-        return MappingProxyType({"duration": duration})
+        return MappingProxyType({"duration": int(duration) if profile.integer_duration else duration})
 
     def validate_environment(
         self,
@@ -251,6 +293,7 @@ class FalAIVideoConfig(BaseVideoConfig):
         request_data: Mapping[str, object] | None = None,
     ) -> VideoObject:
         response_data: Final[Mapping[str, object]] = _response_data(raw_response)
+        profile: Final[_ModelProfile] = _profile_for_model(model)
         request_params: Final[Mapping[str, object]] = request_data or MappingProxyType({})
         request_id: Final[str] = _response_string(response_data, "request_id")
         provider: Final[str] = custom_llm_provider or _FAL_AI_PROVIDER
@@ -262,7 +305,10 @@ class FalAIVideoConfig(BaseVideoConfig):
             key: value
             for key, value in (
                 ("duration_seconds", duration),
-                ("video_resolution", resolution if isinstance(resolution, str) else "720p"),
+                (
+                    "video_resolution",
+                    resolution if isinstance(resolution, str) else profile.default_resolution,
+                ),
             )
             if value is not None
         }
