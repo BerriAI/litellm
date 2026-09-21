@@ -28,10 +28,6 @@ import ComplexityRouterConfig, {
   effectiveClassifierType,
   usesLlmClassifier,
   heuristicScoringRole,
-  DEFAULT_ADAPTIVE_WEIGHTS,
-  DEFAULT_SESSION_AFFINITY,
-  DEFAULT_DEPLOYMENT_AFFINITY,
-  DEFAULT_TIER_DISTANCE_PENALTY,
 } from "./ComplexityRouterConfig";
 import { KeywordTierRule } from "./KeywordTierRules";
 import { customDimensionsError } from "./custom_dimensions";
@@ -48,6 +44,8 @@ import {
   getKeywordTierRulesError,
   getClassifierModelError,
   getHeuristicV2SuccessThresholdError,
+  getReminderMarkersError,
+  getClassifierPluginTimeoutError,
   getClassifierReasoningEffortError,
   getMissingTiersError,
   getPlanModeTierError,
@@ -55,6 +53,7 @@ import {
   getTierLabelsError,
   dryRunRejection,
 } from "./build_complexity_router_config";
+import { builderParamsFromValue } from "./complexity_router_builder_params";
 import { activeTierName, activeTierRows, getCustomTierRowsError, resolveComplexityDefaultModel } from "./tier_rows";
 import { tierRowLabel } from "./complexity_router_tiers";
 import { buildAutoRouterTestTargets, AutoRouterTestTarget } from "./build_auto_router_test_targets";
@@ -152,6 +151,8 @@ export const getSubmitBlockedReason = (
     getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
     getClassifierModelError(config) ??
     getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold) ??
+    getReminderMarkersError(config.reminder_markers) ??
+    getClassifierPluginTimeoutError(config.classifier_type, config.classifier_plugin_timeout_ms) ??
     (heuristicScoringRole(config) === "decides" ? customDimensionsError(config.custom_dimensions) : null) ??
     getClassifierReasoningEffortError(config, modelInfo) ??
     getReferencedModelsError(referencedModelsParams, availability)
@@ -399,56 +400,25 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   );
 
   const complexityRouterConfigParams: BuildComplexityRouterConfigParams = {
-    tiers: complexityRouterConfig.tiers,
-    enableNonReasoningTier: complexityRouterConfig.enable_non_reasoning_tier,
-    customTierSet: complexityRouterConfig.custom_tier_set,
-    defaultModel: complexityRouterConfig.default_model,
-    planModeMinTier: complexityRouterConfig.plan_mode_min_tier,
-    classificationPrompt: complexityRouterConfig.classification_prompt,
-    classificationExamples: complexityRouterConfig.classification_examples,
-    heuristicFirstMaxTier: complexityRouterConfig.heuristic_first_max_tier,
-    hybridBoundaryMargin: complexityRouterConfig.hybrid_boundary_margin,
-    classificationMode: complexityRouterConfig.classification_mode,
-    tierLabels: complexityRouterConfig.tier_labels,
-    classifierType: complexityRouterConfig.classifier_type,
-    jevClassifierConfig: complexityRouterConfig.jev_classifier_config,
-    heuristicV2SuccessThreshold: complexityRouterConfig.heuristic_v2_success_threshold,
-    capabilityClassifierConfig: complexityRouterConfig.capability_classifier_config,
-    llmV2Config: complexityRouterConfig.llm_v2_config,
-    classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
-    classifierContextWindowSize: complexityRouterConfig.classifier_context_window_size,
-    classifierContextBudgetChars: complexityRouterConfig.classifier_context_budget_chars,
-    classifierContextPerTurnChars: complexityRouterConfig.classifier_context_per_turn_chars,
-    classifierContextIncludeAssistantTurns: complexityRouterConfig.classifier_context_include_assistant_turns,
-    classifierFallback: complexityRouterConfig.classifier_fallback,
-    sessionAffinity: complexityRouterConfig.session_affinity ?? DEFAULT_SESSION_AFFINITY,
-    modalityRouting: complexityRouterConfig.modality_routing ?? false,
-    modalityPinOverride: complexityRouterConfig.modality_pin_override ?? false,
-    deploymentAffinity: complexityRouterConfig.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
+    ...builderParamsFromValue(complexityRouterConfig),
     customTechnicalKeywords,
     keywordTierRules,
     semanticMatchingEnabled,
     embeddingModel,
     matchThreshold,
     escalationKeywords,
-    stallEscalationEnabled: complexityRouterConfig.stall_escalation_enabled,
-    stallEscalationWindow: complexityRouterConfig.stall_escalation_window,
-    stallEscalationRepeatThreshold: complexityRouterConfig.stall_escalation_repeat_threshold,
-    adaptive: complexityRouterConfig.adaptive ?? false,
-    adaptiveWeights: complexityRouterConfig.adaptive_weights ?? DEFAULT_ADAPTIVE_WEIGHTS,
-    tierDistancePenalty: complexityRouterConfig.tier_distance_penalty ?? DEFAULT_TIER_DISTANCE_PENALTY,
-    adaptiveEligible: complexityRouterConfig.adaptive_eligible ?? "all",
-    returnRawModelName: complexityRouterConfig.return_raw_model_name ?? false,
-    tierModelParams: complexityRouterConfig.tier_model_params,
-    tierBoundaries: complexityRouterConfig.tier_boundaries,
-    tokenThresholds: complexityRouterConfig.token_thresholds,
-    dimensionWeights: complexityRouterConfig.dimension_weights,
-    customDimensions: complexityRouterConfig.custom_dimensions,
-    reasoningOverrideMinScore: complexityRouterConfig.reasoning_override_min_score,
-    enableContextWindowEscalation: complexityRouterConfig.enable_context_window_escalation,
-    contextWindowEscalationBuffer: complexityRouterConfig.context_window_escalation_buffer,
-    sessionAffinityTtlSeconds: complexityRouterConfig.session_affinity_ttl_seconds,
   };
+  const jevRequestParams =
+    effectiveClassifierType(complexityRouterConfig) === "jev"
+      ? {
+          prompt: JEV_CONNECTION_TEST_PROMPT,
+          config: buildComplexityRouterConfig(complexityRouterConfigParams),
+          defaultModel: resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model),
+          routerName: watchedName,
+          teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
+        }
+      : undefined;
+  const jevRequest = jevRequestParams ? buildAutoRouterRoutingTestRequest(jevRequestParams) : undefined;
 
   const submitRecommendedRouter = async (name: string) => {
     // The one answer the submit button reads, so a disabled button and a refused submit cannot
@@ -857,20 +827,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         testId={connectionTestId}
         accessToken={accessToken}
         targets={testTargets}
-        jevRequest={
-          effectiveClassifierType(complexityRouterConfig) === "jev"
-            ? buildAutoRouterRoutingTestRequest({
-                prompt: JEV_CONNECTION_TEST_PROMPT,
-                config: buildComplexityRouterConfig(complexityRouterConfigParams),
-                defaultModel: resolveComplexityDefaultModel(
-                  complexityRouterConfig,
-                  complexityRouterConfig.default_model,
-                ),
-                routerName: watchedName,
-                teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
-              })
-            : undefined
-        }
+        jevRequest={jevRequest}
         onTestComplete={() => setIsTestingConnection(false)}
       />
     </TooltipProvider>
