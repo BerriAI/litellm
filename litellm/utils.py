@@ -8319,7 +8319,7 @@ class ProviderConfigManager:
                 lambda: litellm.VercelAIGatewayConfig(),
                 False,
             ),
-            LlmProviders.EDENAI: (lambda: litellm.EdenAIChatConfig(), False),
+            LlmProviders.EDENAI: (litellm.EdenAIChatConfig, False),
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
             LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),
