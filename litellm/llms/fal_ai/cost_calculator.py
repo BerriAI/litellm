@@ -9,7 +9,8 @@ import litellm
 from litellm.types.utils import ImageObject, ImageResponse
 
 FAL_KEYED_PRICING_DEFAULT_QUALITY: Final[str] = "high"
-FAL_TEXT_TO_IMAGE_DEFAULT_SIZE: Final[str] = "1024-x-768"
+_DEFAULT_KEYED_DIMENSIONS: Final[tuple[int, int]] = (1024, 768)
+FAL_TEXT_TO_IMAGE_DEFAULT_SIZE: Final[str] = f"{_DEFAULT_KEYED_DIMENSIONS[0]}-x-{_DEFAULT_KEYED_DIMENSIONS[1]}"
 FAL_PIXELS_PER_MEGAPIXEL: Final[int] = 1_048_576
 FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -100,8 +101,10 @@ def _keyed_cost_per_image(
     rows: Final = _keyed_rows(model, quality)
     if not rows:
         return None
+    default_dimensions: Final = _parse_keyed_dimensions(FAL_TEXT_TO_IMAGE_DEFAULT_SIZE)
+    assert default_dimensions is not None
     target_dimensions: Final = (
-        _image_dimensions(image) or _parse_keyed_dimensions(_keyed_size(optional_params)) or (1024, 768)
+        _image_dimensions(image) or _parse_keyed_dimensions(_keyed_size(optional_params)) or default_dimensions
     )
     target_pixels: Final = target_dimensions[0] * target_dimensions[1]
     return min(rows, key=lambda row: (abs(row[0] * row[1] - target_pixels), row[0] * row[1]))[2]

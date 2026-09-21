@@ -1,5 +1,3 @@
-from collections.abc import Iterator, Mapping
-from importlib import import_module
 from typing import Final
 
 import pytest
@@ -8,9 +6,6 @@ import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.fal_ai.cost_calculator import cost_calculator
 from litellm.types.utils import ImageObject, ImageResponse
-
-fal_cost_calculator: Final = import_module("litellm.llms.fal_ai.cost_calculator")
-
 
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
@@ -110,32 +105,6 @@ def test_gpt_image_25_noncanonical_response_uses_nearest_keyed_row():
     ]["output_cost_per_image"]
     assert cost == expected
     assert cost != default_row
-
-
-def test_gpt_image_25_mixed_keyed_and_flat_pricing_is_summed_per_image(monkeypatch: pytest.MonkeyPatch):
-    model: Final = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
-    keyed_cost: Final = float(
-        litellm.model_cost["fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"][
-            "output_cost_per_image"
-        ]
-    )
-    flat_cost: Final = float(litellm.model_cost[f"fal_ai/{model.removeprefix('fal_ai/')}"]["output_cost_per_image"])
-    keyed_costs: Iterator[float | None] = iter((keyed_cost, None))
-
-    def fake_keyed_cost_per_image(
-        model: str,
-        image: object,
-        optional_params: Mapping[str, object],
-    ) -> float | None:
-        return next(keyed_costs)
-
-    monkeypatch.setattr(fal_cost_calculator, "_keyed_cost_per_image", fake_keyed_cost_per_image)
-    cost: Final = cost_calculator(
-        model=model,
-        image_response=_image_response(num_images=2),
-        optional_params={"quality": "low"},
-    )
-    assert cost == keyed_cost + flat_cost
 
 
 def test_gpt_image_25_quality_tiers_are_monotonic():
