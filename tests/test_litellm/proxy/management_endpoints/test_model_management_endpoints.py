@@ -319,6 +319,7 @@ class TestModelManagementAuthChecks:
                 existing_litellm_params=LiteLLM_Params(
                     model="test_model", litellm_credential_name="shared-credential"
                 ),
+                null_detaches=True,
             )
 
         assert exc_info.value.code == "403"
@@ -333,6 +334,7 @@ class TestModelManagementAuthChecks:
             existing_litellm_params=LiteLLM_Params(
                 model="test_model", litellm_credential_name="shared-credential"
             ),
+            null_detaches=True,
         )
 
         assert result is True
@@ -344,6 +346,20 @@ class TestModelManagementAuthChecks:
             litellm_params=litellm_params(litellm_credential_name=None),
             user_api_key_dict=self.team_admin_user,
             existing_litellm_params=LiteLLM_Params(model="test_model"),
+            null_detaches=True,
+        )
+
+        assert result is True
+
+    def test_can_user_attach_credential_null_is_noop_when_null_does_not_detach(self):
+        from litellm.types.router import updateLiteLLMParams as litellm_params
+
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=litellm_params(litellm_credential_name=None),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=LiteLLM_Params(
+                model="test_model", litellm_credential_name="shared-credential"
+            ),
         )
 
         assert result is True
@@ -1288,6 +1304,60 @@ class TestUpdateModel:
 
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
             mock_clear_cache.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_update_model_legacy_null_credential_name_is_not_a_detach_for_non_admin(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+
+        model_id = "legacy-null-credential"
+        existing = Deployment(
+            model_name="legacy-model",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", litellm_credential_name="shared-credential"),
+            model_info={"id": model_id},
+        )
+        existing_row = MagicMock()
+        existing_row.litellm_params = existing.litellm_params.model_dump()
+        existing_row.model_dump.return_value = existing.model_dump()
+        updated_row = MagicMock()
+        updated_row.model_dump_json.return_value = "{}"
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=updated_row)
+        mock_router = MagicMock()
+        mock_router.get_model_ids.return_value = [model_id]
+        team_admin = UserAPIKeyAuth(user_id="team-admin", user_role=LitellmUserRoles.INTERNAL_USER)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            await update_model(
+                model_params=updateDeployment(
+                    litellm_params=updateLiteLLMParams(
+                        model="openai/gpt-4o-mini", litellm_credential_name=None
+                    ),
+                    model_info=ModelInfo(id=model_id),
+                ),
+                user_api_key_dict=team_admin,
+            )
+
+        mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+        persisted = json.loads(mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"])
+        assert persisted["litellm_credential_name"] == "shared-credential"
 
 
 class TestUpdatePublicModelGroups:
