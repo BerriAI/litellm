@@ -4,32 +4,35 @@
 surface and the server-span + shared-provider behavior it produces.
 """
 
-
 from datetime import datetime, timezone
 
 import pytest
-
 
 pytest.importorskip("opentelemetry")
 pytest.importorskip("opentelemetry.instrumentation.fastapi")
 fastapi = pytest.importorskip("fastapi")
 
+from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from opentelemetry import trace  # noqa: E402
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
     InMemorySpanExporter,
 )
-from opentelemetry import trace  # noqa: E402
+from opentelemetry.sdk.trace.sampling import ALWAYS_OFF  # noqa: E402
 from opentelemetry.trace import SpanKind  # noqa: E402
 
+from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import (  # noqa: E402
     OpenTelemetryV2Config,
     is_otel_v2_enabled,
 )
-from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.mount import (  # noqa: E402
+    LITELLM_TRACE_ID_HEADER,
     PASSTHROUGH_PREFIXES,
+    _install_trace_correlation,
     _passthrough_span_name_hook,
     instrument_fastapi_app,
 )
@@ -108,12 +111,135 @@ def test_instrumented_app_emits_server_span():
 
     TestClient(app).get("/ping")
 
-    server_spans = [
-        s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
-    ]
+    server_spans = [s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER]
     assert server_spans, "FastAPI instrumentor should emit a SERVER span per request"
     attrs = server_spans[0].attributes or {}
     assert any("route" in k or "method" in k for k in attrs)
+
+
+def test_proxy_response_exposes_its_server_trace_and_call_id(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    app = fastapi.FastAPI()
+
+    @app.get("/success")
+    async def success():
+        return fastapi.Response(headers={"x-litellm-call-id": "call-success"})
+
+    @app.get("/failure")
+    async def failure():
+        raise fastapi.HTTPException(status_code=400, headers={"x-litellm-call-id": "call-failure"})
+
+    async def chunks():
+        yield b"data: first\n\n"
+
+    @app.get("/stream")
+    async def stream():
+        return StreamingResponse(chunks(), headers={"x-litellm-call-id": "call-stream"})
+
+    logger = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    exporter = InMemorySpanExporter()
+    logger._tracer_provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", logger._tracer_provider)
+    instrument_fastapi_app(app)
+
+    client = TestClient(app)
+    responses = (
+        (client.get("/success"), "call-success"),
+        (client.get("/failure"), "call-failure"),
+        (client.get("/stream"), "call-stream"),
+    )
+    server_spans = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER]
+    trace_ids_by_call_id = {
+        span.attributes["litellm.call_id"]: f"{span.context.trace_id:032x}" for span in server_spans
+    }
+
+    assert len(server_spans) == len(responses)
+    for response, call_id in responses:
+        assert response.headers[LITELLM_TRACE_ID_HEADER] == trace_ids_by_call_id[call_id]
+
+
+def test_proxy_response_keeps_the_incoming_trace_id(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    app = fastapi.FastAPI()
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    logger = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", logger._tracer_provider)
+    instrument_fastapi_app(app)
+
+    response = TestClient(app).get(
+        "/ping",
+        headers={"traceparent": "00-11111111111111111111111111111111-2222222222222222-01"},
+    )
+
+    assert response.headers[LITELLM_TRACE_ID_HEADER] == "11111111111111111111111111111111"
+
+
+def test_proxy_response_omits_trace_id_without_a_recording_span(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    app = fastapi.FastAPI()
+
+    @app.get("/ping")
+    async def ping():
+        return {"ok": True}
+
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", TracerProvider(sampler=ALWAYS_OFF))
+    instrument_fastapi_app(app)
+
+    response = TestClient(app).get("/ping")
+
+    assert LITELLM_TRACE_ID_HEADER not in response.headers
+
+
+def test_failed_instrumentation_leaves_trace_correlation_inactive():
+    app = fastapi.FastAPI()
+
+    @app.get("/ping")
+    async def ping():
+        return fastapi.Response(headers={"x-litellm-call-id": "unrelated-call"})
+
+    def fail_instrumentation() -> None:
+        raise RuntimeError("instrumentation unavailable")
+
+    with pytest.raises(RuntimeError, match="instrumentation unavailable"):
+        _install_trace_correlation(app, fail_instrumentation)
+
+    unrelated_span = TracerProvider().get_tracer("unrelated").start_span("unrelated")
+
+    @app.middleware("http")
+    async def unrelated_tracing_middleware(request, call_next):
+        with trace.use_span(unrelated_span, end_on_exit=False):
+            return await call_next(request)
+
+    response = TestClient(app).get("/ping")
+
+    assert LITELLM_TRACE_ID_HEADER not in response.headers
+    assert "litellm.call_id" not in (unrelated_span.attributes or {})
+    unrelated_span.end()
+
+
+def test_proxy_websocket_bypasses_trace_correlation(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    app = fastapi.FastAPI()
+
+    @app.websocket("/socket")
+    async def socket(websocket: fastapi.WebSocket):
+        await websocket.accept()
+        await websocket.send_text("connected")
+
+    logger = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    monkeypatch.setattr(trace, "_TRACER_PROVIDER", logger._tracer_provider)
+    instrument_fastapi_app(app)
+
+    with TestClient(app).websocket_connect("/socket") as websocket:
+        assert websocket.receive_text() == "connected"
 
 
 def test_logger_and_instrumentor_share_provider():
@@ -125,9 +251,7 @@ def test_logger_and_instrumentor_share_provider():
 def test_passthrough_hook_renames_catch_all_span():
     """A passthrough route gets its span renamed to the real request path."""
     span = _FakeSpan()
-    _passthrough_span_name_hook(
-        span, {"path": "/openai/v1/chat/completions", "method": "POST"}
-    )
+    _passthrough_span_name_hook(span, {"path": "/openai/v1/chat/completions", "method": "POST"})
     assert span.name == "POST /openai/v1/chat/completions"
     assert span.attributes["http.route"] == "/openai/v1/chat/completions"
 
@@ -142,9 +266,7 @@ def test_passthrough_hook_leaves_non_passthrough_route_unchanged():
 
 def test_passthrough_hook_ignores_non_recording_span():
     span = _FakeSpan(recording=False)
-    _passthrough_span_name_hook(
-        span, {"path": "/openai/v1/chat/completions", "method": "POST"}
-    )
+    _passthrough_span_name_hook(span, {"path": "/openai/v1/chat/completions", "method": "POST"})
     assert span.name is None
 
 
@@ -186,9 +308,7 @@ def test_llm_span_route_is_read_off_the_server_span(monkeypatch):
     client.post("/engines/gpt-4o-mini/chat/completions")
     client.post("/openai/v1/responses/resp_abc123")
 
-    routes = {
-        (s.attributes or {})["http.route"] for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER
-    }
+    routes = {(s.attributes or {})["http.route"] for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER}
     # a parameterized route keeps its template; the passthrough hook rewrote the
     # catch-all to the literal path, and both spans have to follow their own span
     assert routes == {"/engines/{model:path}/chat/completions", "/openai/v1/responses/resp_abc123"}
