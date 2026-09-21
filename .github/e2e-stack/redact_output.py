@@ -21,8 +21,7 @@ def string_leaves(node: JsonValue) -> tuple[str, ...]:
             return tuple(leaf for child in node for leaf in string_leaves(child))
         case dict():
             return tuple(leaf for child in node.values() for leaf in string_leaves(child))
-        case _:
-            return ()
+    return ()
 
 
 def field_lines(value: str) -> tuple[str, ...]:
