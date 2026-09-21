@@ -9,11 +9,11 @@ use litellm_secrets_types::{
     BaseSecretManager, SecretValue, async_rotate_secret, validate_secret_name,
 };
 use moka::future::Cache;
-use reqwest::Client;
+use reqwest::{Client, Identity, RequestBuilder};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
-use crate::{Error, HashicorpVaultConfig};
+use crate::{Error, HashicorpVaultConfig, TlsCertAuth};
 
 const CACHE_CAPACITY: u64 = 200;
 
@@ -242,10 +242,10 @@ impl HashicorpVault {
                 return Ok(token);
             }
         };
-        let mut request = self.client.post(login_url).json(&body);
-        if let Some(namespace) = self.config.login_namespace() {
-            request = request.header("X-Vault-Namespace", namespace);
-        }
+        let request: RequestBuilder = with_namespace(
+            self.client.post(login_url).json(&body),
+            self.config.login_namespace(),
+        );
         let response: reqwest::Response = request.send().await?;
         if !response.status().is_success() {
             return Err(Error::LoginStatus {
@@ -305,24 +305,33 @@ impl BaseSecretManager for HashicorpVault {
 }
 
 fn client_for_config(config: &HashicorpVaultConfig) -> Result<Client, Error> {
-    let mut builder: reqwest::ClientBuilder = Client::builder();
-    if let Some(tls) = config.tls_cert.as_ref() {
-        let cert: Vec<u8> = std::fs::read(&tls.cert_path).map_err(|source| Error::TlsIdentity {
-            path: tls.cert_path.clone(),
-            message: source.to_string(),
-        })?;
-        let key: Vec<u8> = std::fs::read(&tls.key_path).map_err(|source| Error::TlsIdentity {
-            path: tls.key_path.clone(),
-            message: source.to_string(),
-        })?;
-        let identity: reqwest::Identity = reqwest::Identity::from_pem(
-            &[cert.as_slice(), key.as_slice()].concat(),
-        )
-        .map_err(|source| Error::TlsIdentity {
-            path: tls.cert_path.clone(),
-            message: source.to_string(),
-        })?;
-        builder = builder.identity(identity);
-    }
+    let builder: reqwest::ClientBuilder = match config.tls_cert.as_ref() {
+        Some(tls) => Client::builder().identity(identity_for(tls)?),
+        None => Client::builder(),
+    };
     builder.build().map_err(Error::Request)
+}
+
+fn with_namespace(request: RequestBuilder, namespace: Option<&str>) -> RequestBuilder {
+    match namespace {
+        Some(namespace) => request.header("X-Vault-Namespace", namespace),
+        None => request,
+    }
+}
+
+fn identity_for(tls: &TlsCertAuth) -> Result<Identity, Error> {
+    let cert: Vec<u8> = std::fs::read(&tls.cert_path).map_err(|source| Error::TlsIdentity {
+        path: tls.cert_path.clone(),
+        message: source.to_string(),
+    })?;
+    let key: Vec<u8> = std::fs::read(&tls.key_path).map_err(|source| Error::TlsIdentity {
+        path: tls.key_path.clone(),
+        message: source.to_string(),
+    })?;
+    Identity::from_pem(&[cert.as_slice(), key.as_slice()].concat()).map_err(|source| {
+        Error::TlsIdentity {
+            path: tls.cert_path.clone(),
+            message: source.to_string(),
+        }
+    })
 }
