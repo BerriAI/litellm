@@ -2773,6 +2773,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cache-valkey-semantic"
+version = "0.1.0"
+dependencies = [
+ "litellm-cache",
+ "litellm-cache-redis",
+ "litellm-cache-response",
+ "redis",
+ "redis-test",
+ "rstest",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
@@ -2944,6 +2960,7 @@ dependencies = [
  "litellm-cache-redis",
  "litellm-cache-response",
  "litellm-cache-s3",
+ "litellm-cache-valkey-semantic",
  "litellm-callbacks-legacy-python",
  "litellm-core",
  "litellm-core-utils",
@@ -2954,10 +2971,12 @@ dependencies = [
  "litellm-types",
  "pyo3",
  "pyo3-async-runtimes",
+ "redis",
  "rstest",
  "serde",
  "serde_json",
  "serde_with",
+ "sha2 0.10.9",
  "tokio",
  "tokio-tungstenite",
 ]

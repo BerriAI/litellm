@@ -1,12 +1,14 @@
 mod binding;
 mod callback;
 mod config;
+mod embedder;
 mod facade;
 mod future;
 mod handle;
 mod native;
 mod request;
 mod resolver;
+mod semantic_step;
 
 use litellm_cache::Error;
 use pyo3::{
