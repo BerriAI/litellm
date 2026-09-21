@@ -102,7 +102,7 @@ export interface ModelEditFormValues {
   vector_store_ids?: string[];
   tags?: string[];
   health_check_model?: string | null;
-  litellm_credential_name?: string;
+  litellm_credential_name?: string | null;
   litellm_extra_params?: string;
   model_info?: string;
   team_id?: string;
@@ -139,7 +139,7 @@ const modelEditShape = {
   vector_store_ids: z.array(z.string()).optional(),
   tags: z.array(z.string()).optional(),
   health_check_model: z.string().nullish(),
-  litellm_credential_name: textish,
+  litellm_credential_name: z.string().nullish(),
   litellm_extra_params: textish,
   model_info: textish,
   team_id: textish,
@@ -254,7 +254,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
   // antd never mounted this field for a non-wildcard model, so the key must be absent, not null.
   ...(isWildcardModel ? { health_check_model: localModelData.model_info?.health_check_model } : {}),
-  litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
+  litellm_credential_name: localModelData.litellm_params?.litellm_credential_name ?? null,
   litellm_extra_params: JSON.stringify(
     Object.fromEntries(
       Object.entries(localModelData.litellm_params || {}).filter(
@@ -635,8 +635,8 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               {isEditing ? (
                 <FormField control={form.control} name="litellm_credential_name">
                   {({ id, value, onChange, onBlur }) => {
-                    const items = [
-                      { value: "", label: "None" },
+                    const items: { value: string | null; label: string }[] = [
+                      { value: null, label: "None" },
                       ...credentialsList.map((credential) => ({
                         value: credential.credential_name,
                         label: credential.credential_name,
@@ -645,15 +645,15 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
                     return (
                       <Select
                         items={items}
-                        value={(value as string) ?? ""}
-                        onValueChange={(selected: string | null) => onChange(selected ?? "")}
+                        value={(value as string | null) ?? null}
+                        onValueChange={(selected: string | null) => onChange(selected)}
                       >
                         <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
                           <SelectValue placeholder="Select or search for existing credentials" />
                         </SelectTrigger>
                         <SelectContent>
                           {items.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
+                            <SelectItem key={item.value ?? "none"} value={item.value}>
                               {item.label}
                             </SelectItem>
                           ))}
