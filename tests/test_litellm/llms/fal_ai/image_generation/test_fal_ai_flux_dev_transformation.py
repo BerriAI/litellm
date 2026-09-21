@@ -86,3 +86,41 @@ def test_flux_dev_response_omits_provider_specific_fields_when_fal_omits_metadat
         encoding=None,
     )
     assert response.data[0].provider_specific_fields is None
+
+
+@pytest.mark.parametrize(
+    "invalid_field, invalid_value, expected_fields",
+    (
+        ("width", True, {"height": 768, "content_type": "image/png"}),
+        ("width", 0, {"height": 768, "content_type": "image/png"}),
+        ("width", -1, {"height": 768, "content_type": "image/png"}),
+        ("height", True, {"width": 1024, "content_type": "image/png"}),
+        ("height", 0, {"width": 1024, "content_type": "image/png"}),
+        ("height", -1, {"width": 1024, "content_type": "image/png"}),
+    ),
+)
+def test_flux_dev_response_drops_invalid_dimension_metadata(invalid_field, invalid_value, expected_fields):
+    metadata = {"width": 1024, "height": 768, "content_type": "image/png"}
+    metadata[invalid_field] = invalid_value
+    raw = httpx.Response(
+        200,
+        json={
+            "images": [
+                {
+                    "url": "https://fal.media/a.png",
+                    **metadata,
+                }
+            ]
+        },
+    )
+    response = FalAIFluxDevConfig().transform_image_generation_response(
+        model="fal-ai/flux/dev",
+        raw_response=raw,
+        model_response=ImageResponse(),
+        logging_obj=None,
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+    assert response.data[0].provider_specific_fields == expected_fields

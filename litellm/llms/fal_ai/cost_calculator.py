@@ -23,7 +23,6 @@ FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
-_EMPTY_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _keyed_size(optional_params: Mapping[str, object]) -> str | None:
@@ -51,7 +50,7 @@ def _image_dimensions(image: object) -> tuple[int, int] | None:
     provider_specific_fields: Final = _OBJECT_MAP.validate_python(raw_provider_specific_fields)
     width: Final = provider_specific_fields.get("width")
     height: Final = provider_specific_fields.get("height")
-    if not isinstance(width, int) or not isinstance(height, int):
+    if type(width) is not int or width <= 0 or type(height) is not int or height <= 0:
         return None
     return width, height
 
@@ -132,13 +131,9 @@ def cost_calculator(
     )
     if all(cost is not None for cost in keyed_costs):
         return sum(cost for cost in keyed_costs if cost is not None)
-    model_info: Final = next(
-        (
-            entry
-            for key in (f"{litellm.LlmProviders.FAL_AI.value}/{normalized_model}", normalized_model)
-            if (entry := _entry(key)) is not None
-        ),
-        _EMPTY_ENTRY,
+    model_info: Final = litellm.get_model_info(
+        model=normalized_model,
+        custom_llm_provider=litellm.LlmProviders.FAL_AI.value,
     )
     raw_output_cost_per_image: Final = model_info.get("output_cost_per_image")
     output_cost_per_image: Final = (
