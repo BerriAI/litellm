@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Sequence
 from datetime import datetime
 from logging import Formatter
 from typing import Any, Final, TextIO
@@ -186,7 +187,8 @@ class SecretRedactionFilter(logging.Filter):
             record.stack_info = _redact_string(record.stack_info)  # rebind-ok: a Filter scrubs records in place
 
         # Redact extra fields passed via logger.debug("msg", extra={...})
-        for key, value in list(record.__dict__.items()):
+        record_items: Final[Sequence[tuple[str, object]]] = list(record.__dict__.items())
+        for key, value in record_items:
             if key in _STANDARD_RECORD_ATTRS:
                 continue
             if isinstance(value, str):
@@ -507,7 +509,7 @@ handler.addFilter(_secret_filter)
 handler.addFilter(_correlation_filter)
 
 
-def _try_parse_json_message(message: str) -> dict[str, Any] | None:
+def _try_parse_json_message(message: str) -> dict[str, object] | None:
     """
     Try to parse a log message as JSON. Returns parsed dict if valid, else None.
     Handles messages that are entirely valid JSON (e.g. json.dumps output).
@@ -585,7 +587,7 @@ class JsonFormatter(Formatter):
 
     def format(self, record):
         message_str: Final = record.getMessage()
-        json_record: Final[dict[str, Any]] = {
+        json_record: Final[dict[str, object]] = {
             "message": message_str,
             "level": record.levelname,
             "timestamp": self.formatTime(record),

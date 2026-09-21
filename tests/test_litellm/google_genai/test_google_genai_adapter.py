@@ -372,8 +372,7 @@ def test_completion_to_generate_content_with_tool_calls():
     assert function_call["name"] == "get_weather"
     assert function_call["args"]["location"] == "San Francisco"
 
-    # Check text field
-    assert generate_content_response["text"] == "I'll check the weather for you."
+    assert "text" not in generate_content_response
 
 
 def test_streaming_tool_calls_transformation():
@@ -738,12 +737,7 @@ def test_completion_to_generate_content_transformation():
         mock_response
     )
 
-    # Verify the transformation
-    assert "text" in generate_content_response
-    assert (
-        generate_content_response["text"]
-        == "Hello! I'm doing well, thank you for asking."
-    )
+    assert "text" not in generate_content_response
 
     assert "candidates" in generate_content_response
     assert len(generate_content_response["candidates"]) == 1
@@ -1267,3 +1261,383 @@ def test_inline_data_backward_compatibility_text_only():
         content, str
     ), "Content should be a string for text-only messages (backward compatibility)"
     assert content == "Hello, how are you?"
+
+
+def test_tools_transformation_reads_parameters_declaration():
+    """The google-genai SDK and REST callers send `parameters` (Gemini Schema types), not `parametersJsonSchema`"""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "park_hours_lookup",
+                    "description": "Look up park hours for a given date and park.",
+                    "parameters": {
+                        "type": "OBJECT",
+                        "properties": {
+                            "park_id": {"type": "STRING"},
+                            "date": {"type": "STRING"},
+                        },
+                        "required": ["park_id", "date"],
+                    },
+                }
+            ]
+        }
+    ]
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-4.1",
+        contents={"role": "user", "parts": [{"text": "When does EPCOT open?"}]},
+        tools=tools,
+    )
+
+    assert completion_request["tools"][0]["function"]["parameters"] == {
+        "type": "object",
+        "properties": {"park_id": {"type": "string"}, "date": {"type": "string"}},
+        "required": ["park_id", "date"],
+    }
+
+
+def test_tools_transformation_prefers_parameters_json_schema_over_parameters():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "lookup",
+                    "parametersJsonSchema": {"type": "object", "properties": {"a": {"type": "string"}}},
+                    "parameters": {"type": "OBJECT", "properties": {"b": {"type": "STRING"}}},
+                }
+            ]
+        }
+    ]
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-4.1", contents={"role": "user", "parts": [{"text": "hi"}]}, tools=tools
+    )
+
+    assert completion_request["tools"][0]["function"]["parameters"]["properties"] == {"a": {"type": "string"}}
+
+
+PARK_TIP_GEMINI_SCHEMA = {
+    "type": "OBJECT",
+    "title": "ParkTipResponse",
+    "properties": {
+        "park_name": {"type": "STRING"},
+        "highlights": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "confidence": {"type": "STRING", "enum": ["low", "medium", "high"]},
+    },
+    "required": ["park_name", "highlights", "confidence"],
+}
+
+PARK_TIP_JSON_SCHEMA = {
+    "type": "object",
+    "title": "ParkTipResponse",
+    "properties": {
+        "park_name": {"type": "string"},
+        "highlights": {"type": "array", "items": {"type": "string"}},
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+    },
+    "required": ["park_name", "highlights", "confidence"],
+}
+
+
+@pytest.mark.parametrize("mime_type_key", ["response_mime_type", "responseMimeType"])
+@pytest.mark.parametrize(
+    "schema_key,schema",
+    [
+        ("response_schema", PARK_TIP_GEMINI_SCHEMA),
+        ("responseSchema", PARK_TIP_GEMINI_SCHEMA),
+        ("response_json_schema", PARK_TIP_JSON_SCHEMA),
+        ("responseJsonSchema", PARK_TIP_JSON_SCHEMA),
+    ],
+)
+def test_response_schema_config_maps_to_json_schema_response_format(mime_type_key, schema_key, schema):
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+    config = {mime_type_key: "application/json", schema_key: schema}
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-4.1", contents={"role": "user", "parts": [{"text": "Summarize EPCOT"}]}, config=config
+    )
+
+    assert completion_request["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "response", "schema": PARK_TIP_JSON_SCHEMA},
+    }
+
+
+def test_response_schema_drops_gemini_property_ordering_at_every_level():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    sdk_pydantic_schema = {
+        "type": "OBJECT",
+        "title": "ParkTipResponse",
+        "propertyOrdering": ["park_name", "highlights"],
+        "properties": {
+            "park_name": {"type": "STRING", "title": "Park Name"},
+            "highlights": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "property_ordering": ["title", "detail"],
+                    "properties": {
+                        "title": {"type": "STRING"},
+                        "detail": {"type": "STRING", "nullable": True},
+                    },
+                    "required": ["title"],
+                },
+            },
+        },
+        "required": ["park_name", "highlights"],
+    }
+
+    completion_request = GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model="claude-opus-5",
+        contents={"role": "user", "parts": [{"text": "Summarize EPCOT"}]},
+        config={"responseMimeType": "application/json", "responseSchema": sdk_pydantic_schema},
+    )
+
+    assert completion_request["response_format"]["json_schema"]["schema"] == {
+        "type": "object",
+        "title": "ParkTipResponse",
+        "properties": {
+            "park_name": {"type": "string", "title": "Park Name"},
+            "highlights": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "detail": {"type": "string", "nullable": True},
+                    },
+                    "required": ["title"],
+                },
+            },
+        },
+        "required": ["park_name", "highlights"],
+    }
+    assert sdk_pydantic_schema["propertyOrdering"] == ["park_name", "highlights"]
+    assert sdk_pydantic_schema["properties"]["highlights"]["items"]["property_ordering"] == ["title", "detail"]
+
+
+def test_response_schema_without_mime_type_still_maps_to_json_schema():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-4.1",
+        contents={"role": "user", "parts": [{"text": "Summarize EPCOT"}]},
+        config={"responseSchema": PARK_TIP_GEMINI_SCHEMA},
+    )
+
+    assert completion_request["response_format"]["type"] == "json_schema"
+    assert completion_request["response_format"]["json_schema"]["schema"] == PARK_TIP_JSON_SCHEMA
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"temperature": 0.2},
+        {"responseMimeType": "text/plain"},
+        {"responseMimeType": "application/json"},
+        {"response_mime_type": "application/json", "temperature": 0.2},
+        {"responseMimeType": "text/x.enum", "responseSchema": {"type": "STRING", "enum": ["a", "b"]}},
+        {"responseMimeType": "application/json", "responseSchema": {"type": "ARRAY", "items": {"type": "STRING"}}},
+        {"responseMimeType": "application/json", "responseSchema": {"type": "STRING", "enum": ["a", "b"]}},
+        {"responseMimeType": "application/json", "responseSchema": {"properties": {"a": {"type": "STRING"}}}},
+        {"responseMimeType": "application/json", "responseSchema": None},
+    ],
+)
+def test_output_config_outside_object_schema_leaves_response_format_unset(config):
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-4.1", contents={"role": "user", "parts": [{"text": "Pick one"}]}, config=config
+    )
+
+    assert "response_format" not in completion_request
+
+
+def test_response_schema_is_not_sent_to_deployment_without_response_format_support():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    from litellm.types.router import GenericLiteLLMParams
+
+    adapter = GoogleGenAIAdapter()
+    config = {"responseMimeType": "application/json", "responseSchema": PARK_TIP_GEMINI_SCHEMA, "temperature": 0.2}
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="openai/gpt-4",
+        contents={"role": "user", "parts": [{"text": "Summarize EPCOT"}]},
+        config=config,
+        litellm_params=GenericLiteLLMParams(custom_llm_provider="openai"),
+    )
+
+    assert "response_format" not in completion_request
+    assert completion_request["temperature"] == 0.2
+
+
+def test_response_schema_is_sent_when_provider_cannot_be_resolved():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="my-unmapped-deployment-alias",
+        contents={"role": "user", "parts": [{"text": "Summarize EPCOT"}]},
+        config={"responseSchema": PARK_TIP_GEMINI_SCHEMA},
+    )
+
+    assert completion_request["response_format"]["json_schema"]["schema"] == PARK_TIP_JSON_SCHEMA
+
+
+def test_pydantic_generation_config_is_tolerated():
+    from pydantic import BaseModel
+
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    class SdkStyleConfig(BaseModel):
+        response_mime_type: str = "application/json"
+        response_schema: dict[str, object] = PARK_TIP_GEMINI_SCHEMA
+
+    adapter = GoogleGenAIAdapter()
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-4.1", contents={"role": "user", "parts": [{"text": "hi"}]}, config=SdkStyleConfig()
+    )
+
+    assert completion_request["messages"] == [{"role": "user", "content": "hi"}]
+    assert "response_format" not in completion_request
+
+
+def test_null_parameters_json_schema_falls_back_to_parameters():
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+    tools = [
+        {
+            "functionDeclarations": [
+                {
+                    "name": "lookup",
+                    "parametersJsonSchema": None,
+                    "parameters": {"type": "OBJECT", "properties": {"b": {"type": "STRING"}}},
+                }
+            ]
+        }
+    ]
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-4.1", contents={"role": "user", "parts": [{"text": "hi"}]}, tools=tools
+    )
+
+    assert completion_request["tools"][0]["function"]["parameters"] == {
+        "type": "object",
+        "properties": {"b": {"type": "string"}},
+    }
+
+
+@pytest.mark.parametrize("parameters", [5, "", "x", [1], True])
+def test_non_object_tool_parameters_are_dropped_instead_of_forwarded(parameters):
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+    tools = [{"functionDeclarations": [{"name": "lookup", "description": "Look it up", "parameters": parameters}]}]
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gpt-4.1", contents={"role": "user", "parts": [{"text": "hi"}]}, tools=tools
+    )
+
+    assert completion_request["tools"][0]["function"] == {"name": "lookup", "description": "Look it up"}
+
+
+def test_streaming_chunk_has_no_top_level_text():
+    from litellm.google_genai.adapters.transformation import (
+        GoogleGenAIAdapter,
+        GoogleGenAIStreamWrapper,
+    )
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    adapter = GoogleGenAIAdapter()
+    mock_response = ModelResponseStream(
+        id="test-streaming",
+        choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hello"))],
+        created=1234567890,
+        model="gpt-4.1",
+        object="chat.completion.chunk",
+    )
+
+    streaming_chunk = adapter.translate_streaming_completion_to_generate_content(
+        mock_response, GoogleGenAIStreamWrapper(completion_stream=None)
+    )
+
+    assert streaming_chunk["candidates"][0]["content"]["parts"] == [{"text": "Hello"}]
+    assert "text" not in streaming_chunk
+
+
+@pytest.mark.asyncio
+async def test_generate_content_sends_response_schema_and_tool_parameters_to_the_provider(respx_mock, monkeypatch):
+    import httpx
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-park-tip",
+                "object": "chat.completion",
+                "created": 1234567890,
+                "model": "gpt-4.1",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": '{"park_name": "EPCOT"}'},
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            },
+        )
+    )
+
+    response = await agenerate_content(
+        model="openai/gpt-4.1",
+        contents=[{"role": "user", "parts": [{"text": "Summarize EPCOT. Do not call tools."}]}],
+        tools=[
+            {
+                "functionDeclarations": [
+                    {
+                        "name": "park_hours_lookup",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {"park_id": {"type": "STRING"}},
+                            "required": ["park_id"],
+                        },
+                    }
+                ]
+            }
+        ],
+        generationConfig={"response_mime_type": "application/json", "response_schema": PARK_TIP_GEMINI_SCHEMA},
+        api_key="sk-test",
+    )
+
+    provider_request = json.loads(route.calls.last.request.content)
+
+    assert provider_request["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {"name": "response", "schema": PARK_TIP_JSON_SCHEMA},
+    }
+    assert provider_request["tools"][0]["function"]["parameters"] == {
+        "type": "object",
+        "properties": {"park_id": {"type": "string"}},
+        "required": ["park_id"],
+    }
+    assert response["candidates"][0]["content"]["parts"] == [{"text": '{"park_name": "EPCOT"}'}]
+    assert "text" not in response
