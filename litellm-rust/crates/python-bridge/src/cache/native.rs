@@ -6,12 +6,49 @@ use litellm_cache::{
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
-    CacheEntry, PartialHits, ResponseCache, ResponseCacheCodec, ResponseCacheRequest, WriteBuffer,
+    CacheEntry, CacheKeyField, PartialHits, ResponseCache, ResponseCacheCodec,
+    ResponseCacheRequest, WriteBuffer,
 };
 use litellm_cache_valkey_semantic::{ValkeySemanticCache, ValkeySemanticConfig};
 use serde_json::Value;
 
 use super::{embedder::PythonEmbedder, request::NativeRequest};
+
+fn semantic_key(request: &NativeRequest, scope: &str) -> litellm_cache_response::CacheKeyInput {
+    let mut key = request.key.clone();
+    if key.preset.is_some() {
+        return key;
+    }
+    key.fields
+        .retain(|field| !matches!(field.name.as_str(), "messages" | "prompt" | "input"));
+    const TENANT: [&str; 3] = [
+        "user_api_key",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+    ];
+    let end_user = (scope == "end_user").then_some("user_api_key_end_user_id");
+    for name in TENANT.into_iter().chain(end_user) {
+        let Some(value) = request
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get(name))
+        else {
+            continue;
+        };
+        let value = match value {
+            Value::Null => continue,
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        key.fields.push(CacheKeyField {
+            name: name.to_owned(),
+            value: Some(value),
+            api_parameter: true,
+            internal_parameter: false,
+        });
+    }
+    key
+}
 
 #[derive(Clone)]
 pub(super) enum NativeResponseCache {
@@ -88,7 +125,7 @@ impl NativeResponseCache {
         scope: &str,
     ) -> ResponseCacheRequest<SemanticCacheContext> {
         ResponseCacheRequest {
-            key: request.key.clone(),
+            key: semantic_key(request, scope),
             controls: request.controls,
             context: SemanticCacheContext {
                 input: request.input.clone(),
@@ -327,5 +364,79 @@ impl NativeResponseCache {
             Self::Redis { cache, .. } => cache.test_connection().await,
             Self::ValkeySemantic { cache, .. } => cache.test_connection().await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use litellm_cache_response::{CacheControls, CacheKeyInput, cache_key};
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+
+    use super::*;
+
+    fn native_request(key: CacheKeyInput, metadata: Value) -> NativeRequest {
+        NativeRequest {
+            key,
+            controls: CacheControls::default(),
+            ttl: None,
+            max_age: None,
+            messages: Some(json!([{"role": "user", "content": "prompt"}])),
+            input: None,
+            metadata: Some(metadata),
+        }
+    }
+
+    #[test]
+    fn semantic_key_matches_python_scope_material() {
+        let key = CacheKeyInput {
+            fields: vec![
+                CacheKeyField {
+                    name: "model".to_owned(),
+                    value: Some("gpt-4.1".to_owned()),
+                    api_parameter: true,
+                    internal_parameter: false,
+                },
+                CacheKeyField {
+                    name: "messages".to_owned(),
+                    value: Some("prompt".to_owned()),
+                    api_parameter: true,
+                    internal_parameter: false,
+                },
+            ],
+            ..Default::default()
+        };
+        let request = native_request(
+            key,
+            json!({"user_api_key": "k1", "user_api_key_team_id": null}),
+        );
+        let expected = format!("{:x}", Sha256::digest(b"model: gpt-4.1user_api_key: k1"));
+        assert_eq!(cache_key(&semantic_key(&request, "key")), expected);
+
+        let end_user_request = native_request(
+            request.key.clone(),
+            json!({"user_api_key": "k1", "user_api_key_end_user_id": "u1"}),
+        );
+        let expected = format!(
+            "{:x}",
+            Sha256::digest(b"model: gpt-4.1user_api_key: k1user_api_key_end_user_id: u1")
+        );
+        assert_eq!(
+            cache_key(&semantic_key(&end_user_request, "end_user")),
+            expected
+        );
+
+        let preset_request = native_request(
+            CacheKeyInput {
+                preset: Some("preset-key".to_owned()),
+                ..Default::default()
+            },
+            json!({"user_api_key": "k1"}),
+        );
+        assert_eq!(
+            semantic_key(&preset_request, "end_user").preset.as_deref(),
+            Some("preset-key")
+        );
+        assert!(semantic_key(&preset_request, "end_user").fields.is_empty());
     }
 }

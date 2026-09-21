@@ -322,9 +322,17 @@ fn project_valkey_semantic(
 ) -> PyResult<Result<ValkeySemanticCacheConfig, UnsupportedCacheConfig>> {
     let client = backend.getattr("sync_client")?;
     let pool = client.getattr("connection_pool")?;
-    let Ok((resolved, _is_tls)) = project_connection_pool(&pool)? else {
+    let Ok((resolved, is_tls)) = project_connection_pool(&pool)? else {
         return Ok(Err(UnsupportedCacheConfig::RedisConnection));
     };
+    for key in ["credential_provider", "redis_connect_func"] {
+        if has_value(&resolved, key)? {
+            return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
+        }
+    }
+    if is_tls {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
     let connection = RedisConnectionConfig {
         host: required_string(&resolved, "host")?,
         port: u16::try_from(required_i64(&resolved, "port")?)
@@ -679,6 +687,53 @@ mod tests {
             assert_eq!(valkey.connection.pool_size, 12);
             assert_eq!(valkey.connection.protocol, RedisProtocol::Resp2);
             assert!(valkey.connection.tls.is_none());
+        });
+    }
+
+    #[test]
+    fn valkey_semantic_tls_stays_on_python() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "pool = ConnectionPool()\n\
+                 pool.connection_class = SSLConnection\n\
+                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390}\n\
+                 client = SimpleNamespace(connection_pool=pool)\n\
+                 backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
+                 facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("TLS Valkey semantic cache should stay on Python");
+            };
+            assert_eq!(
+                reason.message(),
+                "native Redis connection type is not implemented"
+            );
+        });
+    }
+
+    #[test]
+    fn valkey_semantic_dynamic_auth_stays_on_python() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "pool = ConnectionPool()\n\
+                 pool.connection_class = Connection\n\
+                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390, 'credential_provider': object()}\n\
+                 client = SimpleNamespace(connection_pool=pool)\n\
+                 backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
+                 facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("dynamic Valkey authentication must stay on Python");
+            };
+            assert_eq!(reason.message(), "native Redis credentials require Python");
         });
     }
 
