@@ -34,9 +34,9 @@ import time
 import pytest
 from complexity_router_client import ComplexityRouterClient
 from e2e_config import unique_marker
-from e2e_http import NetworkError, StreamingResponse
+from e2e_http import AbandonedRequest, StreamingResponse
 from lifecycle import ResourceManager
-from models import ChatMessage, ChatResponse, ReliabilityChatBody, RouterSettingsOverride
+from models import ChatMessage, ReliabilityChatBody, RouterSettingsOverride
 from reliability_support import (
     chat_override,
     create_azure_benched_on_first_failure_deployment,
@@ -65,8 +65,8 @@ def _say_hi(client: ComplexityRouterClient, key: str, group: str) -> StreamingRe
 
 def _hang_up_mid_answer(client: ComplexityRouterClient, key: str, group: str) -> None:
     """Send a request whose answer takes far longer than the client waits, so the
-    read timeout closes the socket while the provider is still generating."""
-    outcome = client.proxy.transport.post(
+    client closes the socket while the provider is still generating."""
+    outcome = client.proxy.transport.abandon(
         "/chat/completions",
         headers=client.proxy.transport.bearer(key),
         json=ReliabilityChatBody(
@@ -80,16 +80,15 @@ def _hang_up_mid_answer(client: ComplexityRouterClient, key: str, group: str) ->
             max_tokens=LONG_ANSWER_MAX_TOKENS,
             router_settings_override=RouterSettingsOverride(num_retries=0),
         ),
-        response_type=ChatResponse,
-        timeout=CLIENT_HANGS_UP_AFTER_SECONDS,
+        after=CLIENT_HANGS_UP_AFTER_SECONDS,
     )
     match outcome:
-        case NetworkError(message=message) if "Read timed out" in message:
+        case AbandonedRequest():
             return
-        case _:
+        case StreamingResponse(status_code=status_code, body=body):
             pytest.fail(
                 f"the client should have hung up {CLIENT_HANGS_UP_AFTER_SECONDS:.0f}s into a long answer with the "
-                f"call still in flight, but the proxy answered first: {outcome!r}"
+                f"call still in flight, but the proxy answered first with {status_code}: {body[:300]}"
             )
 
 
