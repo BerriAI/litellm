@@ -212,6 +212,18 @@ impl NativeCacheConfig {
             {
                 Some("facade and native backend key prefixes must match")
             }
+            CacheBackendConfig::S3(config) if service.region() != Some(config.region.as_str()) => {
+                Some("facade and native backend regions must match")
+            }
+            CacheBackendConfig::S3(config)
+                if service.endpoint()
+                    != config
+                        .endpoint
+                        .as_ref()
+                        .map(|endpoint| endpoint.url.as_str()) =>
+            {
+                Some("facade and native backend endpoints must match")
+            }
             CacheBackendConfig::S3(_) => None,
         }
     }
@@ -593,6 +605,10 @@ mod tests {
 
     use pyo3::{prelude::*, types::PyDict};
 
+    use litellm_auth_aws::AwsAuthConfig;
+    use litellm_cache_s3::{S3CacheConfig, S3Endpoint};
+    use litellm_host_python::run_sync_value;
+
     use super::{
         CacheBackendConfig, CacheConfigProjection, CertificateRequirement, NativeCacheConfig,
         RedisProtocol,
@@ -856,6 +872,48 @@ mod tests {
             assert_eq!(s3.auth.access_key_id, None);
             assert_eq!(s3.auth.secret_access_key, None);
             assert_eq!(s3.auth.region_name.as_deref(), Some("us-east-1"));
+        });
+    }
+
+    fn s3_service(py: Python<'_>, region: &str, endpoint: Option<&str>) -> NativeResponseCache {
+        let config = S3CacheConfig {
+            bucket: "bucket".to_string(),
+            key_prefix: "team/".to_string(),
+            region: region.to_string(),
+            endpoint: endpoint.map(|url| S3Endpoint {
+                url: url.to_string(),
+            }),
+            auth: AwsAuthConfig::default(),
+        };
+        run_sync_value(py, async move { Ok(NativeResponseCache::s3(config).await) }).unwrap()
+    }
+
+    #[test]
+    fn s3_binding_rejects_region_and_endpoint_mismatches() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = s3_facade(py, "");
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("S3 cache should be supported");
+            };
+            assert_eq!(
+                config.service_mismatch(&s3_service(py, "us-east-1", Some("https://example.test"))),
+                None
+            );
+            assert_eq!(
+                config.service_mismatch(&s3_service(py, "us-west-2", Some("https://example.test"))),
+                Some("facade and native backend regions must match")
+            );
+            assert_eq!(
+                config.service_mismatch(&s3_service(py, "us-east-1", Some("https://other.test"))),
+                Some("facade and native backend endpoints must match")
+            );
+            assert_eq!(
+                config.service_mismatch(&s3_service(py, "us-east-1", None)),
+                Some("facade and native backend endpoints must match")
+            );
         });
     }
 }

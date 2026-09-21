@@ -36,18 +36,21 @@ pub struct S3Cache<C: CacheCodec> {
     runtime: Handle,
     bucket: Arc<str>,
     key_prefix: Arc<str>,
+    region: Arc<str>,
+    endpoint: Option<Arc<str>>,
 }
 
 impl<C: CacheCodec> S3Cache<C> {
     pub fn new(config: S3CacheConfig, codec: C, runtime: Handle) -> Self {
         let mut builder = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
-            .region(Region::new(config.region))
+            .region(Region::new(config.region.clone()))
             .credentials_provider(Credentials::new(config.auth))
             .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
             .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
-        if let Some(endpoint) = config.endpoint {
-            builder = builder.endpoint_url(endpoint.url).force_path_style(true);
+        let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
+        if let Some(url) = &endpoint_url {
+            builder = builder.endpoint_url(url).force_path_style(true);
         }
         Self {
             client: aws_sdk_s3::Client::from_conf(builder.build()),
@@ -55,6 +58,8 @@ impl<C: CacheCodec> S3Cache<C> {
             runtime,
             bucket: config.bucket.into(),
             key_prefix: config.key_prefix.into(),
+            region: config.region.into(),
+            endpoint: endpoint_url.map(Into::into),
         }
     }
 
@@ -64,6 +69,14 @@ impl<C: CacheCodec> S3Cache<C> {
 
     pub fn key_prefix(&self) -> &str {
         &self.key_prefix
+    }
+
+    pub fn region(&self) -> &str {
+        &self.region
+    }
+
+    pub fn endpoint(&self) -> Option<&str> {
+        self.endpoint.as_deref()
     }
 
     pub fn to_s3_key(&self, key: &str) -> String {

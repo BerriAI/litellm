@@ -103,8 +103,6 @@ opt-level = "s"
 [profile.release.package."aws-sdk-sts"]
 opt-level = "s"
 
-[profile.release.package."aws-sigv4"]
-opt-level = "s"
 
 [profile.release.package."aws-smithy-async"]
 opt-level = "s"
@@ -112,8 +110,6 @@ opt-level = "s"
 [profile.release.package."aws-smithy-checksums"]
 opt-level = "s"
 
-[profile.release.package."aws-smithy-eventstream"]
-opt-level = "s"
 
 [profile.release.package."aws-smithy-http"]
 opt-level = "s"
@@ -133,8 +129,6 @@ opt-level = "s"
 [profile.release.package."aws-smithy-runtime"]
 opt-level = "s"
 
-[profile.release.package."aws-smithy-runtime-api"]
-opt-level = "s"
 
 [profile.release.package."aws-smithy-runtime-api-macros"]
 opt-level = "s"
@@ -142,8 +136,6 @@ opt-level = "s"
 [profile.release.package."aws-smithy-schema"]
 opt-level = "s"
 
-[profile.release.package."aws-smithy-types"]
-opt-level = "s"
 
 [profile.release.package."aws-smithy-xml"]
 opt-level = "s"

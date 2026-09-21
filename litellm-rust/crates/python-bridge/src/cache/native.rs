@@ -87,6 +87,20 @@ impl NativeResponseCache {
         }
     }
 
+    pub fn region(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => Some(cache.backend().region()),
+            _ => None,
+        }
+    }
+
+    pub fn endpoint(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => cache.backend().endpoint(),
+            _ => None,
+        }
+    }
+
     pub fn namespace(&self) -> Option<&str> {
         match self {
             Self::Memory(_) => None,
