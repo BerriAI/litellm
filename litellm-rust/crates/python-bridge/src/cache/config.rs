@@ -3,7 +3,7 @@ use std::time::Duration;
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyDict},
+    types::{PyAny, PyDict, PyString},
 };
 
 use super::{native::NativeResponseCache, request::duration};
@@ -111,6 +111,7 @@ pub(super) enum CacheConfigProjection {
 }
 
 impl NativeCacheConfig {
+    #[inline(never)]
     pub(super) fn project(facade: &Bound<'_, PyAny>) -> PyResult<CacheConfigProjection> {
         let backend_name = facade.getattr("type")?.extract::<String>()?;
         let policy = CachePolicy {
@@ -180,6 +181,7 @@ impl NativeCacheConfig {
     }
 }
 
+#[inline(never)]
 fn project_memory(backend: &Bound<'_, PyAny>) -> PyResult<MemoryCacheConfig> {
     let max_size_kib = backend.getattr("max_size_per_item")?.extract::<usize>()?;
     Ok(MemoryCacheConfig {
@@ -191,6 +193,7 @@ fn project_memory(backend: &Bound<'_, PyAny>) -> PyResult<MemoryCacheConfig> {
     })
 }
 
+#[inline(never)]
 fn project_redis(
     backend: &Bound<'_, PyAny>,
 ) -> PyResult<Result<RedisCacheConfig, UnsupportedCacheConfig>> {
@@ -238,8 +241,7 @@ fn project_redis(
 
     let client = backend.getattr("redis_client")?;
     let pool = client.getattr("connection_pool")?;
-    let pool_class = class_identity(&pool)?;
-    if pool_class != ("redis.connection".to_owned(), "ConnectionPool".to_owned()) {
+    if !instance_class_is(&pool, "redis.connection", "ConnectionPool")? {
         return Ok(Err(UnsupportedCacheConfig::RedisConnection));
     }
     let resolved = pool.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
@@ -251,20 +253,12 @@ fn project_redis(
     let connection_class = resolved
         .get_item("connection_class")?
         .unwrap_or(pool.getattr("connection_class")?);
-    let connection_class = (
-        connection_class
-            .getattr("__module__")?
-            .extract::<String>()?,
-        connection_class
-            .getattr("__qualname__")?
-            .extract::<String>()?,
-    );
-    let tls = match connection_class {
-        (module, name) if module == "redis.connection" && name == "Connection" => None,
-        (module, name) if module == "redis.connection" && name == "SSLConnection" => {
-            Some(project_tls(&resolved)?)
-        }
-        _ => return Ok(Err(UnsupportedCacheConfig::RedisConnection)),
+    let tls = if class_is(&connection_class, "redis.connection", "Connection")? {
+        None
+    } else if class_is(&connection_class, "redis.connection", "SSLConnection")? {
+        Some(project_tls(&resolved)?)
+    } else {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
     };
 
     let protocol = match optional_u8(&resolved, "protocol")?.unwrap_or(2) {
@@ -296,6 +290,7 @@ fn project_redis(
     }))
 }
 
+#[inline(never)]
 fn project_tls(values: &Bound<'_, PyDict>) -> PyResult<RedisTlsConfig> {
     Ok(RedisTlsConfig {
         certificate_requirement: certificate_requirement(values)?,
@@ -307,6 +302,7 @@ fn project_tls(values: &Bound<'_, PyDict>) -> PyResult<RedisTlsConfig> {
     })
 }
 
+#[inline(never)]
 fn certificate_requirement(values: &Bound<'_, PyDict>) -> PyResult<CertificateRequirement> {
     let Some(value) = values.get_item("ssl_cert_reqs")? else {
         return Ok(CertificateRequirement::Required);
@@ -334,18 +330,31 @@ fn certificate_requirement(values: &Bound<'_, PyDict>) -> PyResult<CertificateRe
     }
 }
 
-fn class_identity(value: &Bound<'_, PyAny>) -> PyResult<(String, String)> {
-    let class = value.get_type();
-    Ok((
-        class.getattr("__module__")?.extract::<String>()?,
-        class.getattr("__qualname__")?.extract::<String>()?,
-    ))
+#[inline(never)]
+fn instance_class_is(value: &Bound<'_, PyAny>, module: &str, name: &str) -> PyResult<bool> {
+    class_is(value.get_type().as_any(), module, name)
 }
 
+#[inline(never)]
+fn class_is(value: &Bound<'_, PyAny>, module: &str, name: &str) -> PyResult<bool> {
+    Ok(value
+        .getattr("__module__")?
+        .cast_into::<PyString>()?
+        .to_str()?
+        == module
+        && value
+            .getattr("__qualname__")?
+            .cast_into::<PyString>()?
+            .to_str()?
+            == name)
+}
+
+#[inline(never)]
 fn optional_duration(value: Bound<'_, PyAny>) -> PyResult<Option<Duration>> {
     value.extract::<Option<f64>>()?.map(duration).transpose()
 }
 
+#[inline(never)]
 fn optional_attribute_string(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<String>> {
     match value.getattr(name) {
         Ok(value) => optional_string(value),
@@ -356,16 +365,19 @@ fn optional_attribute_string(value: &Bound<'_, PyAny>, name: &str) -> PyResult<O
     }
 }
 
+#[inline(never)]
 fn optional_string(value: Bound<'_, PyAny>) -> PyResult<Option<String>> {
     Ok(value
         .extract::<Option<String>>()?
         .filter(|value| !value.is_empty()))
 }
 
+#[inline(never)]
 fn has_value(values: &Bound<'_, PyDict>, key: &str) -> PyResult<bool> {
     Ok(values.get_item(key)?.is_some_and(|value| !value.is_none()))
 }
 
+#[inline(never)]
 fn required_string(values: &Bound<'_, PyDict>, key: &str) -> PyResult<String> {
     values
         .get_item(key)?
@@ -373,6 +385,7 @@ fn required_string(values: &Bound<'_, PyDict>, key: &str) -> PyResult<String> {
         .extract::<String>()
 }
 
+#[inline(never)]
 fn required_u16(values: &Bound<'_, PyDict>, key: &str) -> PyResult<u16> {
     values
         .get_item(key)?
@@ -380,6 +393,7 @@ fn required_u16(values: &Bound<'_, PyDict>, key: &str) -> PyResult<u16> {
         .extract::<u16>()
 }
 
+#[inline(never)]
 fn optional_dict_string(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<String>> {
     match values.get_item(key)? {
         Some(value) if !value.is_none() => optional_string(value),
@@ -387,6 +401,7 @@ fn optional_dict_string(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Optio
     }
 }
 
+#[inline(never)]
 fn optional_f64(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f64>> {
     match values.get_item(key)? {
         Some(value) => value.extract::<Option<f64>>(),
@@ -394,6 +409,7 @@ fn optional_f64(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<f64>> 
     }
 }
 
+#[inline(never)]
 fn optional_i64(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<i64>> {
     match values.get_item(key)? {
         Some(value) => value.extract::<Option<i64>>(),
@@ -401,6 +417,7 @@ fn optional_i64(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<i64>> 
     }
 }
 
+#[inline(never)]
 fn optional_u8(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<u8>> {
     match values.get_item(key)? {
         Some(value) => value.extract::<Option<u8>>(),
@@ -408,6 +425,7 @@ fn optional_u8(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<u8>> {
     }
 }
 
+#[inline(never)]
 fn optional_bool(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<bool>> {
     match values.get_item(key)? {
         Some(value) => value.extract::<Option<bool>>(),
@@ -415,6 +433,7 @@ fn optional_bool(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<bool>
     }
 }
 
+#[inline(never)]
 fn optional_coerced_bool(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<bool>> {
     let Some(value) = values.get_item(key)? else {
         return Ok(None);
@@ -431,6 +450,7 @@ fn optional_coerced_bool(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Opti
     value.extract::<bool>().map(Some)
 }
 
+#[inline(never)]
 fn optional_dict_duration(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<Duration>> {
     optional_f64(values, key)?.map(duration).transpose()
 }
