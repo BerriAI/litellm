@@ -14,6 +14,10 @@ use crate::{
     base_llm::{base_model_iterator::StreamTransformer, chat::transformation::Error},
 };
 
+use crate::base_llm::base_model_iterator::{
+    AnthropicMessagesApi, ChatCompletions, StreamTransformation,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AnthropicJsonChunkType {
     ValidJson,
@@ -161,5 +165,26 @@ impl StreamTransformer for AnthropicChatCompletionsStreamTransformer {
 
     fn finish(&mut self) -> Result<Vec<Self::Output>, Self::Error> {
         todo!()
+    }
+}
+
+impl StreamTransformation for AnthropicChatCompletionsStreamTransformer {
+    type Caller = ChatCompletions;
+    type Upstream = AnthropicMessagesApi;
+    type Error = Error;
+
+    fn transform_event(
+        &mut self,
+        _event: AnthropicMessagesStreamEvent,
+    ) -> Result<Vec<ChatCompletionChunk>, Error> {
+        todo!(
+            "Port ModelResponseIterator conversion with indexed tools, thinking/signatures, JSON mode, stop reasons, and late usage"
+        )
+    }
+
+    fn finish(self) -> Result<Vec<ChatCompletionChunk>, Error> {
+        todo!(
+            "Require message_stop, validate partial tool JSON, and preserve failed or cancelled termination"
+        )
     }
 }
