@@ -493,6 +493,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/typesafe",
+        "/openrouter",
         "/milvus",
         "/gigachat",
         "/watsonx",
