@@ -32,6 +32,8 @@ class TestRollingUpgrade:
                     ready((new,), baseline_database)
                     assert_upgraded(before, migration_names(baseline_database))
                     keep_serving(traffic, "the baseline replica authenticating after the schema moved")
+                    with auth_traffic(old, provision(new)[0]) as uncached:
+                        keep_serving(uncached, "the baseline replica resolving a key minted after the schema moved")
             assert_history_clean(baseline_database)
             assert CACHED_PLAN not in old.logs(), "The baseline replica hit a stale prepared statement"
             assert old.state().Running, "The baseline replica died during the upgrade"
