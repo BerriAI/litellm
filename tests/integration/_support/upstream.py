@@ -210,6 +210,7 @@ class Provider:
                         "$REQUEST_ID", scenario_id
                     ).encode(),
                     media_type=response.content_type,
+                    status_code=response.status,
                 )
             case SseResponse():
                 stream_body: Final = ("\n\n".join(response.frames) + "\n\n").replace(
