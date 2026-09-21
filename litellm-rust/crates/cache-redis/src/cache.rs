@@ -88,8 +88,6 @@ impl<S: CacheCodec> RedisCache<S> {
         Self::connect(url, &RedisTopology::Standalone, default_ttl, codec)
     }
 
-    /// The URL carries credentials, database, protocol and TLS mode. For a cluster topology its
-    /// address is replaced by each startup node; slot discovery then finds the remaining nodes.
     pub fn connect(
         url: &str,
         topology: &RedisTopology,
@@ -333,7 +331,7 @@ where
 
     async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
         match Self::run_blocking(Arc::clone(&self.connections), |connection| {
-            Ok(match redis::cmd("PING").query::<String>(connection) {
+            Ok(match connection.ping() {
                 Ok(_) => CacheConnectionResult {
                     status: CacheConnectionStatus::Success,
                     message: "Redis cache connection test successful".into(),
