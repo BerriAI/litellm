@@ -9043,3 +9043,59 @@ async def test_router_settings_model_group_alias_authorizes_target_for_team(monk
     await authorize()
     assert (await request.json())["model"] == target
     assert get_client_requested_model(request) == "AgentX-LLM"
+
+
+@pytest.mark.asyncio
+async def test_reserve_budget_after_common_checks_hands_the_reservation_to_the_request_state():
+    from fastapi import Request
+
+    request = Request(scope={"type": "http"})
+    user_api_key_auth_obj = UserAPIKeyAuth(token="test_token")
+    reservation = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new=AsyncMock(return_value=reservation),
+    ):
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request_data={"model": "gpt-4o"},
+            route="/v1/batches/batch_123/cancel",
+            llm_router=None,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            skip_budget_checks=False,
+            general_settings={},
+            request=request,
+        )
+
+    assert user_api_key_auth_obj.budget_reservation is reservation
+    assert request.state.budget_reservation is reservation
+    assert request.scope["state"]["budget_reservation"] is reservation
+
+
+@pytest.mark.asyncio
+async def test_reserve_budget_after_common_checks_clears_the_request_state_when_budget_checks_skip():
+    from fastapi import Request
+
+    request = Request(scope={"type": "http", "state": {"budget_reservation": {"reserved_cost": 0.5}}})
+
+    await _reserve_budget_after_common_checks(
+        user_api_key_auth_obj=UserAPIKeyAuth(token="test_token"),
+        request_data={"model": "free-model"},
+        route="/v1/chat/completions",
+        llm_router=None,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        skip_budget_checks=True,
+        general_settings={},
+        request=request,
+    )
+
+    assert request.state.budget_reservation is None

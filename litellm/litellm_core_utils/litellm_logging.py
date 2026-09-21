@@ -850,6 +850,7 @@ class Logging(LiteLLMLoggingBaseClass):
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
         }
+        bind_budget_reservation_to_callbacks(self.litellm_params)
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
         if _is_debugging_on() or self.litellm_request_debug:
@@ -5373,7 +5374,7 @@ def request_model_access_groups_from_litellm_params(litellm_params: Mapping[str,
     """Access groups the auth layer stamped onto this request, from whichever metadata field carries them.
 
     Detached internal sub-calls only inherit the identity keys, so the auth object is the
-    fallback there, exactly as _get_budget_reservation_from_metadata does for reservations.
+    fallback there, exactly as budget_reservation_from_metadata does for reservations.
     """
     for metadata_variable_name in ("metadata", "litellm_metadata"):
         metadata = litellm_params.get(metadata_variable_name)
@@ -5383,6 +5384,35 @@ def request_model_access_groups_from_litellm_params(litellm_params: Mapping[str,
         if model_access_groups:
             return model_access_groups
     return ()
+
+
+def _budget_reservation_on_auth_object(user_api_key_auth: object) -> object:
+    if isinstance(user_api_key_auth, Mapping):
+        return user_api_key_auth.get("budget_reservation")
+    return getattr(user_api_key_auth, "budget_reservation", None)
+
+
+def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict | None:
+    stamped: Final = metadata.get("user_api_key_budget_reservation")
+    if isinstance(stamped, dict):
+        return stamped
+    on_auth_object: Final = _budget_reservation_on_auth_object(metadata.get("user_api_key_auth"))
+    return on_auth_object if isinstance(on_auth_object, dict) else None
+
+
+def bind_budget_reservation_to_callbacks(litellm_params: Mapping[str, object]) -> None:
+    """Mark the request's budget reservation as owned by this logging object's callbacks.
+
+    The proxy releases any reservation still unbound when the request ends; one bound
+    here is left for the success or failure handler, which may finish after the response.
+    """
+    for metadata_variable_name in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_variable_name)
+        if not isinstance(metadata, Mapping):
+            continue
+        budget_reservation = budget_reservation_from_metadata(metadata)
+        if budget_reservation is not None:
+            budget_reservation["callback_bound"] = True
 
 
 class StandardLoggingPayloadSetup:

@@ -22,9 +22,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
     _get_status_fields,
+    budget_reservation_from_metadata,
     set_callbacks,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
@@ -7415,3 +7417,58 @@ class TestAzurePTUSpilloverCost:
         finally:
             litellm.model_cost.pop(custom_model_id, None)
             self._unregister_models()
+
+
+class TestBudgetReservationBinding:
+    """A reservation the proxy made at auth is owned by the cost callback only once a
+    logging object has seen it; the request-end release skips exactly those."""
+
+    @staticmethod
+    def _reservation() -> dict:
+        return {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+
+    def test_reservation_in_metadata_is_bound(self, logging_obj):
+        reservation: Final = self._reservation()
+
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {"user_api_key_budget_reservation": reservation}}, optional_params={}
+        )
+
+        assert reservation["callback_bound"] is True
+
+    def test_reservation_in_litellm_metadata_is_bound(self, logging_obj):
+        reservation: Final = self._reservation()
+
+        logging_obj.update_environment_variables(
+            litellm_params={"litellm_metadata": {"user_api_key_budget_reservation": reservation}}, optional_params={}
+        )
+
+        assert reservation["callback_bound"] is True
+
+    def test_reservation_reachable_only_through_the_auth_object_is_bound(self, logging_obj):
+        reservation: Final = self._reservation()
+        user_api_key_auth: Final = UserAPIKeyAuth(token="hashed")
+        user_api_key_auth.budget_reservation = reservation
+
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {"user_api_key_auth": user_api_key_auth}}, optional_params={}
+        )
+
+        assert reservation["callback_bound"] is True
+
+    def test_reservation_reachable_only_through_a_dumped_auth_object_is_bound(self, logging_obj):
+        reservation: Final = self._reservation()
+
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {"user_api_key_auth": {"budget_reservation": reservation}}}, optional_params={}
+        )
+
+        assert reservation["callback_bound"] is True
+
+    def test_request_without_a_reservation_binds_nothing(self, logging_obj):
+        logging_obj.update_environment_variables(
+            litellm_params={"metadata": {"user_api_key_auth": UserAPIKeyAuth(token="hashed")}, "litellm_metadata": None},
+            optional_params={},
+        )
+
+        assert budget_reservation_from_metadata(logging_obj.litellm_params["metadata"]) is None

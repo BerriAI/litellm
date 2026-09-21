@@ -323,6 +323,7 @@ async def reserve_budget_for_request(
         "reserved_cost": reservation_cost,
         "entries": applied_entries,
         "finalized": False,
+        "callback_bound": False,
         "input_cost": min(float(input_cost or 0.0), reservation_cost),
         "input_tokens": max(input_token_counts.values(), default=None),
     }
@@ -424,6 +425,19 @@ async def release_or_invalidate_budget_reservation(
             verbose_proxy_logger.exception("Failed to invalidate budget reservation counters after release failed")
         finally:
             budget_reservation["finalized"] = True
+
+
+async def release_unbound_budget_reservation(budget_reservation: Mapping[str, object]) -> None:
+    """Release a reservation no logging callback took ownership of, once the request ended.
+
+    A handler whose litellm call never builds a logging object (batch cancel, file
+    content, anything without the client decorator) runs no cost callback, so nothing
+    else would ever reconcile its reservation. A bound reservation is left alone: its
+    success or failure handler settles it, possibly after the response has been sent.
+    """
+    if not isinstance(budget_reservation, dict) or budget_reservation.get("callback_bound") is True:
+        return
+    await release_or_invalidate_budget_reservation(budget_reservation=budget_reservation)
 
 
 async def _get_budget_counters(
