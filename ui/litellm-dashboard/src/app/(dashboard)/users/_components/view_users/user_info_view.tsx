@@ -332,8 +332,9 @@ export default function UserInfoView({
         user_email: formValues.user_email ?? userData.user_email,
         user_alias: formValues.user_alias ?? userData.user_alias,
         models: formValues.models ?? userData.models,
-        max_budget: formValues.max_budget ?? userData.max_budget,
-        budget_duration: formValues.budget_duration ?? userData.budget_duration,
+        max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
+        budget_duration:
+          formValues.budget_duration === undefined ? userData.budget_duration : formValues.budget_duration,
         metadata: formValues.metadata ?? userData.metadata,
         model_max_budget: formValues.model_max_budget ?? userData.model_max_budget,
         object_permission: mcpEntitlement
@@ -416,7 +417,7 @@ export default function UserInfoView({
               variant="ghost"
               size="icon-xs"
               onClick={() => copyToClipboard(userData.user_id, "user-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
+              className={`left-2 z-raised transition-all duration-200 ${
                 copiedStates["user-id"]
                   ? "text-success bg-success/10 border-success/20"
                   : "text-muted-foreground hover:text-foreground hover:bg-accent"
@@ -598,7 +599,7 @@ export default function UserInfoView({
                       variant="ghost"
                       size="icon-xs"
                       onClick={() => copyToClipboard(userData.user_id, "user-id")}
-                      className={`left-2 z-10 transition-all duration-200 ${
+                      className={`left-2 z-raised transition-all duration-200 ${
                         copiedStates["user-id"]
                           ? "text-success bg-success/10 border-success/20"
                           : "text-muted-foreground hover:text-foreground hover:bg-accent"

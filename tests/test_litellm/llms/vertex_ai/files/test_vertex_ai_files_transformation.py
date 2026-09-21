@@ -159,6 +159,91 @@ class TestCreateFileUrl:
         assert "?" not in object_name
 
 
+class TestBatchObjectNaming:
+    def test_should_store_publisher_model_under_publishers_path(self, config):
+        object_name = config._get_gcs_object_name_from_batch_jsonl([{"body": {"model": "gemini-2.5-flash"}}])
+        assert object_name.startswith("litellm-vertex-files/publishers/google/models/gemini-2.5-flash/")
+
+    def test_should_store_fine_tuned_endpoint_under_endpoints_path(self, config):
+        """A numeric endpoint id must not be filed under publishers/google/models/gemini/<id>,
+        which the batch transformation later mangles into a nonexistent publisher model (LIT-6899)."""
+        object_name = config._get_gcs_object_name_from_batch_jsonl(
+            [{"body": {"model": "gemini/7768560373388541952"}}]
+        )
+        assert object_name.startswith("litellm-vertex-files/endpoints/7768560373388541952/")
+        assert "publishers" not in object_name
+
+    def test_should_store_bare_numeric_endpoint_under_endpoints_path(self, config):
+        object_name = config._get_gcs_object_name_from_batch_jsonl([{"body": {"model": "7768560373388541952"}}])
+        assert object_name.startswith("litellm-vertex-files/endpoints/7768560373388541952/")
+
+    def test_deployment_model_overrides_jsonl_body_model(self, config):
+        """The stored path decides which Vertex model the batch later runs against with the
+        deployment's credentials, so a user-crafted JSONL body.model must not be able to redirect
+        an authorized deployment to a different endpoint."""
+        object_name = config._get_gcs_object_name_from_batch_jsonl(
+            [{"body": {"model": "9999999999999999999"}}],
+            deployment_model="vertex_ai/gemini/7768560373388541952",
+        )
+        assert object_name.startswith("litellm-vertex-files/endpoints/7768560373388541952/")
+        assert "9999999999999999999" not in object_name
+
+    def test_url_derives_object_path_from_configured_model(self, config):
+        url = config.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={
+                "gcs_bucket_name": "my-bucket",
+                "model": "vertex_ai/gemini/7768560373388541952",
+            },
+            data={
+                "file": ("batch.jsonl", b'{"body": {"model": "9999999999999999999"}}', "application/jsonl"),
+                "purpose": "batch",
+            },
+        )
+        object_name = parse_qs(urlparse(url).query)["name"][0]
+        assert object_name.startswith("litellm-vertex-files/endpoints/7768560373388541952/")
+        assert "9999999999999999999" not in object_name
+
+
+class TestCustomEndpointBatchUpload:
+    def test_should_reject_batch_upload_for_custom_endpoint_deployment(self, config):
+        """custom_endpoint deployments have no Vertex batch surface; the upload must 400 instead
+        of staging a file that can only produce a doomed batch job (LIT-6899)."""
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        with pytest.raises(VertexAIError) as exc_info:
+            config.get_complete_file_url(
+                api_base=None,
+                api_key=None,
+                model="",
+                optional_params={},
+                litellm_params={"gcs_bucket_name": "my-bucket", "custom_endpoint": True},
+                data={
+                    "file": ("batch.jsonl", b'{"body": {"model": "openai/gemma-2-2b-it"}}', "application/jsonl"),
+                    "purpose": "batch",
+                },
+            )
+        assert exc_info.value.status_code == 400
+        assert "custom_endpoint" in str(exc_info.value)
+
+    def test_should_allow_non_batch_upload_for_custom_endpoint_deployment(self, config):
+        url = config.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={"gcs_bucket_name": "my-bucket", "custom_endpoint": True},
+            data={
+                "file": ("notes.txt", b"hello", "text/plain"),
+                "purpose": "assistants",
+            },
+        )
+        assert "/b/my-bucket/" in url
+
+
 class TestTransformRetrieveFile:
     def test_should_build_correct_gcs_metadata_url(self, config):
         file_id = "gs://my-bucket/litellm-vertex-files/path/to/file.jsonl"

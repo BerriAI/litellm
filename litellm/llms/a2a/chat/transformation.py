@@ -4,7 +4,7 @@ A2A Protocol Transformation for LiteLLM
 
 import uuid
 from collections.abc import Iterator
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
@@ -19,6 +19,11 @@ from ..common_utils import (
     extract_text_from_a2a_response,
 )
 from .streaming_iterator import A2AModelResponseIterator
+
+if TYPE_CHECKING:
+    import tiktoken
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class A2AConfig(BaseConfig):
@@ -246,12 +251,12 @@ class A2AConfig(BaseConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj: Any,
+        logging_obj: "LiteLLMLoggingObj",
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

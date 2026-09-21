@@ -134,6 +134,11 @@ def test_langfuse_mapper_observation_attrs():
     assert attrs["langfuse.trace.metadata.team_id"] == "t1"
 
 
+def test_langfuse_mapper_names_the_trace_from_the_caller():
+    assert LangfuseMapper().map(_llm_call(trace_name="nightly-eval"))["langfuse.trace.name"] == "nightly-eval"
+    assert "langfuse.trace.name" not in LangfuseMapper().map(_llm_call(trace_name=None))
+
+
 def test_langfuse_mapper_skips_when_no_messages():
     data = _llm_call(messages_in=(), choices_out=())
     attrs = LangfuseMapper().map(data)

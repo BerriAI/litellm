@@ -4,32 +4,38 @@ GigaChat Chat Transformation
 Transforms OpenAI-format requests to GigaChat format and back.
 """
 
+from __future__ import annotations
+
 import json
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.gigachat.utils import convert_usage, get_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import Choices, Message, ModelResponse, Usage
+from litellm.types.utils import Choices, Message, ModelResponse
 
 from ..authenticator import get_access_token
 from ..file_handler import upload_file_sync
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
 
-# GigaChat API endpoint
-GIGACHAT_BASE_URL: Final = "https://gigachat.devices.sberbank.ru/api/v1"
+
+_EMPTY_FUNCTION: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def is_valid_json(value: str) -> bool:
@@ -88,32 +94,30 @@ class GigaChatConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """Get complete API URL for chat completions."""
-        base: Final = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+        base: Final = get_api_base(api_base)
         return f"{base}/chat/completions"
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: mutates in place per GigaChat OAuth setup
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: base class contract returns dict for httpx
         """
         Set up headers with OAuth token.
         """
-        # Get access token
         credentials: Final = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
-        access_token: Final = get_access_token(credentials=credentials)
+        access_token: Final = get_access_token(credentials=credentials, litellm_params=litellm_params)
 
-        # Store credentials for image uploads
         self._current_credentials = credentials
         self._current_api_base = api_base
 
@@ -123,9 +127,9 @@ class GigaChatConfig(BaseConfig):
 
         return headers
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: base class contract returns list
         """Return list of supported OpenAI parameters."""
-        return [
+        return [  # mutable-ok: base class contract returns list
             "stream",
             "temperature",
             "top_p",
@@ -141,11 +145,11 @@ class GigaChatConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict,  # mutable-ok: mutated in place per GigaChat mapping
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict:  # mutable-ok: base class contract returns dict
         """Map OpenAI parameters to GigaChat parameters."""
         for param, value in non_default_params.items():
             if param == "stream":
@@ -165,53 +169,61 @@ class GigaChatConfig(BaseConfig):
                 pass
             elif param == "tools":
                 # Convert tools to functions format
-                optional_params["functions"] = self._convert_tools_to_functions(value)
+                if isinstance(value, Sequence):
+                    optional_params["functions"] = self._convert_tools_to_functions(value)
             elif param == "tool_choice":
                 # Map OpenAI tool_choice to GigaChat function_call
-                mapped_choice = self._map_tool_choice(value)
-                if mapped_choice is not None:
-                    optional_params["function_call"] = mapped_choice
+                if isinstance(value, (str, Mapping)):
+                    mapped_choice = self._map_tool_choice(value)
+                    if mapped_choice is not None:
+                        optional_params["function_call"] = mapped_choice
             elif param == "functions":
                 optional_params["functions"] = value
             elif param == "function_call":
                 optional_params["function_call"] = value
             elif param == "response_format":
                 # Handle structured output via function calling
-                if value.get("type") == "json_schema":
+                if isinstance(value, Mapping) and value.get("type") == "json_schema":
                     json_schema = value.get("json_schema", {})
                     schema_name = json_schema.get("name", "structured_output")
                     schema = json_schema.get("schema", {})
 
-                    function_def = {
+                    function_def = {  # mutable-ok: request payload for httpx
                         "name": schema_name,
                         "description": f"Output structured response: {schema_name}",
                         "parameters": schema,
                     }
 
-                    if "functions" not in optional_params:
-                        optional_params["functions"] = []
-                    optional_params["functions"].append(function_def)
-                    optional_params["function_call"] = {"name": schema_name}
+                    existing_functions = optional_params.get("functions")
+                    optional_params["functions"] = [
+                        *(
+                            existing_functions
+                            if isinstance(existing_functions, Sequence) and not isinstance(existing_functions, str)
+                            else ()
+                        ),
+                        function_def,
+                    ]
+                    optional_params["function_call"] = {"name": schema_name}  # mutable-ok: request payload
                     optional_params["_structured_output"] = True
 
         return optional_params
 
-    def _convert_tools_to_functions(self, tools: list[dict]) -> list[dict]:
+    def _convert_tools_to_functions(self, tools: Sequence) -> Sequence[dict]:
         """Convert OpenAI tools format to GigaChat functions format."""
-        functions: Final = []
-        for tool in tools:
-            if tool.get("type") == "function":
-                func = tool.get("function", {})
-                functions.append(
-                    {
-                        "name": func.get("name", ""),
-                        "description": func.get("description", ""),
-                        "parameters": func.get("parameters", {}),
-                    }
-                )
-        return functions
+        return [
+            {
+                "name": function.get("name", ""),
+                "description": function.get("description", ""),
+                "parameters": function.get("parameters", {}),
+            }
+            for function in (
+                tool.get("function", _EMPTY_FUNCTION)
+                for tool in tools
+                if isinstance(tool, dict) and tool.get("type") == "function"
+            )
+        ]
 
-    def _map_tool_choice(self, tool_choice: str | dict) -> str | dict | None:
+    def _map_tool_choice(self, tool_choice: str | Mapping[str, object]) -> str | Mapping[str, object] | None:
         """
         Map OpenAI tool_choice to GigaChat function_call format.
 
@@ -244,8 +256,9 @@ class GigaChatConfig(BaseConfig):
             # OpenAI format: {"type": "function", "function": {"name": "func_name"}}
             # GigaChat format: {"name": "func_name"}
             if tool_choice.get("type") == "function":
-                func_name: Final = tool_choice.get("function", {}).get("name")
-                if func_name:
+                function_spec: Final = tool_choice.get("function")
+                func_name: Final = function_spec.get("name") if isinstance(function_spec, Mapping) else None
+                if isinstance(func_name, str) and func_name:
                     return {"name": func_name}
 
         # Default to None (don't set function_call)
@@ -271,25 +284,52 @@ class GigaChatConfig(BaseConfig):
             verbose_logger.error("Failed to upload image: %s", e)
             return None
 
+    def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[str]]:
+        """
+        Extract text and image attachments from a multimodal message content list.
+
+        Args:
+            content: List of content parts (OpenAI multimodal format)
+
+        Returns:
+            Tuple of (combined text, list of attachment file ids)
+        """
+        texts: Final[list[str]] = []  # mutable-ok: accumulator
+        attachments: Final[list[str]] = []  # mutable-ok: accumulator
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    texts.append(part.get("text", ""))
+                elif part.get("type") == "image_url":
+                    image_url: object = part.get("image_url", {})
+                    upload_url: str
+                    if isinstance(image_url, str):
+                        upload_url = image_url
+                    else:
+                        upload_url = str(image_url.get("url", "")) if isinstance(image_url, dict) else ""
+                    if upload_url:
+                        file_id = self._upload_image(upload_url)
+                        if file_id:
+                            attachments.append(file_id)
+        text: Final = "\n".join(texts) if texts else ""
+        return text, attachments
+
     def transform_request(
         self,
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        messages: Sequence[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict:  # mutable-ok: request payload sent to httpx
         """Transform OpenAI request to GigaChat format."""
-        # Transform messages
         giga_messages: Final = self._transform_messages(messages)
 
-        # Build request
-        request_data: Final = {
+        request_data: Final[dict[str, object]] = {
             "model": model.replace("gigachat/", ""),
             "messages": giga_messages,
         }
 
-        # Add optional params
         for key in [
             "temperature",
             "top_p",
@@ -301,7 +341,6 @@ class GigaChatConfig(BaseConfig):
             if key in optional_params:
                 request_data[key] = optional_params[key]
 
-        # Add functions if present
         if "functions" in optional_params:
             request_data["functions"] = optional_params["functions"]
         if "function_call" in optional_params:
@@ -309,17 +348,15 @@ class GigaChatConfig(BaseConfig):
 
         return request_data
 
-    def _transform_messages(self, messages: list[AllMessageValues]) -> list[dict]:
+    def _transform_messages(self, messages: Sequence[AllMessageValues]) -> Sequence[dict]:
         """Transform OpenAI messages to GigaChat format."""
-        transformed: Final = []
+        transformed: Final[list[dict]] = []  # mutable-ok: accumulator for building transformed messages
 
         for i, msg in enumerate(messages):
             message = dict(msg)
 
-            # Remove unsupported fields
             message.pop("name", None)
 
-            # Transform roles
             role = message.get("role", "user")
             if role == "developer":
                 message["role"] = "system"
@@ -332,35 +369,15 @@ class GigaChatConfig(BaseConfig):
                 if not isinstance(content, str) or not is_valid_json(content):
                     message["content"] = json.dumps(content, ensure_ascii=False)
 
-            # Handle None content
             if message.get("content") is None:
                 message["content"] = ""
 
-            # Handle list content (multimodal) - extract text and images
             content = message.get("content")
             if isinstance(content, list):
-                texts = []
-                attachments = []
-                for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "text":
-                            texts.append(part.get("text", ""))
-                        elif part.get("type") == "image_url":
-                            # Extract image URL and upload to GigaChat
-                            image_url = part.get("image_url", {})
-                            if isinstance(image_url, str):
-                                url = image_url
-                            else:
-                                url = image_url.get("url", "")
-                            if url:
-                                file_id = self._upload_image(url)
-                                if file_id:
-                                    attachments.append(file_id)
-                message["content"] = "\n".join(texts) if texts else ""
+                message["content"], attachments = self._transform_list_content(content)
                 if attachments:
                     message["attachments"] = attachments
 
-            # Transform tool_calls to function_call
             tool_calls = message.get("tool_calls")
             if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
                 tool_call = tool_calls[0]
@@ -391,7 +408,7 @@ class GigaChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: tiktoken.Encoding | None,
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -406,18 +423,16 @@ class GigaChatConfig(BaseConfig):
 
         is_structured_output: Final = optional_params.get("_structured_output", False)
 
-        choices: Final = []
+        choices: Final[list[Choices]] = []  # mutable-ok: accumulator for building response choices
         for choice in response_json.get("choices", []):
             message_data = choice.get("message", {})
             finish_reason = choice.get("finish_reason", "stop")
 
-            # Transform function_call to tool_calls or content
             if finish_reason == "function_call" and message_data.get("function_call"):
                 func_call = message_data["function_call"]
                 args = func_call.get("arguments", {})
 
                 if is_structured_output:
-                    # Convert to content for structured output
                     if isinstance(args, dict):
                         content = json.dumps(args, ensure_ascii=False)
                     else:
@@ -427,7 +442,6 @@ class GigaChatConfig(BaseConfig):
                     message_data.pop("functions_state_id", None)
                     finish_reason = "stop"
                 else:
-                    # Convert to tool_calls format
                     if isinstance(args, dict):
                         args = json.dumps(args, ensure_ascii=False)
                     message_data["tool_calls"] = [
@@ -443,7 +457,6 @@ class GigaChatConfig(BaseConfig):
                     message_data.pop("function_call", None)
                     finish_reason = "tool_calls"
 
-            # Clean up GigaChat-specific fields
             message_data.pop("functions_state_id", None)
 
             choices.append(
@@ -460,11 +473,7 @@ class GigaChatConfig(BaseConfig):
 
         # Build usage
         usage_data: Final = response_json.get("usage", {})
-        usage: Final = Usage(
-            prompt_tokens=usage_data.get("prompt_tokens", 0),
-            completion_tokens=usage_data.get("completion_tokens", 0),
-            total_tokens=usage_data.get("total_tokens", 0),
-        )
+        usage: Final = convert_usage(usage_data)
 
         model_response.id = response_json.get("id", f"chatcmpl-{uuid.uuid4().hex[:12]}")
         model_response.created = response_json.get("created", int(time.time()))

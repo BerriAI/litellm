@@ -12,9 +12,10 @@ Schema versioning:
   litellm.use_legacy_interactions_schema = True. Remove flag after June 8, 2026.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -39,6 +40,53 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_JsonObject: TypeAlias = dict[str, object]
+
+
+class _InteractionPayload(TypedDict, total=False):
+    """JSON body of an Interactions API interaction, keyed as ``InteractionsAPIResponse`` fields."""
+
+    id: ReadOnly[str | None]
+    object: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    agent: ReadOnly[str | None]
+    status: ReadOnly[str | None]
+    created: ReadOnly[str | None]
+    updated: ReadOnly[str | None]
+    outputs: ReadOnly[list[_JsonObject] | None]
+    steps: ReadOnly[list[_JsonObject] | None]
+    usage: ReadOnly[_JsonObject | None]
+
+
+class _CancelPayload(TypedDict, total=False):
+    """JSON body of an Interactions API cancel response."""
+
+    id: ReadOnly[str | None]
+    status: ReadOnly[str | None]
+
+
+class _InteractionPayloadSource(Protocol):
+    """An Interactions API HTTP response, read for the interaction body it decodes to."""
+
+    def json(self) -> _InteractionPayload: ...
+
+
+class _CancelPayloadSource(Protocol):
+    """An Interactions API cancel HTTP response, read for the body it decodes to."""
+
+    def json(self) -> _CancelPayload: ...
+
+
+def _interaction_body(response: _InteractionPayloadSource) -> _InteractionPayload:
+    """Decode the body of an Interactions API interaction response."""
+    return response.json()
+
+
+def _cancel_body(response: _CancelPayloadSource) -> _CancelPayload:
+    """Decode the body of an Interactions API cancel response."""
+    return response.json()
 
 
 class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
@@ -143,7 +191,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         """
         use_legacy: Final[bool] = litellm.use_legacy_interactions_schema
 
-        request_body: Final[dict[str, Any]] = {}
+        request_body: Final[dict[str, object]] = {}
 
         # Model or Agent (one required)
         if model:
@@ -189,7 +237,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 and (not isinstance(response_format, dict) or "mime_type" not in response_format)
             ):
                 # Wrap the legacy schema into the new polymorphic format.
-                new_rf: Final[dict[str, Any]] = {
+                new_rf: Final[dict[str, object]] = {
                     "type": "text",
                     "mime_type": response_mime_type,
                 }
@@ -215,7 +263,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
                 if image_config is not None:
                     # Move image_config to response_format with type=image.
-                    image_rf: Final[dict[str, Any]] = {"type": "image", **image_config}
+                    image_rf: Final[_JsonObject] = {"type": "image", **image_config}
                     existing_rf: Final = request_body.get("response_format")
                     if existing_rf is None:
                         request_body["response_format"] = image_rf
@@ -239,7 +287,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_json: Final = raw_response.json()
+            raw_json: Final = _interaction_body(raw_response)
         except Exception:
             raise GeminiError(
                 message=raw_response.text,
@@ -290,7 +338,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIResponse:
         try:
-            raw_json: Final = raw_response.json()
+            raw_json: Final = _interaction_body(raw_response)
         except Exception:
             raise GeminiError(
                 message=raw_response.text,
@@ -355,7 +403,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         logging_obj: LiteLLMLoggingObj,
     ) -> CancelInteractionResult:
         try:
-            raw_json: Final = raw_response.json()
+            raw_json: Final = _cancel_body(raw_response)
         except Exception:
             raise GeminiError(
                 message=raw_response.text,

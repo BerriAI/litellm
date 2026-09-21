@@ -8,7 +8,7 @@ from re import Match
 from typing import Final
 
 from litellm._logging import verbose_router_logger
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider, get_llm_provider
 
 
 class PatternUtils:
@@ -56,8 +56,9 @@ class PatternMatchRouter:
     This class will store a mapping for regex pattern: List[Deployments]
     """
 
-    def __init__(self):
+    def __init__(self, pattern_utils: type[PatternUtils] = PatternUtils):
         self.patterns: dict[str, list] = {}
+        self._pattern_utils: Final = pattern_utils
 
     def add_pattern(self, pattern: str, llm_deployment: dict):
         """
@@ -69,9 +70,10 @@ class PatternMatchRouter:
         """
         # Convert the pattern to a regex
         regex: Final = self._pattern_to_regex(pattern)
-        if regex not in self.patterns:
-            self.patterns[regex] = []
-        self.patterns[regex].append(llm_deployment)
+        if regex in self.patterns:
+            self.patterns[regex].append(llm_deployment)
+            return
+        self.patterns = dict(self._pattern_utils.sorted_patterns({**self.patterns, regex: [llm_deployment]}))
 
     def remove_deployment(self, model_id: str) -> None:
         """
@@ -138,11 +140,12 @@ class PatternMatchRouter:
             if request is None:
                 return None
 
-            sorted_patterns: Final = PatternUtils.sorted_patterns(self.patterns)
             regex_filtered_model_names: Final = (
-                [self._pattern_to_regex(m) for m in filtered_model_names] if filtered_model_names is not None else []
+                tuple(self._pattern_to_regex(m) for m in filtered_model_names)
+                if filtered_model_names is not None
+                else ()
             )
-            for pattern, llm_deployments in sorted_patterns:
+            for pattern, llm_deployments in self.patterns.items():
                 if filtered_model_names is not None and pattern not in regex_filtered_model_names:
                     continue
                 pattern_match = re.match(pattern, request)
@@ -204,7 +207,7 @@ class PatternMatchRouter:
 
         return litellm_deployment_litellm_model
 
-    def get_pattern(self, model: str, custom_llm_provider: str | None = None) -> list[dict] | None:
+    def get_pattern(self, model: str | None, custom_llm_provider: str | None = None) -> list[dict] | None:
         """
         Check if a pattern exists for the given model and custom llm provider
 
@@ -215,18 +218,17 @@ class PatternMatchRouter:
         Returns:
             bool: True if pattern exists, False otherwise
         """
-        if custom_llm_provider is None:
-            try:
-                (
-                    _,
-                    custom_llm_provider,
-                    _,
-                    _,
-                ) = get_llm_provider(model=model)
-            except Exception:
-                # get_llm_provider raises exception when provider is unknown
-                pass
-        return self.route(model) or self.route(f"{custom_llm_provider}/{model}")
+        provider: Final = (
+            custom_llm_provider or declared_authenticating_provider(model) or self._resolved_provider(model)
+        )
+        return self.route(model) or self.route(f"{provider}/{model}")
+
+    @staticmethod
+    def _resolved_provider(model: str | None) -> str | None:
+        try:
+            return get_llm_provider(model=model)[1] if model else None
+        except Exception:  # noqa: BLE001  # get_llm_provider raises when the provider is unknown; the name then routes as-is
+            return None
 
     def get_deployments_by_pattern(self, model: str, custom_llm_provider: str | None = None) -> list[dict]:
         """

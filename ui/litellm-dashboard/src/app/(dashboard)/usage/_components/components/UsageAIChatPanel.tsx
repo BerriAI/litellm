@@ -239,7 +239,7 @@ const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, acce
   return (
     <div
       data-testid="usage-ai-chat-panel"
-      className={`fixed top-0 right-0 h-full bg-card border-l border-border shadow-2xl z-50 flex flex-col transition-transform duration-300 ease-in-out ${
+      className={`fixed top-0 right-0 h-full bg-card border-l border-border shadow-2xl z-overlay flex flex-col transition-transform duration-300 ease-in-out ${
         open ? "translate-x-0" : "translate-x-full"
       }`}
       style={{ width: 420 }}

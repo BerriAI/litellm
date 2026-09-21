@@ -233,3 +233,18 @@ def test_trusted_vars_overlay_uses_shared_parser_semantics():
     )
 
     assert params.get("newrelic_api_key") == "12345"
+
+
+def test_validate_langfuse_environment_value():
+    import pytest
+
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_langfuse_environment_value,
+    )
+
+    validate_langfuse_environment_value("team-a-prod")
+    validate_langfuse_environment_value("staging_2")
+
+    for bad in ["Production", "langfuse-eu", "", "team a"]:
+        with pytest.raises(ValueError, match="langfuse_environment"):
+            validate_langfuse_environment_value(bad)

@@ -28,6 +28,9 @@ export interface GuardrailInformation {
   guardrail_status: string;
   guardrail_response: GuardrailEntity[] | BedrockGuardrailResponse;
   masked_entity_count: Record<string, number>;
+  guardrail_usage?: Record<string, number>;
+  guardrail_cost?: number;
+  guardrail_cost_in_spend?: boolean;
   guardrail_provider?: string;
 }
 

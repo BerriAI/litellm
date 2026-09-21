@@ -220,6 +220,12 @@
         "ui_name": "Host URL",
         "description": "Langfuse host URL (default: https://cloud.langfuse.com)",
         "required": false
+      },
+      "langfuse_environment": {
+        "type": "text",
+        "ui_name": "Tracing Environment",
+        "description": "Langfuse tracing environment (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)",
+        "required": false
       }
     },
     "description": "Langfuse v2 Logging Integration"
@@ -246,6 +252,12 @@
         "type": "text",
         "ui_name": "Host URL",
         "description": "Langfuse host URL (default: https://cloud.langfuse.com)",
+        "required": false
+      },
+      "langfuse_environment": {
+        "type": "text",
+        "ui_name": "Tracing Environment",
+        "description": "Langfuse tracing environment (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)",
         "required": false
       }
     },
@@ -344,14 +356,48 @@
         "description": "OpenTelemetry collector endpoint URL",
         "required": true
       },
+      "otel_traces_endpoint": {
+        "type": "text",
+        "ui_name": "Traces Endpoint URL",
+        "description": "Complete trace export URL used verbatim when the collector does not serve /v1/traces (OTel v2 only)",
+        "required": false
+      },
       "otel_headers": {
         "type": "text",
         "ui_name": "Headers",
         "description": "Headers for OTEL exporter (e.g., x-honeycomb-team=YOUR_API_KEY)",
         "required": false
+      },
+      "otel_exporter_otlp_protocol": {
+        "type": "select",
+        "ui_name": "Export Protocol",
+        "description": "OTLP wire format for trace exports. Use http/json for collectors that cannot decode protobuf",
+        "options": ["http/protobuf", "http/json"],
+        "required": false
       }
     },
     "description": "OpenTelemetry Logging Integration"
+  },
+  {
+    "id": "pointfive",
+    "displayName": "PointFive",
+    "logo": "pointfive.png",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "POINTFIVE_API_KEY": {
+        "type": "password",
+        "ui_name": "API Key",
+        "description": "PointFive API key, used to request an upload url for each batch of logs",
+        "required": true
+      },
+      "POINTFIVE_API_URL": {
+        "type": "text",
+        "ui_name": "API URL",
+        "description": "PointFive API endpoint. Leave blank to use https://api.pointfive.co/api/v1/ingestion",
+        "required": false
+      }
+    },
+    "description": "PointFive Logging Integration"
   },
   {
     "id": "s3",

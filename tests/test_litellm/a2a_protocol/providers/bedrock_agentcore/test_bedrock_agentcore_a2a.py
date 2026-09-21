@@ -11,7 +11,9 @@ Verifies that:
 
 import json
 
+import httpx
 import pytest
+import respx
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -293,6 +295,195 @@ class TestTransformation:
         # SigV4 produces an Authorization header starting with "AWS4-HMAC-SHA256"
         assert "Authorization" in headers
         assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+
+
+SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
+CONTEXT_ID = "conversation-alpha-0001-0000000000000000"
+KEY_HASH = "hashed-key-of-caller-one"
+
+
+def _params_with_context(context_id: object) -> dict:
+    return {"message": {**SAMPLE_PARAMS["message"], "contextId": context_id}}
+
+
+def _scoped(context_id: str, key_hash: str) -> str:
+    import hashlib
+
+    return f"{hashlib.sha256(key_hash.encode()).hexdigest()[:16]}-{context_id}"
+
+
+def _session_header(params: dict, litellm_params: dict) -> str:
+    from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+        BedrockAgentCoreA2ATransformation,
+    )
+
+    _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+        request_id="req-001",
+        params=params,
+        litellm_params=litellm_params,
+    )
+    return headers[SESSION_HEADER]
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch):
+    import litellm
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+class TestRequestScopedRuntimeSession:
+    """message.contextId selects the AgentCore runtime session, scoped to the calling key."""
+
+    def test_context_id_scoped_to_calling_key(self):
+        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+            A2A_USER_API_KEY_HASH_PARAM,
+        )
+
+        litellm_params = {**SAMPLE_LITELLM_PARAMS, A2A_USER_API_KEY_HASH_PARAM: KEY_HASH}
+        assert _session_header(_params_with_context(CONTEXT_ID), litellm_params) == _scoped(CONTEXT_ID, KEY_HASH)
+
+    def test_context_id_used_verbatim_without_principal(self):
+        assert _session_header(_params_with_context(CONTEXT_ID), SAMPLE_LITELLM_PARAMS) == CONTEXT_ID
+
+    def test_same_context_id_reuses_session_and_other_context_isolated(self):
+        first = _session_header(_params_with_context(CONTEXT_ID), SAMPLE_LITELLM_PARAMS)
+        second = _session_header(_params_with_context(CONTEXT_ID), SAMPLE_LITELLM_PARAMS)
+        other = _session_header(
+            _params_with_context("conversation-beta-00002-0000000000000000"),
+            SAMPLE_LITELLM_PARAMS,
+        )
+        assert first == second
+        assert other != first
+
+    def test_same_context_id_from_different_keys_is_isolated(self):
+        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+            A2A_USER_API_KEY_HASH_PARAM,
+        )
+
+        params = _params_with_context(CONTEXT_ID)
+        caller_one = _session_header(params, {**SAMPLE_LITELLM_PARAMS, A2A_USER_API_KEY_HASH_PARAM: KEY_HASH})
+        caller_two = _session_header(
+            params, {**SAMPLE_LITELLM_PARAMS, A2A_USER_API_KEY_HASH_PARAM: "hashed-key-of-caller-two"}
+        )
+        assert caller_one != caller_two
+        assert caller_one.endswith(f"-{CONTEXT_ID}")
+        assert caller_two.endswith(f"-{CONTEXT_ID}")
+
+    def test_context_id_takes_precedence_over_configured_session(self):
+        litellm_params = {**SAMPLE_LITELLM_PARAMS, "runtimeSessionId": "a" * 40}
+        assert _session_header(_params_with_context(CONTEXT_ID), litellm_params) == CONTEXT_ID
+
+    def test_configured_session_is_fallback_without_context_id(self):
+        litellm_params = {**SAMPLE_LITELLM_PARAMS, "runtimeSessionId": "a" * 40}
+        assert _session_header(SAMPLE_PARAMS, litellm_params) == "a" * 40
+        assert _session_header(_params_with_context(""), litellm_params) == "a" * 40
+
+    def test_no_context_id_and_no_config_generates_new_session_per_request(self):
+        first = _session_header(SAMPLE_PARAMS, SAMPLE_LITELLM_PARAMS)
+        second = _session_header(SAMPLE_PARAMS, SAMPLE_LITELLM_PARAMS)
+        assert first != second
+        assert 33 <= len(first) <= 256
+
+    @pytest.mark.parametrize(
+        "context_id",
+        [
+            "short-context-id",
+            "x" * 257,
+        ],
+    )
+    def test_invalid_context_id_rejected_with_clear_error(self, context_id):
+        import litellm
+
+        with pytest.raises(litellm.BadRequestError, match="Invalid AgentCore runtime session id") as exc_info:
+            _session_header(_params_with_context(context_id), SAMPLE_LITELLM_PARAMS)
+        assert exc_info.value.status_code == 400
+        assert "33-256" in str(exc_info.value)
+
+    def test_scoped_context_id_shorter_than_33_rejected(self):
+        import litellm
+        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+            A2A_USER_API_KEY_HASH_PARAM,
+        )
+
+        litellm_params = {**SAMPLE_LITELLM_PARAMS, A2A_USER_API_KEY_HASH_PARAM: KEY_HASH}
+        with pytest.raises(litellm.BadRequestError, match=_scoped("c" * 15, KEY_HASH)):
+            _session_header(_params_with_context("c" * 15), litellm_params)
+        assert _session_header(_params_with_context("c" * 16), litellm_params) == _scoped("c" * 16, KEY_HASH)
+
+    def test_invalid_configured_session_rejected(self):
+        import litellm
+
+        litellm_params = {**SAMPLE_LITELLM_PARAMS, "runtimeSessionId": "too-short"}
+        with pytest.raises(litellm.BadRequestError, match="Invalid AgentCore runtime session id"):
+            _session_header(SAMPLE_PARAMS, litellm_params)
+
+    def test_non_string_context_id_falls_back(self):
+        litellm_params = {**SAMPLE_LITELLM_PARAMS, "runtimeSessionId": "a" * 40}
+        assert _session_header(_params_with_context(12345), litellm_params) == "a" * 40
+
+    def test_spoofed_session_header_does_not_override_context_id(self):
+        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
+            BedrockAgentCoreA2ATransformation,
+        )
+
+        _, headers, _ = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=_params_with_context(CONTEXT_ID),
+            litellm_params=SAMPLE_LITELLM_PARAMS,
+            agent_extra_headers={SESSION_HEADER: "s" * 40},
+        )
+        assert headers[SESSION_HEADER] == CONTEXT_ID
+
+    @pytest.mark.asyncio
+    async def test_context_id_session_header_on_outbound_non_streaming_post(self, httpx_transport):
+        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+            A2A_USER_API_KEY_HASH_PARAM,
+        )
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            route = router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": "req-001", "result": {}})
+            )
+            await BedrockAgentCoreA2AConfig().handle_non_streaming(
+                request_id="req-001",
+                params=_params_with_context(CONTEXT_ID),
+                litellm_params={**SAMPLE_LITELLM_PARAMS, A2A_USER_API_KEY_HASH_PARAM: KEY_HASH},
+            )
+
+        assert route.calls.last.request.headers[SESSION_HEADER] == _scoped(CONTEXT_ID, KEY_HASH)
+
+    @pytest.mark.asyncio
+    async def test_context_id_session_header_on_outbound_streaming_post(self, httpx_transport):
+        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+            A2A_USER_API_KEY_HASH_PARAM,
+        )
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        with respx.mock(assert_all_called=True) as router:
+            route = router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(200, json={"jsonrpc": "2.0", "id": "req-001", "result": {}})
+            )
+            events = [
+                event
+                async for event in BedrockAgentCoreA2AConfig().handle_streaming(
+                    request_id="req-001",
+                    params=_params_with_context(CONTEXT_ID),
+                    litellm_params={**SAMPLE_LITELLM_PARAMS, A2A_USER_API_KEY_HASH_PARAM: KEY_HASH},
+                )
+            ]
+
+        assert events == [{"jsonrpc": "2.0", "id": "req-001", "result": {}}]
+        assert route.calls.last.request.headers[SESSION_HEADER] == _scoped(CONTEXT_ID, KEY_HASH)
 
 
 class TestNonStreaming:

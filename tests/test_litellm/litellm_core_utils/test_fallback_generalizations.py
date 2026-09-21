@@ -366,7 +366,7 @@ def test_shipped_rules_stack_adaptive_and_mid_conversation_flags(shipped_cost_ma
 def test_shipped_rules_flag_unmapped_fable_as_always_on_thinking(shipped_cost_map):
     """An unmapped Fable/Mythos id picks up ``thinking_always_on`` from the
     claude-always-on-thinking rule, while other unmapped Claudes stay unflagged."""
-    model = "claude-fable-5-1"
+    model = "claude-fable-6-1"
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model, custom_llm_provider="anthropic")
     assert info["thinking_always_on"] is True
@@ -419,7 +419,7 @@ def test_shipped_rules_cover_new_families_like_fable_at_5_plus(shipped_cost_map)
     """Both version gates accept any claude-<family>- id at major 5 or higher, bare
     major or major-minor, so a new family shaped like claude-fable-5 gets adaptive
     thinking and mid-conversation system support without a cost-map entry."""
-    model = "claude-fable-5-1"
+    model = "claude-fable-6-1"
     assert model not in litellm.model_cost
     info = litellm.get_model_info(model, custom_llm_provider="anthropic")
     assert info["supports_mid_conversation_system"] is True
@@ -571,3 +571,154 @@ def test_shipped_mid_conversation_gate_on_bedrock_ids(shipped_cost_map):
     ):
         matched = match_capability_generalizations(unflagged)
         assert matched is None or not matched.get("supports_mid_conversation_system"), unflagged
+
+
+def test_shipped_rules_flag_unmapped_wandb_ids_as_reasoning(shipped_cost_map):
+    """W&B ships reasoning models faster than the registry names them, so an unmapped
+    wandb id resolves as reasoning-capable and its reasoning_effort survives instead of
+    being dropped. The rule carries no mode and no pricing, so cost stays on the standard
+    unpriced behavior and the deployment does not read as catalog-mapped."""
+    model = "wandb/zai-org/GLM-6-Turbo"
+    assert model not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider="wandb")
+    assert info["litellm_provider"] == "wandb"
+    assert info["supports_reasoning"] is True
+    assert info.get("mode") is None
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+    assert litellm.supports_reasoning(model="zai-org/GLM-6-Turbo", custom_llm_provider="wandb") is True
+
+
+def test_shipped_wandb_rule_loses_to_mapped_non_reasoning_entries(shipped_cost_map):
+    """The whole point of a fallback is that it only fills gaps. A wandb model the map
+    describes as non-reasoning must stay non-reasoning, otherwise the rule silently
+    re-introduces the blanket supports_reasoning it exists to avoid."""
+    for model in (
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "microsoft/Phi-4-mini-instruct",
+        "moonshotai/Kimi-K2-Instruct",
+        "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    ):
+        assert f"wandb/{model}" in litellm.model_cost, model
+        assert litellm.supports_reasoning(model=model, custom_llm_provider="wandb") is False, model
+
+
+def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map):
+    """``^wandb/`` is anchored, so it cannot leak onto another provider's ids."""
+    assert match_capability_generalizations("wandb/some-new-model") == {"supports_reasoning": True}
+    for foreign in ("openai/some-new-model", "notwandb/some-new-model", "together_ai/wandb/some-new-model"):
+        matched = match_capability_generalizations(foreign)
+        assert matched is None or not matched.get("supports_reasoning"), foreign
+
+
+def test_shipped_wandb_rule_keeps_reasoning_effort_on_an_unmapped_model(shipped_cost_map):
+    """End to end through the provider config: the gate WandbConfig applies reads the
+    rule, so reasoning_effort is advertised and survives get_optional_params rather than
+    raising UnsupportedParamsError."""
+    model = "zai-org/GLM-6-Turbo"
+    assert f"wandb/{model}" not in litellm.model_cost
+
+    supported = litellm.get_supported_openai_params(model=f"wandb/{model}")
+    assert supported is not None
+    assert "reasoning_effort" in supported
+
+    optional_params = litellm.utils.get_optional_params(
+        model=model,
+        custom_llm_provider="wandb",
+        reasoning_effort="medium",
+        drop_params=False,
+    )
+    assert optional_params["reasoning_effort"] == "medium"
+
+
+def test_router_registration_does_not_shadow_shipped_rules(shipped_cost_map):
+    """Regression: Router writes every configured deployment into ``litellm.model_cost``,
+    and an exact entry ends the lookup ladder before the rules are consulted. Registering
+    an unmapped model has to carry the rule defaults forward, or configuring a model on a
+    proxy silently strips the capabilities the same model resolves to off-proxy."""
+    from litellm import Router
+
+    unmapped_wandb = "wandb/zai-org/GLM-6-Turbo"
+    unmapped_claude = "anthropic/claude-opus-9"
+    assert unmapped_wandb not in litellm.model_cost
+    assert unmapped_claude not in litellm.model_cost
+
+    Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": name, "api_key": "fake"}}
+            for name in (unmapped_wandb, unmapped_claude)
+        ]
+    )
+
+    assert unmapped_wandb in litellm.model_cost
+    assert unmapped_claude in litellm.model_cost
+    assert litellm.supports_reasoning(model="zai-org/GLM-6-Turbo", custom_llm_provider="wandb") is True
+    assert litellm.supports_reasoning(model="claude-opus-9", custom_llm_provider="anthropic") is True
+
+
+def test_deployment_model_info_beats_the_seeded_rule_defaults(shipped_cost_map):
+    """Seeding a registration from the rules is a floor, not an override: an explicit
+    model_info on the deployment still wins, so a non-reasoning model can be configured
+    under a reasoning-first namespace."""
+    from litellm import Router
+
+    model = "wandb/some-org/NoThink-1"
+    Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {"model": model, "api_key": "fake"},
+                "model_info": {"supports_reasoning": False},
+            }
+        ]
+    )
+
+    assert litellm.model_cost[model]["supports_reasoning"] is False
+    assert litellm.supports_reasoning(model="some-org/NoThink-1", custom_llm_provider="wandb") is False
+
+
+def test_shipped_rules_flag_unmapped_openai_reasoning_families(shipped_cost_map):
+    for model in (
+        "gpt-5.7-nova",
+        "openai/gpt-6",
+        "ft:gpt-5.1-2025-11-13:org::abc",
+        "o5-mini",
+        "gpt-5.6-codex-max",
+        "o4-mini-deep-research-2027-01-01",
+        "gpt-5.7-chat-latest",
+        "azure/gpt-5.7-cyber",
+        "openai/codex-mini-latest-2027",
+    ):
+        assert model not in litellm.model_cost, model
+        assert match_capability_generalizations(model) == {"supports_reasoning": True}, model
+    info = litellm.get_model_info("gpt-5.7-nova", custom_llm_provider="openai")
+    assert info["litellm_provider"] == "openai"
+    assert info["supports_reasoning"] is True
+    assert info.get("mode") is None
+    assert not info.get("input_cost_per_token")
+    assert litellm.supports_reasoning(model="gpt-5.7-nova", custom_llm_provider="openai") is True
+
+
+def test_shipped_openai_reasoning_rule_skips_non_reasoning_gpt_ids(shipped_cost_map):
+    for model in (
+        "gpt-4o",
+        "gpt-4.1-nano-new",
+        "gpt-oss-120b",
+        "gpt-realtime-2027",
+        "gpt-image-2",
+        "gpt-5-search-api-2027-01-01",
+        "omni-moderation-new",
+        "text-embedding-4",
+        "vendor/my-codex-embedding",
+        "some-codex-model",
+        "azure/gpt-35-turbo-0125-custom",
+        "github_copilot/gpt-41-copilot-new",
+    ):
+        assert match_capability_generalizations(model) is None, model
+
+
+def test_shipped_openai_reasoning_rule_loses_to_mapped_entries(shipped_cost_map):
+    assert "gpt-5-search-api" in litellm.model_cost
+    assert litellm.supports_reasoning(model="gpt-5-search-api", custom_llm_provider="openai") is False

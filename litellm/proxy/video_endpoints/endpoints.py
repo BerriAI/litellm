@@ -1,9 +1,10 @@
 #### Video Endpoints #####
 
-from typing import Any, Final
+from typing import Final
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -160,7 +161,7 @@ async def video_list(
 
     # Read query parameters
     query_params: Final = dict(request.query_params)
-    data: Final[dict[str, Any]] = {"query_params": query_params}
+    data: Final[dict[str, object]] = {"query_params": query_params}
 
     # Extract custom_llm_provider from headers, query params, or body
     custom_llm_provider: Final = (
@@ -245,7 +246,7 @@ async def video_status(
     )
 
     # Create data with video_id
-    data: Final[dict[str, Any]] = {"video_id": video_id}
+    data: Final[dict[str, object]] = {"video_id": video_id}
 
     decoded: Final = decode_video_id_with_provider(video_id)
     provider_from_id: Final = decoded.get("custom_llm_provider")
@@ -344,7 +345,7 @@ async def video_content(
     )
 
     # Create data with video_id
-    data: Final[dict[str, Any]] = {"video_id": video_id}
+    data: Final[dict[str, object]] = {"video_id": video_id}
 
     decoded: Final = decode_video_id_with_provider(video_id)
     provider_from_id: Final = decoded.get("custom_llm_provider")
@@ -652,7 +653,7 @@ async def video_get_character(
     )
 
     original_requested_character_id: Final = character_id
-    data: Final[dict[str, Any]] = {"character_id": character_id}
+    data: Final[dict[str, object]] = {"character_id": character_id}
 
     decoded: Final = decode_character_id_with_provider(character_id)
     provider_from_id: Final = decoded.get("custom_llm_provider")
@@ -759,7 +760,14 @@ async def video_edit(
     )
 
     data: Final = await _read_request_body(request=request)
-    data["video_id"] = video_reference_to_id(data.pop("video", None))
+    uploaded_video: Final = data.pop("video", None)
+    if isinstance(uploaded_video, StarletteUploadFile):
+        video_files: Final = await batch_to_bytesio((uploaded_video,))
+        if video_files:
+            data["video"] = video_files[0]
+        data["video_id"] = ""
+    else:
+        data["video_id"] = video_reference_to_id(uploaded_video)
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")

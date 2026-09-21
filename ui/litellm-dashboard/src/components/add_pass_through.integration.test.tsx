@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../tests/test-utils";
+import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import AddPassThroughEndpoint from "./add_pass_through";
 
 const createPassThroughEndpoint = vi.fn();
@@ -153,8 +153,7 @@ describe("add_pass_through submit payload", () => {
     await openModal(user);
     await fillRequiredFields(user);
 
-    await user.click(screen.getByLabelText(/HTTP Methods/));
-    await user.click(await screen.findByTitle("POST"));
+    await chooseSelectOption(user, screen.getByLabelText(/HTTP Methods/), "POST");
 
     await submit(user);
 

@@ -6,6 +6,7 @@ It uses the field targeting configuration from litellm_logging_obj
 to extract specific fields for guardrail processing.
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional
 
 from litellm._logging import verbose_proxy_logger
@@ -89,7 +90,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-    ) -> Any:
+    ) -> Mapping[str, object]:
         """
         Process input by applying guardrails to targeted fields or full payload.
         """
@@ -127,12 +128,12 @@ class PassThroughEndpointHandler(BaseTranslation):
 
     async def process_output_response(
         self,
-        response: Any,
+        response: object,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> object:
         """
         Process output response by applying guardrails to targeted fields.
 
@@ -236,12 +237,12 @@ class LlmPassthroughRouteHandler(BaseTranslation):
 
     async def process_output_response(
         self,
-        response: Any,
+        response: object,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
-        user_api_key_dict: Any | None = None,
+        user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
         request_data: dict | None = None,
-    ) -> Any:
+    ) -> object:
         provider: Final = (request_data or {}).get("custom_llm_provider")
         handler_cls: Final = _get_provider_handlers().get(provider or "")
         if handler_cls is None:

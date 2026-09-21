@@ -1819,3 +1819,92 @@ async def test_run_thread_stream_is_untouched_while_keepalives_are_unconfigured(
 
     assert not any(chunk.startswith(": ping") for chunk in chunks)
     assert chunks[-1] == "data: [DONE]\n\n"
+
+
+# ---------------------------------------------------------------------------
+# async_queue_request: SSE keepalives during the time-to-first-token
+# ---------------------------------------------------------------------------
+
+
+async def _queue_streaming(monkeypatch, interval, delay=0.3, fails_with=None):
+    _patch_logging_flags(monkeypatch)
+    monkeypatch.setattr(litellm, "sse_keepalive_ping_interval_seconds", interval)
+
+    router = MagicMock()
+    router.get_model_list.return_value = []
+
+    async def _schedule_after_the_scheduler_queue_drains(**kwargs):
+        await asyncio.sleep(delay)
+        if fails_with is not None:
+            raise fails_with
+        return _async_iter([_simple_chunk(content="queued reply")])
+
+    router.schedule_acompletion = _schedule_after_the_scheduler_queue_drains
+    monkeypatch.setattr(ps, "llm_router", router)
+
+    request = MagicMock()
+    request.url = "http://testserver/queue/chat/completions"
+    request.method = "POST"
+    request.headers = {}
+    request.json = AsyncMock(
+        return_value={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "priority": 0,
+            "stream": True,
+        }
+    )
+    request.is_disconnected = AsyncMock(return_value=False)
+
+    return await ps.async_queue_request(
+        request=request,
+        fastapi_response=Response(),
+        user_api_key_dict=_user_auth(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_queue_request_pings_while_the_scheduler_is_still_waiting(monkeypatch):
+    response = await _queue_streaming(monkeypatch, interval=0.05)
+
+    assert isinstance(response, StreamingResponse)
+    assert response.headers["x-accel-buffering"] == "no"
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks[0] == b": ping\n\n"
+    assert chunks.count(b": ping\n\n") >= 3
+    assert b'"content":"queued reply"' in chunks[-2]
+    assert chunks[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_queue_request_audits_a_failure_that_arrives_after_the_first_ping(monkeypatch):
+    audited = []
+
+    async def _record_failure(*, user_api_key_dict, original_exception, request_data, **kwargs):
+        audited.append(original_exception)
+        return None
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _record_failure)
+
+    boom = RuntimeError("scheduler died after the wire was already open")
+    response = await _queue_streaming(monkeypatch, interval=0.05, fails_with=boom)
+
+    assert isinstance(response, StreamingResponse)
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert chunks[0] == b": ping\n\n"
+    assert audited == [boom]
+    assert json.loads(chunks[-2].removeprefix(b"data: "))["error"]["code"] == "500"
+    assert chunks[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_queue_request_stream_is_untouched_while_keepalives_are_unconfigured(monkeypatch):
+    response = await _queue_streaming(monkeypatch, interval=None, delay=0.15)
+
+    assert isinstance(response, StreamingResponse)
+    chunks = [chunk if isinstance(chunk, bytes) else chunk.encode() async for chunk in response.body_iterator]
+
+    assert not any(chunk.startswith(b": ping") for chunk in chunks)
+    assert chunks[-1] == b"data: [DONE]\n\n"
