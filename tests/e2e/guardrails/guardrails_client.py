@@ -270,8 +270,6 @@ class GuardrailsClient:
         return self.proxy.generate_key(KeyGenerateBody(team_id=team_id, user_id="e2e-guardrails-user"))
 
     def create_key_with_guardrails(self, resources: ResourceManager, guardrails: list[str]) -> str:
-        """A key whose metadata.guardrails attaches the named guardrails to every
-        request made with it, the way an admin attaches one from the key page."""
         key = self.proxy.generate_key(
             KeyGenerateBody(user_id="e2e-guardrails-user", metadata=KeyMetadata(guardrails=guardrails))
         )
