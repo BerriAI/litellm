@@ -4267,7 +4267,7 @@ if MCP_AVAILABLE:
             return None
         return _get_authorization_header_from_scope(scope)
 
-    def _extra_headers_for_probe(server: MCPServer, raw_headers: Mapping[str, str] | None) -> dict[str, str] | None:
+    def _extra_headers_for_probe(server: MCPServer, raw_headers: Mapping[str, str] | None) -> Mapping[str, str] | None:
         """Caller's values for headers this upstream is configured to read
         (``server.extra_headers``), minus ``authorization`` which the probe
         sets itself. Lets the pre-session probe re-run the same auth path a
@@ -4275,19 +4275,21 @@ if MCP_AVAILABLE:
         """
         if not server.extra_headers or not raw_headers:
             return None
-        normalized: Final = {k.lower(): v for k, v in raw_headers.items()}
-        forwarded: Final = {
-            header: normalized[header.lower()]
-            for header in server.extra_headers
-            if header.lower() != "authorization" and header.lower() in normalized
-        }
+        normalized: Final = types.MappingProxyType({k.lower(): v for k, v in raw_headers.items()})
+        forwarded: Final = types.MappingProxyType(
+            {
+                header: normalized[header.lower()]
+                for header in server.extra_headers
+                if header.lower() != "authorization" and header.lower() in normalized
+            }
+        )
         return forwarded or None
 
     async def _probe_upstream_auth(
         url: str,
         auth_header: str,
         timeout: float = 5.0,
-        extra_headers: dict[str, str] | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> tuple[int, str | None]:
         """JSON-RPC initialize-probe the upstream URL to check whether the token is accepted.
 
@@ -4325,7 +4327,7 @@ if MCP_AVAILABLE:
         probe_headers: Final = {
             "Accept": "application/json, text/event-stream",
             **({"Authorization": auth_header} if auth_header else {}),
-            **(extra_headers or {}),
+            **(extra_headers or types.MappingProxyType({})),
         }
         try:
             resp: Final = await client.post(
