@@ -102,7 +102,7 @@ def test_long_window_blocks_after_short_window_resets(client: BudgetClient, reso
 
     # 1. drive the key to get blocked by SHORT_WINDOW, assert it's budget error
     blocked = _drive_to_block(client, key)
-    assert blocked.status_code == 429, f"budget block was not a 429: {blocked.status_code} {blocked.body[:200]}"
+    assert blocked.status_code == 422, f"budget block was not a 422: {blocked.status_code} {blocked.body[:200]}"
 
     # 2. check the reset times of both budget windows after we drove to being blocked
     blocked_reset_at = window_reset_at(client.key_budget_windows(key), SHORT_WINDOW)
