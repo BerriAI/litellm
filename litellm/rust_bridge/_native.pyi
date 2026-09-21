@@ -1,5 +1,5 @@
 from asyncio import Future
-from collections.abc import AsyncIterator, Awaitable, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import Never, final
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
@@ -92,72 +92,6 @@ class ResponsesWebSocketConnection:
     def send_text(self, text: str) -> Future[None]: ...
     def recv_text(self) -> Future[str | None]: ...
     def close(self) -> Future[None]: ...
-
-@final
-class _CacheTestHandle:
-    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
-    @staticmethod
-    def memory(
-        *, capacity: int = 200, ttl_seconds: float = 600.0, max_entry_bytes: int = 1048576
-    ) -> _CacheTestHandle: ...
-    @staticmethod
-    def redis(url: str, *, ttl_seconds: float | None = None, namespace: str | None = None) -> _CacheTestHandle: ...
-    @property
-    def backend(self) -> str: ...
-    def _bind_facade(self, facade: object) -> None: ...
-
-@final
-class _CacheTestResolver:
-    def __new__(cls, namespace: object) -> _CacheTestResolver: ...
-    def resolve(self) -> _CacheTestBinding: ...
-
-@final
-class _CacheTestBinding:
-    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
-    @property
-    def kind(self) -> str: ...
-    def lookup(
-        self, request: Mapping[str, object] | None, *, callback_kwargs: dict[str, object] | None = None
-    ) -> object: ...
-    def store(
-        self,
-        request: Mapping[str, object] | None,
-        response: object,
-        *,
-        callback_kwargs: dict[str, object] | None = None,
-    ) -> None: ...
-    def lookup_batch(
-        self,
-        requests: Sequence[Mapping[str, object]],
-        *,
-        callback_kwargs: Sequence[dict[str, object]] | None = None,
-    ) -> object: ...
-    def async_lookup(
-        self, request: Mapping[str, object] | None, *, callback_kwargs: dict[str, object] | None = None
-    ) -> Awaitable[object]: ...
-    def async_store(
-        self,
-        request: Mapping[str, object] | None,
-        response: object,
-        *,
-        callback_kwargs: dict[str, object] | None = None,
-    ) -> Awaitable[object]: ...
-    def async_lookup_batch(
-        self,
-        requests: Sequence[Mapping[str, object]],
-        *,
-        callback_kwargs: Sequence[dict[str, object]] | None = None,
-    ) -> Awaitable[object]: ...
-    def async_store_batch(
-        self,
-        requests: Sequence[Mapping[str, object]],
-        responses: Sequence[object],
-        *,
-        callback_result: object = None,
-        callback_kwargs: dict[str, object] | None = None,
-    ) -> Awaitable[object]: ...
-    def async_flush(self) -> Awaitable[None]: ...
-    def ping(self) -> Awaitable[object]: ...
 
 @final
 class TokenCounter:

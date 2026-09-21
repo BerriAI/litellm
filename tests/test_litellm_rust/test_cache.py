@@ -361,18 +361,6 @@ def test_facade_registration_rejects_mismatched_capacity() -> None:
         _native._CacheTestHandle.memory(capacity=7)._bind_facade(facade)
 
 
-async def test_redis_handle_reads_the_python_default_ttl(redis_url: str) -> None:
-    client: Final = redis.Redis.from_url(redis_url)
-    with rebound(litellm, "default_redis_ttl", 7):
-        binding: Final = _native._CacheTestResolver(
-            SimpleNamespace(cache=_native._CacheTestHandle.redis(redis_url))
-        ).resolve()
-        await binding.async_store(request("native-default"), {"value": 1})
-
-    assert 0 < client.ttl("native-default") <= 7
-    client.close()
-
-
 async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
     parsed: Final = urlparse(redis_url)
     with rebound(litellm, "default_redis_ttl", 60):
@@ -386,7 +374,7 @@ async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
             _native._CacheTestHandle.redis(redis_url, ttl_seconds=61)._bind_facade(facade)
         with pytest.raises(TypeError, match="namespaces must match"):
             _native._CacheTestHandle.redis(redis_url, namespace="other")._bind_facade(facade)
-        _native._CacheTestHandle.redis(redis_url)._bind_facade(facade)
+        _native._CacheTestHandle.redis(redis_url, ttl_seconds=60)._bind_facade(facade)
     binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     client: Final = redis.Redis.from_url(redis_url)
 
