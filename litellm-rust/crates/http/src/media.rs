@@ -54,16 +54,39 @@ impl Default for UrlPolicy {
 impl UrlPolicy {
     fn allows(&self, host: &str, port: u16) -> bool {
         let host = normalize_host(host);
-        let with_port = format!("{host}:{port}");
         self.allowed_hosts
             .iter()
-            .map(|entry| normalize_host(entry))
-            .any(|entry| entry == host || entry == with_port)
+            .filter_map(|entry| parse_allowed_host(entry))
+            .any(|(entry_host, entry_port)| {
+                entry_host == host && entry_port.is_none_or(|entry_port| entry_port == port)
+            })
     }
 }
 
-fn normalize_host(host: &str) -> String {
-    host.to_ascii_lowercase().trim_end_matches('.').to_owned()
+pub fn normalize_host(host: &str) -> String {
+    let host = host.trim().trim_end_matches('.');
+    let host = host
+        .strip_prefix('[')
+        .and_then(|host| host.strip_suffix(']'))
+        .unwrap_or(host);
+    host.to_ascii_lowercase()
+}
+
+fn parse_allowed_host(entry: &str) -> Option<(String, Option<u16>)> {
+    let entry = entry.trim();
+    if let Some(entry) = entry.strip_prefix('[') {
+        let (host, suffix) = entry.split_once(']')?;
+        let port = match suffix {
+            "" => None,
+            suffix => Some(suffix.strip_prefix(':')?.parse().ok()?),
+        };
+        return Some((normalize_host(host), port));
+    }
+    let (host, port) = match entry.rsplit_once(':') {
+        Some((host, port)) if !host.contains(':') => (host, Some(port.parse().ok()?)),
+        _ => (entry, None),
+    };
+    Some((normalize_host(host), port))
 }
 
 type ProxyMatch = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
@@ -668,6 +691,21 @@ mod tests {
             .fetch(url, policy(2, 0))
             .await;
         assert!(matches!(result, Err(Error::BlockedUrl)));
+    }
+
+    #[test]
+    fn allowlist_matches_bracketed_ipv6_hosts_and_ports() {
+        let policy = UrlPolicy {
+            validate: true,
+            allowed_hosts: vec!["[2001:db8::1]".into(), "[2001:db8::1]:8443".into()],
+        };
+        assert!(policy.allows("2001:db8::1", 443));
+        assert!(policy.allows("2001:db8::1", 8443));
+        let port_specific = UrlPolicy {
+            validate: true,
+            allowed_hosts: vec!["[2001:db8::1]:8443".into()],
+        };
+        assert!(!port_specific.allows("2001:db8::1", 9443));
     }
 
     #[tokio::test]

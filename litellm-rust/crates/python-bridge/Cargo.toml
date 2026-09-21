@@ -43,6 +43,8 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+serde.workspace = true
+serde_with.workspace = true
 criterion.workspace = true
 futures-util.workspace = true
 rstest.workspace = true
