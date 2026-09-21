@@ -152,6 +152,7 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.router_utils.batch_utils import (
     _get_router_metadata_variable_name,
+    is_batch_retrieve_call_type,
     replace_model_in_jsonl,
     should_replace_model_in_jsonl,
 )
@@ -179,6 +180,7 @@ from litellm.router_utils.cooldown_handlers import (
     _get_cooldown_deployments,
     _set_cooldown_deployments,
     is_advisor_orchestration_failure,
+    is_background_response_cost_poll_not_found,
     is_caller_timeout_408,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -6199,6 +6201,8 @@ class Router:
         """
         try:
             parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            requested_model_group: Final = model
+            metadata_variable_name: Final = _get_router_metadata_variable_name(function_name="aretrieve_batch")
             if model is not None:
                 filtered_model_list: (
                     list[DeploymentTypedDict] | list[dict] | dict | None
@@ -6235,6 +6239,9 @@ class Router:
                         kwargs=new_kwargs,
                         function_name="aretrieve_batch",
                     )
+                    model_group: Final = requested_model_group or model_name["model_name"]
+                    if not new_kwargs[metadata_variable_name].get("model_group"):
+                        new_kwargs[metadata_variable_name]["model_group"] = model_group
                     new_kwargs.pop("custom_llm_provider", None)
                     data.pop("custom_llm_provider", None)
                     return await litellm.aretrieve_batch(
@@ -7943,6 +7950,8 @@ class Router:
             # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
             if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
                 return
+            if is_batch_retrieve_call_type(kwargs.get("call_type")):
+                return
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
             if standard_logging_object is None:
                 raise ValueError("standard_logging_object is None")
@@ -8089,6 +8098,8 @@ class Router:
         - key: str - The key used to increment the cache
         - None: if no key is found
         """
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return None
         id = None
         if kwargs["litellm_params"].get("metadata") is None:
             pass
@@ -8137,11 +8148,18 @@ class Router:
                 )
                 return False
 
-            exception_status: Final = getattr(exception, "status_code", "")
-
             # Cache litellm_params to avoid repeated dict lookups
             litellm_params: Final = kwargs.get("litellm_params", {})
             _model_info: Final = litellm_params.get("model_info", {})
+
+            if is_background_response_cost_poll_not_found(exception, litellm_params):
+                verbose_router_logger.debug(
+                    "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
+                    "Provider 404 came from the background response cost poll, not the deployment's health."
+                )
+                return False
+
+            exception_status: Final = getattr(exception, "status_code", "")
 
             if is_caller_timeout_408(kwargs, exception_status):
                 verbose_router_logger.debug(
@@ -8210,6 +8228,8 @@ class Router:
         """
         Update RPM usage for a deployment
         """
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         deployment_name: Final = kwargs["litellm_params"]["metadata"].get(
             "deployment", None
         )  # handles wildcard routes - by giving the original name sent to `litellm.completion`
@@ -13723,6 +13743,20 @@ class Router:
         to the deployment that actually served the request. Every attempt therefore
         writes or clears, never just writes.
         """
+        from litellm.types.router import BaselineRouteStamp
+
+        baseline_model: Final = routing_decision.get("savings_baseline_model") if routing_decision else None
+        baseline_id: Final = routing_decision.get("savings_baseline_deployment_id") if routing_decision else None
+        router_name: Final = routing_decision.get("router_model_name") if routing_decision else None
+        Router._stamp_or_clear_metadata_key(
+            request_kwargs=request_kwargs,
+            key="_autorouter_baseline_route",
+            value=(
+                BaselineRouteStamp(router_name, baseline_model, baseline_id)
+                if router_name and baseline_model and baseline_id
+                else None
+            ),
+        )
         Router._stamp_or_clear_metadata_key(
             request_kwargs=request_kwargs,
             key="routing_decision",

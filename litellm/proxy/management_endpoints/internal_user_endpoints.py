@@ -107,6 +107,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
+_USER_BUDGET_CACHE_FIELDS: Final = frozenset({"max_budget", "model_max_budget"})
 
 
 def _user_table(
@@ -1571,7 +1572,7 @@ async def _update_single_user_helper(
 
         await _invalidate_user_spend_counter_if_changed(non_default_values)
 
-        if "model_max_budget" in non_default_values:
+        if not _USER_BUDGET_CACHE_FIELDS.isdisjoint(non_default_values) or "metadata" in data_json:
             await evict_and_broadcast(
                 cache_keys=(non_default_values["user_id"],),
                 user_api_key_cache=user_api_key_cache,
@@ -1902,7 +1903,7 @@ async def bulk_user_update(
                 ),
             )
 
-            if "model_max_budget" in non_default_values:
+            if not _USER_BUDGET_CACHE_FIELDS.isdisjoint(non_default_values):
                 for start in range(0, len(all_users_in_db), _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE):
                     await asyncio.gather(
                         *(
