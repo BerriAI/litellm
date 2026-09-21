@@ -13,9 +13,7 @@ impl PythonDiskCacheAdapter {
         let value = match value {
             StoredValue::Bytes(value) => Value::Bytes(value),
             StoredValue::Text(value) => Value::String(value),
-            StoredValue::Integer(value) => {
-                value::from_json(serde_json::Value::Number(value.into()))
-            }
+            StoredValue::Integer(value) => Value::Integer(value.into()),
             StoredValue::Float(value) => Value::Float(value),
             StoredValue::Pickle(value) => value::from_pickle(&value)?,
         };
@@ -39,18 +37,16 @@ impl PythonDiskCacheAdapter {
 
 impl ValueAdapter for PythonDiskCacheAdapter {
     fn read(&self, value: StoredValue) -> Result<Option<Vec<u8>>, Error> {
-        let raw = match &value {
-            StoredValue::Text(value) => Some(value.as_bytes().to_vec()),
-            StoredValue::Bytes(value) => Some(value.clone()),
-            StoredValue::Integer(_) | StoredValue::Float(_) | StoredValue::Pickle(_) => None,
-        };
-        let Some(value) = Self::python_get_cache(value)? else {
-            return Ok(None);
-        };
-        if let Some(raw) = raw {
-            return Ok(Some(raw));
+        match value {
+            StoredValue::Text(value) => Ok((!value.is_empty()).then(|| value.into_bytes())),
+            StoredValue::Bytes(value) => Ok((!value.is_empty()).then_some(value)),
+            value => {
+                let Some(value) = Self::python_get_cache(value)? else {
+                    return Ok(None);
+                };
+                value::to_json(&value).map(Some)
+            }
         }
-        value::to_json(&value).map(Some)
     }
 
     fn write(&self, payload: Vec<u8>) -> StoredValue {
