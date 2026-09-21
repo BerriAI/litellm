@@ -6676,7 +6676,7 @@ def _proxy_attrs_for_db_lookup():
     }
 
 
-async def _run_builder_with_key_lookup(get_key_object_mock):
+async def _run_builder_with_key_lookup(get_key_object_mock, api_key="Bearer sk-db-lookup-test"):
     """Drive the real auth builder with ``get_key_object`` replaced by the
     given mock. Returns the builder result. Patches ``seed_request_identity``
     so the failure path doesn't touch OTEL."""
@@ -6704,7 +6704,7 @@ async def _run_builder_with_key_lookup(get_key_object_mock):
         ):
             return await _user_api_key_auth_builder(
                 request=request,
-                api_key="Bearer sk-db-lookup-test",
+                api_key=api_key,
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -9087,5 +9087,44 @@ async def test_non_oauth_key_rejection_stays_free_of_the_subscription_hint():
                 request=mock_request,
                 api_key="Bearer sk-an-ordinary-wrong-key",
             )
+
+    assert "x-litellm-api-key" not in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_oauth_token_rejected_by_db_lookup_explains_the_header_split():
+    """The same misconfiguration reaches a different rejection once a database is connected,
+    so the guidance has to survive the key lookup path too."""
+    missing_key_error = ProxyException(
+        message="Authentication Error, Invalid proxy server token passed. key=..., not found in db.",
+        type=ProxyErrorTypes.auth_error,
+        param="key",
+        code=401,
+    )
+    get_key_object = AsyncMock(side_effect=missing_key_error)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(
+            get_key_object,
+            api_key="Bearer sk-ant-oat01-subscription-token",
+        )
+
+    assert "x-litellm-api-key" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_non_oauth_key_rejected_by_db_lookup_stays_free_of_the_subscription_hint():
+    """An ordinary missing key takes the same lookup path, so it proves the guidance is
+    keyed off the credential shape rather than the rejection site."""
+    missing_key_error = ProxyException(
+        message="Authentication Error, Invalid proxy server token passed. key=..., not found in db.",
+        type=ProxyErrorTypes.auth_error,
+        param="key",
+        code=401,
+    )
+    get_key_object = AsyncMock(side_effect=missing_key_error)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_with_key_lookup(get_key_object)
 
     assert "x-litellm-api-key" not in str(exc_info.value.message)

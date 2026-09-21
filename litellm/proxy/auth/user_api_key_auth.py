@@ -907,13 +907,6 @@ _JWT_AUTH_DISABLED_HINT = (
     " with JWTs."
 )
 
-_ANTHROPIC_OAUTH_KEY_HINT: Final = (
-    " This key has the structure of an Anthropic OAuth token rather than a LiteLLM virtual key. To route Claude"
-    " Code through this proxy on a subscription, send the virtual key in the `x-litellm-api-key` header (e.g."
-    ' `ANTHROPIC_CUSTOM_HEADERS="x-litellm-api-key: Bearer sk-..."`) and leave `Authorization` carrying the'
-    " OAuth token so it can be forwarded to Anthropic."
-)
-
 
 class _PendingAutoRegister(NamedTuple):
     """
@@ -2101,9 +2094,9 @@ async def _user_api_key_auth_builder(
 
         ## Check DB
 
-        from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+        from litellm.llms.anthropic.common_utils import oauth_key_as_proxy_credential_hint
 
-        _oauth_key_hint: Final = _ANTHROPIC_OAUTH_KEY_HINT if is_anthropic_oauth_key(api_key) else ""
+        _oauth_key_hint: Final = oauth_key_as_proxy_credential_hint(api_key)
 
         if (
             prisma_client is None
