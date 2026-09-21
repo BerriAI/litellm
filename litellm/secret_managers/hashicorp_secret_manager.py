@@ -95,16 +95,16 @@ class HashicorpSecretManager(BaseSecretManager):
         from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
         # Vault-specific config
-        self.vault_addr = (os.getenv("HCP_VAULT_ADDR") or "http://127.0.0.1:8200").rstrip("/")
+        self.vault_addr = os.getenv("HCP_VAULT_ADDR", "http://127.0.0.1:8200")
         self.vault_token = os.getenv("HCP_VAULT_TOKEN", "")
-        self.vault_namespace = self._sanitize_path_component(os.getenv("HCP_VAULT_NAMESPACE"))
-        self.login_namespace_override = self._sanitize_path_component(os.getenv("HCP_VAULT_LOGIN_NAMESPACE"))
-        self.secret_namespace_override = self._sanitize_path_component(os.getenv("HCP_VAULT_SECRET_NAMESPACE"))
+        self.vault_namespace = os.getenv("HCP_VAULT_NAMESPACE", None)
+        self.login_namespace_override = os.getenv("HCP_VAULT_LOGIN_NAMESPACE", None)
+        self.secret_namespace_override = os.getenv("HCP_VAULT_SECRET_NAMESPACE", None)
         # KV engine mount name (default: "secret")
         # If your KV engine is mounted somewhere other than "secret", set HCP_VAULT_MOUNT_NAME
-        self.vault_mount_name = self._sanitize_path_component(os.getenv("HCP_VAULT_MOUNT_NAME")) or "secret"
+        self.vault_mount_name = os.getenv("HCP_VAULT_MOUNT_NAME", "secret")
         # Optional path prefix for secrets (e.g., "myapp" -> secret/data/myapp/{secret_name})
-        self.vault_path_prefix = self._sanitize_path_component(os.getenv("HCP_VAULT_PATH_PREFIX"))
+        self.vault_path_prefix = os.getenv("HCP_VAULT_PATH_PREFIX", None)
 
         # Optional config for TLS cert auth
         self.tls_cert_path = os.getenv("HCP_VAULT_CLIENT_CERT", "")
@@ -114,9 +114,7 @@ class HashicorpSecretManager(BaseSecretManager):
         # Optional config for AppRole auth
         self.approle_role_id = os.getenv("HCP_VAULT_APPROLE_ROLE_ID", "")
         self.approle_secret_id = os.getenv("HCP_VAULT_APPROLE_SECRET_ID", "")
-        self.approle_mount_path = self._sanitize_path_component(
-            os.getenv("HCP_VAULT_APPROLE_MOUNT_PATH")
-        ) or "approle"
+        self.approle_mount_path = os.getenv("HCP_VAULT_APPROLE_MOUNT_PATH", "approle")
 
         self._verify_required_credentials_exist()
 

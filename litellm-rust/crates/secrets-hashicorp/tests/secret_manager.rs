@@ -87,6 +87,39 @@ async fn namespace_mount_and_prefix_are_sanitized_in_the_url() {
     assert!(manager.async_read_secret("name").await.unwrap().is_some());
 }
 
+#[test]
+fn trailing_address_slashes_are_removed() {
+    let environment: Arc<dyn Lookup + Send + Sync> = Arc::new(|name: &str| match name {
+        "HCP_VAULT_ADDR" => Some("http://vault.test:8200///".to_owned()),
+        "HCP_VAULT_TOKEN" => Some("token".to_owned()),
+        _ => None,
+    });
+    let config: HashicorpVaultConfig =
+        HashicorpVaultConfig::from_environment(environment.as_ref()).unwrap();
+    let manager: HashicorpVault =
+        HashicorpVault::with_client(reqwest::Client::new(), config, true).unwrap();
+
+    assert_eq!(
+        manager.secret_url("name").unwrap(),
+        "http://vault.test:8200/v1/secret/data/name"
+    );
+}
+
+#[rstest::rstest]
+#[case("-1")]
+#[case("not-a-number")]
+fn invalid_refresh_intervals_are_rejected(#[case] value: &str) {
+    let environment: Arc<dyn Lookup + Send + Sync> = Arc::new(move |name: &str| match name {
+        "HCP_VAULT_REFRESH_INTERVAL" => Some(value.to_owned()),
+        _ => None,
+    });
+
+    assert!(matches!(
+        HashicorpVaultConfig::from_environment(environment.as_ref()),
+        Err(Error::RefreshInterval)
+    ));
+}
+
 #[tokio::test]
 async fn approle_login_uses_namespace_and_reuses_the_token() {
     let server: MockServer = MockServer::start().await;

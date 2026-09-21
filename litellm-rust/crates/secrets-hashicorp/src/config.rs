@@ -1,7 +1,6 @@
 use std::{path::PathBuf, time::Duration};
 
 use litellm_core_utils::settings::Lookup;
-use litellm_secrets_types::KeyManagementSettings;
 use litellm_secrets_types::SecretValue;
 
 use crate::Error;
@@ -117,13 +116,6 @@ impl HashicorpVaultConfig {
         })
     }
 
-    pub fn from_settings(
-        _settings: &KeyManagementSettings,
-        environment: &dyn Lookup,
-    ) -> Result<Self, Error> {
-        Self::from_environment(environment)
-    }
-
     pub fn login_namespace(&self) -> Option<&str> {
         self.login_namespace
             .as_deref()
@@ -163,7 +155,7 @@ fn refresh_interval(environment: &dyn Lookup) -> Result<Duration, Error> {
     };
     let seconds: i64 = value.parse().map_err(|_| Error::RefreshInterval)?;
     if seconds < 0 {
-        return Ok(Duration::from_nanos(1));
+        return Err(Error::RefreshInterval);
     }
     Ok(Duration::from_secs(seconds as u64))
 }
