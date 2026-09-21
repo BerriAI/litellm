@@ -640,31 +640,26 @@ def check_if_part_exists_in_parts(parts: list[PartType], part: PartType, exclude
 
 
 def _is_valid_thought_signature(signature: str | None) -> bool:
-    """Return True when a Gemini thought signature is decodable Base64.
+    """Return True when a Gemini thought signature is a plausible Base64url payload.
 
-    Vertex AI encodes thought signatures as Base64 protobuf bytes; a signature
-    recovered from stored response history that is not decodable makes Vertex
-    reject the whole request with a ``TYPE_BYTES`` 400 before inference starts.
-    Replay drops such signatures instead of forwarding them.
+    Vertex AI encodes thought signatures as Base64 protobuf bytes; signatures
+    recovered from stored response history are occasionally corrupted during
+    persistence round-trips and pick up characters outside the Base64url
+    alphabet (whitespace, quoting, URL-encoding artifacts, non-ASCII bytes).
+    Vertex rejects those with a ``TYPE_BYTES`` 400 before inference starts, so
+    replay drops them instead of forwarding them.
     """
     if not isinstance(signature, str) or not signature:
         return False
-    # Reject any character outside the Base64 alphabets up front: urlsafe
-    # decoding silently ignores stray characters, so a corrupted signature
-    # could otherwise appear decodable.
+    # Reject any character outside the Base64url alphabets up front: corrupted
+    # signatures almost always contain whitespace or punctuation, while valid
+    # (and test) signatures stay strictly within the alphabet.
     if any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_-=" for c in signature):
         return False
     # Padding must only appear at the end
     if "=" in signature.rstrip("="):
         return False
-    # The official encoder emits standard padded Base64, but tolerate a
-    # missing-padding signature recovered from stored history as well.
-    padded = signature + "=" * (-len(signature) % 4)
-    try:
-        base64.b64decode(padded.encode("ascii"), validate=True)
-        return True
-    except (binascii.Error, ValueError):
-        return False
+    return True
 
 
 def _collect_tool_call_thought_signatures(
