@@ -11,7 +11,7 @@
 import asyncio
 import json
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
@@ -1348,8 +1348,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponse
 
-        all_chunks: list[ModelResponseStream] = []
-        raw_chunks: list[bytes] = []
         buffered_chunks: list[ModelResponseStream | bytes] = []
         passthrough_due_to_unknown_stream_shape = False
         try:
@@ -1358,14 +1356,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if passthrough_due_to_unknown_stream_shape:
                         yield chunk
                     else:
-                        all_chunks.append(chunk)
                         buffered_chunks.append(chunk)
-                elif isinstance(chunk, (bytes, str)):
+                elif isinstance(chunk, bytes):
                     if passthrough_due_to_unknown_stream_shape:
-                        yield cast(bytes, chunk)
+                        yield chunk
                     else:
-                        raw_chunks.append(cast(bytes, chunk))
-                        buffered_chunks.append(cast(ModelResponseStream | bytes, chunk))
+                        buffered_chunks.append(chunk)
                     continue
                 else:
                     if buffered_chunks:
@@ -1379,9 +1375,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                         for buffered_chunk in buffered_chunks:
                             yield buffered_chunk
-                        all_chunks = []
-                        raw_chunks = []
-                        buffered_chunks = []
+                        buffered_chunks.clear()
                     passthrough_due_to_unknown_stream_shape = True
                     yield chunk
             if passthrough_due_to_unknown_stream_shape:
@@ -1390,7 +1384,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     "(e.g. /v1/responses events). Output PII masking was skipped for this response."
                 )
                 return
-            if raw_chunks and not all_chunks:
+            raw_chunks: Final = [chunk for chunk in buffered_chunks if isinstance(chunk, bytes)]
+            model_chunks: Final = [chunk for chunk in buffered_chunks if isinstance(chunk, ModelResponseStream)]
+            if raw_chunks and model_chunks:
+                verbose_proxy_logger.warning(
+                    "Presidio apply_to_output: mixed stream detected (ModelResponseStream + raw SSE bytes). "
+                    "Flushing %d buffered chunks without PII masking and switching to transparent passthrough.",
+                    len(buffered_chunks),
+                )
+                for buffered_chunk in buffered_chunks:
+                    yield buffered_chunk
+                return
+            if raw_chunks:
                 if is_sse_error_stream(raw_chunks) or not is_anthropic_sse_stream(raw_chunks):
                     verbose_proxy_logger.warning(
                         "Presidio apply_to_output: raw streaming response was not an Anthropic SSE stream. "
@@ -1411,10 +1416,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     return
 
                 pre_text = model_response_text(assembled_anthropic_response)
-                await self._process_response_for_pii(
-                    response=assembled_anthropic_response,
-                    request_data=request_data,
-                    mode="mask",
+                process_response_for_pii: Final = cast(
+                    Callable[[ModelResponse, dict[str, object], Literal["mask", "unmask"]], Awaitable[ModelResponse]],
+                    self._process_response_for_pii,
+                )
+                await process_response_for_pii(
+                    assembled_anthropic_response,
+                    cast(dict[str, object], request_data),
+                    "mask",
                 )
                 if model_response_text(assembled_anthropic_response) != pre_text:
                     for chunk in anthropic_sse_chunks_from_response(assembled_anthropic_response):
@@ -1423,16 +1432,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     for chunk in raw_chunks:
                         yield chunk
                 return
-            if all_chunks and raw_chunks:
-                verbose_proxy_logger.warning(
-                    "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
-                    "Flushing %d buffered chunks without PII masking and switching to transparent passthrough.",
-                    len(buffered_chunks),
-                )
-                for buffered_chunk in buffered_chunks:
-                    yield buffered_chunk
-                return
-            if not all_chunks:
+            if not model_chunks:
                 verbose_proxy_logger.warning(
                     "Presidio apply_to_output: streaming response contained no "
                     "ModelResponseStream chunks (e.g. raw SSE bytes or an empty "
@@ -1441,10 +1441,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
                 return
 
-            assembled_model_response = stream_chunk_builder(chunks=all_chunks, messages=request_data.get("messages"))
+            assembled_model_response = stream_chunk_builder(chunks=model_chunks, messages=request_data.get("messages"))
 
             if not isinstance(assembled_model_response, ModelResponse):
-                for chunk in all_chunks:
+                for chunk in model_chunks:
                     yield chunk
                 return
 
@@ -1459,9 +1459,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         except Exception as e:
             verbose_proxy_logger.error("Error masking streaming PII output: %s", e)
-            for chunk in all_chunks:
-                yield chunk
-            for chunk in raw_chunks:
+            for chunk in buffered_chunks:
                 yield chunk
 
     @staticmethod

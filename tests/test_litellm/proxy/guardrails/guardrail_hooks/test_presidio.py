@@ -2386,6 +2386,11 @@ async def test_apply_to_output_streaming_bytes_only_logs_warning():
         assert "Output PII masking was skipped" in warning_msg
 
 
+def test_apply_to_output_declares_mask_response_content():
+    assert _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=True).mask_response_content is True
+    assert _OPTIONAL_PresidioPIIMasking(mock_testing=True, apply_to_output=False).mask_response_content is not True
+
+
 @pytest.mark.asyncio
 async def test_apply_to_output_masks_anthropic_sse_stream(mock_user_api_key):
     guardrail = _OPTIONAL_PresidioPIIMasking(
