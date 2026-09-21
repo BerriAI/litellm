@@ -2,7 +2,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.fal_ai.chat.transformation import FalAIChatConfig
+from litellm.llms.fal_ai.chat.transformation import FalAIChatConfig, FalAIError
 from litellm.types.utils import LlmProviders, ModelResponse
 from litellm.utils import ProviderConfigManager
 
@@ -121,7 +121,7 @@ def test_transform_request_accepts_single_user_message():
 
 
 def test_transform_request_rejects_system_message():
-    with pytest.raises(ValueError, match="exactly one user message"):
+    with pytest.raises(FalAIError, match="exactly one user message") as exc_info:
         FalAIChatConfig().transform_request(
             model=MODEL,
             messages=[
@@ -135,10 +135,11 @@ def test_transform_request_rejects_system_message():
             litellm_params={},
             headers={},
         )
+    assert exc_info.value.status_code == 400
 
 
 def test_transform_request_rejects_multi_turn_history():
-    with pytest.raises(ValueError, match="exactly one user message"):
+    with pytest.raises(FalAIError, match="exactly one user message") as exc_info:
         FalAIChatConfig().transform_request(
             model=MODEL,
             messages=[
@@ -156,10 +157,11 @@ def test_transform_request_rejects_multi_turn_history():
             litellm_params={},
             headers={},
         )
+    assert exc_info.value.status_code == 400
 
 
 def test_transform_request_rejects_zero_images():
-    with pytest.raises(ValueError, match="exactly one image_url"):
+    with pytest.raises(FalAIError, match="exactly one image_url"):
         FalAIChatConfig().transform_request(
             model=MODEL,
             messages=[{"role": "user", "content": [{"type": "text", "text": "describe"}]}],
@@ -170,7 +172,7 @@ def test_transform_request_rejects_zero_images():
 
 
 def test_transform_request_rejects_two_images():
-    with pytest.raises(ValueError, match="exactly one image_url"):
+    with pytest.raises(FalAIError, match="exactly one image_url"):
         FalAIChatConfig().transform_request(
             model=MODEL,
             messages=[
@@ -190,7 +192,7 @@ def test_transform_request_rejects_two_images():
 
 
 def test_transform_request_rejects_missing_text():
-    with pytest.raises(ValueError, match="require text"):
+    with pytest.raises(FalAIError, match="require text"):
         FalAIChatConfig().transform_request(
             model=MODEL,
             messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://a"}}]}],
@@ -201,7 +203,7 @@ def test_transform_request_rejects_missing_text():
 
 
 def test_transform_request_rejects_streaming():
-    with pytest.raises(ValueError, match="streaming"):
+    with pytest.raises(FalAIError, match="streaming"):
         FalAIChatConfig().transform_request(
             model=MODEL,
             messages=[

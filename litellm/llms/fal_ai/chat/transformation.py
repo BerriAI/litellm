@@ -54,14 +54,18 @@ def _image_part_url(part: Mapping[str, object]) -> str | None:
 
 def _prompt_and_image(messages: Sequence[AllMessageValues]) -> tuple[str, str]:
     if len(messages) != 1 or messages[0].get("role") != "user":
-        raise ValueError(
-            "fal_ai chat completions accept exactly one user message; system prompts and multi-turn history are not supported"
+        raise FalAIError(
+            status_code=400,
+            message="fal_ai chat completions accept exactly one user message; system prompts and multi-turn history are not supported",
         )
     content: Final = messages[0].get("content")
     if isinstance(content, str):
         if not content:
-            raise ValueError("fal_ai chat completions require text in the user message")
-        raise ValueError("fal_ai chat completions require exactly one image_url content part in the user message")
+            raise FalAIError(status_code=400, message="fal_ai chat completions require text in the user message")
+        raise FalAIError(
+            status_code=400,
+            message="fal_ai chat completions require exactly one image_url content part in the user message",
+        )
     parts: Final[tuple[Mapping[str, object], ...]] = (
         tuple(part for part in content if isinstance(part, Mapping)) if isinstance(content, Sequence) else ()
     )
@@ -72,9 +76,12 @@ def _prompt_and_image(messages: Sequence[AllMessageValues]) -> tuple[str, str]:
         url for part in parts if part.get("type") == "image_url" and (url := _image_part_url(part)) is not None
     )
     if not prompt:
-        raise ValueError("fal_ai chat completions require text in the user message")
+        raise FalAIError(status_code=400, message="fal_ai chat completions require text in the user message")
     if len(image_urls) != 1:
-        raise ValueError("fal_ai chat completions require exactly one image_url content part in the user message")
+        raise FalAIError(
+            status_code=400,
+            message="fal_ai chat completions require exactly one image_url content part in the user message",
+        )
     return prompt, image_urls[0]
 
 
@@ -97,7 +104,7 @@ class FalAIChatConfig(BaseConfig):
             return True
         if drop_params:
             return None
-        raise ValueError(f"Unsupported reasoning_effort '{value}' for {model}")
+        raise FalAIError(status_code=400, message=f"Unsupported reasoning_effort '{value}' for {model}")
 
     def _translate_param(self, param: str, value: object, model: str, drop_params: bool) -> tuple[str, object] | None:
         if param in ("temperature", "top_p"):
@@ -160,7 +167,7 @@ class FalAIChatConfig(BaseConfig):
         headers: dict,  # mutable-ok: inherited contract
     ) -> dict:  # mutable-ok: inherited contract returns a dict
         if optional_params.get("stream"):
-            raise ValueError("fal_ai chat completions do not support streaming")
+            raise FalAIError(status_code=400, message="fal_ai chat completions do not support streaming")
         prompt, image_url = _prompt_and_image(messages)
         return {  # mutable-ok: JSON request body
             "prompt": prompt,
