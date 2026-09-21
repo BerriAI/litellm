@@ -20,7 +20,9 @@ const mockClient = {
 
 vi.mock("openai", () => ({
   default: {
-    OpenAI: vi.fn(() => mockClient),
+    OpenAI: vi.fn(function () {
+      return mockClient;
+    }),
   },
 }));
 
@@ -465,6 +467,18 @@ describe("chat_completion prompt cache usage", () => {
 
     expect(usageData).not.toHaveProperty("cacheReadTokens");
     expect(usageData).not.toHaveProperty("cacheCreationTokens");
+  });
+
+  it("omits cost when the provider reports a non-numeric value", async () => {
+    const usageData = await captureUsage({ cost: "not-a-number" });
+
+    expect(usageData).toEqual(expect.not.objectContaining({ cost: expect.anything() }));
+  });
+
+  it("omits cost when the provider reports a blank value", async () => {
+    const usageData = await captureUsage({ cost: "  " });
+
+    expect(usageData).toEqual(expect.not.objectContaining({ cost: expect.anything() }));
   });
 });
 

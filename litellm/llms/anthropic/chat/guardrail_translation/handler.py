@@ -13,9 +13,11 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from itertools import chain, repeat
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, overload, runtime_checkable
 
 from typing_extensions import ReadOnly, TypedDict, assert_never
@@ -29,6 +31,7 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.transformation im
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
+    StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     anthropic_tool_name,
@@ -39,6 +42,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     merge_guardrailed_scoped_messages,
     merge_returned_tools_into_request_tools,
     scoped_structured_message_indices,
+    stream_item_field,
     stream_item_fingerprint,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
@@ -151,6 +155,46 @@ class ExtractedInput:
 EMPTY_EXTRACTED_INPUT: Final = ExtractedInput(scanned=(), images=())
 
 
+@dataclass(frozen=True, slots=True)
+class _ToolCallShape:
+    name: str | None
+    arguments: str
+
+
+@dataclass(frozen=True, slots=True)
+class _SSEFieldRewrite:
+    """One field of one nested section of a buffered SSE event, rewritten."""
+
+    section: str
+    field: str
+    value: object
+
+
+class _SSEEventRewriter(Protocol):
+    def __call__(self, event: Mapping[str, object]) -> _SSEFieldRewrite | None: ...
+
+
+def _rewritten_event(event: Mapping[str, object], rewrite_event: _SSEEventRewriter) -> Mapping[str, object]:
+    rewrite: Final = rewrite_event(event)
+    section: Final = None if rewrite is None else event.get(rewrite.section)
+    if rewrite is None or not isinstance(section, Mapping):
+        return event
+    return {**event, rewrite.section: {**section, rewrite.field: rewrite.value}}  # mutable-ok: json.dumps needs a dict
+
+
+def _tool_call_shapes(tool_calls: Sequence[object]) -> tuple[_ToolCallShape, ...]:
+    """The guardrail-visible shape of each tool call, whether the guardrail handed
+    back the ``ChatCompletionMessageToolCall`` objects it was given or plain dicts."""
+    functions: Final = tuple(stream_item_field(tool_call, "function") for tool_call in tool_calls)
+    return tuple(
+        _ToolCallShape(
+            name=name if isinstance(name := stream_item_field(function, "name"), str) else None,
+            arguments=arguments if isinstance(arguments := stream_item_field(function, "arguments"), str) else "",
+        )
+        for function in functions
+    )
+
+
 class _AnthropicSSEDelta(TypedDict, total=False):
     type: ReadOnly[str]
     text: ReadOnly[str]
@@ -168,9 +212,17 @@ class AnthropicMessagesHandler(BaseTranslation):
     them through guardrail rewrites; downstream provider handling is out of scope.
     """
 
+    delivers_ended_stream_rewrites = True
+    assembles_streamed_response = True
+
     def __init__(self):
         super().__init__()
         self.adapter = LiteLLMAnthropicMessagesAdapter()
+
+    def post_call_hook_response(self, response: object) -> object:
+        if not isinstance(response, ModelResponse):
+            return response
+        return self.adapter.translate_openai_response_to_anthropic(response)
 
     @staticmethod
     def _build_streaming_usage_response(
@@ -1014,11 +1066,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
+        stream_transform_sink: StreamTransformSink | None = None,
+        deliver_ended_stream_rewrites: bool = False,
     ) -> Sequence[object]:
         """
         Process output streaming response by applying guardrails to text content.
 
         Get the string so far, check the apply guardrail to the string so far, and return the list of responses so far.
+        With ``deliver_ended_stream_rewrites``, an ended stream whose guardrail rewrote the text gets the rewrite
+        written back across the buffered chunks (full rewritten text in the first ``text_delta``, the rest blanked);
+        a rewrite on a stream that never reported a ``stop_reason`` has no write-back and is reported as
+        undeliverable, so the pipeline executor discards it and releases the original chunks.
         """
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
@@ -1040,6 +1098,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                     first_choice.message.tool_calls,
                 )
                 string_so_far = first_choice.message.content
+                pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_list or ())
                 guardrail_inputs: Final = GenericGuardrailAPIInputs()
                 if string_so_far:
                     guardrail_inputs["texts"] = [string_so_far]
@@ -1065,6 +1124,28 @@ class AnthropicMessagesHandler(BaseTranslation):
                             responses_so_far, request_data
                         )
                     raise
+                guardrailed_texts: Final = _guardrailed_inputs.get("texts")
+                if (
+                    deliver_ended_stream_rewrites
+                    and isinstance(string_so_far, str)
+                    and string_so_far
+                    and guardrailed_texts
+                    and guardrailed_texts[0] != string_so_far
+                ):
+                    self._write_ended_stream_text_rewrite(responses_so_far, guardrailed_texts[0])
+                if deliver_ended_stream_rewrites:
+                    returned_tool_calls: Final = _guardrailed_inputs.get("tool_calls")
+                    self._write_ended_stream_tool_call_rewrites(
+                        responses_so_far,
+                        pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                        post_guardrail_tool_calls=_tool_call_shapes(
+                            returned_tool_calls
+                            if isinstance(returned_tool_calls, list)
+                            and len(returned_tool_calls) == len(pre_guardrail_tool_calls)
+                            else tool_calls_list or ()
+                        ),
+                        guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+                    )
             else:
                 verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
             return responses_so_far
@@ -1087,6 +1168,11 @@ class AnthropicMessagesHandler(BaseTranslation):
             if e.original_response is None:
                 e.original_response = self._build_streaming_usage_response(responses_so_far, request_data)
             raise
+        unended_texts: Final = _guardrailed_inputs.get("texts")
+        if deliver_ended_stream_rewrites and unended_texts and tuple(unended_texts) != (string_so_far,):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
         return responses_so_far
 
     def _prepare_request_data(
@@ -1179,6 +1265,139 @@ class AnthropicMessagesHandler(BaseTranslation):
         if response_model:
             inputs["model"] = response_model
         return inputs
+
+    @staticmethod
+    def _write_ended_stream_text_rewrite(
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
+        rewritten_text: str,
+    ) -> None:
+        """Deliver an ended-stream guardrail text rewrite by rewriting the
+        buffered chunks in place: the first ``text_delta`` carries the full
+        rewritten text and every later one is blanked, leaving the surrounding
+        message and content-block framing untouched."""
+        replacements: Final = chain((rewritten_text,), repeat(""))
+
+        def rewrite_text_delta(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
+            delta: Final = event.get("delta")
+            if event.get("type") != "content_block_delta" or not isinstance(delta, Mapping):
+                return None
+            if delta.get("type") != "text_delta":
+                return None
+            return _SSEFieldRewrite("delta", "text", next(replacements))
+
+        AnthropicMessagesHandler._rewrite_ended_stream_events(responses_so_far, rewrite_text_delta)
+
+    @classmethod
+    def _write_ended_stream_tool_call_rewrites(
+        cls,
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
+        *,
+        pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        post_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        guardrail_name: str,
+    ) -> None:
+        """Deliver ended-stream guardrail tool-call rewrites by rewriting the
+        buffered chunks in place: the rebuilt response lists tool calls in the
+        order of the stream's ``tool_use`` blocks, so the nth rewritten call lands
+        on the nth block, its first ``input_json_delta`` carrying the full rewritten
+        arguments, every later one blanked, and ``content_block_start`` carrying the
+        rewritten name. Blocks that do not line up with the rebuilt tool calls make
+        the rewrite undeliverable, so the pipeline executor discards it and releases
+        the original chunks."""
+        if post_guardrail_tool_calls == pre_guardrail_tool_calls:
+            return
+        block_indices: Final = tuple(
+            index
+            for item in responses_so_far
+            for event in cls._iter_sse_events(item)
+            if event.get("type") == "content_block_start"
+            and isinstance(block := event.get("content_block"), Mapping)
+            and block.get("type") == "tool_use"
+            and isinstance(index := event.get("index"), int)
+        )
+        if len(block_indices) != len(post_guardrail_tool_calls):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(guardrail_name)
+        rewrites_by_block: Final = MappingProxyType(
+            {
+                index: after
+                for index, before, after in zip(block_indices, pre_guardrail_tool_calls, post_guardrail_tool_calls)
+                if after != before
+            }
+        )
+        argument_replacements: Final = MappingProxyType(
+            {index: chain((rewrite.arguments,), repeat("")) for index, rewrite in rewrites_by_block.items()}
+        )
+
+        def rewrite_tool_use(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
+            index: Final = event.get("index")
+            if not isinstance(index, int) or index not in rewrites_by_block:
+                return None
+            match event.get("type"):
+                case "content_block_start":
+                    name: Final = rewrites_by_block[index].name
+                    if name is None:
+                        return None
+                    return _SSEFieldRewrite("content_block", "name", name)
+                case "content_block_delta":
+                    delta: Final = event.get("delta")
+                    if not isinstance(delta, Mapping) or delta.get("type") != "input_json_delta":
+                        return None
+                    return _SSEFieldRewrite("delta", "partial_json", next(argument_replacements[index]))
+                case _:
+                    return None
+
+        cls._rewrite_ended_stream_events(responses_so_far, rewrite_tool_use)
+
+    @staticmethod
+    def _rewrite_ended_stream_events(
+        responses_so_far: MutableSequence[object],  # mutable-ok: rewrites the caller's buffered chunks in place
+        rewrite_event: _SSEEventRewriter,
+    ) -> None:
+        """Replace every buffered event ``rewrite_event`` returns a rewrite for, in
+        both chunk formats this stream carries (parsed event dicts and raw SSE
+        bytes), leaving every other event and the framing untouched."""
+        rewritten_items: Final = tuple(
+            AnthropicMessagesHandler._rewrite_buffered_item(item, rewrite_event) for item in responses_so_far
+        )
+        responses_so_far[:] = rewritten_items  # rebind-ok: delivers the rewrites into the caller's buffer
+
+    @staticmethod
+    def _rewrite_buffered_item(item: object, rewrite_event: _SSEEventRewriter) -> object:
+        if isinstance(item, dict):
+            return _rewritten_event(_as_str_mapping(item), rewrite_event)
+        if isinstance(item, (bytes, bytearray)):
+            return AnthropicMessagesHandler._rewrite_sse_events(bytes(item), rewrite_event)
+        return item
+
+    @staticmethod
+    def _rewrite_sse_events(sse_bytes: bytes, rewrite_event: _SSEEventRewriter) -> bytes:
+        """Rewrite the data lines of one SSE chunk that ``rewrite_event`` rewrites,
+        leaving all other events and framing byte-identical."""
+        try:
+            decoded: Final = sse_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            return sse_bytes
+        return "\n\n".join(
+            "\n".join(AnthropicMessagesHandler._rewrite_sse_line(line, rewrite_event) for line in block.split("\n"))
+            for block in decoded.split("\n\n")
+        ).encode("utf-8")
+
+    @staticmethod
+    def _rewrite_sse_line(line: str, rewrite_event: _SSEEventRewriter) -> str:
+        if not line.startswith("data:"):
+            return line
+        try:
+            data: Final[str | int | float | bool | None | Sequence[object] | Mapping[str, object]] = json.loads(
+                line[len("data:") :].strip()
+            )
+        except json.JSONDecodeError:
+            return line
+        if not isinstance(data, dict):
+            return line
+        rewritten: Final = _rewritten_event(_as_str_mapping(data), rewrite_event)
+        return line if rewritten is data else "data: " + json.dumps(rewritten)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
         stream_ended: Final = self._check_streaming_has_ended(responses_so_far)

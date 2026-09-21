@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from typing import Iterable, List, Optional, Tuple
 from unittest.mock import patch
@@ -7,6 +8,7 @@ import pytest
 from redis.asyncio import Redis
 
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AUTH_CACHE_INVALIDATION_CHANNEL,
     AuthCacheInvalidationSubscriber,
@@ -143,6 +145,35 @@ async def test_subscriber_deletes_local_cache_entry_on_message() -> None:
 
     assert cache.in_memory_cache.get_cache("project_id:p-1") is None
     assert pubsub.subscribed_channels == [AUTH_CACHE_INVALIDATION_CHANNEL]
+
+
+@pytest.mark.asyncio
+async def test_subscriber_deletes_key_object_partition_entry_on_message() -> None:
+    """
+    LIT-7563 moved user-key objects into their own in-memory partition; a key
+    invalidation broadcast must still evict the hashed-token entry there, or a
+    deleted key keeps authenticating on other workers until its TTL expires.
+    """
+    hashed_token = hashlib.sha256(b"sk-lit7563-hot-key").hexdigest()
+    cache = UserApiKeyCache()
+    cache.set_cache(hashed_token, UserAPIKeyAuth(token=hashed_token), model_type=UserAPIKeyAuth)
+    assert cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is not None
+
+    pubsub = _QueuePubSub(initial_messages=[_invalidation_message(hashed_token)])
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=cache,
+    )
+    subscriber.start()
+    try:
+        for _ in range(200):
+            if cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await subscriber.stop()
+
+    assert cache.get_cache(hashed_token, model_type=UserAPIKeyAuth) is None
 
 
 @pytest.mark.asyncio

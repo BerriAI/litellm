@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Final, Protocol, assert_never
+from typing import Final, Protocol
+
+from typing_extensions import assert_never
 
 from .models import CaseDisposition, CaseResult
 

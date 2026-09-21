@@ -39,9 +39,7 @@ class SubprocessRunner:
         return (
             sys.executable,
             "-m",
-            ".".join(
-                self.entrypoint.resolve().relative_to(PROJECT_ROOT).with_suffix("").parts
-            ),
+            ".".join(self.entrypoint.resolve().relative_to(PROJECT_ROOT).with_suffix("").parts),
             "--parity-worker",
             provider_url,
         )
@@ -113,7 +111,11 @@ class SubprocessWorker:
             )
         assert isinstance(result, WorkerSuccess)
         try:
-            return Execution(requests=self.provider.take_requests(len(responses)), report=result.report)
+            return Execution(
+                requests=self.provider.take_requests(len(responses)),
+                report=result.report,
+                callbacks=result.callbacks,
+            )
         except AssertionError:
             self.provider.reset()
             raise

@@ -112,6 +112,7 @@ const PRIMITIVES = {
   "Return Values": [
     { name: "allow()", desc: "Let request/response through" },
     { name: "block(reason)", desc: "Reject with message" },
+    { name: "flag(reason, metadata={})", desc: "Let through, record a non-blocking violation" },
     { name: "modify(texts=[], images=[], tool_calls=[])", desc: "Transform content" },
   ],
   "HTTP Requests (async)": [

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import sys
 import threading
-from collections.abc import Generator
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
-from types import CodeType, FrameType
+from types import CodeType, FrameType, FunctionType, MappingProxyType
 from typing import Final
 
 
@@ -36,7 +37,7 @@ class PythonProfiler:
     def __call__(self, frame: FrameType, event: str, _arg: object) -> None:
         if event != "call" or frame in self._seen_frames:
             return
-        function_name: Final = self.function_name(frame.f_code)
+        function_name: Final = self.function_name(frame)
         if function_name is None:
             return
         event_id: Final = len(self.events)
@@ -48,11 +49,12 @@ class PythonProfiler:
         self._event_ids[frame] = event_id
         self.events.append(FunctionTraceEvent(id=event_id, parent_id=parent_id, function=function_name))
 
-    def function_name(self, code: CodeType) -> str | None:
+    def function_name(self, frame: FrameType) -> str | None:
+        code: Final = frame.f_code
         if not code.co_filename.startswith(self._source_root):
             return None
         relative: Final = code.co_filename.removeprefix(self._source_root)
-        return f"{relative}:{code.co_firstlineno} {getattr(code, 'co_qualname', code.co_name)}"
+        return f"{relative}:{code.co_firstlineno} {_qualified_name(frame)}"
 
 
 class PythonFunctionUsageProfiler:
@@ -68,9 +70,63 @@ class PythonFunctionUsageProfiler:
         if not code.co_filename.startswith(self._source_root):
             return
         relative: Final = code.co_filename.removeprefix(self._source_root)
-        function: Final = f"{relative}:{code.co_firstlineno} {getattr(code, 'co_qualname', code.co_name)}"
+        function: Final = f"{relative}:{code.co_firstlineno} {_qualified_name(frame)}"
         if function in self._functions:
             self.called.add(function)
+
+
+def _qualified_name(frame: FrameType) -> str:
+    code: Final = frame.f_code
+    native: Final = getattr(code, "co_qualname", None)
+    if isinstance(native, str):
+        return native
+    enclosing: Final = next(
+        (
+            name
+            for ancestor in _frame_ancestors(frame)
+            for declared_code, name in _declared_functions(ancestor.f_locals, frozenset())
+            if declared_code is code
+        ),
+        None,
+    )
+    if enclosing is not None:
+        return enclosing
+    module_name: Final = frame.f_globals.get("__name__")
+    if not isinstance(module_name, str):
+        return code.co_name
+    return _module_qualnames(module_name).get(code, code.co_name)
+
+
+@lru_cache(maxsize=None)
+def _module_qualnames(module_name: str) -> Mapping[CodeType, str]:
+    module: Final = sys.modules.get(module_name)
+    if module is None:
+        return MappingProxyType({})
+    return MappingProxyType(dict(_declared_functions(vars(module), frozenset())))
+
+
+def _declared_functions(namespace: Mapping[str, object], visited: frozenset[int]) -> Iterator[tuple[CodeType, str]]:
+    for attribute in tuple(namespace.values()):
+        for value in _accessors(attribute):
+            if isinstance(value, FunctionType):
+                yield from ((wrapped.__code__, wrapped.__qualname__) for wrapped in _unwrapped(value))
+            elif isinstance(value, type) and id(value) not in visited:
+                yield from _declared_functions(dict(vars(value)), visited | {id(value)})
+
+
+def _unwrapped(function: FunctionType) -> Iterator[FunctionType]:
+    yield function
+    inner: Final = getattr(function, "__wrapped__", None)
+    if isinstance(inner, FunctionType):
+        yield from _unwrapped(inner)
+
+
+def _accessors(value: object) -> tuple[object, ...]:
+    if isinstance(value, (staticmethod, classmethod)):
+        return (value.__func__,)
+    if isinstance(value, property):
+        return tuple(accessor for accessor in (value.fget, value.fset, value.fdel) if accessor is not None)
+    return (value,)
 
 
 def _frame_ancestors(frame: FrameType) -> Generator[FrameType]:

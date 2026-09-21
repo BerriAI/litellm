@@ -15,6 +15,8 @@ use std::time::Duration;
 
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
+use litellm_core::AuthError;
+use litellm_core::auth::error::MissingCredential;
 use litellm_core::error::Error;
 use litellm_core::realtime::transformation::RealtimeProviderConfig;
 use litellm_core::realtime::types::RealtimeEvent;
@@ -23,14 +25,14 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 use litellm_core::providers::openai::realtime::transformation::OPENAI_REALTIME_CONFIG;
 
+use crate::io::tls::connect_upstream;
+
 /// Environment variable holding the OpenAI API key (last-resort fallback).
 const OPENAI_API_KEY_ENV: &str = "OPENAI_API_KEY";
-
-const MISSING_KEY_MESSAGE: &str = "Missing OpenAI API Key - a realtime call is being made but no key was passed via params or the OPENAI_API_KEY environment variable";
 
 /// Default **idle** timeout: if neither side sends a frame for this long, the
 /// session is reaped. It resets on any activity, so it does not cap a healthy
@@ -57,7 +59,7 @@ pub(crate) fn resolve_api_key(api_key: Option<&str>) -> Result<String, Error> {
                 .ok()
                 .filter(|key| !key.trim().is_empty())
         })
-        .ok_or_else(|| Error::Auth(MISSING_KEY_MESSAGE.to_string()))
+        .ok_or_else(|| Error::from(AuthError::from(MissingCredential::OpenAiRealtimeApiKey)))
 }
 
 /// Open the upstream WebSocket to OpenAI for `(model, api_key, api_base)`.
@@ -84,7 +86,7 @@ pub(crate) async fn dial_upstream(
             .map_err(|err| Error::Auth(err.to_string()))?,
     );
 
-    let (upstream, _response) = connect_async(request)
+    let (upstream, _response) = connect_upstream(request)
         .await
         .map_err(|err| Error::Network(err.to_string()))?;
     Ok(upstream)
@@ -282,6 +284,33 @@ mod tests {
 
     fn event(raw: &str) -> RealtimeEvent {
         serde_json::from_str(raw).expect("valid event json")
+    }
+
+    /// The realtime dial has to reach a `wss://` upstream without a process-wide
+    /// crypto provider installed, which is what dialing through `io::tls` buys.
+    #[tokio::test]
+    async fn dial_upstream_over_wss_reports_an_error_instead_of_panicking() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a loopback port");
+        let port = listener
+            .local_addr()
+            .expect("read the bound address")
+            .port();
+        tokio::spawn(async move {
+            while let Ok((stream, _peer)) = listener.accept().await {
+                drop(stream);
+            }
+        });
+
+        let result = dial_upstream(
+            "gpt-realtime",
+            "sk-test",
+            Some(&format!("wss://127.0.0.1:{port}")),
+        )
+        .await;
+
+        assert!(matches!(result, Err(Error::Network(_))));
     }
 
     #[test]

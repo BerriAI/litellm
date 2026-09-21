@@ -4,6 +4,7 @@ Translating between OpenAI's `/chat/completion` format and Amazon's `/converse` 
 
 import copy
 import json
+import re
 import time
 import types
 from collections.abc import Mapping
@@ -293,6 +294,10 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock",
                 )
 
+    @staticmethod
+    def _is_openai_gpt_reasoning_model(model: str) -> bool:
+        return re.search(r"openai\.gpt-\d", model) is not None
+
     def _is_nova_2_model(self, model: str) -> bool:
         """
         Check if the model is a Nova 2 model that supports reasoningConfig.
@@ -422,15 +427,15 @@ class AmazonConverseConfig(BaseConfig):
         """
         Handle the reasoning_effort parameter based on the model type.
 
-        - GPT-OSS models: passed through unchanged via additionalModelRequestFields.
-        - OpenAI GPT-5.x models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
+        - GPT-OSS and DeepSeek V3 models: passed through unchanged via additionalModelRequestFields.
+        - OpenAI GPT-5.x and GPT-6 models: mapped to ``reasoning.effort`` via additionalModelRequestFields.
         - Nova 2 models: transformed to reasoningConfig.
         - Anthropic models: mapped to ``thinking`` (and ``output_config.effort`` on
           adaptive Claude 4.6 / 4.7).
         """
-        if "gpt-oss" in model:
+        if "gpt-oss" in model or "deepseek" in model:
             optional_params["reasoning_effort"] = reasoning_effort
-        elif "openai.gpt-5" in model:
+        elif self._is_openai_gpt_reasoning_model(model):
             reasoning: Final[BedrockConverseGptReasoningEffortBlock] = {"effort": reasoning_effort}
             optional_params["reasoning"] = reasoning
         elif self._is_nova_2_model(model):
@@ -509,6 +514,36 @@ class AmazonConverseConfig(BaseConfig):
                 )
                 thinking["budget_tokens"] = BEDROCK_MIN_THINKING_BUDGET_TOKENS
 
+    def _is_deepseek_model(self, model: str, base_model: str) -> bool:
+        return "deepseek" in model or "deepseek" in base_model
+
+    def _is_deepseek_r1_model(self, model: str, base_model: str) -> bool:
+        return "deepseek.r1" in model or "deepseek.r1" in base_model
+
+    def _model_accepts_anthropic_thinking_param(self, model: str, base_model: str) -> bool:
+        """Whether the model accepts the Anthropic-shaped ``thinking`` request field.
+
+        Only Claude reasoning models accept it. DeepSeek advertises ``supports_reasoning`` but reasons
+        natively: R1 returns a 400 when the field is sent and V3 silently ignores it.
+        """
+        if self._is_deepseek_model(model=model, base_model=base_model):
+            return False
+        return (
+            "claude-3-7" in model
+            or "claude-sonnet-4" in model
+            or "claude-opus-4" in model
+            or supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
+        )
+
+    def _model_rejects_reasoning_effort_param(self, model: str, base_model: str) -> bool:
+        """Whether the model returns a 400 for every ``reasoning_effort`` shape on Converse.
+
+        DeepSeek R1 always reasons and rejects any reasoning request field. DeepSeek V3 accepts a raw
+        ``reasoning_effort`` like gpt-oss does, and every other model maps it to a shape it accepts.
+        """
+        return self._is_deepseek_r1_model(model=model, base_model=base_model)
+
     def get_supported_openai_params(self, model: str) -> list[str]:
         from litellm.utils import supports_function_calling
 
@@ -564,23 +599,20 @@ class AmazonConverseConfig(BaseConfig):
             # only anthropic and mistral support tool choice config. otherwise (E.g. cohere) will fail the call - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             supported_params.append("tool_choice")
 
-        if "gpt-oss" in model or "openai.gpt-5" in model or "openai.gpt-5" in base_model:
+        if (
+            "gpt-oss" in model
+            or self._is_openai_gpt_reasoning_model(model)
+            or self._is_openai_gpt_reasoning_model(base_model)
+        ):
             supported_params.append("reasoning_effort")
+        elif self._is_deepseek_model(model=model, base_model=base_model):
+            if not self._is_deepseek_r1_model(model=model, base_model=base_model):
+                supported_params.append("reasoning_effort")
         elif self._is_nova_2_model(model):
             # Nova 2 models support reasoning_effort (transformed to reasoningConfig)
             # These models use a different reasoning structure than Anthropic's thinking parameter
             supported_params.append("reasoning_effort")
-        elif (
-            "claude-3-7" in model
-            or "claude-sonnet-4" in model
-            or "claude-opus-4" in model
-            or "deepseek.r1" in model
-            or supports_reasoning(
-                model=model,
-                custom_llm_provider=self.custom_llm_provider,
-            )
-            or supports_reasoning(model=base_model, custom_llm_provider=self.custom_llm_provider)
-        ):
+        elif self._model_accepts_anthropic_thinking_param(model=model, base_model=base_model):
             supported_params.append("thinking")
             supported_params.append("reasoning_effort")
             supported_params.append("output_config")
@@ -872,6 +904,11 @@ class AmazonConverseConfig(BaseConfig):
         drop_params: bool,
     ) -> dict:
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params)
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        drop_thinking_param: Final = self._is_deepseek_model(model=model, base_model=base_model)
+        drop_reasoning_effort_param: Final = self._model_rejects_reasoning_effort_param(
+            model=model, base_model=base_model
+        )
 
         for param, value in non_default_params.items():
             if param == "response_format" and isinstance(value, dict):
@@ -920,7 +957,12 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["_parallel_tool_use_config"] = {
                     "tool_choice": {"type": "auto", "disable_parallel_tool_use": not value}
                 }
-            if param == "thinking" and "openai.gpt-5" not in model:
+            if param == "thinking" and drop_thinking_param:
+                verbose_logger.debug(
+                    "Dropping unsupported `thinking` param for Bedrock model=%s; it reasons natively.",
+                    model,
+                )
+            elif param == "thinking" and not self._is_openai_gpt_reasoning_model(model):
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
@@ -946,6 +988,11 @@ class AmazonConverseConfig(BaseConfig):
                     AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
                         model=model, optional_params=optional_params, custom_llm_provider="bedrock"
                     )
+            elif param == "reasoning_effort" and isinstance(value, str) and drop_reasoning_effort_param:
+                verbose_logger.debug(
+                    "Dropping unsupported `reasoning_effort` param for Bedrock model=%s; it always reasons and rejects it.",
+                    model,
+                )
             elif param == "reasoning_effort" and isinstance(value, str):
                 self._handle_reasoning_effort_parameter(
                     model=model, reasoning_effort=value, optional_params=optional_params
@@ -1805,6 +1852,7 @@ class AmazonConverseConfig(BaseConfig):
             data=request_data,
             messages=messages,
             encoding=encoding,
+            json_mode=json_mode,
         )
 
     def _transform_reasoning_content(self, reasoning_content_blocks: list[BedrockConverseReasoningContentBlock]) -> str:
@@ -2237,6 +2285,7 @@ class AmazonConverseConfig(BaseConfig):
         data: dict | str,
         messages: list,
         encoding,
+        json_mode: bool | None = None,
     ) -> ModelResponse:
         ## LOGGING
         if logging_obj is not None:
@@ -2247,7 +2296,9 @@ class AmazonConverseConfig(BaseConfig):
                 additional_args={"complete_input_dict": data},
             )
 
-        json_mode: Final[bool | None] = optional_params.get("json_mode", None)
+        resolved_json_mode: Final[bool | None] = (
+            json_mode if json_mode is not None else optional_params.get("json_mode", None)
+        )
         ## RESPONSE OBJECT
         try:
             completion_response: Final = ConverseResponseBlock(**response.json())
@@ -2255,6 +2306,7 @@ class AmazonConverseConfig(BaseConfig):
             raise BedrockError(
                 message=f"Error converting to valid response block={e}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues",
                 status_code=422,
+                headers=response.headers,
             )
 
         """
@@ -2338,7 +2390,7 @@ class AmazonConverseConfig(BaseConfig):
             chat_completion_message["thinking_blocks"] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         filtered_tools: Final = self._filter_json_mode_tools(
-            json_mode=json_mode,
+            json_mode=resolved_json_mode,
             tools=tools,
             chat_completion_message=chat_completion_message,
         )
@@ -2362,7 +2414,7 @@ class AmazonConverseConfig(BaseConfig):
         # When json_mode filtered out all synthetic tool calls the response
         # is plain content, not a pending tool invocation. Fix finish_reason
         # so callers (e.g. OpenAI SDK) don't misinterpret it.
-        if json_mode and not filtered_tools and tools:
+        if resolved_json_mode and not filtered_tools and tools:
             initial_finish_reason = "stop"
 
         (

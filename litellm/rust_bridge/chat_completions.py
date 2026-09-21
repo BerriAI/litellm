@@ -247,8 +247,7 @@ def rust_chat_completions_accepts(
         return False
     if stream:
         return False
-    request_override: Final = litellm_params.get("rust") if litellm_params is not None else None
-    if not rust_enabled(request_override=request_override if isinstance(request_override, bool) else None):
+    if not rust_enabled():
         return False
     if _litellm_metadata_reaches_the_provider(custom_llm_provider, litellm_params):
         verbose_logger.debug("Rust chat completions declined (litellm metadata user_id); using the Python path")

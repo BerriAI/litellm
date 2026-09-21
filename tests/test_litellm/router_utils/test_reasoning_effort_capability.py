@@ -388,3 +388,30 @@ class TestGpt6AstraAdvertisesItsDocumentedLevels:
             "xhigh",
             "max",
         )
+
+    @pytest.mark.parametrize(
+        "model,custom_llm_provider",
+        [
+            ("azure/gpt-6-astra", "azure"),
+            ("azure/us/gpt-6-astra", "azure"),
+            ("azure_ai/gpt-6-astra", "azure_ai"),
+        ],
+    )
+    def test_an_azure_hosted_deployment_advertises_none_but_not_max(
+        self, local_model_cost_map, model, custom_llm_provider
+    ):
+        """Microsoft hosts the same model with a different level set than OpenAI does. Verified live
+        on both Azure routes: none returns 200 with zero reasoning tokens and unlocks temperature,
+        which OpenAI's API rejects, while max returns 400 unsupported_value naming none through
+        xhigh as the levels it does take."""
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
+
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        )

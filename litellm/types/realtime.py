@@ -169,9 +169,19 @@ class RealtimeInputAudioTranscriptionUsageInputTokenDetails(TypedDict):
     audio_tokens: ReadOnly[int]
 
 
-class RealtimeInputAudioTranscriptionUsage(TypedDict):
+class RealtimeInputAudioTranscriptionTokenUsage(TypedDict):
     type: ReadOnly[Literal["tokens"]]
     input_tokens: ReadOnly[int]
     output_tokens: ReadOnly[int]
     total_tokens: ReadOnly[int]
     input_token_details: ReadOnly[RealtimeInputAudioTranscriptionUsageInputTokenDetails]
+
+
+class RealtimeInputAudioTranscriptionDurationUsage(TypedDict):
+    type: ReadOnly[Literal["duration"]]
+    seconds: ReadOnly[float]
+
+
+RealtimeInputAudioTranscriptionUsage = (
+    RealtimeInputAudioTranscriptionTokenUsage | RealtimeInputAudioTranscriptionDurationUsage
+)

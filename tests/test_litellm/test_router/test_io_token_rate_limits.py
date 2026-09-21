@@ -1039,3 +1039,31 @@ class TestContextSlotRetention:
         assert deployment is not None
         router._update_kwargs_with_deployment(deployment=deployment.model_dump(), kwargs=kwargs)
         assert get_io_token_rate_limit_request_kwargs() is kwargs
+
+
+@pytest.mark.asyncio
+async def test_the_deployment_itpm_reservation_counts_the_request_off_the_event_loop():
+    from litellm.utils import get_utc_datetime
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    dual_cache = DualCache()
+    check = ModelRateLimitingCheck(dual_cache=dual_cache)
+    warm_tokenizer("anthropic/claude-fable-5")
+    deployment = {
+        "litellm_params": {"model": "anthropic/claude-fable-5", "itpm": 10_000_000},
+        "model_info": {"id": "io-loop-id"},
+        "model_name": "claude",
+    }
+    set_io_token_rate_limit_request_kwargs({"messages": [{"role": "user", "content": text * 100}], "metadata": {}})
+
+    _, took, lags = await timed_with_loop_lags(lambda: check.async_pre_call_check(deployment))
+
+    minute = get_utc_datetime().strftime("%H-%M")
+    reserved = await dual_cache.async_get_cache(key=f"global_router:io-loop-id:anthropic/claude-fable-5:itpm:{minute}")
+    assert reserved > 100_000
+    assert_loop_stayed_free(took, lags)

@@ -99,5 +99,6 @@ def require_proxy_client(
         base_url=cfg.base_url,
         master_key=cfg.api_key,
         control_plane_base_url=cfg.base_url,
+        replica_urls=(cfg.base_url,),
     )
     return ProxyClientConfig(client=client, api_key=cfg.api_key)

@@ -4,11 +4,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import litellm
-
-
-from litellm import get_model_info, supports_reasoning, supports_vision
-from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
+from litellm import supports_reasoning, supports_vision
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -16,17 +14,6 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
 )
-
-
-@pytest.fixture(autouse=True)
-def force_local_model_cost(monkeypatch):
-    """Force local model cost map usage for all tests in this file."""
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    # Refresh model_cost from local map
-    import litellm
-    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
-
-    litellm.model_cost = get_model_cost_map(url=litellm.model_cost_map_url)
 
 
 def test_validate_environment_sets_session_affinity_from_litellm_session_id():
@@ -363,6 +350,27 @@ def test_get_supported_openai_params_parallel_tool_calls():
     assert "parallel_tool_calls" not in unsupported_params
 
 
+def test_get_supported_openai_params_short_model_name_resolves_account_prefixed_entry():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/deepseek-v4-pro-0813"
+    )
+
+    assert "tool_choice" in supported_params
+    assert "reasoning_effort" in supported_params
+
+
+def test_get_supported_openai_params_preserves_generic_reasoning_fallback():
+    config = FireworksAIConfig()
+
+    supported_params = config.get_supported_openai_params(
+        "fireworks_ai/accounts/fireworks/models/glm-5p3-flash"
+    )
+
+    assert "reasoning_effort" in supported_params
+
+
 def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
     monkeypatch,
 ):
@@ -383,15 +391,6 @@ def test_get_supported_openai_params_parallel_tool_calls_without_tool_choice(
     assert "tools" in supported_params
     assert "parallel_tool_calls" in supported_params
     assert "tool_choice" not in supported_params
-
-
-def test_get_model_info_respects_explicit_fireworks_capabilities():
-    """Test that get_model_info preserves explicit capability flags from the model map."""
-    model_info = get_model_info("fireworks_ai/accounts/fireworks/models/glm-5p1")
-
-    assert model_info["supports_function_calling"] is True
-    assert model_info["supports_reasoning"] is True
-    assert model_info["supports_tool_choice"] is True
 
 
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
@@ -502,8 +501,8 @@ def test_unmapped_model_fallback_function_calling():
     assert info["supports_function_calling"] is True
 
 
-def test_transform_messages_helper_strips_thinking_blocks():
-    """thinking_blocks must not be forwarded to Fireworks chat completions."""
+def test_transform_messages_helper_strips_thinking_blocks_but_keeps_reasoning_content():
+    """Fireworks rejects thinking_blocks but requires reasoning_content to be replayed for reasoning_history."""
     config = FireworksAIConfig()
     messages = [
         {"role": "user", "content": "Translate a poem."},
@@ -520,7 +519,7 @@ def test_transform_messages_helper_strips_thinking_blocks():
         messages, model="accounts/fireworks/models/glm-5p1", litellm_params={}
     )
     assert "thinking_blocks" not in out[1]
-    assert "reasoning_content" not in out[1]
+    assert out[1]["reasoning_content"] == "internal"
     assert out[1]["content"] == "I can help."
 
 
@@ -1814,3 +1813,15 @@ def test_streaming_preserves_selected_model_for_private_accounting():
         completion_response=assembled,
         custom_llm_provider="fireworks_ai",
     ) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+        ("glm-5p3-fast", "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"),
+        ("accounts/fireworks/models/deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
+    ],
+)
+def test_get_model_cost_key_resolves_short_names_to_long_keys(model: str, expected: str) -> None:
+    assert FireworksAIConfig().get_model_cost_key(model) == expected

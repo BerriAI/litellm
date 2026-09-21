@@ -3,12 +3,38 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
+from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
-from typing import Final
+from types import FunctionType
+from typing import Final, ParamSpec, TypeVar, cast
 
 import pytest
 
-from .profiler import FunctionTraceEvent, PythonProfiler, profile_python, profile_python_function_usage
+from .profiler import (
+    FunctionTraceEvent,
+    PythonProfiler,
+    _module_qualnames,
+    profile_python,
+    profile_python_function_usage,
+)
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+def _passthrough(function: Callable[_P, _T]) -> Callable[_P, _T]:
+    @wraps(function)
+    def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _T:
+        return function(*args, **kwargs)
+
+    return wrapper
+
+
+class Decorated:
+    @_passthrough
+    def call(self) -> None:
+        return None
 
 
 def _events_named(profiler: PythonProfiler, name: str) -> tuple[FunctionTraceEvent, ...]:
@@ -24,6 +50,14 @@ def test_profiler_keeps_repeated_calls() -> None:
         called()
 
     assert len(_events_named(profiler, "called")) == 2
+
+
+def test_profiler_qualifies_decorated_methods_by_class() -> None:
+    with profile_python(Path(__file__).parent) as profiler:
+        Decorated().call()
+
+    assert any(event.function.endswith(" Decorated.call") for event in profiler.events)
+    assert _module_qualnames(__name__)[cast(FunctionType, Decorated.call.__wrapped__).__code__] == "Decorated.call"
 
 
 def test_profiler_records_real_frame_ancestry() -> None:
@@ -98,8 +132,7 @@ def test_function_usage_profiler_records_only_selected_functions() -> None:
         return None
 
     source_root: Final = Path(__file__).parent
-    function: Final = PythonProfiler(source_root).function_name(selected.__code__)
-    assert function is not None
+    function: Final = f"{Path(__file__).name}:{selected.__code__.co_firstlineno} {selected.__qualname__}"
 
     with profile_python_function_usage(source_root, frozenset((function,))) as profiler:
         selected()
