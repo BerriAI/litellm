@@ -9,7 +9,7 @@ use pyo3::{
 };
 use serde_json::Value;
 
-use super::{CacheTestHandle, native::NativeResponseCache};
+use super::{handle::CacheTestHandle, native::NativeResponseCache};
 
 struct ClassGuard {
     class: Py<PyType>,

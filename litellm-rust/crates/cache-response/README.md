@@ -6,9 +6,9 @@
 
 `litellm-cache` defines typed storage and codec traits. Memory and Redis implement those traits without depending on response policy. Other consumers can store their own value types using the same backend implementations
 
-`litellm-cache-response` owns response keys, controls, entries, and the Python-compatible response codec. It has no runtime dependency on a specific cache backend or Python
+`litellm-cache-response` owns response keys, controls, entries, the Python-compatible response codec, and `WriteBuffer`, the backend-neutral deferred-write policy. It has no runtime dependency on a specific cache backend or Python
 
-The Python bridge constructs backends and selects them through its private `NativeResponseCache` enum. Generic Rust callers inject their backend directly. A native gateway can construct the same generic response service in its own host
+The Python bridge constructs backends and selects them through its private `NativeResponseCache` enum, which only dispatches. Generic Rust callers inject their backend directly. A native gateway can construct the same generic response service in its own host
 
 ## Native Rust use
 
