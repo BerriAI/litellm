@@ -780,3 +780,29 @@ async def test_agentic_loop_followup_cache_hit_with_converted_stream_marker_repl
     assert hit.cached_result.choices[0].message.content == "done"
     logging_obj.handle_sync_success_callbacks_for_async_calls.assert_called_once()
     assert logging_obj.handle_sync_success_callbacks_for_async_calls.call_args.kwargs["cache_hit"] is True
+
+
+def test_should_defer_streaming_cache_hit_callbacks_without_proxy_extra():
+    """Regression for #42195: cache-hit path must not require fastapi/proxy extras.
+
+    ``response_cache`` imports proxy modules. On a plain ``pip install litellm``
+    those deps are absent; marking the module as missing must not raise, and a
+    non-stream cached result must still return False.
+    """
+    import sys
+
+    from litellm.caching.caching_handler import _should_defer_streaming_cache_hit_callbacks
+
+    mod_name = "litellm.llms.anthropic.experimental_pass_through.messages.response_cache"
+    had_module = mod_name in sys.modules
+    saved = sys.modules.get(mod_name)
+    # PEP 302: sys.modules[name] = None makes the next import raise ImportError.
+    sys.modules[mod_name] = None
+    try:
+        assert _should_defer_streaming_cache_hit_callbacks(cached_result={"choices": []}) is False
+    finally:
+        if had_module:
+            sys.modules[mod_name] = saved
+        else:
+            sys.modules.pop(mod_name, None)
+
