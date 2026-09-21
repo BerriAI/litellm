@@ -1,9 +1,11 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use litellm_cache::ExactCacheContext;
 use litellm_cache_response::{CacheControls, CacheKeyInput, ResponseCacheRequest};
 use litellm_host_python::from_py;
 use pyo3::{exceptions::PyValueError, prelude::*};
 use serde::Deserialize;
+use serde_json::Value;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -12,24 +14,48 @@ struct RequestInput {
     controls: Option<CacheControls>,
     ttl_seconds: Option<f64>,
     max_age_seconds: Option<f64>,
+    messages: Option<Value>,
+    input: Option<Value>,
+    metadata: Option<Value>,
+    litellm_metadata: Option<Value>,
+    litellm_params: Option<Value>,
 }
 
-pub(super) fn request(value: &Bound<'_, PyAny>) -> PyResult<ResponseCacheRequest> {
+pub(super) struct NativeRequest {
+    pub(super) key: CacheKeyInput,
+    pub(super) controls: CacheControls,
+    pub(super) ttl: Option<Duration>,
+    pub(super) max_age: Option<Duration>,
+    pub(super) messages: Option<Value>,
+    pub(super) input: Option<Value>,
+    pub(super) metadata: Option<Value>,
+    pub(super) litellm_metadata: Option<Value>,
+    pub(super) litellm_params: Option<Value>,
+}
+
+pub(super) fn request(value: &Bound<'_, PyAny>) -> PyResult<NativeRequest> {
     let input: RequestInput = from_py(value)?;
     request_input(input)
 }
 
-fn request_input(input: RequestInput) -> PyResult<ResponseCacheRequest> {
-    let mut request = ResponseCacheRequest::new(input.key);
-    if let Some(controls) = input.controls {
-        request.controls = controls;
-    }
-    request.context.ttl = input.ttl_seconds.map(duration).transpose()?;
-    request.max_age = input.max_age_seconds.map(duration).transpose()?;
-    Ok(request)
+fn request_input(input: RequestInput) -> PyResult<NativeRequest> {
+    let controls = input.controls.unwrap_or_else(|| {
+        ResponseCacheRequest::<ExactCacheContext>::new(input.key.clone()).controls
+    });
+    Ok(NativeRequest {
+        key: input.key,
+        controls,
+        ttl: input.ttl_seconds.map(duration).transpose()?,
+        max_age: input.max_age_seconds.map(duration).transpose()?,
+        messages: input.messages,
+        input: input.input,
+        metadata: input.metadata,
+        litellm_metadata: input.litellm_metadata,
+        litellm_params: input.litellm_params,
+    })
 }
 
-pub(super) fn requests(value: &Bound<'_, PyAny>) -> PyResult<Vec<ResponseCacheRequest>> {
+pub(super) fn requests(value: &Bound<'_, PyAny>) -> PyResult<Vec<NativeRequest>> {
     from_py::<Vec<RequestInput>>(value)?
         .into_iter()
         .map(request_input)
