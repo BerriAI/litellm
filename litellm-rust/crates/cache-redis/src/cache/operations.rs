@@ -183,20 +183,13 @@ where
     }
 
     pub fn sync_ping(&self) -> Result<bool, Error> {
-        self.connections.execute(|connection| {
-            redis::cmd("PING")
-                .query::<String>(connection)
-                .map(|response| response == "PONG")
-                .map_err(|_| Error::Unavailable)
-        })
+        self.connections
+            .execute(|connection| connection.ping().map_err(|_| Error::Unavailable))
     }
 
     pub async fn ping(&self) -> Result<bool, Error> {
-        Connections::run_blocking(Arc::clone(&self.connections), |connection| {
-            redis::cmd("PING")
-                .query::<String>(connection)
-                .map(|response| response == "PONG")
-                .map_err(|_| Error::Unavailable)
+        Self::run_blocking(Arc::clone(&self.connections), |connection| {
+            connection.ping().map_err(|_| Error::Unavailable)
         })
         .await
     }
@@ -215,25 +208,14 @@ where
 
     pub async fn async_scan_iter(&self, pattern: &str, count: usize) -> Result<Vec<String>, Error> {
         let pattern = format!("{}*", self.namespaced_key(pattern));
-        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
-            let mut cursor = 0u64;
+        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
             let mut matches = Vec::new();
-            loop {
-                let (next_cursor, keys): (u64, Vec<String>) = redis::cmd("SCAN")
-                    .cursor_arg(cursor)
-                    .arg("MATCH")
-                    .arg(&pattern)
-                    .arg("COUNT")
-                    .arg(count)
-                    .query(connection)
-                    .map_err(|_| Error::Unavailable)?;
+            connection.scan(&pattern, count, |_, keys| {
                 matches.extend(keys);
-                if matches.len() >= count || next_cursor == 0 {
-                    matches.truncate(count);
-                    return Ok(matches);
-                }
-                cursor = next_cursor;
-            }
+                Ok(matches.len() < count)
+            })?;
+            matches.truncate(count);
+            Ok(matches)
         })
         .await
     }
@@ -249,14 +231,19 @@ where
         }
         let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(ttl.unwrap_or(self.default_ttl));
-        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
-            let mut pipeline = redis::pipe();
-            pipeline.cmd("SADD").arg(&key).arg(values);
-            pipeline.cmd("EXPIRE").arg(&key).arg(ttl).ignore();
-            pipeline
-                .query::<(usize,)>(connection)
-                .map(|(added,)| added)
-                .map_err(|_| Error::Unavailable)
+        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+            let mut sadd = redis::cmd("SADD");
+            sadd.arg(&key).arg(values);
+            let mut expire = redis::cmd("EXPIRE");
+            expire.arg(&key).arg(ttl);
+            let replies = connection.pipeline(vec![sadd, expire])?;
+            replies
+                .into_iter()
+                .next()
+                .map(redis::from_redis_value::<usize>)
+                .transpose()
+                .map_err(|_| Error::Unavailable)?
+                .ok_or(Error::Unavailable)
         })
         .await
     }
@@ -292,12 +279,20 @@ where
         if operations.is_empty() {
             return Ok(Vec::new());
         }
-        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
-            let mut pipeline = redis::pipe();
-            for (key, values) in operations {
-                pipeline.cmd("RPUSH").arg(key).arg(values);
-            }
-            pipeline.query(connection).map_err(|_| Error::Unavailable)
+        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+            let commands = operations
+                .into_iter()
+                .map(|(key, values)| {
+                    let mut command = redis::cmd("RPUSH");
+                    command.arg(key).arg(values);
+                    command
+                })
+                .collect();
+            connection
+                .pipeline(commands)?
+                .into_iter()
+                .map(|value| redis::from_redis_value(value).map_err(|_| Error::Unavailable))
+                .collect()
         })
         .await
     }
@@ -338,17 +333,19 @@ where
             .iter()
             .map(|(_, count)| count.is_some())
             .collect::<Vec<_>>();
-        let values = Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
-            let mut pipeline = redis::pipe();
-            for (key, count) in operations {
-                let command = pipeline.cmd("LPOP").arg(key);
-                if let Some(count) = count {
-                    command.arg(count);
-                }
-            }
-            pipeline
-                .query::<Vec<redis::Value>>(connection)
-                .map_err(|_| Error::Unavailable)
+        let values = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+            let commands = operations
+                .into_iter()
+                .map(|(key, count)| {
+                    let mut command = redis::cmd("LPOP");
+                    command.arg(key);
+                    if let Some(count) = count {
+                        command.arg(count);
+                    }
+                    command
+                })
+                .collect();
+            connection.pipeline(commands)
         })
         .await?;
         values
@@ -381,28 +378,17 @@ where
     }
 
     pub fn client_list(&self) -> Result<String, Error> {
-        self.connections.execute(|connection| {
-            redis::cmd("CLIENT")
-                .arg("LIST")
-                .query(connection)
-                .map_err(|_| Error::Unavailable)
-        })
+        self.connections
+            .execute(|connection| connection.node_text(redis::cmd("CLIENT").arg("LIST")))
     }
 
     pub fn info(&self) -> Result<String, Error> {
-        self.connections.execute(|connection| {
-            redis::cmd("INFO")
-                .query(connection)
-                .map_err(|_| Error::Unavailable)
-        })
+        self.connections
+            .execute(|connection| connection.node_text(&redis::cmd("INFO")))
     }
 
     pub fn flushall(&self) -> Result<(), Error> {
-        self.connections.execute(|connection| {
-            redis::cmd("FLUSHALL")
-                .query(connection)
-                .map_err(|_| Error::Unavailable)
-        })
+        self.connections.execute(|connection| connection.flushall())
     }
 }
 
@@ -440,15 +426,28 @@ where
         if operations.is_empty() {
             return Ok(Vec::new());
         }
-        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
-            let mut pipeline = redis::pipe();
+        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+            let mut commands = Vec::with_capacity(operations.len() * 2);
+            let mut increments = Vec::with_capacity(operations.len());
             for (key, amount, ttl) in operations {
-                pipeline.cmd("INCRBYFLOAT").arg(&key).arg(amount);
+                let mut increment = redis::cmd("INCRBYFLOAT");
+                increment.arg(&key).arg(amount);
+                increments.push(commands.len());
+                commands.push(increment);
                 if let Some(ttl) = ttl {
-                    pipeline.cmd("EXPIRE").arg(key).arg(ttl).ignore();
+                    let mut expire = redis::cmd("EXPIRE");
+                    expire.arg(key).arg(ttl);
+                    commands.push(expire);
                 }
             }
-            pipeline.query(connection).map_err(|_| Error::Unavailable)
+            let mut replies = connection.pipeline(commands)?;
+            increments
+                .into_iter()
+                .map(|index| {
+                    redis::from_redis_value(std::mem::take(&mut replies[index]))
+                        .map_err(|_| Error::Unavailable)
+                })
+                .collect()
         })
         .await
     }

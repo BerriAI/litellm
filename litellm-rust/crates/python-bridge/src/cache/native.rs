@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{CacheCodec, CacheConnectionResult, Error, ExactCacheContext};
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_redis::RedisCache;
+use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_redis_semantic::{RedisSemanticCache, RedisSemanticConfig};
 use litellm_cache_response::{
     CacheEntry, PartialHits, ResponseCache, ResponseCacheCodec, ResponseCacheRequest, WriteBuffer,
@@ -39,10 +39,12 @@ impl NativeResponseCache {
 
     pub fn redis(
         url: &str,
+        topology: &RedisTopology,
         ttl: Option<Duration>,
         namespace: Option<String>,
     ) -> Result<Self, Error> {
-        let backend = RedisCache::new(url, ttl, ResponseCacheCodec)?.with_namespace(namespace);
+        let backend =
+            RedisCache::connect(url, topology, ttl, ResponseCacheCodec)?.with_namespace(namespace);
         Ok(Self::Redis {
             cache: Arc::new(ResponseCache::new(Arc::new(backend))),
             buffer: None,
@@ -82,6 +84,13 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) | Self::RedisSemantic(_) => None,
             Self::Redis { cache, .. } => cache.backend().namespace(),
+        }
+    }
+
+    pub fn topology(&self) -> Option<&RedisTopology> {
+        match self {
+            Self::Memory(_) | Self::RedisSemantic(_) => None,
+            Self::Redis { cache, .. } => Some(cache.backend().topology()),
         }
     }
 

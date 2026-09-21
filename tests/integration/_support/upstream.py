@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import base64
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 import json
 from dataclasses import dataclass, field
 import os
@@ -10,6 +12,7 @@ from pathlib import Path
 from queue import SimpleQueue
 import struct
 from typing import Final, cast
+import uuid
 import zlib
 
 import httpx
@@ -17,11 +20,13 @@ import uvicorn
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
 from integration.cost_calculation.cost_tracking_case import (
+    BinaryResponse,
+    EventStreamEvent,
     EventStreamResponse,
     JsonResponse,
     SseResponse,
@@ -75,10 +80,15 @@ def _aws_str_header(name: str, value: str) -> bytes:
     )
 
 
-def _aws_event_frame(event_type: str, payload: Mapping[str, JsonValue], scenario_id: str) -> bytes:
+def _aws_event_frame(
+    event_type: str,
+    payload: Mapping[str, JsonValue],
+    scenario_id: str,
+    unique_id: str,
+) -> bytes:
     payload_bytes: Final = json.dumps(payload, separators=(",", ":")).replace(
         "$REQUEST_ID", scenario_id
-    ).encode()
+    ).replace("$UNIQUE_ID", unique_id).encode()
     headers_bytes: Final = (
         _aws_str_header(":event-type", event_type)
         + _aws_str_header(":content-type", "application/json")
@@ -193,9 +203,11 @@ class Provider:
 
     async def scripted(self, request: Request) -> Response:
         segments: Final = tuple(segment for segment in cast(str, request.path_params["path"]).split("/") if segment)
-        if not segments:
-            return JSONResponse({"error": "Unknown scenario"}, status_code=404)
-        scenario_id: Final = segments[0].split(":", 1)[0]
+        scenario_id: Final = (
+            segments[0].split(":", 1)[0]
+            if segments and self.scenario_store.get(segments[0].split(":", 1)[0]) is not None
+            else request.headers.get("x-scripted-scenario", "")
+        )
         response: Final = self.scenario_store.get(scenario_id)
         if response is None:
             return JSONResponse({"error": "Unknown scenario"}, status_code=404)
@@ -203,22 +215,58 @@ class Provider:
 
     @staticmethod
     def _response(response: StoredResponse, scenario_id: str) -> Response:
+        unique_id: Final = f"{scenario_id}-{uuid.uuid4().hex[:8]}"
         match response:
             case JsonResponse():
                 return Response(
                     content=json.dumps(response.body, separators=(",", ":")).replace(
                         "$REQUEST_ID", scenario_id
+                    ).replace(
+                        "$UNIQUE_ID", unique_id
                     ).encode(),
+                    media_type=response.content_type,
+                    status_code=response.status,
+                )
+            case BinaryResponse():
+                return Response(
+                    content=b"\x00" * response.length,
                     media_type=response.content_type,
                 )
             case SseResponse():
+                if response.frame_delay_ms > 0:
+                    async def stream() -> AsyncIterator[bytes]:
+                        for frame in response.frames:
+                            yield (
+                                f"{frame.replace('$REQUEST_ID', scenario_id).replace('$UNIQUE_ID', unique_id)}\n\n"
+                            ).encode()
+                            await asyncio.sleep(response.frame_delay_ms / 1000)
+
+                    return StreamingResponse(stream(), media_type=response.content_type)
                 stream_body: Final = ("\n\n".join(response.frames) + "\n\n").replace(
                     "$REQUEST_ID", scenario_id
-                )
+                ).replace("$UNIQUE_ID", unique_id)
                 return Response(content=stream_body.encode(), media_type=response.content_type)
             case EventStreamResponse():
+                events: Final = (
+                    tuple(
+                        EventStreamEvent(
+                            event_type="chunk",
+                            payload={
+                                "bytes": base64.b64encode(
+                                    json.dumps(event.payload, separators=(",", ":"))
+                                    .replace("$REQUEST_ID", scenario_id)
+                                    .replace("$UNIQUE_ID", unique_id)
+                                    .encode()
+                                ).decode(),
+                            },
+                        )
+                        for event in response.events
+                    )
+                    if response.framing == "invoke"
+                    else response.events
+                )
                 event_body: Final = b"".join(
-                    _aws_event_frame(event.event_type, event.payload, scenario_id) for event in response.events
+                    _aws_event_frame(event.event_type, event.payload, scenario_id, unique_id) for event in events
                 )
                 return Response(content=event_body, media_type=response.content_type)
 
