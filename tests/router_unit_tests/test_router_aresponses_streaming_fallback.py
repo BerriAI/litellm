@@ -251,7 +251,7 @@ async def test_aresponses_with_streaming_fallbacks_non_streaming_passthrough():
 
     with patch.object(
         router,
-        "_ageneric_api_call_with_fallbacks",
+        "_ageneric_api_call_with_fallbacks_helper",
         new=AsyncMock(return_value=plain_response),
     ):
         out = await router._aresponses_with_streaming_fallbacks(
@@ -278,7 +278,7 @@ async def test_aresponses_with_streaming_fallbacks_wraps_streaming_iterator():
 
     with patch.object(
         router,
-        "_ageneric_api_call_with_fallbacks",
+        "_ageneric_api_call_with_fallbacks_helper",
         new=AsyncMock(return_value=streaming_iter),
     ), patch.object(
         router,
@@ -292,6 +292,173 @@ async def test_aresponses_with_streaming_fallbacks_wraps_streaming_iterator():
         )
     assert out is wrapped
     mock_wrap.assert_awaited_once()
+
+
+# -------- every fallback entry stays reachable across hops --------
+
+
+def _make_three_tier_router(**router_kwargs) -> Router:
+    return Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "sk-test"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "sk-test"}},
+            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "sk-test"}},
+        ],
+        num_retries=0,
+        **router_kwargs,
+    )
+
+
+def _mid_stream_failure(model: str):
+    import litellm
+    from litellm.exceptions import MidStreamFallbackError
+
+    return MidStreamFallbackError(
+        message="stream dropped",
+        model=model,
+        llm_provider="openai",
+        original_exception=litellm.InternalServerError(message="stream dropped", llm_provider="openai", model=model),
+        is_pre_first_chunk=True,
+    )
+
+
+def _scripted_responses_stream(events: list, error: Exception | None = None):
+    from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+
+    class _ScriptedStream(BaseResponsesAPIStreamingIterator):
+        def __init__(self) -> None:
+            self._events = list(events)
+            self._hidden_params: dict = {}
+            self.completed_response = None
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._events:
+                return self._events.pop(0)
+            if error is not None:
+                raise error
+            raise StopAsyncIteration
+
+        async def aclose(self) -> None:
+            return None
+
+    return _ScriptedStream()
+
+
+def _three_tier_original(calls: list, primary_fails_pre_stream: bool):
+    import litellm
+
+    completed_event = _make_completed_event(1, 1, 2)
+
+    async def fake_original(**kwargs):
+        model = kwargs["model"]
+        calls.append(model)
+        if model == "openai/primary-model":
+            if primary_fails_pre_stream:
+                raise litellm.InternalServerError(message="primary down", llm_provider="openai", model=model)
+            return _scripted_responses_stream([], _mid_stream_failure(model))
+        if model == "openai/fb1-model":
+            return _scripted_responses_stream([], _mid_stream_failure(model))
+        return _scripted_responses_stream([completed_event])
+
+    return fake_original, completed_event
+
+
+@pytest.mark.asyncio
+async def test_aresponses_pre_stream_primary_failure_then_hop_stream_failure_reaches_second_entry():
+    """Regression: fallbacks=[{"primary": ["fb1", "fb2"]}]. The primary fails before streaming,
+    fb1 is reached through the regular fallback chain and then fails mid-stream. Only the
+    primary's stream used to be wrapped, so fb1's mid-stream failure either re-raised or
+    re-tried fb1 itself; fb2 was unreachable."""
+    router = _make_three_tier_router(fallbacks=[{"primary": ["fb1", "fb2"]}])
+    calls: list = []
+    fake_original, completed_event = _three_tier_original(calls, primary_fails_pre_stream=True)
+
+    stream = await router._aresponses_with_streaming_fallbacks(
+        original_function=fake_original, model="primary", stream=True, input="hi"
+    )
+    collected = [event async for event in stream]
+
+    assert calls == ["openai/primary-model", "openai/fb1-model", "openai/fb2-model"]
+    assert collected == [completed_event]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_two_consecutive_mid_stream_failures_reach_second_entry():
+    """Regression: the primary and fb1 both fail mid-stream; fb2 must still be tried."""
+    router = _make_three_tier_router(fallbacks=[{"primary": ["fb1", "fb2"]}])
+    calls: list = []
+    fake_original, completed_event = _three_tier_original(calls, primary_fails_pre_stream=False)
+
+    stream = await router._aresponses_with_streaming_fallbacks(
+        original_function=fake_original, model="primary", stream=True, input="hi"
+    )
+    collected = [event async for event in stream]
+
+    assert calls == ["openai/primary-model", "openai/fb1-model", "openai/fb2-model"]
+    assert collected == [completed_event]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_per_request_fallbacks_survive_into_hop_streams():
+    """Regression: a request-level fallbacks list (key or team router_settings) is popped
+    before each attempt runs, so a hop's mid-stream re-entry used to see only the router's
+    own (empty) list and gave up after fb1."""
+    router = _make_three_tier_router()
+    calls: list = []
+    fake_original, completed_event = _three_tier_original(calls, primary_fails_pre_stream=False)
+
+    stream = await router._aresponses_with_streaming_fallbacks(
+        original_function=fake_original,
+        model="primary",
+        stream=True,
+        input="hi",
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+    )
+    collected = [event async for event in stream]
+
+    assert calls == ["openai/primary-model", "openai/fb1-model", "openai/fb2-model"]
+    assert collected == [completed_event]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_attempt_strips_the_controls_carrier_and_wraps_every_hop_stream():
+    """Each attempt of the chain, not only the primary's, comes back wrapped for mid-stream
+    failover, and the per-request controls carrier rides into the wrapper's re-entry kwargs
+    without ever reaching the provider call."""
+    from types import MappingProxyType
+
+    from litellm.router_utils.fallback_event_handlers import (
+        MID_STREAM_FALLBACK_CONTROLS_KEY,
+        MidStreamFallbackControls,
+    )
+
+    router = _make_three_tier_router()
+    completed_event = _make_completed_event(1, 1, 2)
+    hop_stream = _scripted_responses_stream([completed_event])
+    seen: dict = {}
+
+    async def fake_original(**kwargs):
+        seen.update(kwargs)
+        return hop_stream
+
+    controls = MidStreamFallbackControls(MappingProxyType({"fallbacks": [{"primary": ["fb1", "fb2"]}]}))
+    stream = await router._ageneric_api_call_with_fallbacks_responses_attempt(
+        model="fb1",
+        original_generic_function=fake_original,
+        stream=True,
+        input="hi",
+        **{MID_STREAM_FALLBACK_CONTROLS_KEY: controls},
+    )
+    collected = [event async for event in stream]
+
+    assert seen["model"] == "openai/fb1-model"
+    assert MID_STREAM_FALLBACK_CONTROLS_KEY not in seen
+    assert "fallbacks" not in seen
+    assert stream is not hop_stream
+    assert collected == [completed_event]
 
 
 @pytest.mark.asyncio

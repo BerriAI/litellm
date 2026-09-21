@@ -1,6 +1,6 @@
 import hashlib
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Final
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -199,6 +199,18 @@ class AttemptedFallbackTargets:
         self.keys = self.keys | frozenset((key,))
 
 
+def has_unattempted_fallback_target(
+    fallback_model_group: Sequence[object] | None, kwargs: Mapping[str, object]
+) -> bool:
+    """Whether a resolved chain still holds an entry this request has not tried."""
+    if fallback_model_group is None:
+        return False
+    attempted: Final = kwargs.get("attempted_targets")
+    if not isinstance(attempted, AttemptedFallbackTargets):
+        return True
+    return any((key := fallback_attempt_key(target)) is None or key not in attempted for target in fallback_model_group)
+
+
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     """
     Handles wildcard routing scenario
@@ -272,6 +284,76 @@ def get_pre_routing_selection(kwargs: Mapping[str, object]) -> str | None:
     return next((selected for selected in selections if isinstance(selected, str) and selected), None)
 
 
+def carry_over_pre_routing_selection(live_kwargs: Mapping[str, object], snapshot: Mapping[str, object]) -> None:
+    """
+    Replace whatever selection the snapshot carries with the one the pre-routing hook stamped
+    into the live kwargs while routing this attempt, so a mid-stream fallback keys its lookup
+    off the tier this attempt actually routed to.
+    """
+    clear_pre_routing_selection(snapshot)
+    live_selection: Final = get_pre_routing_selection(live_kwargs)
+    if live_selection is not None:
+        record_pre_routing_selection(snapshot, live_selection)
+
+
+MID_STREAM_FALLBACK_CONTROLS_KEY: Final = "_mid_stream_fallback_controls"
+_PER_REQUEST_FALLBACK_CONTROL_KEYS: Final = (
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "num_retries",
+    "model_group_retry_policy",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class MidStreamFallbackControls:
+    """
+    The per-request fallback and retry overrides every streaming attempt must see again.
+
+    async_function_with_retries pops them before the attempt function runs, so without this
+    carrier a fallback hop's own mid-stream re-entry would fall back to the router-level settings.
+    """
+
+    overrides: Mapping[str, object]
+
+
+_NO_FALLBACK_CONTROLS: Final = MidStreamFallbackControls(MappingProxyType({}))
+
+
+def per_request_fallback_controls(kwargs: Mapping[str, object]) -> MidStreamFallbackControls:
+    return MidStreamFallbackControls(
+        MappingProxyType({key: kwargs[key] for key in _PER_REQUEST_FALLBACK_CONTROL_KEYS if key in kwargs})
+    )
+
+
+def mid_stream_fallback_hop_kwargs(
+    model: str,
+    original_generic_function: Callable[..., object],
+    controls: object,
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
+    """
+    The kwargs one streaming attempt re-enters the fallback chain with if its stream fails.
+
+    A shallow copy keeps ``attempted_targets`` shared with the outer chain, so entries this
+    request already tried are never retried; the metadata buckets are copied key by key because
+    the attempt writes deployment-specific fields into them in place.
+    """
+    hop_controls: Final = controls if isinstance(controls, MidStreamFallbackControls) else _NO_FALLBACK_CONTROLS
+    copied_buckets: Final = MappingProxyType(
+        {name: safe_deep_copy(kwargs[name]) for name in _ROUTER_METADATA_BUCKETS if isinstance(kwargs.get(name), dict)}
+    )
+    return {  # mutable-ok: handed to the streaming iterator as its initial_kwargs, which it rewrites on re-entry
+        **kwargs,
+        **copied_buckets,
+        **hop_controls.overrides,
+        MID_STREAM_FALLBACK_CONTROLS_KEY: hop_controls,
+        "model": model,
+        "original_generic_function": original_generic_function,
+    }
+
+
 DISABLE_FALLBACKS_METADATA_KEY: Final = "_disable_fallbacks"
 
 
@@ -307,13 +389,19 @@ def fallbacks_disabled_for_request(kwargs: Mapping[str, object]) -> bool:
 def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None) -> tuple[str, ...]:
     """
     Ordered keys for resolving a fallback chain: the tier a pre-routing hook selected wins,
-    then the routed group, then the requested group. The routed group differs when Claude Code
-    session affinity remaps a subagent's concrete model to its bound router.
+    then the routed group, then the requested group, then the group the request was
+    originally for. The routed group differs when Claude Code session affinity remaps a
+    subagent's concrete model to its bound router. The original group differs on a fallback
+    hop that fails after `run_async_fallback` already returned its stream: the hop has no
+    chain of its own, so it resumes the original group's chain, and `attempted_targets` keeps
+    the entries already tried from being repeated.
     """
     metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
     routed_group_value: Final = metadata.get("model_group") if isinstance(metadata, Mapping) else None
     routed_group: Final = routed_group_value if isinstance(routed_group_value, str) else None
-    ordered: Final = (get_pre_routing_selection(kwargs), routed_group, model_group)
+    original_group_value: Final = metadata.get("original_model_group") if isinstance(metadata, Mapping) else None
+    original_group: Final = original_group_value if isinstance(original_group_value, str) else None
+    ordered: Final = (get_pre_routing_selection(kwargs), routed_group, model_group, original_group)
     return tuple(dict.fromkeys(group for group in ordered if group))
 
 
