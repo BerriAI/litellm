@@ -2998,6 +2998,35 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         assert result.get("custom_param") == "value"
 
 
+class TestExtraBodyCannotOverrideModel:
+    @pytest.mark.parametrize("custom_llm_provider", ["edenai", "openai", "azure"])
+    def test_extra_body_model_is_dropped_for_openai_compatible_providers(self, custom_llm_provider: str) -> None:
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params={"extra_body": {"model": "edenai/openai/gpt-4o", "provider_flag": True}},
+            passed_params={
+                "model": "edenai/openai/gpt-4o-mini",
+                "extra_body": {"model": "edenai/anthropic/claude-3-opus", "top_k": 5},
+                "custom_param": "kept",
+            },
+            custom_llm_provider=custom_llm_provider,
+            openai_params=["model", "temperature"],
+            additional_drop_params=None,
+        )
+
+        assert result == {"extra_body": {"provider_flag": True, "top_k": 5, "custom_param": "kept"}}, result
+
+    def test_get_optional_params_strips_extra_body_model_for_edenai(self) -> None:
+        result = litellm.get_optional_params(
+            model="openai/gpt-4o-mini",
+            custom_llm_provider="edenai",
+            extra_body={"model": "anthropic/claude-opus-4-1", "top_k": 5},
+        )
+
+        assert result["extra_body"] == {"top_k": 5}, result
+
+
 class TestDropParamsWithPromptCacheKey:
     """
     Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
