@@ -1763,8 +1763,8 @@ async def get_ui_settings():
 
     effective_ui_settings: Final[Mapping[str, object]] = MappingProxyType(
         {
-            **{key: proxy_config.settings[key] for key in ALLOWED_UI_SETTINGS_FIELDS if key in proxy_config.settings},
             **ui_settings,
+            **{key: proxy_config.settings[key] for key in ALLOWED_UI_SETTINGS_FIELDS if key in proxy_config.settings},
         }
     )
     config: Final[Mapping[str, object]] = MappingProxyType(
@@ -1787,9 +1787,9 @@ async def get_ui_settings():
     source: Final[Mapping[str, FieldSource]] = MappingProxyType(
         {
             key: (
-                "db"
-                if key in ui_settings
-                else _ui_setting_source(key, values[key], proxy_config.settings, settings_class)
+                _ui_setting_source(key, values[key], proxy_config.settings, settings_class)
+                if key in proxy_config.settings or key not in ui_settings
+                else "db"
             )
             for key in values
         }
