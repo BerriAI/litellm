@@ -50,6 +50,54 @@ async def test_make_call_passes_logging_obj_to_client_post():
     assert call_kwargs.get("logging_obj") is logging_obj
 
 
+@pytest.mark.parametrize(
+    ("api_base", "use_bearer", "expected_authorization", "expected_api_key"),
+    [
+        ("https://gateway.example.com", True, "Bearer test-key", None),
+        ("https://gateway.example.com", False, None, "test-key"),
+        ("https://gateway.example.com", None, None, "test-key"),
+        ("https://api.anthropic.com", True, None, "test-key"),
+    ],
+)
+def test_anthropic_completion_honors_custom_base_bearer_auth(
+    api_base: str,
+    use_bearer: bool | None,
+    expected_authorization: str | None,
+    expected_api_key: str | None,
+) -> None:
+    def provider(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == f"{api_base}/v1/messages"
+        assert (request.headers.get("authorization"), request.headers.get("x-api-key")) == (
+            expected_authorization,
+            expected_api_key,
+        )
+        assert "use_bearer_for_custom_base" not in json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_bearer_auth",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(provider)) as client:
+        response: Final = litellm.completion(
+            model="anthropic/claude-opus-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            api_base=api_base,
+            client=HTTPHandler(client=client),
+            **({"use_bearer_for_custom_base": use_bearer} if use_bearer is not None else {}),
+        )
+
+    assert response.choices[0].message.content == "Hello"
+
+
 def test_anthropic_completion_does_not_send_deployment_default_limits():
     captured_requests: list[httpx.Request] = []
 
