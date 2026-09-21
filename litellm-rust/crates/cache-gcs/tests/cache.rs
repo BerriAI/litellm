@@ -118,6 +118,40 @@ fn key_prefix_normalizes_paths() {
 }
 
 #[tokio::test]
+async fn object_names_use_python_quote_encoding() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/upload/storage/v1/b/bucket/o"))
+        .and(query_param("uploadType", "media"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let cache = cache(&server, Some("p/"));
+    cache
+        .set_cache(
+            "a~b-c_d.e/f g%h",
+            json!({"value": "punctuation"}),
+            &ExactCacheContext::default(),
+        )
+        .unwrap();
+    cache
+        .set_cache(
+            "ключ",
+            json!({"value": "utf8"}),
+            &ExactCacheContext::default(),
+        )
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    let queries: Vec<_> = requests
+        .iter()
+        .filter_map(|request| request.url.query())
+        .collect();
+    assert!(queries.contains(&"uploadType=media&name=p%2Fa~b-c_d.e%2Ff%20g%25h"));
+    assert!(queries.contains(&"uploadType=media&name=p%2F%D0%BA%D0%BB%D1%8E%D1%87"));
+}
+
+#[tokio::test]
 async fn ignores_ttl_and_writes_pipeline_concurrently() {
     let server = MockServer::start().await;
     for key in ["one", "two", "three"] {

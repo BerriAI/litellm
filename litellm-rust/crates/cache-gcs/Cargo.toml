@@ -13,7 +13,6 @@ litellm-cache.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
-url.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
