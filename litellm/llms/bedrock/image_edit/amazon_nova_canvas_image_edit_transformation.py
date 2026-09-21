@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.exceptions import BadRequestError
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -129,10 +130,14 @@ def _nova_canvas_task_body(
     }
 
 
-def _file_types_to_b64(image: FileTypes | None) -> str:
+def _file_types_to_b64(image: FileTypes | None, model: str) -> str:
     """Encode OpenAI image input to base64 string for Nova Canvas."""
     if image is None:
-        raise ValueError("Nova Canvas image edit requires an image input")
+        raise BadRequestError(
+            message="Nova Canvas image edit requires an image input",
+            model=model,
+            llm_provider="bedrock",
+        )
     if hasattr(image, "read") and callable(getattr(image, "read", None)):
         if hasattr(image, "seek"):
             image.seek(0)
@@ -314,12 +319,12 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         headers: dict,
     ) -> tuple[dict, Any]:
         op: Final = dict(image_edit_optional_request_params)
-        image_b64: Final = _file_types_to_b64(image)
+        image_b64: Final = _file_types_to_b64(image, model=model)
 
         mask_raw: Final = op.pop("mask", None)
         mask_b64: str | None = None
         if mask_raw is not None:
-            mask_b64 = _file_types_to_b64(mask_raw)
+            mask_b64 = _file_types_to_b64(mask_raw, model=model)
 
         _size: Final = op.pop("size", None)
         width = op.pop("width", None)
