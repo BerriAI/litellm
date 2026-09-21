@@ -175,6 +175,7 @@ jobs:
         env:
           TESTS: ${{ needs.detect.outputs.tests }}
           E2E_FIXTURE_MODE: live
+          E2E_PROVIDER_EDGE_HOST_REACHABLE: '1'
         run: |
           umask 077
           read -r -a test_files <<< "${TESTS}"
