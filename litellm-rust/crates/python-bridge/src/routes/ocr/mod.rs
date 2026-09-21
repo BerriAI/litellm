@@ -51,7 +51,7 @@ fn run_ocr(
         ocr_settings(py)?,
         secrets,
     )
-    .map_err(|error| http::client_error(error, &config))?;
+    .map_err(http::client_error)?;
     run_legacy_call(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
