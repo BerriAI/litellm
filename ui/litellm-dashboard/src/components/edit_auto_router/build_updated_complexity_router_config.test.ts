@@ -854,6 +854,16 @@ describe("managed keys survive an untouched open-and-save", () => {
     reasoning_override_min_score: 0.3,
     enable_context_window_escalation: false,
     context_window_escalation_buffer: 0.9,
+    code_keywords: ["async", "await"],
+    reasoning_keywords: ["prove"],
+    technical_keywords: ["api"],
+    simple_keywords: ["hello"],
+    plan_mode_patterns: ["plan now"],
+    route_housekeeping_to_cheapest_tier: false,
+    housekeeping_patterns: ["conversation title"],
+    reminder_markers: [{ open: "<system-reminder>", close: "</system-reminder>" }],
+    max_tokens_from_tier_model: false,
+    classifier_plugin_timeout_ms: 3000,
   };
 
   // tier_definitions and fallback_tier cannot sit beside heuristic_first, which this fixture uses,
@@ -864,6 +874,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     "fallback_tier",
     "hybrid_boundary_margin",
     "jev_classifier_config",
+    "classifier_plugin_timeout_ms",
   ]);
 
   // The stall keys are rejected beside the session pinning and user-turn classification this
@@ -892,6 +903,12 @@ describe("managed keys survive an untouched open-and-save", () => {
       .filter((key) => !KEYS_ANOTHER_TIER_LADDER_OWNS.has(key))
       .filter((key) => saved[key] === undefined);
     expect(dropped).toEqual([]);
+  });
+
+  it("keeps the custom classifier plugin timeout through an untouched save", () => {
+    const stored = { ...STORED_ALL_MANAGED, classifier_type: "custom", classifier_plugin_timeout_ms: 3000 };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(buildUpdatedComplexityRouterConfig(stored, hydrated).classifier_plugin_timeout_ms).toBe(3000);
   });
 
   it("carries an enabled non-reasoning tier and its models through their own round trip", () => {

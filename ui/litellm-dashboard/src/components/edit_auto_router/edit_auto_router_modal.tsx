@@ -45,6 +45,8 @@ import {
   buildComplexityRouterConfig,
   getClassifierModelError,
   getHeuristicV2SuccessThresholdError,
+  getReminderMarkersError,
+  getClassifierPluginTimeoutError,
   getClassifierReasoningEffortError,
   getKeywordTierRulesError,
   getMissingTiersError,
@@ -113,6 +115,8 @@ export const hydrateComplexityRouterConfig = (
   parsedConfig: StoredComplexityRouterConfig,
   complexityRouterDefaultModel: string | null | undefined,
 ): ComplexityRouterConfigValue => {
+  const stringList = (input: unknown): string[] | undefined =>
+    Array.isArray(input) ? input.filter((item): item is string => typeof item === "string") : undefined;
   const builtIn = hydrateBuiltInTiers(parsedConfig.tiers, parsedConfig.enable_non_reasoning_tier);
   const { tiers: hydratedTiers, enable_non_reasoning_tier } = builtIn;
   const custom_tier_set = hydrateCustomTierSet(parsedConfig);
@@ -219,6 +223,31 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.stall_escalation_repeat_threshold === "number"
         ? parsedConfig.stall_escalation_repeat_threshold
         : undefined,
+    code_keywords: stringList(parsedConfig.code_keywords),
+    reasoning_keywords: stringList(parsedConfig.reasoning_keywords),
+    technical_keywords: stringList(parsedConfig.technical_keywords),
+    simple_keywords: stringList(parsedConfig.simple_keywords),
+    plan_mode_patterns: stringList(parsedConfig.plan_mode_patterns),
+    route_housekeeping_to_cheapest_tier:
+      typeof parsedConfig.route_housekeeping_to_cheapest_tier === "boolean"
+        ? parsedConfig.route_housekeeping_to_cheapest_tier
+        : undefined,
+    housekeeping_patterns: stringList(parsedConfig.housekeeping_patterns),
+    reminder_markers: Array.isArray(parsedConfig.reminder_markers)
+      ? parsedConfig.reminder_markers.filter(
+          (pair): pair is { open: string; close: string } =>
+            typeof pair === "object" &&
+            pair !== null &&
+            typeof (pair as { open?: unknown }).open === "string" &&
+            typeof (pair as { close?: unknown }).close === "string",
+        )
+      : undefined,
+    max_tokens_from_tier_model:
+      typeof parsedConfig.max_tokens_from_tier_model === "boolean" ? parsedConfig.max_tokens_from_tier_model : undefined,
+    classifier_plugin_timeout_ms:
+      typeof parsedConfig.classifier_plugin_timeout_ms === "number" && Number.isFinite(parsedConfig.classifier_plugin_timeout_ms)
+        ? parsedConfig.classifier_plugin_timeout_ms
+        : undefined,
   };
 };
 
@@ -266,6 +295,16 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "stall_escalation_enabled",
   "stall_escalation_window",
   "stall_escalation_repeat_threshold",
+  "code_keywords",
+  "reasoning_keywords",
+  "technical_keywords",
+  "simple_keywords",
+  "plan_mode_patterns",
+  "route_housekeeping_to_cheapest_tier",
+  "housekeeping_patterns",
+  "reminder_markers",
+  "max_tokens_from_tier_model",
+  "classifier_plugin_timeout_ms",
 ]);
 
 // Managed only when the caller passes the corresponding state. A caller that does not render
@@ -387,6 +426,16 @@ export const buildUpdatedComplexityRouterConfig = (
     stallEscalationEnabled: value.stall_escalation_enabled,
     stallEscalationWindow: value.stall_escalation_window,
     stallEscalationRepeatThreshold: value.stall_escalation_repeat_threshold,
+    codeKeywords: value.code_keywords,
+    reasoningKeywords: value.reasoning_keywords,
+    technicalKeywords: value.technical_keywords,
+    simpleKeywords: value.simple_keywords,
+    planModePatterns: value.plan_mode_patterns,
+    routeHousekeepingToCheapestTier: value.route_housekeeping_to_cheapest_tier,
+    housekeepingPatterns: value.housekeeping_patterns,
+    reminderMarkers: value.reminder_markers,
+    maxTokensFromTierModel: value.max_tokens_from_tier_model,
+    classifierPluginTimeoutMs: value.classifier_plugin_timeout_ms,
   };
   const built = buildComplexityRouterConfig(builderParams);
 
@@ -585,6 +634,11 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       const classifierError =
         getClassifierModelError(complexityRouterConfig) ??
         getHeuristicV2SuccessThresholdError(complexityRouterConfig.heuristic_v2_success_threshold) ??
+        getReminderMarkersError(complexityRouterConfig.reminder_markers) ??
+        getClassifierPluginTimeoutError(
+          complexityRouterConfig.classifier_type,
+          complexityRouterConfig.classifier_plugin_timeout_ms,
+        ) ??
         getForecastConfigError(complexityRouterConfig) ??
         (heuristicScoringRole(complexityRouterConfig) === "decides"
           ? customDimensionsError(complexityRouterConfig.custom_dimensions)

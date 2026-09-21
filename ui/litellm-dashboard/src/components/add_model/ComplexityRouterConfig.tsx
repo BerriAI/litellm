@@ -63,9 +63,14 @@ import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from
 import { type CustomDimensionRow } from "./custom_dimensions";
 import CompressionControls from "./CompressionControls";
 import { type AutoRouterCompressionState, DEFAULT_AUTO_ROUTER_COMPRESSION } from "./buildAutoRouterCompression";
+import HeuristicKeywordOverrides from "./HeuristicKeywordOverrides";
+import HousekeepingRoutingControls from "./HousekeepingRoutingControls";
+import ReminderMarkers from "./ReminderMarkers";
+import { type ReminderMarkerPair } from "./build_complexity_router_config";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
 export type { CustomTierSet, TierRow } from "./tier_rows";
+export type { ReminderMarkerPair } from "./build_complexity_router_config";
 
 export const DEFAULT_CLASSIFIER_TIMEOUT_MS = 3000;
 export const DEFAULT_TIER_DISTANCE_PENALTY = 0.5;
@@ -429,6 +434,16 @@ export interface ComplexityRouterConfigValue {
    * edit round-trip.
    */
   tier_model_params?: TierModelParamsByTier;
+  code_keywords?: string[];
+  reasoning_keywords?: string[];
+  technical_keywords?: string[];
+  simple_keywords?: string[];
+  plan_mode_patterns?: string[];
+  route_housekeeping_to_cheapest_tier?: boolean;
+  housekeeping_patterns?: string[];
+  reminder_markers?: ReminderMarkerPair[];
+  max_tokens_from_tier_model?: boolean;
+  classifier_plugin_timeout_ms?: number;
 }
 
 /** Session affinity wins where a hand-authored config sets both, matching the backend's own `or`. */
@@ -786,6 +801,17 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                       />
                     ),
                   },
+              ]
+              : []),
+            ...(!forecast
+              ? [
+                  {
+                    key: "keyword-overrides",
+                    label: (
+                      <strong className="text-foreground font-semibold">Advanced: Heuristic Keyword Overrides</strong>
+                    ),
+                    children: <HeuristicKeywordOverrides value={value} onChange={onChange} />,
+                  },
                 ]
               : []),
             {
@@ -813,6 +839,16 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
               children: (
                 <PlanModeOverrideControls value={value} onChange={onChange} planModeTierOptions={planModeTierOptions} />
               ),
+            },
+            {
+              key: "housekeeping",
+              label: <strong className="text-foreground font-semibold">Advanced: Housekeeping Routing</strong>,
+              children: <HousekeepingRoutingControls value={value} onChange={onChange} />,
+            },
+            {
+              key: "reminder-markers",
+              label: <strong className="text-foreground font-semibold">Advanced: Reminder Markers</strong>,
+              children: <ReminderMarkers value={value} onChange={onChange} showValidationErrors={showValidationErrors} />,
             },
             {
               key: "context-window",
