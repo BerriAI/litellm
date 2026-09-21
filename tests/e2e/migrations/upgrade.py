@@ -88,6 +88,9 @@ def auth_traffic(replica: Replica, key: str, interval: float = 0.05) -> Generato
         stop.set()
         thread.join(30)
         assert not thread.is_alive(), "Auth traffic thread did not stop"
+    assert not outcomes.failures, (
+        f"Virtual-key auth failed on {replica.name} after the traffic window closed: {outcomes.failures[:5]}"
+    )
 
 
 def keep_serving(outcomes: Outcomes, description: str, calls: int = 20) -> int:
@@ -105,6 +108,10 @@ def assert_history_clean(database: Database) -> None:
     assert database.query(
         "SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL"
     ) == ((0,),), "The upgrade left an unfinished or rolled-back migration behind"
+    assert database.query(
+        "SELECT count(*) FROM (SELECT migration_name FROM _prisma_migrations GROUP BY migration_name "
+        "HAVING count(*) > 1) duplicated"
+    ) == ((0,),), "A migration was recorded more than once, so it ran on more than one replica"
 
 
 def assert_upgraded(before: frozenset[str], after: frozenset[str]) -> frozenset[str]:
