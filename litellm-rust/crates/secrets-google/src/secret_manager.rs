@@ -26,7 +26,7 @@ pub struct GoogleSecretManager {
     credentials: Arc<GoogleCredentials>,
     endpoint: reqwest::Url,
     project: String,
-    cache: Cache<String, Option<SecretValue>>,
+    cache: Cache<String, SecretValue>,
     always_read: bool,
 }
 
@@ -119,7 +119,7 @@ impl GoogleSecretManager {
         if !self.always_read
             && let Some(cached) = self.cache.get(name).await
         {
-            return Ok(cached.and_then(cached_secret));
+            return Ok(Some(Secret::String(cached)));
         }
         let url = self
             .endpoint
@@ -138,32 +138,20 @@ impl GoogleSecretManager {
             .headers(self.credentials.request_headers().await?)
             .send()
             .await?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
         if response.status() != reqwest::StatusCode::OK {
-            self.cache.insert(name.to_owned(), None).await;
             return Err(Error::Status(response.status().as_u16()));
         }
         let response: Response = response.json().await?;
         let Some(data) = response.payload.and_then(|payload| payload.data) else {
-            self.cache.insert(name.to_owned(), None).await;
             return Err(Error::MissingPayload);
         };
-        let filtered: String = data
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
-            .collect();
-        let bytes = STANDARD.decode(filtered)?;
+        let bytes = STANDARD.decode(data)?;
         let plaintext = String::from_utf8(bytes).map_err(|_| Error::Utf8)?;
         let value = SecretValue::new(plaintext);
-        self.cache
-            .insert(name.to_owned(), Some(value.clone()))
-            .await;
+        self.cache.insert(name.to_owned(), value.clone()).await;
         Ok(Some(Secret::String(value)))
-    }
-}
-
-fn cached_secret(value: SecretValue) -> Option<Secret> {
-    match serde_json::from_str(value.expose()) {
-        Ok(json) => Secret::from_json(json),
-        Err(_) => Some(Secret::String(value)),
     }
 }

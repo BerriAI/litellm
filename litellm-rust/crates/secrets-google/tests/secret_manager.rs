@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_secrets_google::{Error, GoogleSecretManager};
-use litellm_secrets_types::Secret;
+
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
     matchers::{header, path},
@@ -55,32 +55,58 @@ async fn successful_reads_use_auth_latest_version_and_cache_including_empty_valu
 }
 
 #[rstest::rstest]
-#[case::not_found(ResponseTemplate::new(404))]
-#[case::missing_payload(
-    ResponseTemplate::new(200).set_body_json(serde_json::json!({"payload":{}}))
-)]
+#[case::not_found(404, serde_json::json!({}))]
+#[case::unauthorized(401, serde_json::json!({}))]
+#[case::forbidden(403, serde_json::json!({}))]
+#[case::throttled(429, serde_json::json!({}))]
+#[case::unavailable(503, serde_json::json!({}))]
+#[case::missing_payload(200, serde_json::json!({"payload":{}}))]
+#[case::invalid_base64(200, serde_json::json!({"payload":{"data":"%%%"}}))]
 #[tokio::test]
-async fn negative_cache_returns_none_after_initial_error(#[case] response: ResponseTemplate) {
+async fn failed_or_missing_reads_are_not_cached(
+    #[case] status: u16,
+    #[case] body: serde_json::Value,
+) {
     let server = MockServer::start().await;
+    let manager = manager(&server, false, Duration::from_secs(60));
+    let failing = Mock::given(path(
+        "/v1/projects/project/secrets/key/versions/latest:access",
+    ))
+    .respond_with(ResponseTemplate::new(status).set_body_json(body))
+    .expect(1)
+    .mount_as_scoped(&server)
+    .await;
+    let result = manager.get_secret_from_google_secret_manager("key").await;
+    match status {
+        404 => assert_eq!(result.unwrap(), None),
+        200 => assert!(matches!(
+            result,
+            Err(Error::MissingPayload | Error::Base64(_))
+        )),
+        status => assert!(matches!(result, Err(Error::Status(actual)) if actual == status)),
+    }
+    drop(failing);
     Mock::given(path(
         "/v1/projects/project/secrets/key/versions/latest:access",
     ))
-    .respond_with(response)
+    .respond_with(
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"payload":{"data":STANDARD.encode("recovered")}})),
+    )
     .expect(1)
     .mount(&server)
     .await;
-    let manager = manager(&server, false, Duration::from_secs(60));
-    assert!(matches!(
-        manager.get_secret_from_google_secret_manager("key").await,
-        Err(Error::Status(404) | Error::MissingPayload)
-    ));
-    assert!(
-        manager
-            .get_secret_from_google_secret_manager("key")
-            .await
-            .unwrap()
-            .is_none()
-    );
+    for _ in 0..2 {
+        assert_eq!(
+            manager
+                .get_secret_from_google_secret_manager("key")
+                .await
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            Some("recovered")
+        );
+    }
 }
 
 #[rstest::rstest]
@@ -130,21 +156,12 @@ fn google_manager_requires_host_license_and_project_configuration() {
 }
 
 #[rstest::rstest]
-#[case::boolean("true", Some(Secret::Bool(true)))]
-#[case::null("null", None)]
-#[case::string(
-    "\"text\"",
-    Some(Secret::String(litellm_secrets_types::SecretValue::new("text")))
-)]
-#[case::object(
-    "{\"key\":1}",
-    Secret::from_json(serde_json::json!({"key":1}))
-)]
+#[case("true")]
+#[case("null")]
+#[case("\"text\"")]
+#[case("{\"key\":1}")]
 #[tokio::test]
-async fn cached_values_preserve_python_json_conversion(
-    #[case] raw: &str,
-    #[case] expected: Option<Secret>,
-) {
+async fn cache_preserves_raw_values(#[case] raw: &str) {
     let server = MockServer::start().await;
     Mock::given(path(
         "/v1/projects/project/secrets/key/versions/latest:access",
@@ -157,20 +174,15 @@ async fn cached_values_preserve_python_json_conversion(
     .mount(&server)
     .await;
     let manager = manager(&server, false, Duration::from_secs(60));
-    assert_eq!(
-        manager
-            .get_secret_from_google_secret_manager("key")
-            .await
-            .unwrap()
-            .unwrap()
-            .as_str(),
-        Some(raw)
-    );
-    assert_eq!(
-        manager
-            .get_secret_from_google_secret_manager("key")
-            .await
-            .unwrap(),
-        expected
-    );
+    for _ in 0..2 {
+        assert_eq!(
+            manager
+                .get_secret_from_google_secret_manager("key")
+                .await
+                .unwrap()
+                .unwrap()
+                .as_str(),
+            Some(raw)
+        );
+    }
 }

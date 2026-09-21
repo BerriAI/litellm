@@ -12,7 +12,7 @@ pub enum Error {
     Timeout,
     #[error("AWS KMS decrypt failed")]
     Decrypt(#[from] #[redact] Box<SdkError<aws_sdk_kms::operation::decrypt::DecryptError>>),
-    #[error("AWS Secrets Manager request preparation failed")]
+    #[error("AWS Secrets Manager read failed")]
     Read(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueError>>),
     #[error("AWS Secrets Manager create failed")]
     Create(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::create_secret::CreateSecretError>>),
@@ -22,6 +22,8 @@ pub enum Error {
     Delete(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::delete_secret::DeleteSecretError>>),
     #[error("AWS Secrets Manager replication failed")]
     Replicate(#[from] #[redact] Box<SdkError<aws_sdk_secretsmanager::operation::replicate_secret_to_regions::ReplicateSecretToRegionsError>>),
+    #[error("AWS Secrets Manager response has no string payload")]
+    MissingString,
     #[error("primary secret is not a JSON object")]
     PrimarySecret,
     #[error(transparent)]

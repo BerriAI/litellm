@@ -12,7 +12,7 @@ pub use litellm_secrets_types::{
     AccessMode, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };
 pub use oidc::{OidcProvider, OidcReference, OidcResolver};
-pub use resolver::SecretResolver;
+pub use resolver::{FailurePolicy, SecretResolver};
 pub use state::{SecretManagerState, secret_manager_would_be_consulted};
 
 #[cfg(feature = "aws")]

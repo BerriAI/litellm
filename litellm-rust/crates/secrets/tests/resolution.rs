@@ -1,18 +1,13 @@
 use std::sync::Arc;
 
 use litellm_secrets::{
-    AccessMode, KeyManagementSettings, KeyManagementSystem, OidcResolver, Secret, SecretManager,
-    SecretManagerState, SecretResolver, SecretValue, secret_manager_would_be_consulted,
+    Error, KeyManagementSettings, OidcResolver, Secret, SecretManager, SecretManagerState,
+    SecretResolver, SecretValue, secret_manager_would_be_consulted,
 };
 
-fn resolver(value: Option<&str>, readable: bool) -> SecretResolver {
-    let state = if readable {
-        SecretManagerState::new(
-            Some(KeyManagementSystem::Local),
-            Some(KeyManagementSettings::default()),
-            Some(SecretManager::Local),
-        )
-        .unwrap()
+fn resolver(value: Option<&str>, configured: bool) -> SecretResolver {
+    let state = if configured {
+        SecretManagerState::new(SecretManager::Local, KeyManagementSettings::default())
     } else {
         SecretManagerState::default()
     };
@@ -25,254 +20,113 @@ fn resolver(value: Option<&str>, readable: bool) -> SecretResolver {
 }
 
 #[rstest::rstest]
-#[case::lowercase_true("true", Some(true), None)]
-#[case::whitespace_lowercase_false(" FALSE ", Some(false), None)]
-#[case::python_true("True", Some(true), Some(true))]
-#[case::python_false("False", Some(false), Some(false))]
-#[case::parenthesized_python_true("(True)", None, Some(true))]
-#[case::commented_python_false("False # comment", None, Some(false))]
-#[case::integer("1", None, None)]
-#[case::yes("yes", None, None)]
-#[case::plain_string("secret", None, None)]
+#[case("true", Some(true))]
+#[case(" FALSE ", Some(false))]
+#[case("(True)", None)]
+#[case("False # comment", None)]
+#[case("1", None)]
+#[case("secret", None)]
 #[tokio::test]
-async fn boolean_conversion_preserves_local_and_manager_differences(
+async fn conversion_is_explicit_and_independent_of_manager_configuration(
     #[case] input: &str,
-    #[case] local: Option<bool>,
-    #[case] manager: Option<bool>,
-    #[values(false, true)] readable: bool,
+    #[case] boolean: Option<bool>,
+    #[values(false, true)] configured: bool,
 ) {
-    let boolean = if readable { manager } else { local };
-    let resolver = resolver(Some(input), readable);
-    let expected = boolean
-        .map(Secret::Bool)
-        .unwrap_or_else(|| Secret::String(SecretValue::new(input)));
+    let resolver = resolver(Some(input), configured);
     assert_eq!(
         resolver.get_secret("key", None).await.unwrap(),
-        Some(expected)
+        Some(Secret::String(SecretValue::new(input)))
     );
     assert_eq!(
         resolver
             .get_secret_str("key", None)
             .await
             .unwrap()
-            .map(|v| v.expose().to_owned()),
-        boolean.is_none().then(|| input.to_owned())
+            .unwrap()
+            .expose(),
+        input
+    );
+    match boolean {
+        Some(value) => assert_eq!(
+            resolver.get_secret_bool("key", None).await.unwrap(),
+            Some(value)
+        ),
+        None => assert!(matches!(
+            resolver.get_secret_bool("key", Some(true)).await,
+            Err(Error::TypeMismatch {
+                expected: "boolean"
+            })
+        )),
+    }
+}
+
+#[rstest::rstest]
+#[tokio::test]
+async fn defaults_apply_only_to_absence(#[values(false, true)] configured: bool) {
+    let missing = resolver(None, configured);
+    assert_eq!(missing.get_secret("key", None).await.unwrap(), None);
+    assert_eq!(
+        missing.get_secret_bool("key", Some(false)).await.unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        missing
+            .get_secret_str("key", Some(SecretValue::new("default")))
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "default"
+    );
+    for value in [
+        Secret::Bool(false),
+        Secret::from_json(serde_json::json!({"key":1})),
+        Secret::from_json(serde_json::Value::Null),
+    ] {
+        assert_eq!(
+            missing
+                .get_secret("key", Some(value.clone()))
+                .await
+                .unwrap(),
+            Some(value)
+        );
+    }
+    assert_eq!(
+        resolver(Some(""), configured)
+            .get_secret_str("key", Some(SecretValue::new("default")))
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        ""
     );
 }
 
 #[tokio::test]
-async fn manager_boolean_conversion_trims_whitespace() {
+async fn prefix_is_removed_once_and_local_manager_is_not_consulted() {
+    let state = SecretManagerState::new(SecretManager::Local, KeyManagementSettings::default());
     assert_eq!(
-        resolver(Some(" true "), true)
-            .get_secret_bool("key", None)
-            .await
-            .unwrap(),
-        Some(true)
+        state.system(),
+        Some(litellm_secrets::KeyManagementSystem::Local)
     );
-}
-
-#[tokio::test]
-async fn missing_values_ignore_defaults_and_prefix_is_removed_before_lookup() {
-    let missing = resolver(None, false);
-    assert_eq!(
-        missing
-            .get_secret("missing", Some(Secret::Bool(true)))
-            .await
-            .unwrap(),
-        None
-    );
-    assert_eq!(
-        missing
-            .get_secret_bool("missing", Some(true))
-            .await
-            .unwrap(),
-        None
-    );
+    assert!(!secret_manager_would_be_consulted(
+        &state,
+        "os.environ/os.environ/KEY"
+    ));
     let resolver = SecretResolver::new(
-        Arc::new(SecretManagerState::default()),
-        Arc::new(|name: &str| (name == "KEY").then(|| "value".into())),
+        Arc::new(state),
+        Arc::new(|name: &str| (name == "os.environ/KEY").then(|| "value".into())),
         OidcResolver::default(),
     );
     assert_eq!(
         resolver
-            .get_secret_str("os.environ/KEY", None)
+            .get_secret_str("os.environ/os.environ/KEY", None)
             .await
             .unwrap()
             .unwrap()
             .expose(),
         "value"
     );
-}
-
-#[rstest::rstest]
-#[case::all_keys(None)]
-#[case::no_keys(Some(Vec::new()))]
-#[case::allowlisted_key(Some(vec!["KEY".into()]))]
-fn manager_gating_requires_client_readable_settings_and_allowlisted_name(
-    #[values(AccessMode::ReadOnly, AccessMode::WriteOnly, AccessMode::ReadAndWrite)]
-    access_mode: AccessMode,
-    #[values(false, true)] client: bool,
-    #[case] keys: Option<Vec<String>>,
-) {
-    let expected = client
-        && access_mode.readable()
-        && keys
-            .as_ref()
-            .is_none_or(|keys| keys.iter().any(|key| key == "KEY"));
-    let state = SecretManagerState::new(
-        Some(KeyManagementSystem::Local),
-        Some(KeyManagementSettings {
-            access_mode,
-            hosted_keys: keys,
-            ..Default::default()
-        }),
-        client.then_some(SecretManager::Local),
-    )
-    .unwrap();
-    assert_eq!(
-        secret_manager_would_be_consulted(&state, "os.environ/KEY"),
-        expected
-    );
-}
-
-#[test]
-fn manager_gating_requires_settings() {
-    let no_settings = SecretManagerState::new(None, None, Some(SecretManager::Local)).unwrap();
-    assert!(!secret_manager_would_be_consulted(&no_settings, "KEY"));
-}
-
-#[cfg(feature = "aws")]
-#[rstest::rstest]
-#[case::missing_value(None, None)]
-#[case::lookup_error(Some("primary".to_owned()), Some("environment-value"))]
-#[tokio::test]
-async fn aws_missing_values_do_not_fallback_but_lookup_errors_do(
-    #[case] primary: Option<String>,
-    #[case] expected: Option<&str>,
-) {
-    use litellm_secrets::aws::AwsSecretsManagerV2;
-    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::body_partial_json};
-    let server = MockServer::start().await;
-    Mock::given(body_partial_json(serde_json::json!({"SecretId":"KEY"})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
-        .expect(u64::from(primary.is_none()))
-        .mount(&server)
-        .await;
-    Mock::given(body_partial_json(serde_json::json!({"SecretId":"primary"})))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"SecretString":"invalid-json"})),
-        )
-        .expect(u64::from(primary.is_some()))
-        .mount(&server)
-        .await;
-    let endpoint = server.uri();
-    let environment: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> =
-        Arc::new(move |name: &str| match name {
-            "AWS_REGION_NAME" => Some("us-east-1".into()),
-            "AWS_ACCESS_KEY_ID" | "AWS_SECRET_ACCESS_KEY" => Some("test".into()),
-            "AWS_BEDROCK_RUNTIME_ENDPOINT" => Some(endpoint.clone()),
-            "KEY" => Some("environment-value".into()),
-            _ => None,
-        });
-    let settings = KeyManagementSettings {
-        primary_secret_name: primary,
-        ..Default::default()
-    };
-    let manager = AwsSecretsManagerV2::load_aws_secret_manager(
-        Some(true),
-        settings.clone(),
-        environment.clone(),
-    )
-    .unwrap()
-    .unwrap();
-    let state = SecretManagerState::new(
-        Some(KeyManagementSystem::AwsSecretManager),
-        Some(settings),
-        Some(SecretManager::AwsSecretsManagerV2(manager)),
-    )
-    .unwrap();
-    let resolver = SecretResolver::new(
-        Arc::new(state),
-        environment.clone(),
-        OidcResolver::default(),
-    );
-    assert_eq!(
-        resolver
-            .get_secret_str("os.environ/KEY", None)
-            .await
-            .unwrap()
-            .map(|v| v.expose().to_owned())
-            .as_deref(),
-        expected
-    );
-}
-
-#[cfg(feature = "google")]
-#[rstest::rstest]
-#[case::hosted_filter(Some(Vec::new()), Some(KeyManagementSystem::GoogleSecretManager))]
-#[case::negative_cache(None, Some(KeyManagementSystem::GoogleSecretManager))]
-#[case::missing_system(None, None)]
-#[case::hosted_nested_prefix(Some(vec!["os.environ/KEY".into()]), Some(KeyManagementSystem::GoogleSecretManager))]
-#[tokio::test]
-async fn google_negative_cache_still_falls_back_and_hosted_filter_avoids_io(
-    #[case] hosted_keys: Option<Vec<String>>,
-    #[case] system: Option<KeyManagementSystem>,
-) {
-    use litellm_secrets::google::GoogleSecretManager;
-    use std::time::Duration;
-    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
-    let server = MockServer::start().await;
-    Mock::given(path(
-        "/v1/projects/project/secrets/os%2Eenviron%2FKEY/versions/latest:access",
-    ))
-    .respond_with(ResponseTemplate::new(404))
-    .expect(u64::from(
-        hosted_keys.as_ref().is_none_or(|keys| !keys.is_empty()) && system.is_some(),
-    ))
-    .mount(&server)
-    .await;
-    let environment: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> =
-        Arc::new(|name: &str| match name {
-            "VERTEX_AI_API_KEY" => Some("token".into()),
-            "os.environ/KEY" => Some("environment-value".into()),
-            _ => None,
-        });
-    let manager = GoogleSecretManager::with_client(
-        reqwest::Client::new(),
-        server.uri().parse().unwrap(),
-        "project".into(),
-        environment.clone(),
-        Some(Duration::from_secs(60)),
-        false,
-    )
-    .unwrap();
-    let settings = KeyManagementSettings {
-        hosted_keys,
-        ..Default::default()
-    };
-    let state = SecretManagerState::new(
-        system,
-        Some(settings),
-        Some(SecretManager::GoogleSecretManager(manager)),
-    )
-    .unwrap();
-    let resolver = SecretResolver::new(
-        Arc::new(state),
-        environment.clone(),
-        OidcResolver::default(),
-    );
-    for _ in 0..2 {
-        assert_eq!(
-            resolver
-                .get_secret_str("os.environ/os.environ/KEY", None)
-                .await
-                .unwrap()
-                .unwrap()
-                .expose(),
-            "environment-value"
-        );
-    }
 }
 
 #[tokio::test]
@@ -285,59 +139,230 @@ async fn resolver_future_can_run_on_a_tokio_worker() {
     assert_eq!(result.unwrap().expose(), "worker-value");
 }
 
-#[rstest::rstest]
-#[case::nested_true("((True)) # comment", Some(true))]
-#[case::commented_false("(False # comment\n)", Some(false))]
-#[case::boolean_expression("True and False", None)]
-#[case::string_literal("'True'", None)]
-#[case::tuple("(True,)", None)]
-#[case::unary_expression("not False", None)]
-#[case::multiple_expressions("True\nFalse", None)]
-#[case::incomplete_expression("(True", None)]
-#[tokio::test]
-async fn manager_boolean_literals_follow_python_syntax(
-    #[case] input: &str,
-    #[case] expected: Option<bool>,
-) {
-    let value = resolver(Some(input), true)
-        .get_secret("key", None)
-        .await
-        .unwrap();
-    assert_eq!(
-        value,
-        Some(
-            expected
-                .map(Secret::Bool)
-                .unwrap_or_else(|| Secret::String(SecretValue::new(input)))
+#[cfg(feature = "aws")]
+mod aws {
+    use super::*;
+    use litellm_secrets::{AccessMode, FailurePolicy, aws::AwsSecretsManagerV2};
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    fn state(server: &MockServer, settings: KeyManagementSettings) -> SecretManagerState {
+        let endpoint = server.uri();
+        let environment = Arc::new(move |name: &str| match name {
+            "AWS_REGION_NAME" => Some("us-east-1".into()),
+            "AWS_ACCESS_KEY_ID" | "AWS_SECRET_ACCESS_KEY" => Some("test".into()),
+            "AWS_BEDROCK_RUNTIME_ENDPOINT" => Some(endpoint.clone()),
+            _ => None,
+        });
+        let manager =
+            AwsSecretsManagerV2::load_aws_secret_manager(Some(true), settings.clone(), environment)
+                .unwrap()
+                .unwrap();
+        SecretManagerState::new(SecretManager::AwsSecretsManagerV2(manager), settings)
+    }
+
+    #[rstest::rstest]
+    #[case::missing(400, serde_json::json!({"__type":"ResourceNotFoundException"}), false)]
+    #[case::denied(400, serde_json::json!({"__type":"AccessDeniedException"}), true)]
+    #[case::malformed(200, serde_json::json!({}), true)]
+    #[tokio::test]
+    async fn failure_policy_preserves_errors_and_fallback_precedence(
+        #[case] status: u16,
+        #[case] body: serde_json::Value,
+        #[case] fails: bool,
+        #[values(FailurePolicy::Propagate, FailurePolicy::EnvironmentFallback)]
+        policy: FailurePolicy,
+        #[values(None, Some("environment"))] environment: Option<&'static str>,
+        #[values(None, Some("default"))] default: Option<&str>,
+    ) {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let resolver = SecretResolver::new(
+            Arc::new(state(&server, KeyManagementSettings::default())),
+            Arc::new(move |_: &str| environment.map(str::to_owned)),
+            OidcResolver::default(),
         )
-    );
+        .with_failure_policy(policy);
+        let result = resolver
+            .get_secret_str("KEY", default.map(SecretValue::new))
+            .await;
+        let fallback = environment.or(default);
+        if fails && (policy == FailurePolicy::Propagate || fallback.is_none()) {
+            assert!(matches!(result, Err(Error::Aws(_))));
+        } else {
+            assert_eq!(result.unwrap().as_ref().map(SecretValue::expose), fallback);
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::boolean(serde_json::json!(false))]
+    #[case::object(serde_json::json!({"key":1}))]
+    #[case::null(serde_json::Value::Null)]
+    #[case::string(serde_json::json!("true"))]
+    #[tokio::test]
+    async fn typed_values_survive_resolution_and_accessors_reject_wrong_types(
+        #[case] value: serde_json::Value,
+    ) {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"SecretString":serde_json::json!({"KEY":value}).to_string()}),
+            ))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let settings = KeyManagementSettings {
+            primary_secret_name: Some("primary".into()),
+            ..Default::default()
+        };
+        let resolver = SecretResolver::new(
+            Arc::new(state(&server, settings)),
+            Arc::new(|_: &str| Some("fallback".into())),
+            OidcResolver::default(),
+        );
+        assert_eq!(
+            resolver
+                .get_secret("KEY", Some(Secret::Bool(true)))
+                .await
+                .unwrap(),
+            Some(Secret::from_json(value.clone()))
+        );
+        match &value {
+            serde_json::Value::String(text) => assert_eq!(
+                resolver
+                    .get_secret_str("KEY", None)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .expose(),
+                text
+            ),
+            _ => assert!(matches!(
+                resolver.get_secret_str("KEY", None).await,
+                Err(Error::TypeMismatch { expected: "string" })
+            )),
+        }
+        match value {
+            serde_json::Value::Bool(boolean) => assert_eq!(
+                resolver.get_secret_bool("KEY", None).await.unwrap(),
+                Some(boolean)
+            ),
+            serde_json::Value::String(_) => assert_eq!(
+                resolver.get_secret_bool("KEY", None).await.unwrap(),
+                Some(true)
+            ),
+            _ => assert!(matches!(
+                resolver.get_secret_bool("KEY", None).await,
+                Err(Error::TypeMismatch {
+                    expected: "boolean"
+                })
+            )),
+        }
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn gating_prediction_matches_actual_lookup(
+        #[values(AccessMode::ReadOnly, AccessMode::WriteOnly, AccessMode::ReadAndWrite)]
+        access_mode: AccessMode,
+        #[values(None, Some(vec![]), Some(vec!["KEY".into()]))] hosted_keys: Option<Vec<String>>,
+        #[values("os.environ/KEY", "os.environ/oidc/env/KEY")] name: &str,
+    ) {
+        let server = MockServer::start().await;
+        let expected = name == "os.environ/KEY"
+            && access_mode.readable()
+            && hosted_keys
+                .as_ref()
+                .is_none_or(|keys| keys.iter().any(|key| key == "KEY"));
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"SecretString":"remote"})),
+            )
+            .expect(u64::from(expected))
+            .mount(&server)
+            .await;
+        let state = state(
+            &server,
+            KeyManagementSettings {
+                access_mode,
+                hosted_keys,
+                ..Default::default()
+            },
+        );
+        assert!(state.backend().is_some());
+        assert_eq!(state.settings().unwrap().access_mode, access_mode);
+        assert_eq!(secret_manager_would_be_consulted(&state, name), expected);
+        let resolver = SecretResolver::new(
+            Arc::new(state),
+            Arc::new(|_: &str| Some("environment".into())),
+            OidcResolver::default(),
+        );
+        assert_eq!(
+            resolver
+                .get_secret_str(name, None)
+                .await
+                .unwrap()
+                .unwrap()
+                .expose(),
+            if expected { "remote" } else { "environment" }
+        );
+    }
 }
 
+#[cfg(feature = "google")]
+#[rstest::rstest]
+#[case::missing(404)]
+#[case::failure(503)]
 #[tokio::test]
-async fn environment_prefix_is_removed_only_once_and_gating_uses_the_same_name() {
-    let name = "os.environ/folder/os.environ/KEY";
-    let state = SecretManagerState::new(
-        Some(KeyManagementSystem::Local),
-        Some(KeyManagementSettings {
-            hosted_keys: Some(vec!["folder/os.environ/KEY".into()]),
-            ..Default::default()
-        }),
-        Some(SecretManager::Local),
+async fn google_resolver_distinguishes_absence_from_failure(#[case] status: u16) {
+    use litellm_secrets::{FailurePolicy, google::GoogleSecretManager};
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(status))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let environment: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> =
+        Arc::new(|name: &str| match name {
+            "VERTEX_AI_API_KEY" => Some("token".into()),
+            "KEY" => Some("environment".into()),
+            _ => None,
+        });
+    let manager = GoogleSecretManager::with_client(
+        reqwest::Client::new(),
+        server.uri().parse().unwrap(),
+        "project".into(),
+        environment.clone(),
+        None,
+        false,
     )
     .unwrap();
-    assert!(secret_manager_would_be_consulted(&state, name));
-    let resolver = SecretResolver::new(
-        Arc::new(state),
-        Arc::new(|name: &str| (name == "folder/os.environ/KEY").then(|| "value".into())),
-        OidcResolver::default(),
+    let state = SecretManagerState::new(
+        SecretManager::GoogleSecretManager(manager),
+        KeyManagementSettings::default(),
     );
+    let resolver = SecretResolver::new(Arc::new(state), environment, OidcResolver::default());
+    let result = resolver.get_secret_str("KEY", None).await;
+    if status == 404 {
+        assert_eq!(result.unwrap().unwrap().expose(), "environment");
+    } else {
+        assert!(
+            matches!(result, Err(Error::Google(litellm_secrets::google::Error::Status(actual))) if actual == status)
+        );
+    }
     assert_eq!(
         resolver
-            .get_secret_str(name, None)
+            .with_failure_policy(FailurePolicy::EnvironmentFallback)
+            .get_secret_str("KEY", None)
             .await
             .unwrap()
             .unwrap()
             .expose(),
-        "value"
+        "environment"
     );
 }
