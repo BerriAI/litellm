@@ -165,7 +165,7 @@ def register_scenario_deployment(
         **case.litellm_params,
         **(
             {"vertex_credentials": _vertex_service_account_json(control_url)}
-            if case.rates.litellm_provider == "vertex_ai-language-models"
+            if case.rates.litellm_provider.startswith("vertex_ai")
             else {}
         ),
     }
