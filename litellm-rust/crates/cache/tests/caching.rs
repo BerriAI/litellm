@@ -1,7 +1,8 @@
 use std::{sync::Mutex, time::Duration};
 
 use litellm_cache::{
-    BaseCache, CacheConnectionResult, CacheContext, Error, ExactCacheContext, get_cache,
+    BaseCache, CacheConnectionResult, CacheContext, Error, ExactCacheContext,
+    SemanticCacheContext, get_cache,
 };
 
 struct TestCache {
@@ -124,6 +125,27 @@ fn associated_context_preserves_backend_specific_lookup_inputs() {
         get_cache(&SemanticCache, "shared-key", &context).unwrap(),
         Some("semantic hit".into())
     );
+}
+
+#[test]
+fn semantic_context_with_ttl_preserves_lookup_inputs() {
+    let context = SemanticCacheContext {
+        input: Some(serde_json::json!("text")),
+        messages: vec![serde_json::json!({"role": "user", "content": "hi"})],
+        metadata: serde_json::Map::from_iter([(
+            "key".into(),
+            serde_json::json!("value"),
+        )]),
+        scope: Some("scope".into()),
+        ttl: None,
+    };
+    let updated = context.with_ttl(Some(Duration::from_secs(30)));
+    assert_eq!(updated.ttl(), Some(Duration::from_secs(30)));
+    assert_eq!(updated.input, context.input);
+    assert_eq!(updated.messages, context.messages);
+    assert_eq!(updated.metadata, context.metadata);
+    assert_eq!(updated.scope, context.scope);
+    assert_eq!(context.with_ttl(None).ttl(), None);
 }
 
 #[tokio::test]

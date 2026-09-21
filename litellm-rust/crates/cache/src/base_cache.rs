@@ -32,6 +32,31 @@ impl CacheContext for ExactCacheContext {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SemanticCacheContext {
+    pub input: Option<serde_json::Value>,
+    pub messages: Vec<serde_json::Value>,
+    pub metadata: serde_json::Map<String, serde_json::Value>,
+    pub scope: Option<String>,
+    pub ttl: Option<Duration>,
+}
+
+impl CacheContext for SemanticCacheContext {
+    fn ttl(&self) -> Option<Duration> {
+        self.ttl
+    }
+
+    fn with_ttl(&self, ttl: Option<Duration>) -> Self {
+        Self {
+            input: self.input.clone(),
+            messages: self.messages.clone(),
+            metadata: self.metadata.clone(),
+            scope: self.scope.clone(),
+            ttl,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CacheConnectionStatus {

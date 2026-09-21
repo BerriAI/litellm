@@ -8,7 +8,7 @@ mod error;
 
 pub use base_cache::{
     BaseCache, BatchEntry, CacheConnectionResult, CacheConnectionStatus, CacheContext,
-    ExactCacheContext,
+    ExactCacheContext, SemanticCacheContext,
 };
 pub use cache_type::CacheType;
 pub use caching::{Cache, CacheBackend, get_cache, set_cache};
