@@ -110,6 +110,19 @@ class TestOutputConfigStrippedFromCompletionKwargs:
             "reject it with 400 'Extra inputs are not permitted'"
         )
 
+    def test_safeguards_is_stripped_for_non_anthropic_target(self):
+        extra_kwargs = {
+            "custom_llm_provider": "azure",
+            "safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}],
+        }
+
+        result = _call_prepare(extra_kwargs=extra_kwargs)
+
+        completion_kwargs = result[0] if isinstance(result, tuple) else result
+        assert "safeguards" not in completion_kwargs, (
+            "safeguards is an Anthropic-only field; OpenAI-format backends reject it with 400"
+        )
+
     def test_output_config_format_translated_to_response_format(self):
         """When ``output_config`` carries structured-output ``format``, the
         translator now maps it to OpenAI's ``response_format`` so non-Anthropic

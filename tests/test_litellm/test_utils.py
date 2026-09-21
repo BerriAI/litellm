@@ -619,6 +619,8 @@ def validate_model_cost_values(model_data, exceptions=None):
         "output_cost_per_second",
         "output_cost_per_second_480p",
         "output_cost_per_second_720p",
+        "output_cost_per_second_768p",
+        "output_cost_per_second_2k",
         "output_cost_per_second_1080p",
         "output_cost_per_second_4k",
         "input_cost_per_query",
@@ -652,6 +654,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
+        "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
         "output_db_cost_per_token",
         "output_dbu_cost_per_token",
@@ -740,6 +743,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_512k_tokens": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -836,6 +840,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_second": {"type": "number"},
                 "output_cost_per_second_480p": {"type": "number"},
                 "output_cost_per_second_720p": {"type": "number"},
+                "output_cost_per_second_768p": {"type": "number"},
+                "output_cost_per_second_2k": {"type": "number"},
                 "output_cost_per_second_1080p": {"type": "number"},
                 "output_cost_per_second_4k": {"type": "number"},
                 "output_cost_per_token": {"type": "number"},
@@ -869,6 +875,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
+                "supports_thinking_cache_preservation": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
@@ -940,6 +947,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
                             "/v1beta/interactions",
@@ -1069,6 +1077,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
@@ -1154,6 +1165,21 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
 
     control = litellm.get_model_info(model="au.anthropic.claude-opus-4-8", custom_llm_provider="bedrock")
     assert control["key"] == "au.anthropic.claude-opus-4-8"
+
+
+def test_get_model_info_bedrock_mantle_region_prefix_falls_back_to_the_mantle_row(local_model_cost_map):
+    """A Mantle deployment name may carry the region as a prefix (bedrock_mantle/us-east-2/<model>).
+    That name has no cost row of its own, so pricing must fall through to the region-free
+    bedrock_mantle/<model> row instead of raising, while a region that has its own row keeps it."""
+    for model, expected_key in (
+        ("bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5", "bedrock_mantle/anthropic.claude-haiku-4-5"),
+        ("bedrock_mantle/us-east-2/openai.gpt-5.6-sol", "bedrock_mantle/openai.gpt-5.6-sol"),
+        ("bedrock_mantle/us-gov-west-1/openai.gpt-5.4", "bedrock_mantle/us-gov-west-1/openai.gpt-5.4"),
+    ):
+        info = litellm.get_model_info(model=model, custom_llm_provider="bedrock_mantle")
+        assert info["key"] == expected_key, model
+        assert info["input_cost_per_token"] == litellm.model_cost[expected_key]["input_cost_per_token"], model
+        assert info["input_cost_per_token"] > 0, model
 
 
 def test_openai_models_in_model_info(monkeypatch):
@@ -3638,6 +3664,28 @@ class TestGetOptionalParamsTencent:
         )
         assert isinstance(config, TencentAnthropicMessagesConfig)
         assert config.custom_llm_provider == "tencent"
+
+    def test_bedrock_mantle_claude_messages_config_routing(self):
+        import litellm
+        from litellm.llms.bedrock_mantle.messages.transformation import (
+            BedrockMantleAnthropicMessagesConfig,
+        )
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="anthropic.claude-sonnet-5",
+            provider=litellm.LlmProviders.BEDROCK_MANTLE,
+        )
+        assert isinstance(config, BedrockMantleAnthropicMessagesConfig)
+        assert config.custom_llm_provider == "bedrock_mantle"
+
+    def test_bedrock_mantle_openai_models_keep_the_messages_bridge(self):
+        import litellm
+
+        config = ProviderConfigManager.get_provider_anthropic_messages_config(
+            model="openai.gpt-5.6-sol",
+            provider=litellm.LlmProviders.BEDROCK_MANTLE,
+        )
+        assert config is None
 
 
 class TestValidateEnvironmentTencent:

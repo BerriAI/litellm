@@ -11,30 +11,42 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 litellm-core = { path = "crates/core" }
 litellm-host = { path = "crates/host" }
-litellm-callbacks-legacy = { path = "crates/callbacks-legacy" }
+litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
 litellm-framing = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
+litellm-auth-types = { path = "crates/auth-types" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
+litellm-secrets = { path = "crates/secrets" }
+litellm-secrets-types = { path = "crates/secrets-types" }
+litellm-secrets-aws = { path = "crates/secrets-aws" }
+litellm-secrets-google = { path = "crates/secrets-google" }
 litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
 litellm-types = { path = "crates/types" }
 litellm-core-utils = { path = "crates/core-utils" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-memory = { path = "crates/cache-memory" }
+litellm-cache-redis = { path = "crates/cache-redis" }
+litellm-cache-response = { path = "crates/cache-response" }
 litellm-token-counter = { path = "crates/token-counter" }
+litellm-token-counter-fast = { path = "crates/token-counter-fast" }
+litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" }
+litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
 
 bytes = "1"
 http = "1"
+google-cloud-auth = { version = "1.16.0", default-features = false }
+jsonwebtoken = { version = "11.1.0", default-features = false }
 hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy"] }
 proptest = "1.7.0"
 pyo3 = "0.29.2"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
 pythonize = "0.29.0"
 rand = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "rustls-tls", "http2", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "http2", "stream"] }
 rstest = "0.26.1"
 rstest_reuse = "0.7.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
@@ -45,6 +57,8 @@ serde_with = { version = "=3.16.1", default-features = false, features = ["std",
 sha2 = "0.10"
 subtle = "2"
 thiserror = "2.0"
+tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
+tiktoken-rs = "0.12.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
