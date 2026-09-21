@@ -4797,16 +4797,15 @@ class TestMCPServerManager:
         manager._create_mcp_client = AsyncMock(return_value=AsyncMock(run_with_session=AsyncMock(return_value="ok")))
 
         cached = await manager.health_check_server(server.server_id)
-        with patch.object(manager, "build_mcp_server_from_table", new=AsyncMock(return_value=replacement)):
-            await manager.update_server(
-                LiteLLM_MCPServerTable(
-                    server_id=server.server_id,
-                    server_name=server.name,
-                    url=replacement.url,
-                    transport=MCPTransport.http,
-                    approval_status="active",
-                )
+        await manager.update_server(
+            LiteLLM_MCPServerTable(
+                server_id=server.server_id,
+                server_name=server.name,
+                url=replacement.url,
+                transport=MCPTransport.http,
+                approval_status="active",
             )
+        )
         after_update = await manager.health_check_server(server.server_id)
 
         manager.remove_server(
@@ -4821,11 +4820,11 @@ class TestMCPServerManager:
         after_remove = await manager.health_check_server(server.server_id)
 
         with (
-            patch(
+            patch(  # test-quality-ok: reload constructs its repository internally and this test has no database
                 "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
                 return_value=MagicMock(table=MagicMock(find_many=AsyncMock(return_value=[]))),
             ),
-            patch(
+            patch(  # test-quality-ok: reload fetches prisma internally and this test has no database
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
                 return_value=MagicMock(),
             ),

@@ -927,11 +927,9 @@ class _OpenAPIHealthProbe:
             try:
                 status, error = await _openapi_spec_health(self.spec_path, timeout=MCP_HEALTH_CHECK_TIMEOUT)
             except asyncio.CancelledError:
-                return (
-                    "unknown",
-                    "OpenAPI specification check was cancelled",
-                    datetime.datetime.now(datetime.timezone.utc),
-                )
+                if self.result is None or self.clock() - self.checked_at >= 30.0:
+                    self.checked_at = float("-inf")
+                raise
             self.result = (status, error, datetime.datetime.now(datetime.timezone.utc))
             self.checked_at = self.clock()
             return self.result
@@ -6897,11 +6895,29 @@ class MCPServerManager:
                 return cached
         inflight: Final = self._health_check_inflight.get(server_id)
         if inflight is not None:
-            return await asyncio.shield(inflight)
+            try:
+                return await asyncio.shield(inflight)
+            except asyncio.CancelledError:
+                if not inflight.cancelled():
+                    raise
         probe: Final = asyncio.create_task(self._probe_server_health(server_id, mcp_auth_header))
         self._health_check_inflight[server_id] = probe
         try:
             result: Final = await probe
+        except asyncio.CancelledError:
+            if self._health_check_inflight.get(server_id) is probe:
+                self._health_check_inflight.pop(server_id, None)
+            server: Final = self.get_mcp_server_by_id(server_id)
+            if server is None or not server.spec_path:
+                raise
+            return LiteLLM_MCPServerTable(
+                server_id=server_id,
+                server_name=server.server_name,
+                transport=server.transport,
+                status="unknown",
+                health_check_error="OpenAPI specification check was cancelled",
+                last_health_check=datetime.datetime.now(datetime.timezone.utc),
+            )
         finally:
             self._health_check_inflight.pop(server_id, None)
         if result.health_check_error != "Server not found":
