@@ -1342,7 +1342,7 @@ class TestProxySettingEndpoints:
             where={"id": "ui_settings"}
         )
 
-    def test_get_ui_settings_reports_sources(self, monkeypatch):
+    def test_get_ui_settings_reports_sources(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.proxy import proxy_server
@@ -3532,7 +3532,7 @@ class TestPtuCostAttributionUISetting:
 
     def test_reported_config_when_secret_manager_enables_the_flag(
         self, mock_auth: None, monkeypatch: pytest.MonkeyPatch
-    ):
+    ) -> None:
         from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 
         monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)
@@ -3550,7 +3550,7 @@ class TestPtuCostAttributionUISetting:
 
     def test_reported_config_when_secret_manager_disables_the_flag(
         self, mock_auth: None, monkeypatch: pytest.MonkeyPatch
-    ):
+    ) -> None:
         from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
 
         monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR, raising=False)

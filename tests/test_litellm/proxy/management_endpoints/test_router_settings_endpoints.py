@@ -4,6 +4,8 @@ Tests for router settings management endpoints.
 Tests the GET endpoints for router settings and router fields.
 """
 
+from collections.abc import Mapping
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,15 +24,14 @@ from litellm.router import Router
 client = TestClient(app)
 
 
-def _stub_proxy_config(router_settings, config_router_settings):
-    class _StubProxyConfig:
-        def __init__(self):
-            self.router_settings = router_settings
+class _StubProxyConfig:
+    def __init__(self, router_settings: SettingsStore, config_router_settings: Mapping[str, Any]) -> None:
+        self.router_settings: Final = router_settings
+        self._config_router_settings: Final = dict(config_router_settings)
 
-        async def get_config(self, config_file_path=None):
-            return {"router_settings": dict(config_router_settings)}
-
-    return _StubProxyConfig()
+    async def get_config(self, config_file_path: str | None = None) -> dict[str, Any]:
+        del config_file_path
+        return {"router_settings": dict(self._config_router_settings)}
 
 
 class TestRouterSettingsEndpoints:
@@ -95,7 +96,7 @@ class TestRouterSettingsEndpoints:
         monkeypatch.setattr(
             proxy_server,
             "proxy_config",
-            _stub_proxy_config(
+            _StubProxyConfig(
                 store,
                 {"routing_strategy": "simple-shuffle", "num_retries": 3},
             ),
@@ -140,7 +141,7 @@ class TestRouterSettingsEndpoints:
         monkeypatch.setattr(
             proxy_server,
             "proxy_config",
-            _stub_proxy_config(SettingsStore("router_settings"), {}),
+            _StubProxyConfig(SettingsStore("router_settings"), {}),
         )
 
         admin_user = UserAPIKeyAuth(

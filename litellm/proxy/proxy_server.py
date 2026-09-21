@@ -15993,16 +15993,13 @@ def _nested_setting_source(
     field_name: str,
     field_default: JsonValue,
 ) -> FieldSource:
+    unset_source: Final[FieldSource] = "default" if field_default is not None else "unset"
     parent_value: Final = settings.config_value(parent_key)
     if isinstance(parent_value, Mapping) and field_name in parent_value:
         return "config"
-    unset_source: Final[FieldSource] = "default" if field_default is not None else "unset"
     if settings.owned_by_config(parent_key):
         return unset_source
-    db_value: Final = db_values.get(field_name)
-    if db_value is not None and not (isinstance(db_value, list) and len(db_value) == 0):
-        return "db"
-    return unset_source
+    return "db" if field_name in db_values else unset_source
 
 
 @router.get(
