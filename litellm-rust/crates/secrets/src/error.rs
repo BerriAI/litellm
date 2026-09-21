@@ -30,6 +30,9 @@ pub enum Error {
     #[cfg(feature = "google")]
     #[error(transparent)]
     Google(#[from] litellm_secrets_google::Error),
+    #[cfg(feature = "hashicorp")]
+    #[error(transparent)]
+    Hashicorp(#[from] litellm_secrets_hashicorp::Error),
     #[cfg(feature = "azure")]
     #[error(transparent)]
     Azure(#[from] litellm_secrets_azure::Error),

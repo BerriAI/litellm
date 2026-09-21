@@ -344,6 +344,7 @@ impl FacadeGuard {
                 "RedisClusterCache",
                 "redis",
             ),
+            ("gcs", _) => ("litellm.caching.gcs_cache", "GCSCache", "gcs"),
             ("valkey-semantic", false) => (
                 "litellm.caching.valkey_semantic_cache",
                 "ValkeySemanticCache",
@@ -403,6 +404,9 @@ impl FacadeGuard {
                     "index_name",
                     "embedding_max_input_tokens",
                     "embedding_timeout",
+                    "bucket_name",
+                    "key_prefix",
+                    "path_service_account",
                 ],
             )?,
             disk_store: (kind == "disk")
