@@ -13,6 +13,8 @@ SUITES: Final = {
     "startup": (("test_startup.py",), 12),
     "recovery": (("test_recovery.py",), 15),
     "legacy": (("test_legacy.py", "test_pooling.py"), 11),
+    "upgrade": (("test_upgrade.py", "test_rolling_upgrade.py"), 5),
+    "shaped": (("test_shaped_database.py",), 1),
 }
 
 
@@ -93,6 +95,7 @@ def main() -> int:
             {
                 **metadata,
                 "suite": suite,
+                "baseline_image": os.environ.get("LITELLM_MIGRATION_BASELINE_IMAGE", ""),
                 "expected_cases": expected,
                 "passed": passed,
                 "pytest_exit_code": result.returncode,
