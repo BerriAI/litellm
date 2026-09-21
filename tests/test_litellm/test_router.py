@@ -9574,6 +9574,23 @@ def test_configured_price_ignores_a_malformed_configured_value():
     assert price is None, f"expected malformed and negative values to be dropped, got {price}"
 
 
+def test_deployment_listing_price_keys_on_base_model_and_prefers_litellm_params():
+    """The record a deployment contributes: its catalog key, plus its own configured prices.
+
+    base_model names the catalog entry when set, because litellm_params.model can be an
+    opaque backend name, and litellm_params wins over model_info for a price, matching the
+    copy the router makes when it builds the deployment's cost-map entry.
+    """
+    price = litellm.Router._deployment_listing_price(
+        {"base_model": "eu.anthropic.claude-opus-5", "input_cost_per_token": 1e-06},
+        {"model": "bedrock/some-opaque-arn", "input_cost_per_token": 4e-06},
+    )
+
+    assert price == DeploymentListingPrice(
+        cost_map_key="eu.anthropic.claude-opus-5", input_cost_per_token=4e-06, output_cost_per_token=None
+    )
+
+
 def test_get_model_listing_info_keeps_each_deployment_price_separate():
     """A group's price is only correct once each deployment resolves its own price first.
 
@@ -9606,12 +9623,9 @@ def test_get_model_listing_info_keeps_each_deployment_price_separate():
     )
 
 
-def test_get_wildcard_listing_price_reports_a_priced_pattern_deployment():
-    """A wildcard-expanded name is absent from the index, so its override lives on the pattern.
-
-    Without this the listing quotes the catalog while the request is billed at the
-    override.
-    """
+def test_get_wildcard_listing_prices_reports_every_matched_deployment():
+    """A pattern can front several deployments and routing can pick any of them, so the
+    listing needs all their prices, not the first one's: the caller reports the dearest."""
     router = litellm.Router(
         model_list=[
             {
@@ -9622,17 +9636,28 @@ def test_get_wildcard_listing_price_reports_a_priced_pattern_deployment():
                     "input_cost_per_token": 9e-06,
                     "output_cost_per_token": 9e-05,
                 },
-            }
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 4e-05,
+                    "output_cost_per_token": 8e-05,
+                },
+            },
         ]
     )
 
-    price = router.get_wildcard_listing_price("openai/gpt-4o-mini")
+    prices = router.get_wildcard_listing_prices("openai/gpt-4o-mini")
 
-    assert price is not None
-    assert (price.input_cost_per_token, price.output_cost_per_token) == (9e-06, 9e-05)
+    assert {(p.input_cost_per_token, p.output_cost_per_token) for p in prices} == {
+        (9e-06, 9e-05),
+        (4e-05, 8e-05),
+    }
 
 
-def test_get_wildcard_listing_price_skips_pattern_matching_when_no_wildcard_is_priced():
+def test_get_wildcard_listing_prices_skips_pattern_matching_when_no_wildcard_is_priced():
     """Pattern matching is the expensive path, so an unpriced wildcard must not trigger it.
 
     With no override the catalog is already the right answer, so there is nothing to find.
@@ -9642,7 +9667,7 @@ def test_get_wildcard_listing_price_skips_pattern_matching_when_no_wildcard_is_p
     )
 
     with patch.object(router.pattern_router, "route", side_effect=AssertionError("pattern matching ran")) as routed:
-        assert router.get_wildcard_listing_price("openai/gpt-4o-mini") is None
+        assert router.get_wildcard_listing_prices("openai/gpt-4o-mini") == ()
 
     routed.assert_not_called()
 

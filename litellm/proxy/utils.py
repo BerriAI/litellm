@@ -8429,22 +8429,24 @@ def _listing_deployment_prices(
     """The per-deployment prices behind a listed name, one entry per deployment.
 
     A name the router indexes carries its deployments' own records. A wildcard-expanded
-    name has none, so its deployment's override lives on the pattern instead and is asked
-    for there; the record is keyed to None so an absent half still falls back to the
-    catalog entry the listing already resolved.
+    name has none, so the overrides live on the patterns it expands from and are asked for
+    there, one record per matched deployment because a request can route to any of them.
+    Those records are keyed to None so a deployment that configures nothing, or configures
+    only one half, still falls back to the catalog entry the listing already resolved.
     """
     if listing_info is not None:
         return listing_info.deployment_prices
 
-    wildcard_price: Final = llm_router.get_wildcard_listing_price(lookup_model) if llm_router is not None else None
-    if wildcard_price is None:
+    wildcard_prices: Final = llm_router.get_wildcard_listing_prices(lookup_model) if llm_router is not None else ()
+    if not wildcard_prices:
         return (DeploymentListingPrice(cost_map_key=None, input_cost_per_token=None, output_cost_per_token=None),)
-    return (
+    return tuple(
         DeploymentListingPrice(
             cost_map_key=None,
-            input_cost_per_token=wildcard_price.input_cost_per_token,
-            output_cost_per_token=wildcard_price.output_cost_per_token,
-        ),
+            input_cost_per_token=price.input_cost_per_token,
+            output_cost_per_token=price.output_cost_per_token,
+        )
+        for price in wildcard_prices
     )
 
 

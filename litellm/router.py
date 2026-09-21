@@ -10311,39 +10311,41 @@ class Router:
             output_cost_per_token=Router._configured_price(model_info, litellm_params, "output_cost_per_token"),
         )
 
-    def get_wildcard_listing_price(self, model_name: str) -> DeploymentListingPrice | None:
-        """Custom pricing a wildcard deployment configures for a name it expands to.
+    def get_wildcard_listing_prices(self, model_name: str) -> tuple[DeploymentListingPrice, ...]:
+        """One record per wildcard deployment that a name expands from, in match order.
 
-        Wildcard-expanded rows are absent from the model-name index, so their deployment's
-        override is invisible to ``get_model_listing_info`` and the listing would quote the
-        catalog while the request is billed at the override.
+        Wildcard-expanded rows are absent from the model-name index, so their deployments'
+        overrides are invisible to ``get_model_listing_info`` and the listing would quote
+        the catalog while the request is billed at an override.
+
+        Every matched deployment is returned rather than the first, because a request can
+        route to any of them: the caller resolves each one and reports the dearest, the same
+        way it treats a group the index does know.
 
         Pattern matching is the expensive path this listing exists to avoid, so it only
         runs when a wildcard deployment actually configures a price: with none, the catalog
         is already the right answer and nothing here can change it.
         """
         if not any(
-            Router._deployment_has_configured_price(deployment)
-            for deployments in self.pattern_router.patterns.values()
-            for deployment in deployments
+            price.input_cost_per_token is not None or price.output_cost_per_token is not None
+            for price in (
+                Router._deployment_listing_price(
+                    deployment.get("model_info") or MappingProxyType({}),
+                    deployment.get("litellm_params") or MappingProxyType({}),
+                )
+                for deployments in self.pattern_router.patterns.values()
+                for deployment in deployments
+            )
         ):
-            return None
+            return ()
 
-        matched: Final = self.pattern_router.route(model_name)
-        if not matched:
-            return None
-        return Router._deployment_listing_price(
-            matched[0].get("model_info") or MappingProxyType({}),
-            matched[0].get("litellm_params") or MappingProxyType({}),
+        return tuple(
+            Router._deployment_listing_price(
+                deployment.get("model_info") or MappingProxyType({}),
+                deployment.get("litellm_params") or MappingProxyType({}),
+            )
+            for deployment in (self.pattern_router.route(model_name) or ())
         )
-
-    @staticmethod
-    def _deployment_has_configured_price(deployment: Mapping[str, Any]) -> bool:
-        price: Final = Router._deployment_listing_price(
-            deployment.get("model_info") or MappingProxyType({}),
-            deployment.get("litellm_params") or MappingProxyType({}),
-        )
-        return price.input_cost_per_token is not None or price.output_cost_per_token is not None
 
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """

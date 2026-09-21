@@ -1374,8 +1374,10 @@ def test_create_model_info_response_uses_wildcard_pricing_for_an_expanded_row():
     """
     router = MagicMock()
     router.get_model_listing_info.return_value = None
-    router.get_wildcard_listing_price.return_value = DeploymentListingPrice(
-        cost_map_key="openai/gpt-4o-mini", input_cost_per_token=9e-06, output_cost_per_token=9e-05
+    router.get_wildcard_listing_prices.return_value = (
+        DeploymentListingPrice(
+            cost_map_key="openai/gpt-4o-mini", input_cost_per_token=9e-06, output_cost_per_token=9e-05
+        ),
     )
 
     response = create_model_info_response(
@@ -1395,11 +1397,74 @@ def test_create_model_info_response_uses_wildcard_pricing_for_an_expanded_row():
     }
 
 
+def test_create_model_info_response_reports_the_dearest_deployment_behind_one_pattern():
+    """A pattern can front several deployments, and routing can pick any of them.
+
+    Reading only the first quoted 9e-06 while a sibling billed 4e-05, so the listing
+    advertised less than the request could cost.
+    """
+    router = MagicMock()
+    router.get_model_listing_info.return_value = None
+    router.get_wildcard_listing_prices.return_value = (
+        DeploymentListingPrice(
+            cost_map_key="openai/gpt-4o-mini", input_cost_per_token=9e-06, output_cost_per_token=9e-05
+        ),
+        DeploymentListingPrice(
+            cost_map_key="openai/gpt-4o-mini", input_cost_per_token=4e-05, output_cost_per_token=8e-05
+        ),
+    )
+
+    response = create_model_info_response(
+        model_id="openai/gpt-4o-mini",
+        provider="openai",
+        llm_router=router,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o-mini", input_cost_per_token=1.5e-07, output_cost_per_token=6e-07
+        ),
+        cost_map={"gpt-4o-mini": {"input_cost_per_token": 1.5e-07, "output_cost_per_token": 6e-07}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 4e-05,
+        "output_cost_per_token": 9e-05,
+    }
+
+
+def test_create_model_info_response_wildcard_sibling_without_an_override_still_bills_catalog():
+    """A matched deployment configuring nothing is billed at the catalog, so it can be the
+    dearest member even when its sibling carries a very cheap override."""
+    router = MagicMock()
+    router.get_model_listing_info.return_value = None
+    router.get_wildcard_listing_prices.return_value = (
+        DeploymentListingPrice(
+            cost_map_key="openai/gpt-4o-mini", input_cost_per_token=1e-08, output_cost_per_token=1e-08
+        ),
+        DeploymentListingPrice(cost_map_key="openai/gpt-4o-mini", input_cost_per_token=None, output_cost_per_token=None),
+    )
+
+    response = create_model_info_response(
+        model_id="openai/gpt-4o-mini",
+        provider="openai",
+        llm_router=router,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o-mini", input_cost_per_token=1.5e-07, output_cost_per_token=6e-07
+        ),
+        cost_map={"gpt-4o-mini": {"input_cost_per_token": 1.5e-07, "output_cost_per_token": 6e-07}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+    }
+
+
 def test_create_model_info_response_falls_back_to_catalog_for_an_unpriced_wildcard_row():
     """An unpriced wildcard changes nothing, so the catalog answer still stands."""
     router = MagicMock()
     router.get_model_listing_info.return_value = None
-    router.get_wildcard_listing_price.return_value = None
+    router.get_wildcard_listing_prices.return_value = ()
 
     response = create_model_info_response(
         model_id="openai/gpt-4o-mini",
@@ -1480,7 +1545,7 @@ def test_create_model_info_response_pricing_does_not_call_router_group_info():
     """Pricing must not pull /v1/models onto the expensive group-info path (#33721)."""
     router = MagicMock()
     router.get_model_listing_info.return_value = None
-    router.get_wildcard_listing_price.return_value = None
+    router.get_wildcard_listing_prices.return_value = ()
 
     response = create_model_info_response(
         model_id="gpt-4o",
