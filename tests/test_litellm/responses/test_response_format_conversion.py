@@ -11,14 +11,10 @@ These assert on the params that would be sent to the provider rather than on a
 successful return, because the call returned successfully in the broken case too.
 """
 
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel
-
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -188,8 +184,9 @@ def test_response_format_without_type_raises(bad_format):
     None would send the request unconstrained -- reintroducing, for malformed input,
     exactly the silent drop this conversion exists to remove.
 
-    The helper raises ValueError; responses() surfaces it through exception_type() as
-    BadRequestError, which is what a caller actually sees.
+    The helper raises litellm.BadRequestError directly: a bare ValueError would reach the
+    caller through exception_type() as APIConnectionError, reporting bad input as a
+    network fault.
     """
     with pytest.raises(litellm.BadRequestError, match="Could not read a `type`"):
         _capture_request_params(response_format=bad_format)
