@@ -11,7 +11,7 @@ use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
     CacheEntry, CacheKeyField, CacheKeyInput, ResponseCache, ResponseCacheCodec,
-    ResponseCacheRequest,
+    ResponseCacheRequest, WriteBuffer,
 };
 use redis_test::{MockCmd, MockRedisConnection};
 use serde_json::json;
@@ -413,4 +413,72 @@ async fn deferred_entries_keep_the_time_they_were_produced() {
         cache.lookup(&request, Duration::from_secs(111)).unwrap(),
         None
     );
+}
+
+#[tokio::test]
+async fn write_buffer_flushes_at_its_size_and_keeps_each_produced_time() {
+    let cache = ResponseCache::new(Arc::new(InMemoryCache::default()));
+    let buffer = WriteBuffer::new(2);
+    let mut first = request();
+    first.max_age = Some(Duration::from_secs(10));
+    let mut second = request();
+    second.key.preset = Some("tenant:other".into());
+
+    buffer
+        .async_store(
+            &cache,
+            &first,
+            json!({"answer": 7}),
+            Duration::from_secs(100),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        cache.lookup(&first, Duration::from_secs(100)).unwrap(),
+        None
+    );
+
+    buffer
+        .async_store(
+            &cache,
+            &second,
+            json!({"answer": 8}),
+            Duration::from_secs(200),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        cache.lookup(&first, Duration::from_secs(110)).unwrap(),
+        Some(json!({"answer": 7}))
+    );
+    assert_eq!(
+        cache.lookup(&first, Duration::from_secs(111)).unwrap(),
+        None
+    );
+    assert_eq!(
+        cache.lookup(&second, Duration::from_secs(200)).unwrap(),
+        Some(json!({"answer": 8}))
+    );
+}
+
+#[tokio::test]
+async fn write_buffer_clear_drops_pending_entries() {
+    let cache = ResponseCache::new(Arc::new(InMemoryCache::default()));
+    let buffer = WriteBuffer::new(2);
+    let mut other = request();
+    other.key.preset = Some("tenant:other".into());
+    let now = Duration::from_secs(100);
+
+    buffer
+        .async_store(&cache, &request(), json!({"answer": 7}), now)
+        .await
+        .unwrap();
+    buffer.clear().unwrap();
+    buffer
+        .async_store(&cache, &other, json!({"answer": 8}), now)
+        .await
+        .unwrap();
+
+    assert_eq!(cache.lookup(&request(), now).unwrap(), None);
+    assert_eq!(cache.lookup(&other, now).unwrap(), None);
 }

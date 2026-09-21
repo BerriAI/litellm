@@ -4,23 +4,17 @@ use litellm_cache::{CacheCodec, CacheConnectionResult, Error};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
-    CacheEntry, PartialHits, ResponseCache, ResponseCacheCodec, ResponseCacheRequest,
+    CacheEntry, PartialHits, ResponseCache, ResponseCacheCodec, ResponseCacheRequest, WriteBuffer,
 };
 use serde_json::Value;
-use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub(super) enum NativeResponseCache {
     Memory(Arc<ResponseCache<InMemoryCache<CacheEntry>>>),
     Redis {
         cache: Arc<ResponseCache<RedisCache<ResponseCacheCodec>>>,
-        buffer: Option<Arc<RedisWriteBuffer>>,
+        buffer: Option<Arc<WriteBuffer>>,
     },
-}
-
-pub(super) struct RedisWriteBuffer {
-    flush_size: usize,
-    entries: Mutex<Vec<(ResponseCacheRequest, Value, Duration)>>,
 }
 
 impl NativeResponseCache {
@@ -33,7 +27,7 @@ impl NativeResponseCache {
                 Some(Arc::new(|entry| {
                     ResponseCacheCodec.encode(entry).map(|bytes| bytes.len())
                 })),
-                super::now,
+                super::request::now,
             ),
         ))))
     }
@@ -84,12 +78,7 @@ impl NativeResponseCache {
         match self {
             Self::Redis { cache, .. } => Self::Redis {
                 cache,
-                buffer: flush_size.map(|flush_size| {
-                    Arc::new(RedisWriteBuffer {
-                        flush_size: flush_size.max(1),
-                        entries: Mutex::new(Vec::new()),
-                    })
-                }),
+                buffer: flush_size.map(|flush_size| Arc::new(WriteBuffer::new(flush_size))),
             },
             memory => memory,
         }
@@ -155,19 +144,7 @@ impl NativeResponseCache {
             Self::Redis {
                 cache,
                 buffer: Some(buffer),
-            } => {
-                let pending = {
-                    let mut entries = buffer.entries.lock().await;
-                    entries.push((request.clone(), response, now));
-                    (entries.len() >= buffer.flush_size).then(|| std::mem::take(&mut *entries))
-                };
-                // A failed flush drops its batch, as Python does. Requeueing would grow the
-                // buffer and re-send an ever larger pipeline on every write during an outage.
-                match pending {
-                    Some(pending) => cache.async_store_entries(pending).await,
-                    None => Ok(()),
-                }
-            }
+            } => buffer.async_store(cache, request, response, now).await,
         }
     }
 
@@ -198,7 +175,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.async_flush().await,
             Self::Redis { cache, buffer } => {
                 if let Some(buffer) = buffer {
-                    buffer.entries.lock().await.clear();
+                    buffer.clear()?;
                 }
                 cache.async_flush().await
             }
