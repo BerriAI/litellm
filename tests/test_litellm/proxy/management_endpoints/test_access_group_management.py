@@ -930,6 +930,34 @@ async def test_put_access_group_budget_rejects_an_empty_body():
 
 
 @pytest.mark.asyncio
+async def test_put_access_group_budget_rejects_explicit_null_max_budget():
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        set_access_group_budget,
+    )
+    from litellm.types.proxy.management_endpoints.model_management_endpoints import (
+        AccessGroupBudgetRequest,
+    )
+
+    prisma = _FakePrismaClient([], deployments=[_deployment()])
+    cache = _FakeAuthCache()
+
+    with _proxy(prisma), pytest.raises(HTTPException) as exc_info:
+        await set_access_group_budget(
+            access_group="prod-models",
+            data=AccessGroupBudgetRequest(max_budget=None),
+            user_api_key_dict=_admin(),
+            auth_cache=cache,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert prisma.access_group_budget_table.rows == {}
+    assert prisma.budget_table.create_calls == []
+    assert cache.deleted_keys == []
+
+
+@pytest.mark.asyncio
 async def test_put_access_group_budget_rejects_an_unparseable_duration():
     """An unparseable duration can only be discovered by the reset job, long after the write."""
     from fastapi import HTTPException

@@ -15,6 +15,7 @@ from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.core_helpers import is_expected_client_error
 from litellm.proxy._types import (
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
@@ -23,7 +24,9 @@ from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
     is_invalid_virtual_key_error,
     mark_invalid_virtual_key_error,
+    normalize_request_route,
 )
+from litellm.proxy.auth.model_access_denied import ModelAccessDeniedHTTPException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
 
@@ -50,6 +53,14 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             param=None,
             code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
         )
+    if isinstance(e, ModelAccessDeniedHTTPException):
+        return ModelAccessDeniedProxyException(
+            message=str(e.detail),
+            internal_message=e.internal_message,
+            type=ProxyErrorTypes.auth_error,
+            param="None",
+            code=e.status_code,
+        )
     if isinstance(e, HTTPException):
         return ProxyException(
             message=getattr(e, "detail", f"Authentication Error({e})"),
@@ -61,9 +72,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
         return e
     if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
         return ProxyException(
-            message=(
-                "Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly."
-            ),
+            message=PrismaDBExceptionHandler.database_unavailable_message(e),
             type=ProxyErrorTypes.no_db_connection,
             param="None",
             code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -76,17 +85,28 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
     )
 
 
-def _with_requester_ip_address(request_data: dict[str, object], requester_ip: str | None) -> dict[str, object]:
+def _get_user_agent(request: Request) -> str | None:
+    if "headers" not in request.scope:
+        return None
+    return request.headers.get("user-agent")
+
+
+def _with_client_context(
+    request_data: dict[str, object], requester_ip: str | None, user_agent: str | None
+) -> dict[str, object]:
     """Auth gate rejections are raised before `add_litellm_data_to_request` records the
-    caller IP, so their failure logs would otherwise carry no IP nor key/user identity."""
-    if not requester_ip:
-        return request_data
+    caller IP and User-Agent, so their failure logs would otherwise carry neither."""
     key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
     metadata: Final = request_data.get(key)
     base: Final[Mapping[str, object]] = metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
-    if base.get("requester_ip_address"):
+    stamped: Final = {
+        name: value
+        for name, value in (("requester_ip_address", requester_ip), ("user_agent", user_agent))
+        if value and not base.get(name)
+    }
+    if not stamped:
         return request_data
-    return {**request_data, key: {**base, "requester_ip_address": requester_ip}}  # mutable-ok: logging needs dicts
+    return {**request_data, key: {**base, **stamped}}  # mutable-ok: logging needs dicts
 
 
 class UserAPIKeyAuthExceptionHandler:
@@ -150,6 +170,7 @@ class UserAPIKeyAuthExceptionHandler:
                 request=request,
                 use_x_forwarded_for=general_settings.get("use_x_forwarded_for") is True,
             )
+            user_agent: Final = _get_user_agent(request)
 
             # Log authentication failures before identity seeding and callbacks, so the log
             # survives a raising callback pipeline. Classify and route malformed virtual-key
@@ -174,7 +195,7 @@ class UserAPIKeyAuthExceptionHandler:
             # so the handler is side-effect-free for the caller's identity object.
             user_api_key_dict = resolved_identity.model_copy() if resolved_identity is not None else UserAPIKeyAuth()
             user_api_key_dict.parent_otel_span = parent_otel_span
-            user_api_key_dict.request_route = route
+            user_api_key_dict.request_route = normalize_request_route(route)
             user_api_key_dict.api_key = user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
 
             # Stamp identity onto the request's server span now, before the request
@@ -202,7 +223,7 @@ class UserAPIKeyAuthExceptionHandler:
 
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                request_data=_with_requester_ip_address(request_data, requester_ip),
+                request_data=_with_client_context(request_data, requester_ip, user_agent),
                 original_exception=e,
                 user_api_key_dict=user_api_key_dict,
                 error_type=ProxyErrorTypes.auth_error,

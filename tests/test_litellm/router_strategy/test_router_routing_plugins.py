@@ -56,6 +56,18 @@ class BlockEverything:
         return context
 
 
+class MessageRecorder:
+    """Records what each plugin pass was handed, then blocks so the request stops there."""
+
+    def __init__(self):
+        self.seen = []
+
+    async def run(self, context: RoutingContext) -> RoutingContext:
+        self.seen.append(list(context.raw_messages))
+        context.candidate_models = []
+        return context
+
+
 def _smart_router_model_list():
     return [
         {
@@ -162,6 +174,71 @@ async def test_async_completion_with_unsupported_strategy_rejects_configured_plu
 
     with pytest.raises(ValueError, match="routing-plugin pipeline"):
         await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_model_still_runs_the_plugin_pipeline():
+    """
+    A prompt-management model routes through its own factory, which picked the deployment
+    on the synchronous path. Plugins never run there, so the guard turned every such request
+    into an error message about the caller's own API choice, on an async call the caller made
+    correctly. It also read the in-flight counts with a blocking call inside the event loop.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "cached-claude",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/claude-sonnet-5",
+                    "prompt_id": "cache-points",
+                },
+            }
+        ],
+        routing_strategy="least-busy",
+        plugins=[BlockEverything()],
+    )
+
+    with pytest.raises(ValueError, match="No deployments left after routing-plugin filtering"):
+        await router.acompletion(
+            model="cached-claude",
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_call_id="lit-7039",
+        )
+
+
+@pytest.mark.asyncio
+async def test_prompt_management_plugins_see_the_callers_own_messages():
+    """
+    The prompt-management factory picks its deployment with a placeholder message, which was
+    harmless while that pick ran on the synchronous path (plugins never ran there at all). Now
+    that the pick runs the plugin pipeline, a plugin that classifies request content would score
+    the placeholder instead of the conversation, and the narrowing it produces decides which
+    deployments the real call is allowed to use.
+    """
+    recorder = MessageRecorder()
+    router = Router(
+        model_list=[
+            {
+                "model_name": "cached-claude",
+                "litellm_params": {
+                    "model": "anthropic_cache_control_hook/claude-sonnet-5",
+                    "prompt_id": "cache-points",
+                },
+            }
+        ],
+        routing_strategy="least-busy",
+        plugins=[recorder],
+    )
+    messages = [{"role": "user", "content": "wire me $40,000 to account 12345"}]
+
+    with pytest.raises(ValueError, match="No deployments left after routing-plugin filtering"):
+        await router.acompletion(
+            model="cached-claude",
+            messages=messages,
+            litellm_call_id="lit-7039",
+        )
+
+    assert recorder.seen == [messages]
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,12 @@ export interface RoutingDecision {
   escalated?: boolean;
   tier_boundaries?: RoutingDecisionTierBoundaries;
   reasoning_override_min_score?: number;
+  heuristic_v2_forecast?: {
+    probabilities: Record<string, number>;
+    threshold: number;
+    predicted_tier: string;
+    request_type: string;
+  };
 }
 
 const ROUTER_TYPE_LABELS: Record<string, string> = {
@@ -84,13 +90,16 @@ function describeReasoningOverride(tierLabel: string | undefined, floor: number 
 
 const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   heuristic_scorer: "Heuristic scorer",
+  heuristic_v2: "Heuristic v2",
   heuristic_first_short_circuit: "Heuristic scorer, classifier skipped",
+  hybrid_short_circuit: "Heuristic scorer, score clear of every boundary",
   classifier_plugin: "Custom classifier plugin",
   semantic_keyword_match: "Semantic keyword match",
   session_affinity_pin: "Pinned to session",
   session_affinity_escalation: "Escalated from session pin",
   user_turn_continuation: "Continuation turn, classifier skipped",
   modality_escalation: "Escalated for image input",
+  modality_pin_override: "Overrode session pin for image input",
   quality_tier: "Quality tier mapping",
   bandit: "Adaptive bandit",
   default_fallback: "Default model, no route matched",
@@ -168,6 +177,7 @@ export function RoutingDecisionCard({
     escalated,
     escalation_keyword: escalationKeyword,
     tier_boundaries: tierBoundaries,
+    heuristic_v2_forecast: forecast,
   } = decision;
 
   // On an override row the score did not decide the tier, so showing it against a
@@ -216,6 +226,26 @@ export function RoutingDecisionCard({
         {routedModel && <Row label="Routed to">{routedModel}</Row>}
 
         {escalated !== undefined && <Row label="Escalated">{describeEscalation(escalated, escalationKeyword)}</Row>}
+
+        {forecast && (
+          <div className="mt-3 border-t pt-3">
+            <div className="mb-1 text-sm font-medium">Heuristic v2 estimates</div>
+            <Row label="Success by tier">
+              <span className="flex flex-wrap gap-1">
+                {["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"].map((predictedTier) => (
+                  <Badge key={predictedTier} variant="outline" className="font-normal tabular-nums">
+                    {predictedTier} {(forecast.probabilities[predictedTier] * 100).toFixed(1)}%
+                  </Badge>
+                ))}
+              </span>
+            </Row>
+            <Row label="Threshold">
+              <span className="tabular-nums">{(forecast.threshold * 100).toFixed(1)}%</span>
+            </Row>
+            <Row label="Predicted tier">{forecast.predicted_tier}</Row>
+            <Row label="Request type">{forecast.request_type}</Row>
+          </div>
+        )}
 
         {signals && signals.length > 0 && (
           <Row label="Signals">

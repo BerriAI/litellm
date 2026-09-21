@@ -4,6 +4,7 @@ import litellm
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
+    nearest_declared_reasoning_effort,
     resolve_supported_reasoning_efforts,
 )
 
@@ -371,3 +372,70 @@ class TestKimiK3AdvertisesItsDocumentedLevels:
             "low",
             "high",
         )
+
+
+class TestGpt6AstraAdvertisesItsDocumentedLevels:
+    def test_the_entry_advertises_low_through_max_without_none(self, local_model_cost_map):
+        """OpenAI documents low, medium, high, xhigh and max for gpt-6-astra. Unlike gpt-5.6-sol it
+        does not take none, so a group must not offer none and must offer max."""
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model="gpt-6-astra", custom_llm_provider="openai"))
+
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        )
+
+    @pytest.mark.parametrize(
+        "model,custom_llm_provider",
+        [
+            ("azure/gpt-6-astra", "azure"),
+            ("azure/us/gpt-6-astra", "azure"),
+            ("azure_ai/gpt-6-astra", "azure_ai"),
+        ],
+    )
+    def test_an_azure_hosted_deployment_advertises_none_but_not_max(
+        self, local_model_cost_map, model, custom_llm_provider
+    ):
+        """Microsoft hosts the same model with a different level set than OpenAI does. Verified live
+        on both Azure routes: none returns 200 with zero reasoning tokens and unlocks temperature,
+        which OpenAI's API rejects, while max returns 400 unsupported_value naming none through
+        xhigh as the levels it does take."""
+        from litellm.utils import _get_model_info_helper
+
+        model_info = dict(_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider))
+
+        assert resolve_supported_reasoning_efforts(model_info, deployment_is_mapped=True) == (
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+        )
+
+
+class TestNearestDeclaredReasoningEffort:
+    def test_a_declared_level_is_kept(self):
+        assert nearest_declared_reasoning_effort("high", ("none", "high")) == "high"
+        assert nearest_declared_reasoning_effort("none", ("none", "high")) == "none"
+
+    def test_an_undeclared_level_rounds_up_to_the_next_declared_one(self):
+        assert nearest_declared_reasoning_effort("medium", ("none", "high")) == "high"
+        assert nearest_declared_reasoning_effort("minimal", ("low", "high", "max")) == "low"
+        assert nearest_declared_reasoning_effort("xhigh", ("low", "high", "max")) == "max"
+
+    def test_none_is_a_switch_that_is_never_rounded_in_either_direction(self):
+        assert nearest_declared_reasoning_effort("none", ("low", "high", "max")) == "none"
+        assert nearest_declared_reasoning_effort("medium", ("none",)) == "medium"
+
+    def test_a_level_above_the_ceiling_takes_the_strongest_declared_one(self):
+        assert nearest_declared_reasoning_effort("max", ("none", "high")) == "high"
+        assert nearest_declared_reasoning_effort("xhigh", ("none", "low", "medium", "high")) == "high"
+
+    def test_a_level_outside_the_strength_order_is_left_for_upstream(self):
+        assert nearest_declared_reasoning_effort("turbo", ("none", "high")) == "turbo"
+        assert nearest_declared_reasoning_effort("medium", ()) == "medium"

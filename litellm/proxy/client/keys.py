@@ -1,4 +1,5 @@
 import builtins
+from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
@@ -72,7 +73,7 @@ class KeysManagementClient:
             requests.exceptions.RequestException: If the request fails with any other error
         """
         url: Final = f"{self._base_url}/key/list"
-        params: Final[dict[str, Any]] = {}
+        params: Final[dict[str, int | str]] = {}
 
         # Add optional query parameters
         if page is not None:
@@ -119,9 +120,9 @@ class KeysManagementClient:
         team_id: str | None = None,
         user_id: str | None = None,
         budget_id: str | None = None,
-        config: dict[str, Any] | None = None,
+        config: Mapping[str, object] | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Generate an API key based on the provided data.
 
@@ -149,7 +150,7 @@ class KeysManagementClient:
         """
         url: Final = f"{self._base_url}/key/generate"
 
-        data: Final[dict[str, Any]] = {}
+        data: Final[dict[str, object]] = {}
         if models is not None:
             data["models"] = models
         if aliases is not None:
@@ -189,7 +190,7 @@ class KeysManagementClient:
         keys: builtins.list[str] | None = None,
         key_aliases: builtins.list[str] | None = None,
         return_request: bool = False,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Delete existing keys
 
@@ -238,7 +239,7 @@ class KeysManagementClient:
         key_alias: str | None = None,
         team_id: str | None = None,
         user_id: str | None = None,
-    ) -> dict[str, Any] | requests.Request:
+    ) -> dict[str, object] | requests.Request:
         """
         Update an existing API key's parameters.
 
@@ -261,7 +262,7 @@ class KeysManagementClient:
         """
         url: Final = f"{self._base_url}/key/update"
 
-        data: Final[dict[str, Any]] = {"key": key}
+        data: Final[dict[str, object]] = {"key": key}
 
         if key_alias is not None:
             data["key_alias"] = key_alias
@@ -288,7 +289,7 @@ class KeysManagementClient:
         except Exception:
             raise Exception(f"Error updating key: {response_text}")
 
-    def info(self, key: str, return_request: bool = False) -> dict[str, Any] | requests.Request:
+    def info(self, key: str, return_request: bool = False) -> dict[str, object] | requests.Request:
         """
         Get information about API keys.
 

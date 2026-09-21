@@ -10,7 +10,7 @@ export interface ProjectUpdateParams {
   description?: string;
   team_id?: string;
   models?: string[];
-  max_budget?: number;
+  max_budget?: number | null;
   blocked?: boolean;
   guardrails?: string[];
   metadata?: Record<string, unknown>;

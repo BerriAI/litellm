@@ -1,6 +1,13 @@
 
+import json
+import uuid
+from unittest.mock import Mock
+
+import httpx
 import pytest
 
+import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -338,3 +345,133 @@ def test_map_function_enterprise_web_search_snake_case():
 
     assert len(result) == 1
     assert "enterpriseWebSearch" in result[0]
+
+
+async def test_gemini_ai_studio_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
+    image_url = f"http://img.example/{uuid.uuid4()}.png"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = request.content.decode()
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "Green"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What colour is this?"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+            }
+        ],
+        api_key="fake-gemini-key",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "Green"
+    assert async_only_image_fetch.fetched == [image_url]
+    assert image_url not in captured["body"]
+    assert async_only_image_fetch.base64_png in captured["body"]
+
+
+async def test_gemini_ai_studio_async_completion_passes_files_api_uris_through_unfetched(async_only_image_fetch):
+    files_api_pdf = f"https://generativelanguage.googleapis.com/v1beta/files/{uuid.uuid4().hex}"
+    files_api_image = f"https://generativelanguage.googleapis.com/v1beta/files/{uuid.uuid4().hex}"
+    captured = {}
+
+    def handle(request):
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "A report"}], "role": "model"}, "finishReason": "STOP"}],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+        )
+
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+
+    response = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Summarize these"},
+                    {"type": "file", "file": {"file_id": files_api_pdf, "format": "application/pdf"}},
+                    {"type": "image_url", "image_url": {"url": files_api_image, "format": "image/png"}},
+                ],
+            }
+        ],
+        api_key="fake-gemini-key",
+        client=client,
+    )
+
+    assert response.choices[0].message.content == "A report"
+    assert async_only_image_fetch.fetched == []
+    file_parts = [part["file_data"] for part in captured["body"]["contents"][0]["parts"] if "file_data" in part]
+    assert file_parts == [
+        {"mime_type": "application/pdf", "file_uri": files_api_pdf},
+        {"mime_type": "image/png", "file_uri": files_api_image},
+    ]
+
+
+async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fetch_itself(async_only_image_fetch):
+    plain_http_png = f"http://img.example/{uuid.uuid4()}.png"
+    extensionless_https = f"https://cdn.example/files/{uuid.uuid4().hex}"
+    https_png = f"https://img.example/{uuid.uuid4()}.png"
+    hinted_extensionless = f"https://cdn.example/files/{uuid.uuid4().hex}"
+    files_api_pdf = f"https://generativelanguage.googleapis.com/v1beta/files/{uuid.uuid4().hex}"
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe these"},
+                {"type": "image_url", "image_url": {"url": plain_http_png}},
+                {"type": "image_url", "image_url": {"url": extensionless_https}},
+                {"type": "image_url", "image_url": {"url": https_png}},
+                {"type": "image_url", "image_url": {"url": hinted_extensionless, "mime_type": "image/webp"}},
+                {"type": "file", "file": {"file_id": files_api_pdf, "format": "application/pdf"}},
+            ],
+        }
+    ]
+
+    body = await transformation.async_transform_request_body(
+        gemini_api_key=None,
+        messages=messages,
+        api_base=None,
+        model="gemini-3.8-flash",
+        client=None,
+        timeout=None,
+        extra_headers=None,
+        optional_params={},
+        logging_obj=Mock(),
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        vertex_project="qa-project",
+        vertex_location="us-central1",
+        vertex_auth_header=None,
+    )
+
+    inlined = {"inline_data": {"mime_type": "image/png", "data": async_only_image_fetch.base64_png}}
+    assert body["contents"][0]["parts"] == [
+        {"text": "Describe these"},
+        inlined,
+        inlined,
+        {"file_data": {"mime_type": "image/png", "file_uri": https_png}},
+        {"file_data": {"mime_type": "image/webp", "file_uri": hinted_extensionless}},
+        {"file_data": {"mime_type": "application/pdf", "file_uri": files_api_pdf}},
+    ]
+    assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])

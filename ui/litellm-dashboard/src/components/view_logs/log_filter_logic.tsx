@@ -15,6 +15,8 @@ export interface PaginatedResponse {
   page_size: number;
   total_pages: number;
   total_is_capped?: boolean;
+  next_session_cursor?: string | null;
+  has_more?: boolean;
 }
 
 export const LOG_FILTER_IDS = {
@@ -31,6 +33,7 @@ export const LOG_FILTER_IDS = {
   PUBLIC_MODEL_OR_SEARCH_TOOL: "model",
   REQUEST_ID: "request_id",
   USER_ID: "user_id",
+  SEARCH: "search",
 } as const;
 
 export const LOG_FILTER_LABELS: Record<string, string> = {
@@ -46,6 +49,7 @@ export const LOG_FILTER_LABELS: Record<string, string> = {
   [LOG_FILTER_IDS.SESSION_ID]: "Session ID",
   [LOG_FILTER_IDS.MODEL_ID]: "Model",
   [LOG_FILTER_IDS.PUBLIC_MODEL_OR_SEARCH_TOOL]: "Public model / search tool",
+  [LOG_FILTER_IDS.SEARCH]: "Search",
 };
 
 export interface LogsWindow {
@@ -109,6 +113,7 @@ export function useLogFilterLogic({
   pagination,
   isCustomDate,
   sorting,
+  sessionCursors = {},
 }: {
   accessToken: string | null;
   token: string | null;
@@ -123,11 +128,14 @@ export function useLogFilterLogic({
   pagination: PaginationState;
   isCustomDate: boolean;
   sorting: SortingState;
+  sessionCursors?: Record<number, string>;
 }) {
   const pageSize = pagination.pageSize || defaultPageSize;
   const activeSort = sorting[0] ?? DEFAULT_LOGS_SORTING[0];
   const sortBy: LogsSortField = isSortField(activeSort.id) ? activeSort.id : "startTime";
   const sortOrder: "asc" | "desc" = activeSort.desc ? "desc" : "asc";
+  const usesSessionCursor = sortBy === "startTime";
+  const sessionCursor = usesSessionCursor ? sessionCursors[pagination.pageIndex] : undefined;
 
   const logsQueryOptions: UseQueryOptions<PaginatedResponse> = {
     queryKey: [
@@ -142,6 +150,7 @@ export function useLogFilterLogic({
       sortBy,
       sortOrder,
       excludeInternalHealthChecks,
+      sessionCursor,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -168,6 +177,7 @@ export function useLogFilterLogic({
           api_key: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_HASH),
           team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
           request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
+          search: getFilterValue(columnFilters, LOG_FILTER_IDS.SEARCH),
           session_id: getFilterValue(columnFilters, LOG_FILTER_IDS.SESSION_ID),
           user_id: userIdFilter,
           end_user: getFilterValue(columnFilters, LOG_FILTER_IDS.END_USER),
@@ -181,6 +191,8 @@ export function useLogFilterLogic({
           sort_by: sortBy,
           sort_order: sortOrder,
           exclude_internal_health_checks: excludeInternalHealthChecks,
+          group_by_session: true,
+          session_cursor: sessionCursor,
         },
       });
     },
@@ -218,5 +230,6 @@ export function useLogFilterLogic({
     logsQuery,
     filteredLogs,
     allTeams,
+    usesSessionCursor,
   };
 }

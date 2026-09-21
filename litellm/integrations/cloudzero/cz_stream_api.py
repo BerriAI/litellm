@@ -97,7 +97,11 @@ class CloudZeroStreamer:
                 continue
 
         # Convert lists back to DataFrames
-        return {date_key: pl.DataFrame(records) for date_key, records in daily_batches.items() if records}
+        return {
+            date_key: pl.DataFrame(records, infer_schema_length=None)
+            for date_key, records in daily_batches.items()
+            if records
+        }
 
     def _parse_and_convert_timestamp(self, timestamp_str: str) -> datetime:
         """Parse timestamp string and convert to UTC."""

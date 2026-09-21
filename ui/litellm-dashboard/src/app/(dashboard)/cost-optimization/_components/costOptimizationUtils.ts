@@ -10,6 +10,13 @@ export const usd = (value: number): string => {
   return `${value < 0 ? "-" : ""}$${formatNumberWithCommas(magnitude, decimals)}`;
 };
 
+export const classificationRatePer1kTurns = (classifierCost: number, turns: number): string => {
+  if (turns <= 0) return `(${usd(0)} / 1K turns)`;
+  const rate = (classifierCost * 1000) / turns;
+  if (rate > 0 && rate < 0.0001) return "(<$0.0001 / 1K turns)";
+  return `(${usd(rate)} / 1K turns)`;
+};
+
 export const pct = (ratio: number): string => `${formatNumberWithCommas(ratio * 100, 1)}%`;
 
 export const shortDate = (iso: string): string =>
@@ -36,8 +43,6 @@ export interface CacheLeakageResult {
   rows: CacheLeakageRow[];
   netSavingsPerCachedToken: number | null;
 }
-
-export const isAnthropicModel = (model: string): boolean => /claude|anthropic/i.test(model);
 
 interface LeakageAccumulator {
   alias: string | null;
@@ -89,7 +94,6 @@ const aggregateByModel = (results: readonly DailyData[]): Map<string, LeakageAcc
   const byModel = new Map<string, LeakageAccumulator>();
   for (const day of results) {
     for (const [model, entry] of Object.entries(day.breakdown?.models ?? {})) {
-      if (!isAnthropicModel(model)) continue;
       const acc = byModel.get(model) ?? emptyAccumulator();
       byModel.set(model, addMetrics(acc, entry.metrics, null, null));
     }

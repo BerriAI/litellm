@@ -1,3 +1,4 @@
+from importlib import import_module
 import json
 from unittest.mock import MagicMock, patch
 
@@ -64,7 +65,7 @@ async def test_redis_cluster_async_batch_get(mock_init_redis_cluster):
 
 @patch("litellm._redis.get_redis_connection_pool")
 @patch("litellm._redis.get_redis_client")
-@patch("litellm.caching.redis_cache.RedisCache._setup_health_pings")
+@patch.object(import_module("litellm.caching.redis_cache").RedisCache, "_setup_health_pings")
 def test_cache_init_creates_cluster_cache_from_env_var(
     mock_health, mock_get_client, mock_get_pool, monkeypatch
 ):
@@ -91,7 +92,7 @@ def test_cache_init_creates_cluster_cache_from_env_var(
 
 @patch("litellm._redis.get_redis_connection_pool")
 @patch("litellm._redis.get_redis_client")
-@patch("litellm.caching.redis_cache.RedisCache._setup_health_pings")
+@patch.object(import_module("litellm.caching.redis_cache").RedisCache, "_setup_health_pings")
 def test_cache_init_creates_redis_cache_without_cluster_config(
     mock_health, mock_get_client, mock_get_pool, monkeypatch
 ):

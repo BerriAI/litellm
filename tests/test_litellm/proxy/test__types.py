@@ -277,3 +277,61 @@ def test_team_membership_budget_table_present_still_works():
     }
     result = LiteLLM_TeamMembership.model_validate(data)
     assert result.litellm_budget_table is None
+
+
+def test_a_jwt_issuer_can_override_the_virtual_key_claim_field_while_other_issuers_keep_the_global_one():
+    from litellm.proxy._types import LiteLLM_JWTAuth, UnregisteredJWTClientBehavior
+
+    jwt_auth = LiteLLM_JWTAuth(
+        virtual_key_claim_field="client_id",
+        issuers=[
+            {
+                "issuer": "https://team-idp.example.com",
+                "jwks_url": "https://team-idp.example.com/keys",
+                "audience": "litellm",
+                "team_id_jwt_field": "sub",
+            },
+            {
+                "issuer": "https://service-idp.example.com",
+                "jwks_url": "https://service-idp.example.com/keys",
+                "audience": "litellm",
+                "virtual_key_claim_field": "sub",
+                "unregistered_jwt_client_behavior": "reject",
+            },
+        ],
+    )
+
+    assert jwt_auth.get_virtual_key_claim_field("https://service-idp.example.com") == "sub"
+    assert jwt_auth.get_unregistered_jwt_client_behavior("https://service-idp.example.com") is (
+        UnregisteredJWTClientBehavior.REJECT
+    )
+    assert jwt_auth.get_virtual_key_claim_field("https://team-idp.example.com") == "client_id"
+    assert jwt_auth.get_unregistered_jwt_client_behavior("https://team-idp.example.com") is (
+        UnregisteredJWTClientBehavior.FALLBACK_TEAM_MAPPING
+    )
+    assert jwt_auth.get_virtual_key_claim_field(None) == "client_id"
+    assert jwt_auth.get_virtual_key_claim_field("https://unknown-idp.example.com") == "client_id"
+
+
+@pytest.mark.parametrize(
+    ("global_field", "issuer_field", "is_configured"),
+    ((None, None, False), ("sub", None, True), (None, "sub", True)),
+)
+def test_virtual_key_mapping_counts_as_configured_when_any_issuer_sets_the_claim_field(
+    global_field, issuer_field, is_configured
+):
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    jwt_auth = LiteLLM_JWTAuth(
+        virtual_key_claim_field=global_field,
+        issuers=[
+            {
+                "issuer": "https://idp.example.com",
+                "jwks_url": "https://idp.example.com/keys",
+                "audience": "litellm",
+                "virtual_key_claim_field": issuer_field,
+            }
+        ],
+    )
+
+    assert jwt_auth.is_virtual_key_mapping_configured() is is_configured

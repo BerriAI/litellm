@@ -5,8 +5,10 @@ At request time the spend writer builds one ToolUsageTransaction per request tha
 invoked tools (MCP namespaced tool name plus response tool_calls; declared-but-not-
 invoked tools are excluded) and queues it on the prisma client. The spend-log flush
 job drains the queue into LiteLLM_SpendLogToolIndex (per-request drill-down) and
-LiteLLM_DailyToolSpend (the per-day rollup the Cost Optimization card reads) in a
-single transaction, so a failed flush never leaves a partial rollup increment.
+LiteLLM_DailyToolSpend (the per-day rollup the Cost Optimization card reads). The
+index rows are keyed on (request_id, tool_name) and written with skip_duplicates,
+so they go out as bounded standalone statements; every rollup upsert stays in one
+transaction, so a failed flush never leaves a partial rollup increment.
 """
 
 from __future__ import annotations
@@ -19,7 +21,10 @@ from datetime import datetime, timezone
 from itertools import groupby
 from typing import TYPE_CHECKING, Any, Final
 
+from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
+from litellm.proxy.db.spend_log_batching import spend_log_write_batches
+from litellm.repositories.table_repositories import SpendLogToolIndexRepository
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -98,14 +103,19 @@ async def flush_tool_usage_transactions(
     transactions: Sequence[ToolUsageTransaction],
     n_retry_times: int = 3,
 ) -> None:
-    """Write index rows and rollup upserts for a drained queue batch in one
-    transaction. Retries only ConnectError, the one failure that proves the
-    statements never reached the database. Post-send failures (Read timeouts
-    and errors) are ambiguous and are NOT retried: the engine can abandon the
-    transaction open on the pooled connection, so a retry's statements stack
-    into the same transaction and one commit applies both increment sets.
-    Ambiguous failures drop the batch; the caller logs it at error. Callers
-    must not add their own retry around this function."""
+    """Write the index rows as bounded standalone statements, then every rollup
+    upsert for the drained queue batch in one transaction. One flush fans out to
+    transactions x tools index rows, so the index write is split by the spend-log
+    statement budgets; a split inside ``batch_()`` would not help, since the
+    batcher ships every queued statement to the query engine as one payload.
+    Retries only ConnectError, the one failure that proves the statements never
+    reached the database; replayed index rows are no-ops under skip_duplicates.
+    Post-send failures (Read timeouts and errors) are ambiguous and are NOT
+    retried: the engine can abandon the transaction open on the pooled
+    connection, so a retry's statements stack into the same transaction and one
+    commit applies both increment sets. Ambiguous failures drop the batch; the
+    caller logs it at error. Callers must not add their own retry around this
+    function."""
     if not transactions:
         return
 
@@ -119,10 +129,14 @@ async def flush_tool_usage_transactions(
         key=lambda entry: (entry[0], entry[1]),
     )
 
+    index_table: Final = SpendLogToolIndexRepository(prisma_client).table
     for attempt in range(n_retry_times + 1):
         try:
+            for statement_rows in spend_log_write_batches(
+                index_rows, SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
+            ):
+                await index_table.create_many(data=statement_rows, skip_duplicates=True)
             async with prisma_client.db.batch_() as batcher:
-                batcher.litellm_spendlogtoolindex.create_many(data=index_rows, skip_duplicates=True)
                 for (date_key, tool_name), grouped in groupby(per_tool_day, key=lambda entry: (entry[0], entry[1])):
                     entries = tuple(grouped)
                     spend = sum(entry[2] for entry in entries)

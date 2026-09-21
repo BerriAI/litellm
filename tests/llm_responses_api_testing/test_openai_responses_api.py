@@ -1627,9 +1627,10 @@ async def test_openai_responses_api_token_limit_error():
 
     Parsing the in-stream ErrorEvent must not raise
     "pydantic_core._pydantic_core.ValidationError: 3 validation errors for ErrorEvent".
-    The iterator now surfaces the event as litellm.APIError with status 400
-    (invalid_request_error is a non-retriable client error, so no
-    MidStreamFallbackError wrapping) carrying the provider's message.
+    The iterator routes the event through litellm.exception_type, so it surfaces as
+    the typed 400 client error the non-streaming path raises (litellm.BadRequestError)
+    carrying the provider's message. invalid_request_error is a non-retriable client
+    error, so there is no MidStreamFallbackError wrapping.
     """
     litellm._turn_on_debug()
 
@@ -1644,7 +1645,7 @@ async def test_openai_responses_api_token_limit_error():
         async for event in response:
             print(event)
 
-    with pytest.raises(litellm.APIError) as exc_info:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
         await _drain()
 
     assert exc_info.value.status_code == 400

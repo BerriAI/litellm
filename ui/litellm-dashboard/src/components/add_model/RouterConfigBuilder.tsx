@@ -15,7 +15,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 
 interface Route {
   id: string;
-  model: string;
+  model: string | null;
   utterances: string[];
   description: string;
   score_threshold: number;
@@ -23,21 +23,28 @@ interface Route {
 
 interface SavedRoute {
   id?: string;
-  name?: string;
-  model?: string;
+  name?: string | null;
+  model?: string | null;
   utterances?: string[];
   description?: string;
   score_threshold?: number;
 }
 
-interface RouterConfig {
+export interface RouterConfig {
   routes?: SavedRoute[];
+}
+
+export function serializeRouterConfig(config: RouterConfig | null): string {
+  if (config?.routes?.some((route) => !(route.name ?? route.model))) {
+    throw new Error("Please select a model for every route");
+  }
+  return JSON.stringify(config);
 }
 
 interface RouterConfigBuilderProps {
   modelInfo: ModelGroup[];
-  value?: RouterConfig;
-  onChange?: (config: any) => void;
+  value?: RouterConfig | null;
+  onChange?: (config: RouterConfig) => void;
 }
 
 interface UtteranceInputProps {
@@ -136,7 +143,7 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
           routeIds.push(id);
           return {
             id,
-            model: route.name || route.model || "",
+            model: route.name || route.model || null,
             utterances: route.utterances || [],
             description: route.description || "",
             score_threshold: route.score_threshold ?? 0.5,
@@ -165,7 +172,7 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
     const newRouteId = `route-${Date.now()}`;
     const updatedRoutes = [
       ...routes,
-      { id: newRouteId, model: "", utterances: [], description: "", score_threshold: 0.5 },
+      { id: newRouteId, model: null, utterances: [], description: "", score_threshold: 0.5 },
     ];
     setRoutes(updatedRoutes);
     updateConfig(updatedRoutes);

@@ -46,3 +46,45 @@ def test_load_credentials_assumes_role_with_external_id(monkeypatch):
     assert credentials.token == "assumed-session-token"
     assert aws_region_name == "us-east-1"
     assert "aws_external_id" not in optional_params
+
+
+def test_load_credentials_assumes_role_with_session_tags(monkeypatch):
+    """A trust policy gated on sts:TagSession only admits the session when the deployment's tags are sent."""
+    monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
+    tags = [{"Key": "team", "Value": "genai"}]
+
+    class FakeSTSClient:
+        def get_caller_identity(self):
+            return {"Arn": "arn:aws:iam::111111111111:user/litellm-proxy-pod"}
+
+        def assume_role(self, **params):
+            if list(params.get("Tags", ())) != tags:
+                raise ClientError(
+                    {"Error": {"Code": "AccessDenied", "Message": "is not authorized to perform: sts:TagSession"}},
+                    "AssumeRole",
+                )
+            return {
+                "Credentials": {
+                    "AccessKeyId": "ASIASMCHATTAGGED",
+                    "SecretAccessKey": "assumed-secret",
+                    "SessionToken": "assumed-session-token",
+                    "Expiration": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=30),
+                }
+            }
+
+    optional_params = {
+        "aws_access_key_id": "AKIASMCHATCALLERKEY",
+        "aws_secret_access_key": "pod-caller-secret",
+        "aws_region_name": "us-east-1",
+        "aws_role_name": "arn:aws:iam::999999999999:role/litellm-sm-chat-role",
+        "aws_session_name": "litellm-sm-chat-session",
+        "aws_session_tags": tags,
+    }
+
+    with patch.object(boto3, "client", return_value=FakeSTSClient()):
+        credentials, aws_region_name = SagemakerChatHandler()._load_credentials(optional_params)
+
+    assert credentials.access_key == "ASIASMCHATTAGGED"
+    assert aws_region_name == "us-east-1"
+    assert "aws_session_tags" not in optional_params

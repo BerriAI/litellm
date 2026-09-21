@@ -1633,6 +1633,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Update the guardrails litellm params in memory
         """
         super().update_in_memory_litellm_params(litellm_params)
+        if self.apply_to_output:
+            self.output_parse_pii = False
         if litellm_params.pii_entities_config:
             self.pii_entities_config = litellm_params.pii_entities_config
         if litellm_params.presidio_score_thresholds:

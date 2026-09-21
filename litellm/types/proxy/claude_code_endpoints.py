@@ -25,10 +25,12 @@ class PluginSpec(BaseModel):
     source: dict[str, str] = Field(
         ...,
         description=(
-            "Git source reference. Supported formats:\n"
+            "Plugin source reference. Supported formats:\n"
             "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
             "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
-            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}"
+            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n"
+            "- Zip archive on any https host (e.g. S3): "
+            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}"
         ),
     )
     version: str | None = Field("1.0.0", description="Semantic version")
@@ -46,7 +48,7 @@ class RegisterPluginRequest(PluginSpec):
     Request body for registering a plugin in the marketplace.
 
     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-    GitHub/GitLab/Bitbucket and referenced by their git source.
+    GitHub/GitLab/Bitbucket or as a zip archive on any https host and referenced by their source.
     """
 
     name: str = Field(
@@ -76,7 +78,7 @@ class PluginResponse(BaseModel):
     name: str = Field(..., description="Plugin name")
     version: str | None = Field(None, description="Plugin version")
     description: str | None = Field(None, description="Plugin description")
-    source: dict[str, str] = Field(..., description="Git source reference")
+    source: dict[str, str] = Field(..., description="Plugin source reference")
     enabled: bool = Field(..., description="Whether plugin is enabled")
 
 

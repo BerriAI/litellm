@@ -14,6 +14,7 @@ vi.mock("./panels/HealthStatusPanel", () => ({ default: () => <div data-testid="
 vi.mock("./panels/ModelRetrySettingsPanel", () => ({ default: () => <div data-testid="panel-retry" /> }));
 vi.mock("./panels/ModelGroupAliasPanel", () => ({ default: () => <div data-testid="panel-alias" /> }));
 vi.mock("./panels/PriceDataPanel", () => ({ default: () => <div data-testid="panel-price" /> }));
+vi.mock("./panels/AccessGroupBudgetsPanel", () => ({ default: () => <div data-testid="panel-budgets" /> }));
 
 const detailState = { modelId: null as string | null, teamId: null as string | null };
 vi.mock("./detailNavigation", () => ({
@@ -25,7 +26,11 @@ vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
 vi.mock("@/components/team/TeamInfo", () => ({
-  default: ({ teamId }: { teamId: string }) => <div data-testid="team-info">team:{teamId}</div>,
+  default: ({ teamId, is_team_admin }: { teamId: string; is_team_admin: boolean }) => (
+    <div data-testid="team-info" data-team-admin={String(is_team_admin)}>
+      team:{teamId}
+    </div>
+  ),
 }));
 
 const mockUseAuthorized = vi.fn();
@@ -38,8 +43,17 @@ vi.mock("./useModelDashboardData", () => ({
   useModelDashboardData: () => ({ availableModelAccessGroups: [], allModelsOnProxy: [], availableModelGroups: [] }),
 }));
 
-const ADMIN = { accessToken: "at", token: "t", userRole: "Admin", userId: "u1", premiumUser: false };
-const NON_ADMIN = { accessToken: "at", token: "t", userRole: "Internal User", userId: "u1", premiumUser: false };
+const ADMIN = { accessToken: "at", token: "t", userRole: "Admin", userId: "u1", premiumUser: false, isViewOnly: false };
+const NON_ADMIN = {
+  accessToken: "at",
+  token: "t",
+  userRole: "Internal User",
+  userId: "u1",
+  premiumUser: false,
+  isViewOnly: false,
+};
+// A proxy_admin_viewer session: effectiveSessionRole masquerades the role as "Admin".
+const VIEW_ONLY_ADMIN = { ...ADMIN, isViewOnly: true };
 
 const renderPage = () => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -86,10 +100,19 @@ describe("ModelsAndEndpointsPage", () => {
     expect(screen.queryByRole("tab", { name: "All Models" })).not.toBeInTheDocument();
   });
 
-  it("renders the team detail overlay from the ?team drill-in", () => {
+  it("renders the team detail overlay from the ?team drill-in with admin edit rights", () => {
     detailState.teamId = "team-9";
     renderPage();
     expect(screen.getByTestId("team-info")).toHaveTextContent("team:team-9");
+    expect(screen.getByTestId("team-info")).toHaveAttribute("data-team-admin", "true");
+  });
+
+  it("opens the ?team drill-in without edit rights for a view-only admin", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    detailState.teamId = "team-9";
+    renderPage();
+    expect(screen.getByTestId("team-info")).toHaveTextContent("team:team-9");
+    expect(screen.getByTestId("team-info")).toHaveAttribute("data-team-admin", "false");
   });
 
   it("hides admin-only tabs for a non-admin user", () => {
@@ -97,6 +120,51 @@ describe("ModelsAndEndpointsPage", () => {
     renderPage();
     expect(screen.queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Health Status" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the full admin tab order for a real admin", () => {
+    renderPage();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "All Models",
+      "Add Model",
+      "Auto-Routers Beta",
+      "LLM Credentials",
+      "Pass-Through Endpoints",
+      "Health Status",
+      "Model Retry Settings",
+      "Model Group Alias",
+      "Model Access Group Budgets Beta",
+      "Price Data Reload",
+    ]);
+  });
+
+  it("hides the admin write-form tabs from a view-only admin, keeping the read views", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    renderPage();
+    expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Health Status" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Pass-Through Endpoints" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Model Retry Settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Model Group Alias" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Model Access Group Budgets/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Price Data Reload" })).not.toBeInTheDocument();
+  });
+
+  // POST /model/new 403s a proxy_admin_viewer, so the form's tab must not render for one.
+  it("hides the Add Model tab for a view-only admin session", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    renderPage();
+    expect(screen.queryByRole("tab", { name: "Add Model" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "All Models" })).toBeInTheDocument();
+  });
+
+  // Read parity: the Auto-Routers list stays reachable for a view-only admin; only the
+  // create affordance inside it is withheld, which AutoRoutersTabPanel decides.
+  it("keeps the Auto-Routers tab for a view-only admin session", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    renderPage();
+    expect(screen.getByRole("tab", { name: /Auto-Routers/ })).toBeInTheDocument();
   });
 
   // Auto-routers are excluded from the All Models table, so this tab is their home: the only

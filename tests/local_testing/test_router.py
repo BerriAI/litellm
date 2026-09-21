@@ -1552,8 +1552,9 @@ def test_router_timeout():
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
-                "api_key": "os.environ/OPENAI_API_KEY",
+                "model": "openai/slow-endpoint",
+                "api_base": FAKE_OPENAI_API_BASE,
+                "api_key": "fake-key",
             },
         }
     ]
@@ -1562,7 +1563,7 @@ def test_router_timeout():
     start_time = time.time()
     try:
         res = router.completion(
-            model="gpt-3.5-turbo", messages=messages, timeout=0.0001
+            model="gpt-3.5-turbo", messages=messages, timeout=0.5
         )
         print(res)
         pytest.fail("this should have timed out")

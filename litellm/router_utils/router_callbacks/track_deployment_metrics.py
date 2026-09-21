@@ -9,7 +9,10 @@ get_deployment_failures_for_current_minute
 get_deployment_successes_for_current_minute
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
+
+from litellm.constants import ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -17,6 +20,26 @@ if TYPE_CHECKING:
     LitellmRouter = _Router
 else:
     LitellmRouter = Any
+
+_METADATA_CHANNELS: Final = ("litellm_metadata", "metadata")
+
+
+def find_deployment_metadata(kwargs: Mapping[str, object]) -> dict[str, object] | None:
+    buckets: Final = (kwargs.get(channel) for channel in _METADATA_CHANNELS)
+    return next((bucket for bucket in buckets if isinstance(bucket, dict) and "model_info" in bucket), None)
+
+
+def get_counted_usage_tokens(litellm_params: Mapping[str, object]) -> int | None:
+    buckets: Final = (litellm_params.get(channel) for channel in _METADATA_CHANNELS)
+    counted: Final = next(
+        (
+            bucket[ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY]
+            for bucket in buckets
+            if isinstance(bucket, dict) and ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY in bucket
+        ),
+        None,
+    )
+    return counted if isinstance(counted, int) and not isinstance(counted, bool) else None
 
 
 def increment_deployment_successes_for_current_minute(

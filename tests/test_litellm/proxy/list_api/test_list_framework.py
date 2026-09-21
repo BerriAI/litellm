@@ -25,6 +25,7 @@ from litellm.proxy.list_api.list_framework import (
     SortKey,
     Within,
     build_query_plan,
+    handle_facet,
     handle_list,
     order_by_sql,
     where_sql,
@@ -892,3 +893,107 @@ def test_the_facet_page_shapes_are_untouched_by_page_mode():
 
     assert set(links) == {"self", "prev", "next"}
     assert links["next"] == "/management/v1/budgets?q=ac&page=3"
+
+
+# ------------------------------------------------------- facet request handling
+
+
+class RecordingFacetExecutor:
+    """Records the one call `handle_facet` is allowed to make, so a rejected request
+    can be shown never to have reached it."""
+
+    def __init__(self, values: tuple[str, ...] = ()) -> None:
+        self.values = values
+        self.field: str | None = None
+        self.where: tuple[object, ...] | None = None
+
+    async def distinct(self, field: str, where: tuple[object, ...]) -> Sequence[str]:
+        self.field = field
+        self.where = where
+        return self.values
+
+
+async def _facet_problem(query: str, spec: ListSpec[BudgetRow, BudgetOut] | None = None) -> ProblemDetail:
+    executor = RecordingFacetExecutor(values=("a", "b"))
+    with pytest.raises(ManagementProblem) as raised:
+        await handle_facet(
+            spec=spec or _spec(),
+            executor=executor,
+            request=_request(query),
+            caller=CALLER,
+            field="created_by",
+        )
+    assert executor.field is None, "a rejected facet request still queried the executor"
+    return raised.value.problem
+
+
+@pytest.mark.asyncio
+async def test_a_facet_conjoins_the_scope_with_the_callers_filters():
+    """The scope is the one predicate a caller cannot drop, so a facet has to add to it
+    rather than replace it: otherwise a dropdown lists values from rows the caller
+    cannot see in the table."""
+    spec = _spec(scope=lambda caller: ScopeWhere(where=(Compare(field="created_by", op="eq", value="caller-1"),)))
+    executor = RecordingFacetExecutor(values=("caller-1",))
+
+    response = await handle_facet(
+        spec=spec,
+        executor=executor,
+        request=_request("filter[max_budget][gte]=5&q=ac"),
+        caller=CALLER,
+        field="created_by",
+    )
+
+    assert tuple(response.data) == ("caller-1",)
+    assert executor.where == (
+        Compare(field="created_by", op="eq", value="caller-1"),
+        Compare(field="max_budget", op="gte", value=5.0),
+        AnyOf(
+            clauses=(
+                Compare(field="budget_id", op="contains", value="ac"),
+                Compare(field="created_by", op="contains", value="ac"),
+            )
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_denied_scope_on_a_facet_never_reaches_the_executor():
+    """A 200 with an empty list would read as "no such values" rather than "not yours"."""
+    problem = await _facet_problem("", spec=_spec(scope=lambda caller: ScopeDenied(reason="nope")))
+
+    assert problem.status == 403
+    assert problem.type == f"{PROBLEM_TYPE_BASE}forbidden"
+
+
+@pytest.mark.asyncio
+async def test_a_facet_rejects_a_filter_operator_its_spec_does_not_offer():
+    problem = await _facet_problem("filter[created_by][gte]=x")
+
+    assert problem.status == 400
+    assert "gte" in problem.detail
+
+
+@pytest.mark.asyncio
+async def test_a_facet_rejects_a_repeated_query_parameter():
+    problem = await _facet_problem("page=1&page=2")
+
+    assert problem.type == f"{PROBLEM_TYPE_BASE}duplicate-query-parameter"
+    assert "page" in problem.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("query", ("page=0", "page=one"))
+async def test_a_facet_rejects_a_page_that_is_not_a_positive_integer(query: str):
+    problem = await _facet_problem(query)
+
+    assert problem.status == 400
+    assert problem.type == f"{PROBLEM_TYPE_BASE}invalid-query-parameter"
+    assert "'page'" in problem.detail
+
+
+@pytest.mark.asyncio
+async def test_a_facet_rejects_a_page_size_that_is_not_a_positive_integer():
+    problem = await _facet_problem("page_size=0")
+
+    assert problem.status == 400
+    assert "'page_size'" in problem.detail

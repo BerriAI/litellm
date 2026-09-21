@@ -61,7 +61,9 @@ const SemanticKeywordMatching: React.FC<SemanticKeywordMatchingProps> = ({
             <SearchSelect
               options={modelOptions}
               value={embeddingModel ?? ""}
-              onValueChange={onEmbeddingModelChange}
+              onValueChange={(model) => {
+                if (model !== null) onEmbeddingModelChange(model);
+              }}
               placeholder="Select an embedding model"
               emptyText="No embedding models found"
               aria-label="Embedding model"

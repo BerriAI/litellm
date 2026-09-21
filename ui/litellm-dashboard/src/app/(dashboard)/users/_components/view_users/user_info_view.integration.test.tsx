@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, renderWithProviders as render, screen, waitFor } from "../../../../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import UserInfoView from "./user_info_view";
@@ -162,6 +162,35 @@ describe("UserInfoView add-to-team form", () => {
       });
 
       expect(await openEditor(user)).toHaveValue(42);
+    });
+
+    it("should keep Unlimited selected after saving and reopening the user", async () => {
+      const user = setup();
+      render(<UserInfoView {...budgetProps} />);
+
+      await openEditor(user);
+      await user.click(screen.getByRole("checkbox", { name: "Unlimited Budget" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalled());
+      expect(mockUserUpdateUserCall.mock.calls[0][1]).toMatchObject({ max_budget: null });
+      await openEditor(user);
+      expect(screen.getByRole("checkbox", { name: "Unlimited Budget" })).toBeChecked();
+    });
+
+    it("should keep a cleared reset period after saving and reopening the user", async () => {
+      const user = setup();
+      render(<UserInfoView {...budgetProps} />);
+
+      await openEditor(user);
+      await user.click(screen.getByRole("combobox", { name: "Reset Budget" }));
+      await user.click(await screen.findByRole("option", { name: "n/a" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(mockUserUpdateUserCall).toHaveBeenCalled());
+      expect(mockUserUpdateUserCall.mock.calls[0][1]).toMatchObject({ budget_duration: null });
+      await openEditor(user);
+      expect(screen.getByRole("combobox", { name: "Reset Budget" })).toHaveTextContent("n/a");
     });
   });
 

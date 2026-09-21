@@ -1,3 +1,4 @@
+from importlib import import_module
 import json
 
 import pytest
@@ -148,8 +149,8 @@ class TestTextFormatConversion:
                     incomplete_details=None,
                 )
 
-        with patch(
-            "litellm.responses.main.base_llm_http_handler.response_api_handler",
+        with patch.object(
+            import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler",
             new=mock_handler,
         ):
             litellm._turn_on_debug()

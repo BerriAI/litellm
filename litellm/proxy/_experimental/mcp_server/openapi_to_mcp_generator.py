@@ -54,7 +54,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._experimental.mcp_server.tool_registry import (
     global_mcp_tool_registry,
 )
-from litellm.types.mcp import credential_redirect_hook, custom_credential_slot
+from litellm.types.mcp import MCPAuthType, credential_redirect_hook, custom_credential_slot
 
 
 class _OpenAPIJSONSchema(TypedDict, total=False):
@@ -163,10 +163,14 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str) -> dict[str, Any]:
+async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
-        r: Final[httpx.Response] = await async_safe_get(client, filepath)
+        r: Final[httpx.Response] = (
+            await async_safe_get(client, filepath)
+            if max_bytes is None
+            else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
+        )
         r.raise_for_status()
         return r.json()
 
@@ -467,6 +471,8 @@ def create_tool_function(
     headers: dict[str, str] | None = None,
     server_label: str | None = None,
     relays_upstream_auth: bool = False,
+    auth_type: MCPAuthType = None,
+    upstream_token_header: str | None = None,
 ):
     """Create a tool function for an OpenAPI operation.
 
@@ -499,6 +505,18 @@ def create_tool_function(
         by using **kwargs instead of named parameters.
         """
         effective_headers: Final = _merge_openapi_tool_request_headers(headers)
+        if auth_type is not None:
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (
+                raise_public,
+                validate_static_credential,
+            )
+            from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok
+
+            match validate_static_credential(auth_type, effective_headers, upstream_token_header, headers or ()):
+                case Error(error):
+                    raise_public(error)
+                case Ok():
+                    pass
 
         # Build URL from base_url and path
         url = base_url + path

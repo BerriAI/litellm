@@ -547,7 +547,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         for _tool_call, is_allowed, _rule_id, message in checked:
             if not is_allowed and message is not None:
-                verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
+                verbose_proxy_logger.info("Tool Permission Guardrail: %s", message)
                 if self.on_disallowed_action == "block":
                     raise GuardrailRaisedException(
                         guardrail_name=self.guardrail_name, message=message, blocked_content=True
@@ -809,7 +809,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         new_tools: Final = self._collect_request_tools(data)
         if not new_tools:
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.debug(
                 "Tool Permission Guardrail: not running guardrail. No tools or functions in data"
             )
             return data
@@ -820,7 +820,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             is_allowed, _, message = self._check_tool_permission(tool_name, tool_type)
 
             if not is_allowed and message is not None:
-                verbose_proxy_logger.warning("Tool Permission Guardrail: %s", message)
+                verbose_proxy_logger.info("Tool Permission Guardrail: %s", message)
                 if self.on_disallowed_action == "block":
                     raise HTTPException(
                         status_code=400,

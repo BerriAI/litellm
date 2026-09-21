@@ -89,6 +89,13 @@ describe("MCPAppsPanel logos", () => {
 
 const connectServers = [
   {
+    server_id: "s-m2m",
+    server_name: "service_tool",
+    auth_type: "oauth2",
+    oauth2_flow: "client_credentials",
+    connected_app_reachable: true,
+  },
+  {
     server_id: "s-reach",
     server_name: "reachable_srv",
     auth_type: "none",
@@ -124,6 +131,8 @@ describe("MCPAppsPanel connected-app reachability (LIT-4861)", () => {
     expect(vi.mocked(fetchMCPServers)).toHaveBeenCalledWith("tok", undefined, true);
     expect(screen.queryByText("unreachable_srv")).not.toBeInTheDocument();
     expect(screen.getByText("Connected (1)")).toBeInTheDocument();
+    expect(screen.getByText("service_tool")).toBeInTheDocument();
+    expect(screen.queryByText("Connect", { exact: true })).not.toBeInTheDocument();
     const toolCountFetchedIds = vi.mocked(listMCPTools).mock.calls.map((call) => call[1]);
     expect(toolCountFetchedIds).toContain("s-reach");
     expect(toolCountFetchedIds).not.toContain("s-unreach");

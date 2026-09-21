@@ -16,13 +16,12 @@ from litellm.proxy.agent_endpoints.agent_search import (
     AgentSearchHits,
     AgentSearchIndex,
     AgentSearchNotConfigured,
-    Vector,
     agent_search_text,
-    cosine_similarity,
     search_agents,
 )
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import RestrictedAgentAccess
 from litellm.proxy.agent_endpoints.endpoints import router, user_api_key_auth
+from litellm.proxy.common_utils.semantic_text_index import Vector, cosine_similarity
 from litellm.types.agents import AgentResponse
 
 CALLER: Final = UserAPIKeyAuth(api_key="hashed-caller-key", team_id="team-1", user_id="user-1")
@@ -212,11 +211,24 @@ class TestAgentSearchIndex:
         assert isinstance(outcome, AgentSearchEmbeddingFailed)
 
 
+def _pass_through_key_limits() -> MagicMock:
+    limits = MagicMock()
+    limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    return limits
+
+
 class TestSearchAgents:
     @pytest.mark.asyncio
     async def test_no_embedding_model_is_not_configured(self) -> None:
         outcome = await search_agents(
-            "q", AGENTS, 5, router=MagicMock(), embedding_model=None, index=AgentSearchIndex(), user_api_key_dict=CALLER
+            "q",
+            AGENTS,
+            5,
+            router=MagicMock(),
+            embedding_model=None,
+            index=AgentSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
         )
         assert isinstance(outcome, AgentSearchNotConfigured)
         assert "agent_search_embedding_model" in outcome.reason
@@ -224,7 +236,14 @@ class TestSearchAgents:
     @pytest.mark.asyncio
     async def test_no_router_is_not_configured(self) -> None:
         outcome = await search_agents(
-            "q", AGENTS, 5, router=None, embedding_model="m", index=AgentSearchIndex(), user_api_key_dict=CALLER
+            "q",
+            AGENTS,
+            5,
+            router=None,
+            embedding_model="m",
+            index=AgentSearchIndex(),
+            user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
         )
         assert isinstance(outcome, AgentSearchNotConfigured)
 
@@ -245,6 +264,7 @@ class TestSearchAgents:
             embedding_model="text-embedding-3-small",
             index=AgentSearchIndex(),
             user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
         )
         assert isinstance(outcome, AgentSearchHits)
         assert [hit.agent.agent_id for hit in outcome.hits] == ["translator"]
@@ -267,6 +287,7 @@ class TestSearchAgents:
             embedding_model="text-embedding-3-small",
             index=AgentSearchIndex(),
             user_api_key_dict=CALLER,
+            proxy_logging_obj=_pass_through_key_limits(),
         )
         metadata = router.aembedding.await_args.kwargs["metadata"]
         assert metadata["user_api_key"] == "hashed-caller-key"
@@ -303,6 +324,7 @@ def embedding_router(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
         )
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", _pass_through_key_limits())
     monkeypatch.setattr(litellm, "agent_search_embedding_model", "text-embedding-3-small")
     return router
 

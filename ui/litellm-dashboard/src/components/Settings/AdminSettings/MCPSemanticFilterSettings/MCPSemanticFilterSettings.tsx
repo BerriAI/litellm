@@ -115,7 +115,7 @@ export default function MCPSemanticFilterSettings({ accessToken }: MCPSemanticFi
 
   // Test section state
   const [testQuery, setTestQuery] = useState("");
-  const [testModel, setTestModel] = useState<string>("gpt-4o");
+  const [testModel, setTestModel] = useState<string | null>("gpt-4o");
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
   const [isTesting, setIsTesting] = useState(false);

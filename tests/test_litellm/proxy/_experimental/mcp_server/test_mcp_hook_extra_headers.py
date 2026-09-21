@@ -597,7 +597,11 @@ class TestHookHeaderMergePriority:
                             "Authorization": "Bearer oauth2-token",
                             "X-OAuth": "yes",
                         },
-                        raw_headers=None,
+                        raw_headers={
+                            "x-litellm-api-key": "Bearer sk-litellm-key",
+                            "authorization": "Bearer oauth2-token",
+                        },
+                        user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
                         proxy_logging_obj=None,
                         hook_extra_headers={
                             "Authorization": "Bearer hook-jwt",
@@ -1233,13 +1237,14 @@ class TestResolveByokMcpAuthHeader:
         assert result == "stored-cred"
 
     @pytest.mark.asyncio
-    async def test_byok_server_raises_401_when_no_credential_stored(self):
+    async def test_byok_server_raises_401_when_no_credential_stored(self, monkeypatch):
         from fastapi import HTTPException
 
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             _resolve_byok_mcp_auth_header,
         )
 
+        monkeypatch.setenv("PROXY_BASE_URL", "https://gateway.example.com/proxy")
         server = self._server(is_byok=True)
         user_auth = UserAPIKeyAuth(user_id="user-1", api_key="sk-dashboard")
 
@@ -1252,6 +1257,9 @@ class TestResolveByokMcpAuthHeader:
 
         assert exc_info.value.status_code == 401
         assert exc_info.value.detail["error"] == "byok_auth_required"
+        assert exc_info.value.headers == {
+            "WWW-Authenticate": 'Bearer resource_metadata="https://gateway.example.com/proxy/v1/mcp/oauth/protected-resource"'
+        }
 
     @pytest.mark.asyncio
     async def test_byok_server_checks_credential_and_keeps_caller_header_when_supplied(self):

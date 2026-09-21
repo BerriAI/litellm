@@ -14,6 +14,7 @@ All /budget management endpoints
 #### BUDGET TABLE MANAGEMENT ####
 import math
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -51,6 +52,7 @@ async def new_budget(
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
+    - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
     - budget_reset_at: Optional[datetime] - Datetime when the initial budget is reset. Default is now.
     """
@@ -134,6 +136,7 @@ async def update_budget(
     - max_parallel_requests: Optional[int] - The max number of parallel requests for the budget.
     - tpm_limit: Optional[int] - The tokens per minute limit for the budget.
     - rpm_limit: Optional[int] - The requests per minute limit for the budget.
+    - tpd_limit: Optional[int] - The tokens per day limit for the budget. Charged by batch submissions instead of tpm_limit/rpm_limit.
     - model_max_budget: Optional[dict] - Specify max budget for a given model. Example: {"openai/gpt-4o-mini": {"max_budget": 100.0, "budget_duration": "1d", "tpm_limit": 100000, "rpm_limit": 100000}}
     - budget_reset_at: Optional[datetime] - Update the Datetime when the budget was last reset.
     """
@@ -176,6 +179,10 @@ async def update_budget(
     recomputed_reset_at: Final = (
         {"budget_reset_at": get_budget_reset_time(budget_duration=budget_obj.budget_duration)}
         if budget_obj.budget_duration is not None and "budget_reset_at" not in budget_obj.model_fields_set
+        else MappingProxyType({"budget_reset_at": None})
+        if "budget_duration" in budget_obj.model_fields_set
+        and budget_obj.budget_duration is None
+        and "budget_reset_at" not in budget_obj.model_fields_set
         else {}
     )
 
@@ -267,6 +274,7 @@ async def budget_settings(
         "max_parallel_requests": {"type": "Integer"},
         "tpm_limit": {"type": "Integer"},
         "rpm_limit": {"type": "Integer"},
+        "tpd_limit": {"type": "Integer"},
         "budget_duration": {"type": "String"},
         "max_budget": {"type": "Float"},
         "soft_budget": {"type": "Float"},

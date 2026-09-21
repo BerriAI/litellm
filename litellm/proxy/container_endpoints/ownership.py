@@ -1,9 +1,10 @@
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, TypeAlias
 
 from fastapi import HTTPException
+from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -45,6 +46,12 @@ _CONTAINER_STORED_ID_CACHE: Final = InMemoryCache(max_size_in_memory=10000, defa
 # tuple — different keys for the same user share the same allow-set, but
 # different users with different scopes get disjoint cache entries.
 _ALLOWED_CONTAINER_IDS_CACHE: Final = InMemoryCache(max_size_in_memory=2048, default_ttl=60)
+
+DEFAULT_CONTAINER_LIST_LIMIT: Final = 20
+OWNED_CONTAINER_LIST_PAGE_SIZE: Final = 100
+OWNED_CONTAINER_LIST_MAX_PAGES: Final = 5
+
+FetchContainerListPage: TypeAlias = Callable[[str | None, int | None], Awaitable[object]]
 
 
 def _allowed_container_ids_cache_key(owner_scopes: Sequence[str]) -> str:
@@ -337,27 +344,23 @@ def _get_container_list_data(response: object) -> Sequence[object] | None:
     return data if isinstance(data, list) else None
 
 
-def _set_container_list_data(response: Any, data: list[object], removed_filtered_items: bool = False) -> object:
+def _get_has_more(response: object) -> bool:
     if isinstance(response, dict):
-        response["data"] = data
-        if data:
-            response["first_id"] = _get_response_id(data[0])
-            response["last_id"] = _get_response_id(data[-1])
-        else:
-            response["first_id"] = None
-            response["last_id"] = None
-            response["has_more"] = False
-        if removed_filtered_items:
-            response["has_more"] = False
-        return response
+        return response.get("has_more") is True
+    return getattr(response, "has_more", None) is True
 
-    response.data = data
-    response.first_id = _get_response_id(data[0]) if data else None
-    response.last_id = _get_response_id(data[-1]) if data else None
-    if not data and hasattr(response, "has_more"):
-        response.has_more = False
-    if removed_filtered_items and hasattr(response, "has_more"):
-        response.has_more = False
+
+def _with_container_list_page(response: object, data: Sequence[object], has_more: bool) -> object:
+    page: Final = {
+        "data": list(data),
+        "first_id": _get_response_id(data[0]) if data else None,
+        "last_id": _get_response_id(data[-1]) if data else None,
+        "has_more": has_more,
+    }
+    if isinstance(response, dict):
+        return {**response, **page}
+    if isinstance(response, BaseModel):
+        return response.model_copy(update=page)
     return response
 
 
@@ -366,16 +369,16 @@ async def _get_allowed_container_ids(
 ) -> AbstractSet[str]:
     owner_scopes: Final = get_resource_owner_scopes(user_api_key_dict)
     if not owner_scopes:
-        return set()
+        return frozenset()
 
     cache_key: Final = _allowed_container_ids_cache_key(owner_scopes)
     cached: Final = _ALLOWED_CONTAINER_IDS_CACHE.get_cache(cache_key)
     if cached is not None:
-        return set(cached)
+        return frozenset(cached)
 
     prisma_client: Final = await _get_prisma_client()
     if prisma_client is None:
-        return set()
+        return frozenset()
 
     table: Final = ManagedObjectRepository(prisma_client).table
     rows: Final[Sequence[prisma_models.LiteLLM_ManagedObjectTable]] = await table.find_many(
@@ -384,34 +387,69 @@ async def _get_allowed_container_ids(
             "created_by": {"in": owner_scopes},
         }
     )
-    allowed_ids: Final = {row.model_object_id for row in rows if getattr(row, "model_object_id", None) is not None}
-    # ``InMemoryCache.get_cache`` attempts ``json.loads`` on the stored
-    # value; passing a set would round-trip through that path
-    # unnecessarily. Store as a list and rehydrate above.
-    _ALLOWED_CONTAINER_IDS_CACHE.set_cache(cache_key, list(allowed_ids))
+    allowed_ids: Final = frozenset(
+        row.model_object_id for row in rows if getattr(row, "model_object_id", None) is not None
+    )
+    _ALLOWED_CONTAINER_IDS_CACHE.set_cache(cache_key, tuple(allowed_ids))
     return allowed_ids
 
 
-async def filter_container_list_response(
-    response: object,
+def _is_owned_container(item: object, allowed_container_ids: AbstractSet[str], custom_llm_provider: str) -> bool:
+    container_id: Final = _get_response_id(item)
+    if container_id is None:
+        return False
+    original_container_id, resolved_provider = decode_container_id_for_ownership(container_id, custom_llm_provider)
+    return _container_model_object_id(original_container_id, resolved_provider) in allowed_container_ids
+
+
+async def _collect_owned_containers(
+    fetch_page: FetchContainerListPage,
+    after: str | None,
+    needed: int,
+    allowed_container_ids: AbstractSet[str],
+    custom_llm_provider: str,
+    pages_left: int,
+    collected: tuple[object, ...],
+) -> tuple[object, tuple[object, ...]]:
+    page: Final = await fetch_page(after, OWNED_CONTAINER_LIST_PAGE_SIZE)
+    page_data: Final = _get_container_list_data(page) or ()
+    owned: Final = collected + tuple(
+        item for item in page_data if _is_owned_container(item, allowed_container_ids, custom_llm_provider)
+    )
+    upstream_last_id: Final = _get_response_id(page_data[-1]) if page_data else None
+    if len(owned) >= needed or upstream_last_id is None or pages_left <= 1 or not _get_has_more(page):
+        return page, owned
+    return await _collect_owned_containers(
+        fetch_page=fetch_page,
+        after=upstream_last_id,
+        needed=needed,
+        allowed_container_ids=allowed_container_ids,
+        custom_llm_provider=custom_llm_provider,
+        pages_left=pages_left - 1,
+        collected=owned,
+    )
+
+
+async def list_owned_containers(
+    fetch_page: FetchContainerListPage,
+    after: str | None,
+    limit: int | None,
     user_api_key_dict: UserAPIKeyAuth,
     custom_llm_provider: str,
 ) -> object:
-    if is_proxy_admin(user_api_key_dict):
-        return response
-
-    data: Final = _get_container_list_data(response)
-    if data is None:
-        return response
-
     allowed_container_ids: Final = await _get_allowed_container_ids(user_api_key_dict)
-    filtered: Final[list[object]] = []
-    for item in data:
-        container_id = _get_response_id(item)
-        if container_id is None:
-            continue
-        original_container_id, resolved_provider = decode_container_id_for_ownership(container_id, custom_llm_provider)
-        if _container_model_object_id(original_container_id, resolved_provider) in allowed_container_ids:
-            filtered.append(item)
-
-    return _set_container_list_data(response, filtered, removed_filtered_items=len(filtered) != len(data))
+    page_limit: Final = limit if limit is not None else DEFAULT_CONTAINER_LIST_LIMIT
+    last_page, owned = await _collect_owned_containers(
+        fetch_page=fetch_page,
+        after=after,
+        needed=page_limit + 1,
+        allowed_container_ids=allowed_container_ids,
+        custom_llm_provider=custom_llm_provider,
+        pages_left=OWNED_CONTAINER_LIST_MAX_PAGES,
+        collected=(),
+    )
+    return _with_container_list_page(
+        last_page,
+        owned[:page_limit],
+        has_more=len(owned) > page_limit or _get_has_more(last_page),
+    )

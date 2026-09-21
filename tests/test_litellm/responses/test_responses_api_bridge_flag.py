@@ -6,10 +6,17 @@ Includes file_search emulation: the flag must be forwarded on inner aresponses
 calls so routed requests do not hit a custom api_base /v1/responses endpoint.
 """
 
+import json
+from importlib import import_module
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
+import pytest
+import respx
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
@@ -17,11 +24,31 @@ from litellm.types.utils import Choices, Message, ModelResponse, Usage
 class TestUseResponsesApiBridgeFlag:
     """Test that bridge opt-in forces the chat completions path."""
 
-    @patch(
-        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
+    @pytest.mark.parametrize("model", ["openai/chat_completions/gpt-6-astra", "xai/test-classifier"])
+    def test_encrypted_classifier_rejection_preserves_public_error(self, model: str) -> None:
+        respond: Final = MagicMock(side_effect=AssertionError("Incompatible classifier sent an upstream request"))
+        with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            with pytest.raises(
+                litellm.APIConnectionError,
+                match="Encrypted task classification requires a compatible native Responses deployment",
+            ) as error:
+                litellm.responses(
+                    model=model,
+                    input="Delegated task",
+                    api_key="test-key",
+                    api_base="https://classifier.test/v1",
+                    client=HTTPHandler(client=client),
+                    _require_encrypted_task_support=True,
+                    num_retries=0,
+                )
+        assert error.value.status_code == 500
+        respond.assert_not_called()
+
+    @patch.object(
+        import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
     def test_bridge_used_when_use_chat_completions_api_true(
         self, mock_get_config, mock_bridge_handler
@@ -39,11 +66,11 @@ class TestUseResponsesApiBridgeFlag:
 
         mock_bridge_handler.assert_called_once()
 
-    @patch(
-        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
+    @patch.object(
+        import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
     def test_bridge_used_when_model_uses_chat_completions_prefix(
         self, mock_get_config, mock_bridge_handler
@@ -62,9 +89,9 @@ class TestUseResponsesApiBridgeFlag:
         # Model string is provider-normalized after resolution; prefix only forces the bridge.
         assert mock_bridge_handler.call_args.kwargs["model"].endswith("my-custom-model")
 
-    @patch("litellm.responses.main.base_llm_http_handler.response_api_handler")
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    @patch.object(import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler")
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
     def test_native_forwarding_when_flag_absent(
         self, mock_get_config, mock_native_handler
@@ -82,11 +109,11 @@ class TestUseResponsesApiBridgeFlag:
 
         mock_native_handler.assert_called_once()
 
-    @patch(
-        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
+    @patch.object(
+        import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
     def test_flag_does_not_leak_into_kwargs(self, mock_get_config, mock_bridge_handler):
         """use_chat_completions_api should be popped and not passed to the bridge handler."""
@@ -104,11 +131,11 @@ class TestUseResponsesApiBridgeFlag:
         all_kwargs = call_kwargs.kwargs if call_kwargs.kwargs else {}
         assert "use_chat_completions_api" not in all_kwargs
 
-    @patch(
-        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
+    @patch.object(
+        import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
     def test_bridge_used_when_provider_config_none(
         self, mock_get_config, mock_bridge_handler
@@ -127,8 +154,8 @@ class TestUseResponsesApiBridgeFlag:
         mock_bridge_handler.assert_called_once()
 
     @patch("litellm.acompletion")
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
     async def test_allowed_openai_params_forwarded_through_bridge(
         self, mock_get_config, mock_acompletion
@@ -164,9 +191,116 @@ class TestUseResponsesApiBridgeFlag:
             "reasoning_effort"
         ]
 
-    @patch("litellm.responses.file_search.emulated_handler._call_aresponses")
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    @pytest.mark.parametrize(
+        ("model", "upstream_url", "use_chat_completions_api", "allowed_openai_params", "expected_chat_template_kwargs"),
+        [
+            pytest.param(
+                "openai/my-custom-model",
+                "https://api.openai.com/v1/chat/completions",
+                True,
+                None,
+                None,
+                id="native-config-drops-unknown-param",
+            ),
+            pytest.param(
+                "openai/my-custom-model",
+                "https://api.openai.com/v1/chat/completions",
+                True,
+                ["chat_template_kwargs"],
+                {"thinking": True},
+                id="native-config-keeps-allowed-param",
+            ),
+            pytest.param(
+                "together_ai/my-custom-model",
+                "https://api.together.ai/v1/chat/completions",
+                False,
+                None,
+                {"thinking": True},
+                id="no-native-config-keeps-passthrough",
+            ),
+        ],
+    )
+    def test_bridge_forwards_same_params_as_native_dispatch(
+        self,
+        model: str,
+        upstream_url: str,
+        use_chat_completions_api: bool,
+        allowed_openai_params: list[str] | None,
+        expected_chat_template_kwargs: dict[str, bool] | None,
+        respx_mock: respx.MockRouter,
+    ):
+        upstream: Final = respx_mock.post(upstream_url).mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "my-custom-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        response: Final = litellm.responses(
+            model=model,
+            input="Hello",
+            use_chat_completions_api=use_chat_completions_api,
+            allowed_openai_params=allowed_openai_params,
+            chat_template_kwargs={"thinking": True},
+            drop_params=True,
+            api_key="fake-provider-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        request_body: Final = json.loads(upstream.calls[0].request.read())
+        assert request_body.get("chat_template_kwargs") == expected_chat_template_kwargs
+        assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
+        assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_keeps_deployment_credentials_while_dropping_unknown_params(self, respx_mock: respx.MockRouter):
+        upstream: Final = respx_mock.post(
+            "https://example-resource.openai.azure.com/openai/deployments/my-deployment/chat/completions",
+            params={"api-version": "2024-10-21"},
+        ).mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "my-deployment",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        litellm.responses(
+            model="azure/my-deployment",
+            input="Hello",
+            use_chat_completions_api=True,
+            api_base="https://example-resource.openai.azure.com",
+            api_version="2024-10-21",
+            azure_ad_token="fake-azure-ad-token",
+            chat_template_kwargs={"thinking": True},
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        request: Final = upstream.calls[0].request
+        assert request.headers["authorization"] == "Bearer fake-azure-ad-token"
+        assert "chat_template_kwargs" not in json.loads(request.read())
+
+    @patch.object(import_module("litellm.responses.file_search.emulated_handler"), "_call_aresponses")
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
     async def test_bridge_flag_forwarded_to_file_search_emulation(
         self, mock_get_config, mock_call_aresponses
@@ -206,12 +340,12 @@ class TestUseResponsesApiBridgeFlag:
             call_kwargs.get("use_chat_completions_api") is True
         ), "use_chat_completions_api should be forwarded to inner aresponses call"
 
-    @patch(
-        "litellm.responses.main.litellm_completion_transformation_handler.response_api_handler"
+    @patch.object(
+        import_module("litellm.responses.main").litellm_completion_transformation_handler, "response_api_handler"
     )
     @patch("litellm.vector_stores.main.asearch")
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
     async def test_bridge_flag_prevents_native_responses_endpoint_call(
         self, mock_get_config, mock_asearch, mock_bridge_handler
@@ -280,10 +414,10 @@ class TestUseResponsesApiBridgeFlag:
         assert result is not None
         assert result.id is not None
 
-    @patch("litellm.responses.main.base_llm_http_handler.response_api_handler")
+    @patch.object(import_module("litellm.responses.main").base_llm_http_handler, "response_api_handler")
     @patch("litellm.vector_stores.main.asearch")
-    @patch(
-        "litellm.responses.main.ProviderConfigManager.get_provider_responses_api_config"
+    @patch.object(
+        import_module("litellm.responses.main").ProviderConfigManager, "get_provider_responses_api_config"
     )
     async def test_without_bridge_flag_uses_native_endpoint(
         self, mock_get_config, mock_asearch, mock_native_handler

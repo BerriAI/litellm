@@ -38,7 +38,9 @@ def load_custom_secret_manager(config_file_path: str | None = None) -> None:
             "CustomSecretManagerException - key_management_settings is required with custom_secret_manager field"
         )
 
-    custom_secret_manager_path: Final = getattr(litellm._key_management_settings, "custom_secret_manager", None)
+    custom_secret_manager_path: Final[str | None] = getattr(
+        litellm._key_management_settings, "custom_secret_manager", None
+    )
 
     if not custom_secret_manager_path:
         raise ValueError(

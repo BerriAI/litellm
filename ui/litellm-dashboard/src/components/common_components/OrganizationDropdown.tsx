@@ -4,8 +4,8 @@ import { Organization } from "../networking";
 
 interface OrganizationDropdownProps {
   organizations?: Organization[] | null;
-  value?: string;
-  onChange?: (value: string) => void;
+  value?: string | null;
+  onChange?: (value: string | null) => void;
   disabled?: boolean;
   loading?: boolean;
   style?: React.CSSProperties;

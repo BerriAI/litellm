@@ -1,6 +1,6 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Final
 
 import litellm
@@ -8,6 +8,7 @@ from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
 
 class LowestCostLoggingHandler(CustomLogger):
@@ -19,6 +20,8 @@ class LowestCostLoggingHandler(CustomLogger):
         self.router_cache = router_cache
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update usage on success
@@ -39,7 +42,7 @@ class LowestCostLoggingHandler(CustomLogger):
                 # ------------
                 """
                 {
-                    {model_group}_map: {
+                    cost_map:{model_group}: {
                         id: {
                             f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
                         }
@@ -50,18 +53,14 @@ class LowestCostLoggingHandler(CustomLogger):
                 current_hour: Final = datetime.now().strftime("%H")
                 current_minute: Final = datetime.now().strftime("%M")
                 precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
-                cost_key: Final = f"{model_group}_map"
-
-                response_ms: Final[timedelta] = end_time - start_time
+                cost_key: Final = f"cost_map:{model_group}"
 
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
                     _usage: Final = getattr(response_obj, "usage", None)
                     if _usage is not None and isinstance(_usage, litellm.Usage):
-                        completion_tokens: Final = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        float(response_ms.total_seconds() / completion_tokens)
 
                 # ------------
                 # Update usage
@@ -96,6 +95,8 @@ class LowestCostLoggingHandler(CustomLogger):
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update cost usage on success
@@ -116,32 +117,26 @@ class LowestCostLoggingHandler(CustomLogger):
                 # ------------
                 """
                 {
-                    {model_group}_map: {
+                    cost_map:{model_group}: {
                         id: {
-                            "cost": [..]
                             f"{date:hour:minute}" : {"tpm": 34, "rpm": 3}
                         }
                     }
                 }
                 """
-                cost_key: Final = f"{model_group}_map"
+                cost_key: Final = f"cost_map:{model_group}"
 
                 current_date: Final = datetime.now().strftime("%Y-%m-%d")
                 current_hour: Final = datetime.now().strftime("%H")
                 current_minute: Final = datetime.now().strftime("%M")
                 precise_minute: Final = f"{current_date}-{current_hour}-{current_minute}"
 
-                response_ms: Final[timedelta] = end_time - start_time
-
                 total_tokens = 0
 
                 if isinstance(response_obj, ModelResponse):
                     _usage: Final = getattr(response_obj, "usage", None)
                     if _usage is not None and isinstance(_usage, litellm.Usage):
-                        completion_tokens: Final = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-
-                        float(response_ms.total_seconds() / completion_tokens)
 
                 # ------------
                 # Update usage
@@ -185,7 +180,7 @@ class LowestCostLoggingHandler(CustomLogger):
         """
         Returns a deployment with the lowest cost
         """
-        cost_key: Final = f"{model_group}_map"
+        cost_key: Final = f"cost_map:{model_group}"
 
         request_count_dict: Final = await self.router_cache.async_get_cache(key=cost_key) or {}
 

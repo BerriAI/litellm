@@ -1,110 +1,206 @@
-"""
-Regression tests for AWS Secrets Manager same-name in-place rotation fix.
-
-When current_secret_name == new_secret_name (e.g. key alias preserved during
-rotation), AWS must use PutSecretValue to update in place instead of
-create+delete, which would fail with ResourceExistsException.
-"""
-
-from unittest.mock import AsyncMock, patch
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
+from types import MappingProxyType
+from typing import Final, TypeAlias
 
 import pytest
 
 from litellm.secret_managers.aws_secret_manager_v2 import AWSSecretsManagerV2
 
 
+OptionalParams: TypeAlias = Mapping[str, object] | None
+Timeout: TypeAlias = object
+WriteCall: TypeAlias = tuple[str, str, str | None, OptionalParams, Timeout]
+PutCall: TypeAlias = tuple[str, str, OptionalParams, Timeout]
+DeleteCall: TypeAlias = tuple[str, int | None, OptionalParams, Timeout]
+
+
+@dataclass(frozen=True, slots=True)
+class StatefulSecretStorage:
+    values: Mapping[str, str]
+    events: tuple[str, ...] = ()
+    reads: tuple[str, ...] = ()
+    writes: tuple[WriteCall, ...] = ()
+    puts: tuple[PutCall, ...] = ()
+    deletions: tuple[DeleteCall, ...] = ()
+
+    def read(self, secret_name: str) -> tuple["StatefulSecretStorage", str | None]:
+        return (
+            replace(self, events=(*self.events, f"read:{secret_name}"), reads=(*self.reads, secret_name)),
+            self.values.get(secret_name),
+        )
+
+    def write(
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: str | None,
+        optional_params: OptionalParams,
+        timeout: Timeout,
+    ) -> tuple["StatefulSecretStorage", dict[str, str]]:
+        values: Final = MappingProxyType({**self.values, secret_name: secret_value})
+        return (
+            replace(
+                self,
+                values=values,
+                events=(*self.events, f"write:{secret_name}"),
+                writes=(*self.writes, (secret_name, secret_value, description, optional_params, timeout)),
+            ),
+            {"ARN": f"arn:synthetic:{secret_name}"},
+        )
+
+    def put(
+        self,
+        secret_name: str,
+        secret_value: str,
+        optional_params: OptionalParams,
+        timeout: Timeout,
+    ) -> tuple["StatefulSecretStorage", dict[str, str]]:
+        values: Final = MappingProxyType({**self.values, secret_name: secret_value})
+        return (
+            replace(
+                self,
+                values=values,
+                events=(*self.events, f"put:{secret_name}"),
+                puts=(*self.puts, (secret_name, secret_value, optional_params, timeout)),
+            ),
+            {"ARN": f"arn:synthetic:{secret_name}"},
+        )
+
+    def delete(
+        self,
+        secret_name: str,
+        recovery_window_in_days: int | None,
+        optional_params: OptionalParams,
+        timeout: Timeout,
+    ) -> tuple["StatefulSecretStorage", dict[str, object]]:
+        values: Final = MappingProxyType({name: value for name, value in self.values.items() if name != secret_name})
+        return (
+            replace(
+                self,
+                values=values,
+                events=(*self.events, f"delete:{secret_name}"),
+                deletions=(*self.deletions, (secret_name, recovery_window_in_days, optional_params, timeout)),
+            ),
+            {},
+        )
+
+
+class StatefulAWSSecretsManager(AWSSecretsManagerV2):
+    def __init__(self, storage: StatefulSecretStorage) -> None:
+        super().__init__()
+        self.storage = storage
+
+    async def async_read_secret(
+        self,
+        secret_name: str,
+        optional_params: OptionalParams = None,
+        timeout: Timeout = None,
+        primary_secret_name: str | None = None,
+    ) -> str | None:
+        storage, secret_value = self.storage.read(secret_name)
+        self.storage = storage
+        return secret_value
+
+    async def async_write_secret(
+        self,
+        secret_name: str,
+        secret_value: str,
+        description: str | None = None,
+        optional_params: OptionalParams = None,
+        timeout: Timeout = None,
+        tags: object = None,
+    ) -> dict[str, str]:
+        storage, response = self.storage.write(secret_name, secret_value, description, optional_params, timeout)
+        self.storage = storage
+        return response
+
+    async def async_put_secret_value(
+        self,
+        secret_name: str,
+        secret_value: str,
+        optional_params: OptionalParams = None,
+        timeout: Timeout = None,
+    ) -> dict[str, str]:
+        storage, response = self.storage.put(secret_name, secret_value, optional_params, timeout)
+        self.storage = storage
+        return response
+
+    async def async_delete_secret(
+        self,
+        secret_name: str,
+        recovery_window_in_days: int | None = 7,
+        optional_params: OptionalParams = None,
+        timeout: Timeout = None,
+    ) -> dict[str, object]:
+        storage, response = self.storage.delete(secret_name, recovery_window_in_days, optional_params, timeout)
+        self.storage = storage
+        return response
+
+
 @pytest.mark.asyncio
-async def test_rotate_secret_same_name_uses_put_secret_value():
-    """
-    When current_secret_name == new_secret_name, async_rotate_secret should
-    call PutSecretValue (async_put_secret_value) instead of create+delete.
-    """
-    secret_name = "litellm/tenant/litellm-metis-key"
-    new_value = "sk-new-rotated-key-value"
-
-    with patch.object(
-        AWSSecretsManagerV2,
-        "async_put_secret_value",
-        new_callable=AsyncMock,
-        return_value={"ARN": "arn:aws:secretsmanager:us-east-1:123:secret:test"},
-    ) as mock_put:
-        with patch.object(
-            AWSSecretsManagerV2,
-            "async_write_secret",
-            new_callable=AsyncMock,
-        ) as mock_write:
-            with patch.object(
-                AWSSecretsManagerV2,
-                "async_delete_secret",
-                new_callable=AsyncMock,
-            ) as mock_delete:
-                manager = AWSSecretsManagerV2()
-                result = await manager.async_rotate_secret(
-                    current_secret_name=secret_name,
-                    new_secret_name=secret_name,
-                    new_secret_value=new_value,
-                )
-
-    # PutSecretValue (in-place update) should be called
-    mock_put.assert_called_once_with(
-        secret_name=secret_name,
-        secret_value=new_value,
-        optional_params=None,
-        timeout=None,
+async def test_rotate_secret_same_name_writes_requested_value_in_place() -> None:
+    secret_name: Final = "synthetic/current-alias"
+    new_value: Final = "synthetic-new-value"
+    unrelated_secret_name: Final = "synthetic/unrelated"
+    unrelated_value: Final = "synthetic-unrelated-value"
+    storage: Final = StatefulSecretStorage(
+        MappingProxyType(
+            {
+                secret_name: "synthetic-old-value",
+                unrelated_secret_name: unrelated_value,
+            }
+        )
     )
-    # Create + delete should NOT be called
-    mock_write.assert_not_called()
-    mock_delete.assert_not_called()
-    assert result["ARN"] == "arn:aws:secretsmanager:us-east-1:123:secret:test"
+    manager: Final = StatefulAWSSecretsManager(storage)
+
+    assert await manager.async_rotate_secret(
+        current_secret_name=secret_name,
+        new_secret_name=secret_name,
+        new_secret_value=new_value,
+    ) == {"ARN": f"arn:synthetic:{secret_name}"}
+
+    assert manager.storage.events == (f"put:{secret_name}",)
+    assert manager.storage.puts == ((secret_name, new_value, None, None),)
+    assert manager.storage.writes == ()
+    assert manager.storage.deletions == ()
+    assert manager.storage.values[secret_name] == new_value
+    assert manager.storage.values[unrelated_secret_name] == unrelated_value
 
 
 @pytest.mark.asyncio
-async def test_rotate_secret_different_names_uses_create_delete():
-    """
-    When current_secret_name != new_secret_name, async_rotate_secret should
-    use base class logic (create new, delete old).
-    """
-    current_name = "litellm/old-key-alias"
-    new_name = "litellm/virtual-key-new-token-id"
-    new_value = "sk-new-key-value"
-
-    with patch.object(
-        AWSSecretsManagerV2,
-        "async_read_secret",
-        new_callable=AsyncMock,
-        side_effect=["sk-old-value", new_value],  # read old, then read new
-    ):
-        with patch.object(
-            AWSSecretsManagerV2,
-            "async_write_secret",
-            new_callable=AsyncMock,
-            return_value={"ARN": "arn:new"},
-        ) as mock_write:
-            with patch.object(
-                AWSSecretsManagerV2,
-                "async_delete_secret",
-                new_callable=AsyncMock,
-                return_value={},
-            ) as mock_delete:
-                with patch.object(
-                    AWSSecretsManagerV2,
-                    "async_put_secret_value",
-                    new_callable=AsyncMock,
-                ) as mock_put:
-                    manager = AWSSecretsManagerV2()
-                    await manager.async_rotate_secret(
-                        current_secret_name=current_name,
-                        new_secret_name=new_name,
-                        new_secret_value=new_value,
-                    )
-
-    # PutSecretValue should NOT be called (different names)
-    mock_put.assert_not_called()
-    # Create + delete should be called
-    mock_write.assert_called_once()
-    mock_delete.assert_called_once_with(
-        secret_name=current_name,
-        recovery_window_in_days=7,
-        optional_params=None,
-        timeout=None,
+async def test_rotate_secret_different_names_persists_requested_value_and_deletes_old_alias() -> None:
+    current_name: Final = "synthetic/old-alias"
+    new_name: Final = "synthetic/new-alias"
+    new_value: Final = "synthetic-new-value"
+    unrelated_secret_name: Final = "synthetic/unrelated"
+    unrelated_value: Final = "synthetic-unrelated-value"
+    storage: Final = StatefulSecretStorage(
+        MappingProxyType(
+            {
+                current_name: "synthetic-old-value",
+                unrelated_secret_name: unrelated_value,
+            }
+        )
     )
+    manager: Final = StatefulAWSSecretsManager(storage)
+
+    await manager.async_rotate_secret(
+        current_secret_name=current_name,
+        new_secret_name=new_name,
+        new_secret_value=new_value,
+    )
+
+    assert manager.storage.events == (
+        f"read:{current_name}",
+        f"write:{new_name}",
+        f"read:{new_name}",
+        f"delete:{current_name}",
+    )
+    assert manager.storage.reads == (current_name, new_name)
+    assert manager.storage.writes == ((new_name, new_value, f"Rotated from {current_name}", None, None),)
+    assert manager.storage.puts == ()
+    assert manager.storage.deletions == ((current_name, 7, None, None),)
+    assert manager.storage.values[new_name] == new_value
+    assert current_name not in manager.storage.values
+    assert manager.storage.values[unrelated_secret_name] == unrelated_value

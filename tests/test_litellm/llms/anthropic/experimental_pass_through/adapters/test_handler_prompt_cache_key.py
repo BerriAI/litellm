@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -10,6 +11,7 @@ from litellm.llms.anthropic.experimental_pass_through.adapters.handler import (
 )
 
 MESSAGES = [{"role": "user", "content": "hello"}]
+CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
 
 
 def _prepare(model: str, extra_kwargs: dict[str, object], thinking: dict[str, object] | None = None):
@@ -17,7 +19,7 @@ def _prepare(model: str, extra_kwargs: dict[str, object], thinking: dict[str, ob
         max_tokens=1024,
         messages=MESSAGES,
         model=model,
-        metadata={"user_id": "session-abc"},
+        metadata={"user_id": CLAUDE_CODE_USER_ID},
         thinking=thinking,
         extra_kwargs=extra_kwargs,
     )
@@ -26,7 +28,7 @@ def _prepare(model: str, extra_kwargs: dict[str, object], thinking: dict[str, ob
 
 def test_prepare_completion_kwargs_derives_prompt_cache_key_for_openai_provider():
     completion_kwargs = _prepare("openai/gpt-5.6-luna", {"custom_llm_provider": "openai"})
-    assert completion_kwargs["user"] == "session-abc"
+    assert completion_kwargs["user"] == CLAUDE_CODE_USER_ID
     assert completion_kwargs["prompt_cache_key"] == "session-abc"
 
 
@@ -35,7 +37,7 @@ def test_prepare_completion_kwargs_prefers_explicit_prompt_cache_key_over_derive
         "openai/gpt-5.6-luna",
         {"custom_llm_provider": "openai", "prompt_cache_key": "explicit-key"},
     )
-    assert completion_kwargs["user"] == "session-abc"
+    assert completion_kwargs["user"] == CLAUDE_CODE_USER_ID
     assert completion_kwargs["prompt_cache_key"] == "explicit-key"
 
 
@@ -50,13 +52,13 @@ def test_prepare_completion_kwargs_skips_prompt_cache_key_without_provider_suppo
     model: str, extra_kwargs: dict[str, object]
 ):
     completion_kwargs = _prepare(model, extra_kwargs)
-    assert completion_kwargs["user"] == "session-abc"
+    assert completion_kwargs["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in completion_kwargs
 
 
 def test_prepare_completion_kwargs_skips_prompt_cache_key_for_chained_litellm_proxy():
     completion_kwargs = _prepare("litellm_proxy/xai", {"custom_llm_provider": "litellm_proxy"})
-    assert completion_kwargs["user"] == "session-abc"
+    assert completion_kwargs["user"] == CLAUDE_CODE_USER_ID
     assert "prompt_cache_key" not in completion_kwargs
 
 

@@ -1,6 +1,7 @@
 import asyncio
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final, cast
 
@@ -181,7 +182,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
 
         # cast because StandardLoggingMetadata is a TypedDict; we iterate it
         # as a generic mapping below.
-        metadata: Final[dict[str, Any]] = cast(dict[str, Any], log.get("metadata") or {})
+        metadata: Final[Mapping[str, object]] = cast(dict[str, Any], log.get("metadata") or {})
 
         # Backwards-compat: team/user/model_group preserved regardless of allowlist.
         if metadata.get("user_api_key_alias"):
@@ -233,7 +234,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         tags[key] = normalize_datadog_tag_value(value)
 
     @staticmethod
-    def _add_tag(tags: dict[str, str], key: str, value: Any) -> None:
+    def _add_tag(tags: dict[str, str], key: str, value: object) -> None:
         if value:
             tags[key] = str(value)
 

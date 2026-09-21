@@ -1,6 +1,7 @@
 #### What this does ####
 #   identifies lowest tpm deployment
 import random
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -11,6 +12,7 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
 from litellm.utils import get_utc_datetime, print_verbose
@@ -209,6 +211,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update TPM/RPM usage on success
@@ -249,6 +253,8 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+            return
         try:
             """
             Update TPM usage on success
@@ -350,9 +356,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         model_group: str,
         healthy_deployments: list,
         tpm_keys: list,
-        tpm_values: list | None,
+        tpm_values: Sequence | None,
         rpm_keys: list,
-        rpm_values: list | None,
+        rpm_values: Sequence | None,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
     ) -> dict | None:

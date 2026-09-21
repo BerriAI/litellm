@@ -626,7 +626,7 @@ async def test_direct_reconnect_probe_success_clears_writer_unavailable(
         database_url="mock://test", proxy_logging_obj=mock_proxy_logging
     )
     writer = MagicMock()
-    writer.query_raw = AsyncMock(return_value=[{"result": 1}])
+    writer.query_raw = AsyncMock(return_value=[{"transaction_read_only": "off"}])
     reader = MagicMock()
     routing = RoutingPrismaWrapper(writer=writer, reader=reader)
     routing._writer_unavailable = True
@@ -636,5 +636,5 @@ async def test_direct_reconnect_probe_success_clears_writer_unavailable(
     with patch.dict(os.environ, {"DATABASE_URL": "postgresql://test"}):
         await client._run_reconnect_cycle(timeout_seconds=5.0)
 
-    writer.query_raw.assert_awaited_once_with("SELECT 1")
+    writer.query_raw.assert_awaited_once_with("SELECT current_setting('transaction_read_only') AS transaction_read_only")
     assert routing.writer_unavailable is False

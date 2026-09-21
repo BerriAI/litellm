@@ -4,8 +4,10 @@ https://docs.cohere.com/reference/rerank
 
 """
 
-from pydantic import BaseModel, PrivateAttr
-from typing_extensions import Required, TypedDict
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, PrivateAttr
+from typing_extensions import ReadOnly, Required, TypedDict
 
 
 class RerankRequest(BaseModel):
@@ -21,6 +23,18 @@ class RerankRequest(BaseModel):
     # (e.g. hosted vLLM / Qwen3-Reranker, DeepInfra). Omitted from the outgoing
     # request when None, so this is fully backward-compatible.
     instruction: str | None = None
+    truncate_prompt_tokens: int | None = None
+    truncation_side: Literal["left", "right"] | None = None
+    max_tokens_per_query: int | None = None
+
+
+class HostedVLLMRerankTruncationParams(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    truncate_prompt_tokens: int | None = None
+    truncation_side: Literal["left", "right"] | None = None
+    max_tokens_per_query: int | None = None
+    max_tokens_per_doc: int | None = None
 
 
 class OptionalRerankParams(TypedDict, total=False):
@@ -32,6 +46,9 @@ class OptionalRerankParams(TypedDict, total=False):
     max_chunks_per_doc: int | None
     max_tokens_per_doc: int | None
     instruction: str | None
+    truncate_prompt_tokens: ReadOnly[int | None]
+    truncation_side: ReadOnly[Literal["left", "right"] | None]
+    max_tokens_per_query: ReadOnly[int | None]
 
 
 class RerankBilledUnits(TypedDict, total=False):

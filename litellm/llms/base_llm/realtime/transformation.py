@@ -1,7 +1,10 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from collections.abc import Mapping, Sequence
+from types import TracebackType
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
+from typing_extensions import Self
 
 from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
@@ -18,6 +21,23 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class RealtimeBackend(Protocol):
+    async def __aenter__(self) -> Self: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    async def send(self, message: str | bytes) -> None: ...
+
+    async def recv(self, decode: bool | None = None) -> str | bytes: ...
+
+    async def close(self) -> None: ...
 
 
 class BaseRealtimeConfig(ABC):
@@ -54,8 +74,11 @@ class BaseRealtimeConfig(ABC):
         message: str,
         model: str,
         session_configuration_request: str | None = None,
-    ) -> list[str]:
+    ) -> Sequence[str | bytes]:
         pass
+
+    async def pace_backend_send(self, message: bytes) -> None:
+        return None
 
     def is_setup_message(self, msg_obj: dict) -> bool:
         return False
@@ -74,12 +97,15 @@ class BaseRealtimeConfig(ABC):
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         return None
 
+    async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
+        return None
+
     def transform_session_created_event(
         self,
         model: str,
         logging_session_id: str,
         session_configuration_request: str | None = None,
-    ) -> dict | OpenAIRealtimeStreamSessionEvents | None:
+    ) -> Mapping[str, object] | OpenAIRealtimeStreamSessionEvents | None:
         """
         Optional hook for providers that defer session setup until client `session.update`.
 

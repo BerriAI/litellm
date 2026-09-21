@@ -3,6 +3,7 @@ import asyncio
 import gc
 import json
 import os
+import socket
 import sys
 import tracemalloc
 from collections import Counter
@@ -147,8 +148,11 @@ async def memory_usage_in_mem_cache(
             llm_router.cache.in_memory_cache.ttl_dict
         )
 
-    num_items_in_user_api_key_cache: Final = len(user_api_key_cache.in_memory_cache.cache_dict) + len(
-        user_api_key_cache.in_memory_cache.ttl_dict
+    num_items_in_user_api_key_cache: Final = (
+        len(user_api_key_cache.in_memory_cache.cache_dict)
+        + len(user_api_key_cache.in_memory_cache.ttl_dict)
+        + len(user_api_key_cache.key_object_cache.in_memory_cache.cache_dict)
+        + len(user_api_key_cache.key_object_cache.in_memory_cache.ttl_dict)
     )
 
     num_items_in_proxy_logging_obj_cache: Final = len(
@@ -189,6 +193,8 @@ async def memory_usage_in_mem_cache_items(
     return {
         "user_api_key_cache": user_api_key_cache.in_memory_cache.cache_dict,
         "user_api_key_ttl": user_api_key_cache.in_memory_cache.ttl_dict,
+        "user_key_object_cache": user_api_key_cache.key_object_cache.in_memory_cache.cache_dict,
+        "user_key_object_ttl": user_api_key_cache.key_object_cache.in_memory_cache.ttl_dict,
         "llm_router_cache": llm_router_in_memory_cache_dict,
         "llm_router_ttl": llm_router_in_memory_ttl_dict,
         "proxy_logging_obj_cache": proxy_logging_obj.internal_usage_cache.dual_cache.in_memory_cache.cache_dict,
@@ -232,6 +238,80 @@ def _process_memory_usage(process: _ProcessHandle) -> _ProcessMemoryUsage:
     )
 
 
+PROC_STATM_PATH: Final = "/proc/self/statm"
+PROC_MEMINFO_PATH: Final = "/proc/meminfo"
+PSUTIL_MISSING_ERROR: Final = "Install psutil for memory monitoring: pip install psutil"
+
+
+class _ProcMemoryInfo(NamedTuple):
+    rss: int
+    vms: int
+
+
+class _ProcFilesystemProcess:
+    """Memory of the running process read from the Linux proc filesystem, for images without psutil."""
+
+    def __init__(
+        self,
+        statm_path: str = PROC_STATM_PATH,
+        meminfo_path: str = PROC_MEMINFO_PATH,
+        page_size: int | None = None,
+    ) -> None:
+        self._statm_path: Final = statm_path
+        self._meminfo_path: Final = meminfo_path
+        self._page_size: Final = os.sysconf("SC_PAGE_SIZE") if page_size is None else page_size
+
+    def memory_info(self) -> _ProcMemoryInfo:
+        with open(self._statm_path, encoding="ascii") as statm:
+            size_pages, resident_pages = statm.read().split()[:2]
+        return _ProcMemoryInfo(rss=int(resident_pages) * self._page_size, vms=int(size_pages) * self._page_size)
+
+    def memory_percent(self) -> float:
+        with open(self._meminfo_path, encoding="ascii") as meminfo:
+            total_kilobytes: Final = next(int(line.split()[1]) for line in meminfo if line.startswith("MemTotal:"))
+        return self.memory_info().rss / (total_kilobytes * 1024) * 100
+
+
+def _process_handle() -> _ProcessHandle | None:
+    try:
+        import psutil
+    except ImportError:
+        return _ProcFilesystemProcess() if os.path.exists(PROC_STATM_PATH) else None
+    return psutil.Process()
+
+
+def _health_status(memory_percent: float) -> str:
+    if memory_percent > 80:
+        return "critical"
+    if memory_percent > 60:
+        return "warning"
+    return "healthy"
+
+
+class _SummaryProcessMemory(TypedDict, total=False):
+    summary: ReadOnly[str]
+    ram_usage_mb: ReadOnly[float]
+    system_memory_percent: ReadOnly[float]
+    error: ReadOnly[str]
+
+
+def _summary_process_memory(process: _ProcessHandle | None) -> tuple[_SummaryProcessMemory, str]:
+    if process is None:
+        missing: Final[_SummaryProcessMemory] = {"error": PSUTIL_MISSING_ERROR}
+        return missing, "healthy"
+    try:
+        usage: Final = _process_memory_usage(process)
+    except Exception as e:
+        unreadable: Final[_SummaryProcessMemory] = {"error": str(e)}
+        return unreadable, "healthy"
+    memory: Final[_SummaryProcessMemory] = {
+        "summary": f"{usage.resident_megabytes:.1f} MB ({usage.percent:.1f}% of system memory)",
+        "ram_usage_mb": round(usage.resident_megabytes, 2),
+        "system_memory_percent": round(usage.percent, 2),
+    }
+    return memory, _health_status(usage.percent)
+
+
 @router.get("/debug/memory/summary", include_in_schema=False)
 async def get_memory_summary(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -241,6 +321,7 @@ async def get_memory_summary(
 
     Returns:
     - worker_pid: Process ID
+    - hostname: Host (the pod on Kubernetes) the worker runs on
     - status: Overall health based on memory usage
     - memory: Process memory usage and RAM info
     - caches: Cache item counts and descriptions
@@ -258,35 +339,7 @@ async def get_memory_summary(
         user_api_key_cache,
     )
 
-    # Get process memory info
-    process_memory = {}
-    health_status = "healthy"
-
-    try:
-        import psutil
-
-        usage: Final = _process_memory_usage(psutil.Process())
-        memory_mb: Final = usage.resident_megabytes
-        memory_percent: Final = usage.percent
-
-        process_memory = {
-            "summary": f"{memory_mb:.1f} MB ({memory_percent:.1f}% of system memory)",
-            "ram_usage_mb": round(memory_mb, 2),
-            "system_memory_percent": round(memory_percent, 2),
-        }
-
-        # Check memory health status
-        if memory_percent > 80:
-            health_status = "critical"
-        elif memory_percent > 60:
-            health_status = "warning"
-        else:
-            health_status = "healthy"
-
-    except ImportError:
-        process_memory["error"] = "Install psutil for memory monitoring: pip install psutil"
-    except Exception as e:
-        process_memory["error"] = str(e)
+    process_memory, health_status = _summary_process_memory(_process_handle())
 
     # Get cache information
     caches: Final[dict[str, object]] = {}
@@ -294,7 +347,9 @@ async def get_memory_summary(
 
     try:
         # User API key cache
-        user_cache_items: Final = len(user_api_key_cache.in_memory_cache.cache_dict)
+        user_cache_items: Final = len(user_api_key_cache.in_memory_cache.cache_dict) + len(
+            user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
+        )
         total_cache_items += user_cache_items
         caches["user_api_keys"] = {
             "count": user_cache_items,
@@ -340,6 +395,7 @@ async def get_memory_summary(
 
     return {
         "worker_pid": os.getpid(),
+        "hostname": socket.gethostname(),
         "status": health_status,
         "memory": process_memory,
         "caches": {
@@ -429,10 +485,16 @@ def _get_cache_memory_stats(
     cache_stats: Final[dict[str, object]] = {}
     try:
         # User API key cache
-        user_cache_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.cache_dict)
-        user_ttl_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.ttl_dict)
+        key_object_in_memory_cache: Final = user_api_key_cache.key_object_cache.in_memory_cache
+        user_cache_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.cache_dict) + sys.getsizeof(
+            key_object_in_memory_cache.cache_dict
+        )
+        user_ttl_size: Final = sys.getsizeof(user_api_key_cache.in_memory_cache.ttl_dict) + sys.getsizeof(
+            key_object_in_memory_cache.ttl_dict
+        )
         cache_stats["user_api_key_cache"] = {
-            "num_items": len(user_api_key_cache.in_memory_cache.cache_dict),
+            "num_items": len(user_api_key_cache.in_memory_cache.cache_dict)
+            + len(key_object_in_memory_cache.cache_dict),
             "cache_dict_size_bytes": user_cache_size,
             "ttl_dict_size_bytes": user_ttl_size,
             "total_size_mb": round((user_cache_size + user_ttl_size) / (1024 * 1024), 2),

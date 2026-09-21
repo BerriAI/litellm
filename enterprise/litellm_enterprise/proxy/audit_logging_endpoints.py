@@ -48,6 +48,18 @@ def _build_json_field_or_condition(json_key: str, value: str) -> dict[str, objec
     }
 
 
+def _build_search_condition(search: str) -> dict[str, object]:
+    """Match a row whose id, changed_by, object_id, or changed_by_api_key equals the search value."""
+    return {
+        "OR": (
+            {"id": search},
+            {"changed_by": search},
+            {"object_id": search},
+            {"changed_by_api_key": search},
+        )
+    }
+
+
 @router.get(
     "/audit",
     tags=["Audit Logging"],
@@ -82,6 +94,10 @@ async def get_audit_logs(
     object_key_hash: str | None = Query(
         None,
         description="Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only)",
+    ),
+    search: str | None = Query(
+        None,
+        description="Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value",
     ),
     # Sorting parameters
     sort_by: str | None = Query(
@@ -118,6 +134,11 @@ async def get_audit_logs(
         *([_build_json_field_or_condition("token", object_key_hash)] if object_key_hash else []),
     ]
 
+    and_conditions: Final[tuple[dict[str, object], ...]] = (
+        *json_field_conditions,
+        *((_build_search_condition(search),) if search else ()),
+    )
+
     # Build filter conditions
     where_conditions: Final[dict[str, object]] = {
         **({"changed_by": changed_by} if changed_by else {}),
@@ -126,14 +147,14 @@ async def get_audit_logs(
         **({"table_name": table_name} if table_name else {}),
         **({"object_id": object_id} if object_id else {}),
         **({"updated_at": date_filter} if start_date or end_date else {}),
-        **({"AND": json_field_conditions} if json_field_conditions else {}),
+        **({"AND": and_conditions} if and_conditions else {}),
     }
 
     order_by: Final[dict[str, str]] = (
         {sort_by: sort_order} if sort_by and isinstance(sort_by, str) else {"updated_at": sort_order}
     )
 
-    audit_log_table: Final[TableActions["prisma_models.LiteLLM_AuditLog"]] = AuditLogRepository(prisma_client).table
+    audit_log_table: Final[TableActions[prisma_models.LiteLLM_AuditLog]] = AuditLogRepository(prisma_client).table
 
     # Get paginated results
     audit_logs: Final = await audit_log_table.find_many(
@@ -195,7 +216,7 @@ async def get_audit_log_by_id(
             detail={"message": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    audit_log_table: Final[TableActions["prisma_models.LiteLLM_AuditLog"]] = AuditLogRepository(prisma_client).table
+    audit_log_table: Final[TableActions[prisma_models.LiteLLM_AuditLog]] = AuditLogRepository(prisma_client).table
 
     # Get the audit log by ID
     audit_log: Final = await audit_log_table.find_unique(where={"id": id})

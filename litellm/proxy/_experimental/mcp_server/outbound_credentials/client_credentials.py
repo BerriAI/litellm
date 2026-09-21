@@ -34,9 +34,11 @@ from dataclasses import dataclass
 from typing import Annotated, Final, Literal
 
 import httpx
+import httpx2
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InMemoryTokenCacheBackend,
     OAuthToken,
@@ -101,6 +103,11 @@ async def post_client_credentials_grant(
     from litellm.llms.custom_httpx.http_handler import (  # noqa: PLC0415  # defer heavy handler import to call time
         get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # handler factory params are coarsely typed
     )
+    from litellm.proxy._experimental.mcp_server.mcp_debug import (  # noqa: PLC0415  # diagnostics import credential enums through this package
+        describe_upstream_http_failure,
+        describe_upstream_response,
+        safe_upstream_url,
+    )
     from litellm.types.llms.custom_http import httpxSpecialProvider  # noqa: PLC0415  # deferred with the handler import
 
     try:
@@ -110,14 +117,27 @@ async def post_client_credentials_grant(
         )
     except httpx.HTTPStatusError as status_err:
         status_code: Final = status_err.response.status_code
+        verbose_logger.warning(
+            "OAuth2 client_credentials token request denied:\n  upstream exchange: %s",
+            describe_upstream_http_failure(status_err),
+        )
         return TokenEndpointDenied(status_code=status_code, detail=f"token endpoint returned HTTP {status_code}")
     except Exception as exc:  # noqa: BLE001  # any transport failure is the same outcome: unreachable
-        return TokenEndpointUnreachable(detail=str(exc))
+        verbose_logger.warning(
+            "OAuth2 client_credentials POST %s failed: %s", safe_upstream_url(httpx.URL(url)), type(exc).__name__
+        )
+        return TokenEndpointUnreachable(detail=type(exc).__name__)
     try:
         body: Final = _TOKEN_BODY_ADAPTER.validate_json(response.content)
     except ValidationError:
+        verbose_logger.warning("OAuth2 client_credentials invalid response: %s", describe_upstream_response(response))
         return TokenEndpointDenied(
             status_code=response.status_code, detail="token endpoint returned a non-JSON-object body"
+        )
+    access_token: Final = body.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        verbose_logger.warning(
+            "OAuth2 client_credentials response has no access token | %s", describe_upstream_response(response)
         )
     return TokenEndpointSuccess(body=body)
 
@@ -318,7 +338,7 @@ def _identity_key(config: ClientCredentialsConfig) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-class ClientCredentialsBearerAuth(httpx.Auth):
+class ClientCredentialsBearerAuth(httpx2.Auth):
     """Bearer auth that retries an upstream 401 exactly once with a freshly minted token.
 
     The initial token was already resolved (so config/IdP failures surfaced as typed errors
@@ -337,7 +357,7 @@ class ClientCredentialsBearerAuth(httpx.Auth):
         self._access_token = SecretStr(access_token)
         self._refetch = refetch
 
-    async def async_auth_flow(self, request: httpx.Request) -> AsyncGenerator[httpx.Request, httpx.Response]:
+    async def async_auth_flow(self, request: httpx2.Request) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
         token: Final = self._access_token.get_secret_value()
         name, value = self._carrier.header(token)
         request.headers[name] = value
@@ -352,5 +372,5 @@ class ClientCredentialsBearerAuth(httpx.Auth):
         request.headers[fresh_name] = fresh_value
         yield request
 
-    def sync_auth_flow(self, request: httpx.Request) -> Generator[httpx.Request, httpx.Response, None]:
-        raise RuntimeError("ClientCredentialsBearerAuth only supports async httpx clients")
+    def sync_auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
+        raise RuntimeError("ClientCredentialsBearerAuth only supports async httpx2 clients")

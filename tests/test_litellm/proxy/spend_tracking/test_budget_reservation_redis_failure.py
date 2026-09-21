@@ -41,6 +41,15 @@ class _FlakyRedisCache:
         self._store[key] = float(value)
         return True
 
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        results = []
+        for op in increment_list:
+            results.append(await self.async_increment(op["key"], op["increment_value"]))
+        return results
+
+    def get_ttl(self, **kwargs):
+        return None
+
 
 @pytest.mark.asyncio
 async def test_direct_increment_runs_when_reservation_reconcile_hits_redis_failure(

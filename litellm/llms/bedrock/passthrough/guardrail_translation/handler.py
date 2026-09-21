@@ -89,11 +89,24 @@ def _extract_converse_texts(
     top-level ``text`` blocks this scans the arbitrary-JSON fields a caller can
     hide prompt content in -- ``toolUse.input`` and
     ``toolResult.content[].json`` (alongside ``toolResult.content[].text``) --
-    as well as the request-level fields still forwarded to Bedrock that a caller
-    can route blocked content through: ``toolConfig.tools`` (tool names,
-    descriptions and input schemas) and ``additionalModelRequestFields``. Tool
-    message blocks are skipped when tool messages are excluded, but tool
-    definitions are always scanned to match the chat-completions guardrail path.
+    as well as ``additionalModelRequestFields``, a free-form model-parameter bag
+    with no schema that a caller can route blocked content through.
+
+    ``toolConfig.tools`` is deliberately NOT scanned. Tool definitions are
+    app-authored config, so their names, descriptions and JSON-schema strings
+    ("object", property names, titles, type names, enum values) would each reach
+    the guardrail as a separate INPUT item, producing false positives and
+    inflating guardrail usage for a request whose only prompt is one user
+    message. No other guardrail translation handler puts tool definitions in
+    ``texts``; the chat and messages handlers carry them in the structured
+    ``tools`` input instead, which this handler does not populate because a
+    Bedrock ``toolSpec`` is not the OpenAI tool shape those consumers expect.
+
+    ``additionalModelRequestFields`` is treated differently on purpose. Bedrock
+    gives ``toolConfig.tools`` a fixed schema whose contents are tool metadata by
+    contract, while ``additionalModelRequestFields`` is free-form and defined by
+    the target model, so what it carries cannot be classified without knowing
+    that model. Scanning it stays the fail-closed default.
     """
     holders: Final[list[_StringHolder]] = []
 
@@ -120,10 +133,6 @@ def _extract_converse_texts(
                     if isinstance(inner, dict):
                         _collect_block_text(inner, holders)
                         _collect_strings(inner.get("json"), holders)
-
-    tool_config: Final = body.get("toolConfig")
-    if isinstance(tool_config, dict):
-        _collect_strings(tool_config.get("tools"), holders)
 
     _collect_strings(body.get("additionalModelRequestFields"), holders)
 

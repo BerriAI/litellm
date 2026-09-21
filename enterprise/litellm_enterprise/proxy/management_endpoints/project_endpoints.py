@@ -11,7 +11,7 @@ Endpoints for /project operations
 #### PROJECT MANAGEMENT ####
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,7 +22,11 @@ from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
+from litellm.proxy.management_endpoints.common_utils import (
+    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # shared owner of team-admin membership
+    _set_object_metadata_field,
+)
+from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
 from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
@@ -82,37 +86,38 @@ async def _check_user_permission_for_project(
     user_api_key_dict: UserAPIKeyAuth,
     team_id: str | None,
     prisma_client: PrismaClient,
+    general_settings: Mapping[str, object],
     require_admin: bool = False,
     team_object: LiteLLM_TeamTable | None = None,
 ) -> bool:
     """
     Check if user has permission to manage a project.
 
-    Returns True if user is proxy admin or team admin (when team_id provided).
+    Returns True if user is proxy admin, or a team admin of ``team_id`` when the
+    ``team_admin_editable_team_fields`` setting grants team admins the ``projects`` permission.
     If require_admin=True, only proxy admins are allowed.
 
     If team_object is provided, it will be used instead of fetching from DB
     (avoids duplicate DB queries when team was already fetched for validation).
     """
-    is_proxy_admin = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    is_proxy_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
-    if require_admin:
+    if require_admin or is_proxy_admin:
         return is_proxy_admin
 
-    if is_proxy_admin:
-        return True
-
-    if not team_id or not user_api_key_dict.user_id:
+    if not team_id or not user_api_key_dict.user_id or not team_admin_may_manage_projects(general_settings):
         return False
 
-    team = team_object
-    if team is None:
-        team = await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+    team_row: Final = (
+        team_object
+        if team_object is not None
+        else await _team_table(prisma_client).find_unique(where={"team_id": team_id})
+    )
+    if team_row is None:
+        return False
 
-    if team and team.admins:
-        return user_api_key_dict.user_id in team.admins
-
-    return False
+    team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
+    return _is_user_team_admin(user_api_key_dict, team) or user_api_key_dict.user_id in (team.admins or [])
 
 
 async def _validate_team_exists(
@@ -531,6 +536,7 @@ async def new_project(
             user_api_key_dict=user_api_key_dict,
             team_id=data.team_id,
             prisma_client=prisma_client,
+            general_settings=general_settings,
             team_object=LiteLLM_TeamTable.model_validate(team_object.model_dump()),
         )
 
@@ -735,6 +741,7 @@ async def update_project(
             user_api_key_dict=user_api_key_dict,
             team_id=existing_project.team_id,
             prisma_client=prisma_client,
+            general_settings=general_settings,
         )
 
         if not has_permission:
@@ -751,6 +758,7 @@ async def update_project(
                 user_api_key_dict=user_api_key_dict,
                 team_id=data.team_id,
                 prisma_client=prisma_client,
+                general_settings=general_settings,
                 team_object=(
                     LiteLLM_TeamTable.model_validate(target_team_obj.model_dump()) if target_team_obj else None
                 ),
@@ -780,7 +788,10 @@ async def update_project(
 
         # Handle budget updates
         budget_fields = LiteLLM_BudgetTable.model_fields.keys()
-        budget_updates = {k: v for k, v in update_data.items() if k in budget_fields}
+        budget_updates = {
+            **{k: v for k, v in update_data.items() if k in budget_fields},
+            **({"max_budget": None} if "max_budget" in data.model_fields_set and data.max_budget is None else {}),
+        }
 
         if budget_updates and existing_project.budget_id:
             # Update existing budget
@@ -874,7 +885,7 @@ async def delete_project(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import general_settings, premium_user, prisma_client, user_api_key_cache
 
     try:
         if not premium_user:
@@ -896,6 +907,7 @@ async def delete_project(
             user_api_key_dict=user_api_key_dict,
             team_id=None,
             prisma_client=prisma_client,
+            general_settings=general_settings,
             require_admin=True,
         )
 

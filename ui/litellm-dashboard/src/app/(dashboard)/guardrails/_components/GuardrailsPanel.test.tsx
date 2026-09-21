@@ -1,7 +1,8 @@
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { type UrlUpdateEvent } from "nuqs/adapters/testing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import GuardrailsPanel from "./GuardrailsPanel";
 import { getGuardrailsList, deleteGuardrailCall } from "@/components/networking";
+import { fireEvent, renderWithProviders, screen, waitFor, within } from "@/../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   getGuardrailsList: vi.fn(),
@@ -15,16 +16,21 @@ vi.mock("./add_guardrail_form", () => ({
 
 vi.mock("./guardrail_table", () => ({
   __esModule: true,
-  default: ({ guardrailsList, onDeleteClick }: any) => (
+  default: ({ guardrailsList, onDeleteClick, onGuardrailClick }: any) => (
     <div>
       <div>Mock Guardrail Table</div>
       {guardrailsList.length > 0 && (
-        <button
-          data-testid="delete-button"
-          onClick={() => onDeleteClick(guardrailsList[0].guardrail_id, guardrailsList[0].guardrail_name)}
-        >
-          Delete
-        </button>
+        <>
+          <button
+            data-testid="delete-button"
+            onClick={() => onDeleteClick(guardrailsList[0].guardrail_id, guardrailsList[0].guardrail_name)}
+          >
+            Delete
+          </button>
+          <button data-testid="open-button" onClick={() => onGuardrailClick(guardrailsList[0].guardrail_id)}>
+            Open
+          </button>
+        </>
       )}
     </div>
   ),
@@ -32,7 +38,12 @@ vi.mock("./guardrail_table", () => ({
 
 vi.mock("./guardrail_info", () => ({
   __esModule: true,
-  default: () => <div>Mock Guardrail Info View</div>,
+  default: ({ guardrailId, onClose }: { guardrailId: string; onClose: () => void }) => (
+    <div>
+      <div data-testid="guardrail-info-view">Mock Guardrail Info View {guardrailId}</div>
+      <button onClick={onClose}>Close Guardrail Info</button>
+    </div>
+  ),
 }));
 
 vi.mock("./GuardrailTestPlayground", async () => {
@@ -112,7 +123,7 @@ describe("GuardrailsPanel", () => {
   });
 
   it("should render the component", async () => {
-    render(<GuardrailsPanel {...defaultProps} />);
+    renderWithProviders(<GuardrailsPanel {...defaultProps} />);
     expect(screen.getByText("Guardrails")).toBeInTheDocument();
     // Activate the Guardrails tab so its content (including the Add button) is rendered
     fireEvent.click(screen.getByText("Guardrails"));
@@ -120,7 +131,7 @@ describe("GuardrailsPanel", () => {
   });
 
   it("should delete the clicked guardrail after confirming in the modal", async () => {
-    render(<GuardrailsPanel {...defaultProps} />);
+    renderWithProviders(<GuardrailsPanel {...defaultProps} />);
     fireEvent.click(screen.getByText("Guardrails"));
 
     fireEvent.click(await screen.findByTestId("delete-button"));
@@ -139,14 +150,14 @@ describe("GuardrailsPanel", () => {
   });
 
   it("should mount every tab panel up front so panel state survives tab switches", async () => {
-    render(<GuardrailsPanel {...defaultProps} />);
+    renderWithProviders(<GuardrailsPanel {...defaultProps} />);
 
     expect(await screen.findByLabelText("playground draft")).toBeInTheDocument();
     expect(screen.getByText("Mock Team Guardrails Tab")).toBeInTheDocument();
   });
 
   it("should keep test playground state when switching tabs away and back", async () => {
-    render(<GuardrailsPanel {...defaultProps} />);
+    renderWithProviders(<GuardrailsPanel {...defaultProps} />);
 
     fireEvent.click(screen.getByText("Test Playground"));
 
@@ -161,7 +172,7 @@ describe("GuardrailsPanel", () => {
   });
 
   it("should not delete anything when the modal is cancelled", async () => {
-    render(<GuardrailsPanel {...defaultProps} />);
+    renderWithProviders(<GuardrailsPanel {...defaultProps} />);
     fireEvent.click(screen.getByText("Guardrails"));
 
     fireEvent.click(await screen.findByTestId("delete-button"));
@@ -170,5 +181,43 @@ describe("GuardrailsPanel", () => {
     fireEvent.click(modal.getByRole("button", { name: "Cancel" }));
 
     expect(mockDeleteGuardrailCall).not.toHaveBeenCalled();
+  });
+
+  describe("guardrail detail deep link (?guardrail=)", () => {
+    it("should open the guardrail info view directly from a ?guardrail= deep link", async () => {
+      renderWithProviders(<GuardrailsPanel {...defaultProps} />, { searchParams: "?guardrail=test-guardrail-1" });
+
+      expect(await screen.findByTestId("guardrail-info-view")).toHaveTextContent("test-guardrail-1");
+      expect(screen.queryByText("Mock Guardrail Table")).not.toBeInTheDocument();
+    });
+
+    it("should push ?guardrail= as a new history entry when a guardrail row is clicked", async () => {
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      renderWithProviders(<GuardrailsPanel {...defaultProps} />, { onUrlUpdate });
+
+      fireEvent.click(await screen.findByTestId("open-button"));
+
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      const lastUpdate = onUrlUpdate.mock.calls.at(-1)![0];
+      expect(lastUpdate.searchParams.get("guardrail")).toBe("test-guardrail-1");
+      expect(lastUpdate.options.history).toBe("push");
+      expect(await screen.findByTestId("guardrail-info-view")).toHaveTextContent("test-guardrail-1");
+    });
+
+    it("should clear ?guardrail= by replacing history when the info view is closed", async () => {
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      renderWithProviders(<GuardrailsPanel {...defaultProps} />, {
+        searchParams: "?guardrail=test-guardrail-1",
+        onUrlUpdate,
+      });
+
+      fireEvent.click(await screen.findByRole("button", { name: "Close Guardrail Info" }));
+
+      await waitFor(() => expect(onUrlUpdate).toHaveBeenCalled());
+      const lastUpdate = onUrlUpdate.mock.calls.at(-1)![0];
+      expect(lastUpdate.searchParams.has("guardrail")).toBe(false);
+      expect(lastUpdate.options.history).toBe("replace");
+      expect(await screen.findByText("Mock Guardrail Table")).toBeInTheDocument();
+    });
   });
 });
