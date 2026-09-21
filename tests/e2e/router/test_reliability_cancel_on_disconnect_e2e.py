@@ -9,11 +9,13 @@ answers the key and warms its auth path. The test then asks for an answer far
 longer than CLIENT_HANGS_UP_AFTER_SECONDS of generation, retries off, and hangs up
 that many seconds in: late enough that the proxy has handed the call to Azure (a
 hang-up before the provider call is in flight cancels nothing the router could
-bench, so the cell would pass vacuously), and should the proxy ever answer first
-the cell fails out loud naming the window instead of passing. After the cooldown
-suite's replica propagation window, every one of the next calls has to come back
-200 from the Azure deployment itself, named in x-litellm-model-id; a single answer
-from the backup means the hang-up was booked as a failure.
+bench, so the cell would pass vacuously). An answer that comes back inside the
+window proves nothing and benches nothing either, since a success never counts
+against the deployment, so the cell asks again up to HANG_UP_ATTEMPTS times and
+fails out loud naming the window only when every ask came back early. After the
+cooldown suite's replica propagation window, every one of the next calls has to
+come back 200 from the Azure deployment itself, named in x-litellm-model-id; a
+single answer from the backup means the hang-up was booked as a failure.
 
 The test reads `cancel_on_disconnect` back from the proxy first: without the flag
 the hang-up cancels nothing and the cell would pass vacuously.
@@ -39,7 +41,8 @@ from reliability_support import (
 
 pytestmark = pytest.mark.e2e
 
-CLIENT_HANGS_UP_AFTER_SECONDS = 8.0
+CLIENT_HANGS_UP_AFTER_SECONDS = 5.0
+HANG_UP_ATTEMPTS = 3
 LONG_ANSWER_MAX_TOKENS = 16384
 BENCH_OUTLASTS_TEST_SECONDS = 300.0
 CALLS_AFTER_HANGUP = 6
@@ -55,8 +58,10 @@ def _say_hi(client: ComplexityRouterClient, key: str, group: str) -> StreamingRe
     )
 
 
-def _hang_up_mid_answer(client: ComplexityRouterClient, key: str, group: str) -> None:
-    outcome = client.proxy.transport.abandon(
+def _ask_for_a_long_answer_then_hang_up(
+    client: ComplexityRouterClient, key: str, group: str
+) -> AbandonedRequest | StreamingResponse:
+    return client.proxy.transport.abandon(
         "/chat/completions",
         headers=client.proxy.transport.bearer(key),
         json=ReliabilityChatBody(
@@ -65,8 +70,8 @@ def _hang_up_mid_answer(client: ComplexityRouterClient, key: str, group: str) ->
                 ChatMessage(
                     role="user",
                     content=(
-                        "Write a 10000 word essay on the history of the telegraph, one section per decade. "
-                        f"{unique_marker()}"
+                        "Write an essay on the history of the telegraph with one section per decade from the 1830s "
+                        f"to the 2020s, each section at least 300 words. {unique_marker()}"
                     ),
                 )
             ],
@@ -75,14 +80,24 @@ def _hang_up_mid_answer(client: ComplexityRouterClient, key: str, group: str) ->
         ),
         after=CLIENT_HANGS_UP_AFTER_SECONDS,
     )
-    match outcome:
-        case AbandonedRequest():
-            return
-        case StreamingResponse(status_code=status_code, body=body):
-            pytest.fail(
-                f"the client should have hung up {CLIENT_HANGS_UP_AFTER_SECONDS:.0f}s into a long answer with the "
-                f"call still in flight, but the proxy answered first with {status_code}: {body[:300]}"
-            )
+
+
+def _hang_up_mid_answer(client: ComplexityRouterClient, key: str, group: str) -> None:
+    for attempt in range(1, HANG_UP_ATTEMPTS + 1):
+        match _ask_for_a_long_answer_then_hang_up(client, key, group):
+            case AbandonedRequest():
+                return
+            case StreamingResponse(status_code=200):
+                continue
+            case StreamingResponse(status_code=status_code, body=body):
+                pytest.fail(
+                    f"hang-up attempt {attempt} should have found the long answer still in flight after "
+                    f"{CLIENT_HANGS_UP_AFTER_SECONDS:.0f}s, but the proxy answered {status_code}: {body[:300]}"
+                )
+    pytest.fail(
+        f"the proxy answered all {HANG_UP_ATTEMPTS} long asks within {CLIENT_HANGS_UP_AFTER_SECONDS:.0f}s, so the "
+        "client never hung up with a call still in flight and the bench this cell guards against could not happen"
+    )
 
 
 class TestReliabilityCancelOnDisconnect:
