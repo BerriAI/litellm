@@ -61,15 +61,15 @@ def _build_s3_input_config(s3_uri: str, s3_bucket_owner: str | None) -> BedrockS
 def _build_s3_output_config(
     s3_uri: str, s3_bucket_owner: str | None, s3_encryption_key_id: str | None
 ) -> BedrockS3OutputDataConfig:
-    match (s3_bucket_owner, s3_encryption_key_id):
-        case (None, None):
+    if s3_bucket_owner is None:
+        if s3_encryption_key_id is None:
             return BedrockS3OutputDataConfig(s3Uri=s3_uri)
-        case (str() as owner, None):
-            return BedrockS3OutputDataConfig(s3Uri=s3_uri, s3BucketOwner=owner)
-        case (None, str() as key_id):
-            return BedrockS3OutputDataConfig(s3Uri=s3_uri, s3EncryptionKeyId=key_id)
-        case (str() as owner, str() as key_id):
-            return BedrockS3OutputDataConfig(s3Uri=s3_uri, s3BucketOwner=owner, s3EncryptionKeyId=key_id)
+        return BedrockS3OutputDataConfig(s3Uri=s3_uri, s3EncryptionKeyId=s3_encryption_key_id)
+    if s3_encryption_key_id is None:
+        return BedrockS3OutputDataConfig(s3Uri=s3_uri, s3BucketOwner=s3_bucket_owner)
+    return BedrockS3OutputDataConfig(
+        s3Uri=s3_uri, s3BucketOwner=s3_bucket_owner, s3EncryptionKeyId=s3_encryption_key_id
+    )
 
 
 def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
