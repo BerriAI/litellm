@@ -4,10 +4,8 @@ Tests for litellm.acount_tokens() public API.
 
 import asyncio
 import os
-import sys
 from unittest.mock import AsyncMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.types.utils import TokenCountResponse
@@ -144,20 +142,36 @@ def test_acount_tokens_api_error_falls_back():
         assert result.total_tokens > 0
 
 
-def test_acount_tokens_no_api_key_falls_back():
+def test_acount_tokens_no_api_key_falls_back(monkeypatch):
     """Test that missing API key falls back to local counting."""
-    env_backup = os.environ.pop("OPENAI_API_KEY", None)
-    try:
-        result = asyncio.run(
-            litellm.acount_tokens(
-                model="openai/gpt-4o",
-                messages=[{"role": "user", "content": "Hello"}],
-            )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    result = asyncio.run(
+        litellm.acount_tokens(
+            model="openai/gpt-4o",
+            messages=[{"role": "user", "content": "Hello"}],
         )
+    )
 
-        # Should fall back to local tokenizer since no API key
-        assert result.total_tokens > 0
-        assert result.tokenizer_type == "local_tokenizer"
-    finally:
-        if env_backup:
-            os.environ["OPENAI_API_KEY"] = env_backup
+    # Should fall back to local tokenizer since no API key
+    assert result.total_tokens > 0
+    assert result.tokenizer_type == "local_tokenizer"
+
+
+async def test_acount_tokens_local_fallback_counts_off_the_event_loop():
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    model = "together_ai/meta-llama/Llama-3-8b-chat-hf"
+    warm_tokenizer(model)
+
+    result, took, lags = await timed_with_loop_lags(
+        lambda: litellm.acount_tokens(model=model, messages=[{"role": "user", "content": text * 100}])
+    )
+
+    assert result.tokenizer_type == "local_tokenizer"
+    assert result.total_tokens > 100_000
+    assert_loop_stayed_free(took, lags)

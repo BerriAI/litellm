@@ -108,6 +108,8 @@ describe("convertToDotPrompt", () => {
     expect(result).toContain("output:");
     expect(result).toContain("format: text");
     expect(result).toContain("User: Hello world");
+    const cleared = convertToDotPrompt({ ...prompt, model: null });
+    expect(cleared).toBe(result.replace("model: gpt-4\n", ""));
   });
 
   it("should include config parameters when set", () => {
@@ -203,6 +205,20 @@ describe("convertToDotPrompt", () => {
 });
 
 describe("parseExistingPrompt", () => {
+  it("should keep saved prompts with missing or blank models unassigned", () => {
+    for (const modelLine of ["", "model: \n"]) {
+      const prompt = parseExistingPrompt({
+        prompt_spec: {
+          prompt_id: "unassigned-prompt",
+          litellm_params: { dotprompt_content: `---\n${modelLine}temperature: 0\n---\nUser: Keep this message` },
+        },
+      });
+
+      expect(prompt.model).toBeNull();
+      expect(convertToDotPrompt(prompt)).not.toMatch(/^model:/m);
+    }
+  });
+
   it("should parse basic dotprompt content", () => {
     const apiResponse = {
       prompt_spec: {

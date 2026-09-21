@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import traceback
+from typing import Final
 
 import litellm
 
@@ -27,14 +28,12 @@ class Supabase:
             raise ValueError(
                 "LiteLLM Error, trying to use Supabase but url or key not passed. Create a table and set `litellm.supabase_url=<your-url>` and `litellm.supabase_key=<your-key>`"
             )
-        self.supabase_client = supabase.create_client(  # type: ignore
-            self.supabase_url, self.supabase_key
-        )
+        self.supabase_client = supabase.create_client(self.supabase_url, self.supabase_key)
 
     def input_log_event(self, model, messages, end_user, litellm_call_id, print_verbose):
         try:
             print_verbose(f"Supabase Logging - Enters input logging function for model {model}")
-            supabase_data_obj = {
+            supabase_data_obj: Final = {
                 "model": model,
                 "messages": messages,
                 "end_user": end_user,
@@ -45,7 +44,6 @@ class Supabase:
             print_verbose(f"data: {data}")
         except Exception:
             print_verbose(f"Supabase Logging Error - {traceback.format_exc()}")
-            pass
 
     def log_event(
         self,
@@ -63,7 +61,7 @@ class Supabase:
 
             total_cost = litellm.completion_cost(completion_response=response_obj)
 
-            response_time = (end_time - start_time).total_seconds()
+            response_time: Final = (end_time - start_time).total_seconds()
             if "choices" in response_obj:
                 supabase_data_obj = {
                     "response_time": response_time,
@@ -103,4 +101,3 @@ class Supabase:
 
         except Exception:
             print_verbose(f"Supabase Logging Error - {traceback.format_exc()}")
-            pass

@@ -1,11 +1,18 @@
 import sys
-from typing import Optional
+from collections.abc import Mapping
+from types import MappingProxyType
+from typing import Final
 
-DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS = 600.0
+from pydantic import TypeAdapter
+
+DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS: Final = 600.0
+
+_SECONDS: Final = TypeAdapter(float)
+_NO_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def resolve_pass_through_request_timeout(
-    endpoint_timeout: Optional[float] = None,
+    endpoint_timeout: float | None = None,
 ) -> float:
     """
     Resolve the upstream httpx timeout for pass_through_request.
@@ -19,9 +26,9 @@ def resolve_pass_through_request_timeout(
         return float(endpoint_timeout)
 
     try:
-        proxy_server = sys.modules.get("litellm.proxy.proxy_server")
+        proxy_server: Final = sys.modules.get("litellm.proxy.proxy_server")
         if proxy_server is not None:
-            global_timeout = getattr(proxy_server, "general_settings", {}).get("pass_through_request_timeout")
+            global_timeout: Final = getattr(proxy_server, "general_settings", {}).get("pass_through_request_timeout")
             if global_timeout is not None:
                 return float(global_timeout)
     except Exception:
@@ -31,26 +38,41 @@ def resolve_pass_through_request_timeout(
 
 
 def resolve_llm_passthrough_timeout(
-    kwargs: Optional[dict] = None,
-    litellm_params: Optional[dict] = None,
-    router_timeout: Optional[float] = None,
+    kwargs: Mapping[str, object] | None = None,
+    litellm_params: Mapping[str, object] | None = None,
+    router_timeout: float | str | None = None,
+    router_stream_timeout: float | str | None = None,
 ) -> float:
     """
-    Resolve upstream httpx timeout for SDK native passthrough (e.g. Bedrock /converse).
+    Resolve upstream httpx timeout for SDK native passthrough (e.g. Bedrock /converse,
+    Anthropic /v1/messages).
 
-    Precedence: kwargs timeout/request_timeout -> litellm_params timeout/request_timeout
-    -> router_timeout -> general_settings.pass_through_request_timeout -> 600s default.
+    Non-streaming precedence: kwargs timeout/request_timeout -> litellm_params
+    timeout/request_timeout -> router_timeout -> general_settings.pass_through_request_timeout
+    -> 600s default.
+
+    Streaming (``kwargs["stream"]`` truthy) resolves ``stream_timeout`` at every level before
+    any generic timeout, matching ``Router._get_stream_timeout`` on the completion route:
+    kwargs stream_timeout -> litellm_params stream_timeout -> router_stream_timeout, then the
+    non-streaming chain above.
+
+    Only the first set value is validated as seconds, so a value in a lower-precedence
+    field never fails the call.
     """
-    kwargs = kwargs or {}
-    litellm_params = litellm_params or {}
-
-    for source in (kwargs, litellm_params):
-        for key in ("timeout", "request_timeout"):
-            val = source.get(key)
-            if val is not None:
-                return float(val)
-
-    if router_timeout is not None:
-        return float(router_timeout)
-
-    return resolve_pass_through_request_timeout()
+    request: Final = kwargs if kwargs is not None else _NO_PARAMS
+    deployment: Final = litellm_params if litellm_params is not None else _NO_PARAMS
+    stream_candidates: Final = (
+        (request.get("stream_timeout"), deployment.get("stream_timeout"), router_stream_timeout)
+        if request.get("stream")
+        else ()
+    )
+    candidates: Final = (
+        *stream_candidates,
+        request.get("timeout"),
+        request.get("request_timeout"),
+        deployment.get("timeout"),
+        deployment.get("request_timeout"),
+        router_timeout,
+    )
+    winner: Final = next((val for val in candidates if val is not None), None)
+    return resolve_pass_through_request_timeout() if winner is None else _SECONDS.validate_python(winner)

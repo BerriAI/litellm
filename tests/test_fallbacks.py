@@ -289,10 +289,8 @@ async def test_chat_completion_client_fallbacks_with_custom_message(has_access):
                 pytest.fail("Expected this to work: {}".format(str(e)))
 
 
-import asyncio
 from openai import AsyncOpenAI
 from typing import List
-import time
 
 
 async def make_request(client: AsyncOpenAI, model: str) -> bool:

@@ -1,0 +1,92 @@
+interactions:
+- request:
+    body: '{"model":"mistral-ocr-4-0","document":{"type":"image_url","image_url":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAABQCAIAAADnUzvSAAABfUlEQVR4nO3dwY2DMBRAQbza/ltmK+BAhNd+YaYAcEBPPnwC4zzPA2j6Wb0A4HMChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFD2O9TBxpjHDM99cz2U+vcbT1XdnvW/er3zl7nWHTfZ99fOzCECRjCBAxhAoYwAUOYgCFMwBD22Bx41bz06viz5427rWc3s+efd897Lrrvs++vHRjCBAxhAoYwAUOYgCFMwBAmYAibPgfmne7Ow2ef91vZgSFMwBAmYAgTMIQJGMIEDGEChjBzYNjof8V32YEhTMAQJmAIEzCECRjCBAxhAoYwc2BebSx6X/dTx7cDQ5iAIUzAECZgCBMwhAkYwgQMYebAvML40u8z24EhTMAQJmAIEzCECRjCBAxhAoawsdt7bq/sts7d1nNl1Zxz1XUek6/nbt9DtgNDmIAhTMAQJmAIEzCECRjCBAxhj82Bgf9nB4YwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iA4ej6A6GiUaF+b+RaAAAAAElFTkSuQmCC"}}'
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/providers/mistral/azure/ocr
+  response:
+    body:
+      string: '{"pages":[{"index":0,"markdown":"$$\\text{DOC } 123$$","images":[],"tables":[],"hyperlinks":[],"header":null,"footer":null,"dimensions":{"dpi":200,"height":80,"width":320},"confidence_scores":null,"blocks":[{"top_left_x":0,"top_left_y":0,"bottom_right_x":320,"bottom_right_y":80,"content":"$$\\text{DOC
+        } 123$$","type":"equation"}]}],"model":"mistral-ocr-4-0","document_annotation":null,"usage_info":{"pages_processed":1,"doc_size_bytes":438}}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - Wed, 02 Sep 2026 22:38:07 GMT
+      Server:
+      - istio-envoy
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains; preload
+      X-Content-Type-Options:
+      - nosniff
+      apim-request-id:
+      - 3795070f-a4a7-4ad6-b31d-fe51fdcf29d4
+      azureai-fe-is-streaming:
+      - 'False'
+      azureai-fe-offer-type:
+      - paygo
+      azureai-processed-tier:
+      - default
+      azureai-requested-tier:
+      - default
+      azureml-destination-deployment:
+      - d20260831221917-7d0e5d7f
+      azureml-destination-endpoint:
+      - mo4-use-h1-oai-oe-nvisoc
+      azureml-destination-model-group:
+      - aoai-balanced
+      azureml-destination-region:
+      - eastus
+      azureml-model-deployment:
+      - d20260831221917-7d0e5d7f
+      azureml-model-group:
+      - aoai-balanced
+      azureml-model-session:
+      - d20260831221917-7d0e5d7f
+      azureml-ms-model-error-comprehensive:
+      - --
+      azureml-served-by-cluster:
+      - hyena-westus3-01
+      x-ms-client-request-id:
+      - 3795070f-a4a7-4ad6-b31d-fe51fdcf29d4
+      x-ms-is-spilled-over:
+      - 'false'
+      x-ms-region:
+      - West US 3
+      x-pages-processed:
+      - '1'
+      x-ratelimit-abusepenalty-active:
+      - 'False'
+      x-ratelimit-key:
+      - mistral-ocr-4-0
+      x-ratelimit-limit-requests:
+      - '10'
+      x-ratelimit-remaining-requests:
+      - '8'
+      x-ratelimit-renewalperiod-requests:
+      - '60'
+      x-ratelimit-reset-requests:
+      - '14'
+      x-request-id:
+      - 7a885df6-7464-4f05-b091-1a154c180886
+    status:
+      code: 200
+      message: ''
+recorded_at: '2026-09-02T22:38:08.503737+00:00'
+ttl_seconds: 0
+version: 1
+x-litellm:
+  case:
+    litellm_input:
+      document:
+        image_url: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAUAAAABQCAIAAADnUzvSAAABfUlEQVR4nO3dwY2DMBRAQbza/ltmK+BAhNd+YaYAcEBPPnwC4zzPA2j6Wb0A4HMChjABQ5iAIUzAECZgCBMwhAkYwgQMYQKGMAFD2O9TBxpjHDM99cz2U+vcbT1XdnvW/er3zl7nWHTfZ99fOzCECRjCBAxhAoYwAUOYgCFMwBD22Bx41bz06viz5427rWc3s+efd897Lrrvs++vHRjCBAxhAoYwAUOYgCFMwBAmYAibPgfmne7Ow2ef91vZgSFMwBAmYAgTMIQJGMIEDGEChjBzYNjof8V32YEhTMAQJmAIEzCECRjCBAxhAoYwc2BebSx6X/dTx7cDQ5iAIUzAECZgCBMwhAkYwgQMYebAvML40u8z24EhTMAQJmAIEzCECRjCBAxhAoawsdt7bq/sts7d1nNl1Zxz1XUek6/nbt9DtgNDmIAhTMAQJmAIEzCECRjCBAxhj82Bgf9nB4YwAUOYgCFMwBAmYAgTMIQJGMIEDGEChjABQ5iA4ej6A6GiUaF+b+RaAAAAAElFTkSuQmCC
+        type: image_url
+      model: azure_ai/mistral-ocr-4-0
+  request_source: recorded
+  schema_version: 1

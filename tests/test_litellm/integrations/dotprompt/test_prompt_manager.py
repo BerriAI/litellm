@@ -1,15 +1,10 @@
 import json
-import os
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 from unittest.mock import MagicMock, Mock, patch
@@ -17,7 +12,9 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 
 import litellm
+from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
 from litellm.integrations.dotprompt.prompt_manager import PromptManager, PromptTemplate
+from litellm.types.prompts.init_prompts import PromptLiteLLMParams, PromptSpec
 
 
 def test_prompt_manager_initialization():
@@ -582,3 +579,170 @@ async def test_dotprompt_with_prompt_version():
     )
     assert "Version 2:" in v2_rendered
     assert "Test v2" in v2_rendered
+
+
+def test_keyed_prompt_data_with_prompt_id_keeps_real_content():
+    prompt_data = {
+        "json_prompt": {
+            "content": "You are a pirate. Begin every reply with AHOY.",
+            "metadata": {"model": "gpt-4o-mini"},
+        }
+    }
+
+    manager = PromptManager(prompt_data=prompt_data, prompt_id="agent-prompt")
+
+    template = manager.get_prompt("json_prompt")
+    assert template is not None
+    assert template.content == "You are a pirate. Begin every reply with AHOY."
+    assert template.model == "gpt-4o-mini"
+    assert "agent-prompt" not in manager.prompts
+
+
+def test_flat_prompt_data_with_prompt_id_registers_under_prompt_id():
+    manager = PromptManager(
+        prompt_data={"content": "Hello {{name}}", "metadata": {"model": "gpt-4o-mini"}},
+        prompt_id="flat-prompt",
+    )
+
+    template = manager.get_prompt("flat-prompt")
+    assert template is not None
+    assert template.content == "Hello {{name}}"
+    assert manager.render("flat-prompt", {"name": "world"}) == "Hello world"
+
+
+def test_get_prompt_falls_back_to_base_id_for_versioned_id():
+    manager = PromptManager(
+        prompt_data={"content": "Hi", "metadata": {}},
+        prompt_id="my-prompt",
+    )
+
+    assert manager.get_prompt("my-prompt.v1") is not None
+    assert manager.get_prompt("my-prompt.v12") is not None
+    assert manager.get_prompt("my-prompt.vx") is None
+    assert manager.get_prompt("other-prompt.v1") is None
+
+
+def test_should_run_prompt_management_accepts_versioned_id():
+    from litellm.integrations.dotprompt import DotpromptManager
+
+    dotprompt_manager = DotpromptManager(
+        prompt_data={"content": "Hi", "metadata": {}},
+        prompt_id="versioned-prompt",
+    )
+
+    assert dotprompt_manager.should_run_prompt_management("versioned-prompt", None, {}) is True
+    assert dotprompt_manager.should_run_prompt_management("versioned-prompt.v1", None, {}) is True
+    assert dotprompt_manager.should_run_prompt_management("missing-prompt", None, {}) is False
+
+
+def test_prompt_initializer_registers_flat_db_prompt_under_base_id():
+    from litellm.integrations.dotprompt import DotpromptManager, prompt_initializer
+    from litellm.types.prompts.init_prompts import (
+        PromptInfo,
+        PromptLiteLLMParams,
+        PromptSpec,
+    )
+
+    litellm_params = PromptLiteLLMParams(
+        prompt_integration="dotprompt",
+        prompt_data={"content": "AHOY {{name}}", "metadata": {"model": "gpt-4o-mini"}},
+    )
+    prompt_spec = PromptSpec(
+        prompt_id="agent-prompt.v1",
+        litellm_params=litellm_params,
+        prompt_info=PromptInfo(prompt_type="db"),
+    )
+
+    dotprompt_manager = prompt_initializer(litellm_params, prompt_spec)
+
+    assert isinstance(dotprompt_manager, DotpromptManager)
+    template = dotprompt_manager.prompt_manager.get_prompt("agent-prompt")
+    assert template is not None
+    assert template.content == "AHOY {{name}}"
+
+
+def _swap_prompt_manager_and_spec(ignore_prompt_manager_model: bool) -> tuple[DotpromptManager, PromptSpec]:
+    manager = DotpromptManager(
+        prompt_data={"content": "You are a pirate assistant.", "metadata": {"model": "gpt-4o-mini"}},
+        prompt_id="swap-prompt",
+    )
+    spec = PromptSpec(
+        prompt_id="swap-prompt",
+        litellm_params=PromptLiteLLMParams(
+            prompt_id="swap-prompt",
+            prompt_integration="dotprompt",
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+        ),
+    )
+    return manager, spec
+
+
+@pytest.mark.asyncio
+async def test_async_prompt_spec_ignore_prompt_manager_model_keeps_requested_model():
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    manager, spec = _swap_prompt_manager_and_spec(ignore_prompt_manager_model=True)
+    model, messages, _ = await manager.async_get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_id="swap-prompt",
+        prompt_variables=None,
+        dynamic_callback_params=StandardCallbackDynamicParams(),
+        litellm_logging_obj=MagicMock(),
+        prompt_spec=spec,
+    )
+    assert model == "anthropic/claude-haiku-4-5"
+    assert len(messages) == 2
+    assert "pirate" in str(messages[0]["content"])
+
+
+@pytest.mark.asyncio
+async def test_async_prompt_spec_without_ignore_flag_swaps_model():
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    manager, spec = _swap_prompt_manager_and_spec(ignore_prompt_manager_model=False)
+    model, _, _ = await manager.async_get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_id="swap-prompt",
+        prompt_variables=None,
+        dynamic_callback_params=StandardCallbackDynamicParams(),
+        litellm_logging_obj=MagicMock(),
+        prompt_spec=spec,
+    )
+    assert model == "gpt-4o-mini"
+
+
+def test_sync_prompt_spec_ignore_prompt_manager_model_keeps_requested_model():
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    manager, spec = _swap_prompt_manager_and_spec(ignore_prompt_manager_model=True)
+    model, _, _ = manager.get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_id="swap-prompt",
+        prompt_variables=None,
+        dynamic_callback_params=StandardCallbackDynamicParams(),
+        prompt_spec=spec,
+    )
+    assert model == "anthropic/claude-haiku-4-5"
+
+
+def test_sync_caller_ignore_flag_survives_missing_prompt_spec():
+    from litellm.types.utils import StandardCallbackDynamicParams
+
+    manager, _ = _swap_prompt_manager_and_spec(ignore_prompt_manager_model=False)
+    model, _, _ = manager.get_chat_completion_prompt(
+        model="anthropic/claude-haiku-4-5",
+        messages=[{"role": "user", "content": "hi"}],
+        non_default_params={},
+        prompt_id="swap-prompt",
+        prompt_variables=None,
+        dynamic_callback_params=StandardCallbackDynamicParams(),
+        prompt_spec=None,
+        ignore_prompt_manager_model=True,
+    )
+    assert model == "anthropic/claude-haiku-4-5"

@@ -4,13 +4,10 @@ Integration tests for async_post_call_streaming_hook.
 Tests verify that the streaming hook can transform streaming responses sent to clients.
 """
 
-import os
-import sys
 import pytest
 from typing import Any
 from unittest.mock import patch, MagicMock
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger

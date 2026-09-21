@@ -1,45 +1,25 @@
-import React, { useState } from "react";
-import { CheckCircleFilled } from "@ant-design/icons";
+import React from "react";
+import { CircleCheck } from "lucide-react";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
 import { Logo } from "@/components/molecules/logo/Logo";
 
 const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> = ({ card, onClick }) => {
-  const [hovered, setHovered] = useState(false);
-
   return (
     <div
       onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        borderRadius: 12,
-        border: hovered ? "1px solid #93c5fd" : "1px solid #e5e7eb",
-        backgroundColor: "#ffffff",
-        padding: "20px 20px 16px 20px",
-        cursor: "pointer",
-        transition: "border-color 0.15s, box-shadow 0.15s",
-        display: "flex",
-        flexDirection: "column",
-        minHeight: 170,
-        boxShadow: hovered ? "0 1px 6px rgba(59,130,246,0.08)" : "none",
-      }}
+      className="flex min-h-[170px] cursor-pointer flex-col rounded-xl border border-border bg-card px-5 pt-5 pb-4 transition-[border-color,box-shadow] hover:border-primary/40 hover:shadow-sm"
     >
-      {/* Icon + Name row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+      <div className="mb-2.5 flex items-center gap-2.5">
         <Logo src={card.logo} label={card.name} className="w-7 h-7 rounded-md object-contain shrink-0" />
-        <span style={{ fontSize: 14, fontWeight: 600, color: "#111827", lineHeight: 1.3 }}>{card.name}</span>
+        <span className="text-sm leading-tight font-semibold text-foreground">{card.name}</span>
       </div>
 
-      {/* Description */}
-      <p className="line-clamp-3" style={{ fontSize: 12, color: "#6b7280", lineHeight: 1.6, margin: 0, flex: 1 }}>
-        {card.description}
-      </p>
+      <p className="line-clamp-3 m-0 flex-1 text-xs leading-relaxed text-muted-foreground">{card.description}</p>
 
-      {/* Eval badge */}
       {card.eval && (
-        <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 4 }}>
-          <CheckCircleFilled style={{ color: "#16a34a", fontSize: 12 }} />
-          <span style={{ fontSize: 11, color: "#16a34a", fontWeight: 500 }}>
+        <div className="mt-2.5 flex items-center gap-1 text-success">
+          <CircleCheck className="size-3" />
+          <span className="text-[11px] font-medium">
             F1: {card.eval.f1}% &middot; {card.eval.testCases} test cases
           </span>
         </div>

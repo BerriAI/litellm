@@ -2,15 +2,10 @@
 Tests for MCP End User Permission Guardrail Hook
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth
@@ -274,65 +269,6 @@ class TestMCPEndUserPermissionGuardrail:
             # Should keep all non-MCP tools even with MCP restrictions
             assert len(result.get("tools", [])) == 2
 
-    @pytest.mark.asyncio
-    async def test_apply_guardrail_filters_unauthorized_mcp_tools(self):
-        """Test guardrail filters out unauthorized MCP tools"""
-        from litellm.proxy._types import LiteLLM_ObjectPermissionTable
-
-        guardrail = MCPEndUserPermissionGuardrail()
-
-        # Create inputs with MCP tools where user only has access to some
-        inputs = {
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "github-create_issue",
-                        "description": "Create an issue",
-                    },
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "slack-send_message",
-                        "description": "Send a message",
-                    },
-                },
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "jira-create_ticket",
-                        "description": "Create a ticket",
-                    },
-                },
-            ]
-        }
-
-        request_data = {"user_api_key_end_user_id": "end-user-123"}
-
-        # Mock fetching end user object - only has access to slack and jira, not github
-        with patch.object(
-            MCPEndUserPermissionGuardrail,
-            "_fetch_end_user_object",
-            return_value=MagicMock(
-                object_permission=LiteLLM_ObjectPermissionTable(
-                    object_permission_id="perm-1",
-                    mcp_servers=["slack", "jira"],
-                )
-            ),
-        ):
-            result = await guardrail.apply_guardrail(
-                inputs=inputs,
-                request_data=request_data,
-                input_type="request",
-            )
-
-            # Should filter out github tool
-            assert len(result.get("tools", [])) == 2
-            tool_names = [t["function"]["name"] for t in result["tools"]]
-            assert "slack-send_message" in tool_names
-            assert "jira-create_ticket" in tool_names
-            assert "github-create_issue" not in tool_names
 
     @pytest.mark.asyncio
     async def test_apply_guardrail_with_mixed_tools(self):

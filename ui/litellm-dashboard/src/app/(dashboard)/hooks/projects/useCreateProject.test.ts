@@ -67,7 +67,12 @@ describe("useCreateProject", () => {
     const { result } = renderHook(() => useCreateProject(), {
       wrapper: makeWrapper(queryClient),
     });
-    const params: ProjectCreateParams = { team_id: "team-1", project_alias: "New Project" };
+    const params: ProjectCreateParams = {
+      team_id: "team-1",
+      project_alias: "New Project",
+      model_itpm_limit: { "gpt-4": 150 },
+      model_otpm_limit: { "gpt-4": 250 },
+    };
     const data = await result.current.mutateAsync(params);
     expect(data).toEqual(mockProject);
     const [url, init] = (global.fetch as any).mock.calls[0];

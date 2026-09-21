@@ -13,8 +13,8 @@ Here are the core requirements for any PR submitted to LiteLLM:
 
 - [ ] **Add testing** - Adding at least 1 test is a hard requirement - [see details](#adding-testing)
 - [ ] **Ensure your PR passes all checks**:
-  - [ ] [Unit Tests](#running-unit-tests) - `make test-unit`
   - [ ] [Linting / Formatting](#running-linting-and-formatting-checks) - `make lint`
+  - [ ] [The tests covering your change](#running-unit-tests) pass, e.g. `uv run pytest tests/test_litellm/<your_test_file>.py -v`. CI runs the full unit test matrix, so you don't need to run the whole suite locally
 
 #### UI PRs
 
@@ -71,8 +71,8 @@ make format
 # Run all linting checks (matches CI exactly)
 make lint
 
-# Run unit tests to ensure nothing is broken
-make test-unit
+# Run the tests covering your change (CI runs the full suite)
+uv run pytest tests/test_litellm/<your_test_file>.py -v
 
 # Commit your changes (must follow Conventional Commits — see above)
 git add .
@@ -123,11 +123,12 @@ def test_your_feature():
 
 ### Running Unit Tests
 
-Run all unit tests (uses parallel execution for speed):
-
+Run the tests covering your change:
 ```bash
-make test-unit
+uv run pytest tests/test_litellm/test_your_file.py -v
 ```
+
+`tests/test_litellm` holds thousands of tests, so running all of it locally takes a long time. CI runs it as a parallel matrix (`make test-unit-llms`, `make test-unit-proxy-core`, and the other `test-unit-*` targets) on beefier boxes, so if, for whatever reason, you must run the whole suite, it's better to rely on CI to do that.
 
 If you're running broader test suites, proxy tests, or anything that touches PostgreSQL-backed fixtures/plugins, install the full local test environment first:
 
@@ -136,11 +137,6 @@ make install-test-deps
 ```
 
 This syncs the locked test environment used across the repo, including `psycopg` v3 plus `psycopg-binary` (used by `pytest-postgresql`), `psycopg2-binary` (used by some proxy E2E tests), and a generated Prisma client for DB-backed proxy tests, so pytest startup matches CI without manual package installs.
-
-Run specific test files:
-```bash
-uv run pytest tests/test_litellm/test_your_file.py -v
-```
 
 ### Running Linting and Formatting Checks
 
@@ -152,7 +148,7 @@ make lint
 
 Individual linting commands:
 ```bash
-make format-check       # Check Black formatting
+make format-check       # Check ruff format formatting
 make lint-ruff          # Run Ruff linting
 make lint-basedpyright  # Run basedpyright type checking
 make check-circular-imports    # Check for circular imports
@@ -164,14 +160,14 @@ Apply formatting (auto-fixes issues):
 make format
 ```
 
-> **Black formatting is enforced in CI.** All PRs must pass the Black formatting check.
+> **Formatting is enforced in CI.** All PRs must pass the `ruff format --check` step.
 >
-> - **AI coding agents** (Claude Code, Copilot, Cursor, etc.): `AGENTS.md` and `CLAUDE.md` instruct agents to run `poetry run black .` before committing.
-> - **VS Code users**: Install the [Black Formatter extension](https://marketplace.visualstudio.com/items?itemName=ms-python.black-formatter) and enable format-on-save:
+> - **AI coding agents** (Claude Code, Copilot, Cursor, etc.): follow `AGENTS.md` and run `make format` before committing.
+> - **VS Code users**: Install the [Ruff extension](https://marketplace.visualstudio.com/items?itemName=charliermarsh.ruff) and enable format-on-save:
 >   ```json
 >   {
 >     "[python]": {
->       "editor.defaultFormatter": "ms-python.black-formatter",
+>       "editor.defaultFormatter": "charliermarsh.ruff",
 >       "editor.formatOnSave": true
 >     }
 >   }
@@ -201,8 +197,8 @@ make help                       # Show all available commands
 make install-dev               # Install development dependencies
 make install-proxy-dev         # Install proxy development dependencies
 make install-test-deps         # Install the full local test environment
-make format                    # Apply Black code formatting
-make format-check              # Check Black formatting (matches CI)
+make format                    # Apply ruff format code formatting
+make format-check              # Check ruff format formatting (matches CI)
 make lint                      # Run all linting checks
 make test-unit                 # Run unit tests
 make test-integration          # Run integration tests
@@ -214,8 +210,7 @@ make test-unit-helm            # Run Helm unit tests
 LiteLLM follows the [Google Python Style Guide](https://google.github.io/styleguide/pyguide.html).
 
 Our automated quality checks include:
-- **Black** for consistent code formatting
-- **Ruff** for linting and code quality
+- **Ruff** for formatting, linting, and code quality
 - **basedpyright** for static type checking
 - **Circular import detection**
 - **Import safety validation**
@@ -273,10 +268,13 @@ If you want to build the Docker image yourself:
 # Build using the non-root Dockerfile
 docker build -f docker/Dockerfile.non_root -t litellm_dev .
 
+# Generate a master key. Requests send it as the bearer token
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
+
 # Run with your config
 docker run \
     -v $(pwd)/proxy_config.yaml:/app/config.yaml \
-    -e LITELLM_MASTER_KEY="sk-1234" \
+    -e LITELLM_MASTER_KEY \
     -p 4000:4000 \
     litellm_dev \
     --config /app/config.yaml --detailed_debug
@@ -319,10 +317,12 @@ Ensure the UI builds successfully before submitting your PR:
 npm run build
 ```
 
+Local lint and budget checks follow origin's current default branch. They refresh it from the remote instead of trusting cached `origin/HEAD`. For an intentional comparison against another branch or commit, use `make check BASE_REF=<ref>` or the standalone gate's `--base <ref>` option. An explicit ref can also be used offline once it has been fetched locally. Without an override, unavailable remote metadata stops the check
+
 ## Submitting Your PR
 
 1. **Push your branch**: `git push origin your-feature-branch`
-2. **Create a PR**: Go to GitHub and open a pull request against [`litellm_internal_staging`](https://github.com/BerriAI/litellm/tree/litellm_internal_staging), which is the default base branch. Do not target `main`.
+2. **Create a PR**: Go to GitHub and open a pull request against the repository's current default branch. Run `python3 scripts/default_branch.py --branch` to check its name
 3. **Fill out the PR template**: Provide clear description of changes
 4. **Wait for review**: Maintainers will review and provide feedback
 5. **Address feedback**: Make requested changes and push updates

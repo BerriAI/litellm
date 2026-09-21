@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import KW_ONLY, dataclass
-from typing import Protocol
+from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_coordinator import (
@@ -28,7 +28,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.redis_refresh_c
 # Delete the key only if it still holds this caller's token, so a holder whose lock already expired
 # (PX) and was re-acquired by another worker cannot delete the new holder's lock.
 _RELEASE_IF_OWNER = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
-_EXTEND_IF_OWNER = (
+_EXTEND_IF_OWNER: Final = (
     "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end"
 )
 
@@ -51,7 +51,7 @@ class RedisDistributedLock:
 
     async def acquire(self, key: str, token: str, ttl_seconds: float) -> LockAcquisition:
         try:
-            result = await self.client.set(self.namespace_key(key), token, nx=True, px=int(ttl_seconds * 1000))
+            result: Final = await self.client.set(self.namespace_key(key), token, nx=True, px=int(ttl_seconds * 1000))
         # Degrade on any Redis client error: redis.exceptions narrows only via an import that
         # is Unknown under basedpyright, and the lock must never crash the resolve path.
         except Exception as exc:  # noqa: BLE001
@@ -61,7 +61,7 @@ class RedisDistributedLock:
 
     async def extend(self, key: str, token: str, ttl_seconds: float) -> bool:
         try:
-            result = await self.client.eval(
+            result: Final = await self.client.eval(
                 _EXTEND_IF_OWNER,
                 1,
                 self.namespace_key(key),

@@ -1,18 +1,12 @@
 import asyncio
 import json
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -4028,27 +4022,27 @@ def test_async_text_completion():
     asyncio.run(test_get_response())
 
 
-@pytest.mark.flaky(retries=6, delay=1)
 def test_async_text_completion_together_ai():
-    litellm.set_verbose = True
-    print("test_async_text_completion")
+    from openai import AsyncOpenAI
 
-    async def test_get_response():
-        try:
+    client = AsyncOpenAI(api_key="my-fake-key")
+
+    async def run_call():
+        with patch.object(client.completions.with_raw_response, "create", side_effect=mock_post) as mock_call:
             response = await litellm.atext_completion(
-                model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
+                model="together_ai/Qwen/Qwen2-1.5B-Instruct",
                 prompt="good morning",
                 max_tokens=10,
+                client=client,
             )
-            print(f"response: {response}")
-        except litellm.RateLimitError as e:
-            print(e)
-        except litellm.Timeout as e:
-            print(e)
-        except Exception as e:
-            pytest.fail("An unexpected error occurred")
+        return response, mock_call.call_args.kwargs
 
-    asyncio.run(test_get_response())
+    response, sent = asyncio.run(run_call())
+    assert sent["model"] == "Qwen/Qwen2-1.5B-Instruct"
+    assert sent["prompt"] == "good morning"
+    assert sent["max_tokens"] == 10
+    assert response.choices[0].text == ") might be faster than then answering, and the added time it takes for the"
+    assert response.usage.total_tokens == 18
 
 
 # test_async_text_completion()

@@ -1,55 +1,84 @@
-from typing import Any, Optional
+from collections.abc import Mapping, Sequence
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
 
 
-class SingulrGuardrailRequest(BaseModel):
-    model: Optional[str] = None
-    messages: Optional[list[dict[str, Any]]] = None
-    tools: Optional[list[dict[str, Any]]] = None
-    model_response: Optional[dict[str, Any]] = None
-    litellm_metadata: Optional[dict[str, Any]] = None
+class ContentBlock(BaseModel):
+    type: str | None = None
+    text: str | None = None
+
+
+class ToolCallFunction(BaseModel):
+    name: str
+    arguments: str
+
+
+class ToolCall(BaseModel):
+    id: str
+    type: str = "function"
+    function: ToolCallFunction
+
+
+class AssistantMessage(BaseModel):
+    role: Literal["assistant"] = "assistant"
+    content: str | Sequence[ContentBlock] | None = None
+    tool_calls: Sequence[ToolCall] | None = None
 
 
 class SingulrGuardrailPayload(BaseModel):
-    litellm_call_id: Optional[str] = None
-    request_data: Optional[SingulrGuardrailRequest] = None
-    input_type: str
-    is_playground_request: Optional[bool] = None
-    playground_text: Optional[str] = None
+    correlation_id: str | None = None
+    model_name: str | None = None
+    model_provider_name: str | None = None
+    guardrail_scope: str | None = None
+    messages: Sequence[Mapping[str, object]] | None = None
+    images: Sequence[str] | None = None
+    tools: Sequence[Mapping[str, object]] | None = None
+    response: AssistantMessage | None = None
+    metadata: Mapping[str, str] | None = None
+
+
+class SingulrMcpGuardrailPayload(BaseModel):
+    model_name: str | None = None
+    guardrail_scope: str | None = None
+    tool_name: str | None = None
+    tool_arguments: object = None
+    mcp_server_name: str | None = None
+    tool_result: Sequence[str] | None = None
+    metadata: Mapping[str, str] | None = None
 
 
 class SingulrGuardrailResponse(BaseModel):
     """Response returned by the Singulr guardrail API."""
 
     should_block: bool = False
-    blocking_due_to: Optional[str] = None
+    blocking_due_to: str | None = None
 
 
 class SingulrGuardrailConfigModel(GuardrailConfigModel):
-    singulr_api_key: Optional[str] = Field(
+    singulr_api_key: str | None = Field(
         default=None,
         description="The Singulr API key. Generate API key from Singulr Platform.",
     )
 
-    singulr_api_base: Optional[str] = Field(
+    singulr_api_base: str | None = Field(
         default=None,
         description="The Singulr API base URL. Get base URL from Singulr Platform.",
     )
 
-    singulr_application_id: Optional[str] = Field(
+    singulr_application_id: str | None = Field(
         default=None,
         description="The Singulr application ID. Get application ID from Singulr Platform.",
     )
 
-    singulr_guardrail_id: Optional[str] = Field(
+    singulr_guardrail_id: str | None = Field(
         default=None,
         description="The Singulr Guardrail ID. Get guardrail ID from Singulr Platform.",
     )
 
-    block_on_error: Optional[bool] = Field(
+    block_on_error: bool | None = Field(
         default=None,
         description=(
             "Whether to block requests when the Singulr Guardrails API is unavailable "

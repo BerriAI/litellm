@@ -3,12 +3,11 @@
  */
 
 import { useState } from "react";
-import { Typography, Tag } from "antd";
-import { ToolOutlined, RightOutlined, DownOutlined } from "@ant-design/icons";
+import { ChevronDown, ChevronRight, Wrench } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/cva.config";
 import { ParsedTool } from "./types";
 import { ToolExpandedContent } from "./ToolExpandedContent";
-
-const { Text } = Typography;
 
 interface ToolItemProps {
   tool: ParsedTool;
@@ -18,52 +17,35 @@ export function ToolItem({ tool }: ToolItemProps) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div
-      style={{
-        border: "1px solid #f0f0f0",
-        borderRadius: 8,
-        overflow: "hidden",
-      }}
-    >
+    <div className="overflow-hidden rounded-lg border border-border">
       {/* Header Row - Always Visible */}
       <div
         onClick={() => setExpanded(!expanded)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "12px 16px",
-          cursor: "pointer",
-          background: expanded ? "#fafafa" : "#fff",
-          transition: "background 0.2s",
-        }}
+        className={cn(
+          "flex cursor-pointer items-center justify-between gap-3 px-4 py-3 text-card-foreground transition-colors",
+          expanded ? "bg-muted" : "bg-card",
+        )}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <ToolOutlined style={{ color: "#8c8c8c", fontSize: 14 }} />
-          <Text style={{ fontSize: 14 }}>
+        <div className="flex items-center gap-2.5">
+          <Wrench className="size-3.5 text-muted-foreground" />
+          <span className="text-sm">
             {tool.index}. {tool.name}
-          </Text>
+          </span>
         </div>
 
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Tag color={tool.called ? "blue" : "default"}>{tool.called ? "called" : "not called"}</Tag>
+        <div className="flex items-center gap-2">
+          <Badge variant={tool.called ? "default" : "secondary"}>{tool.called ? "called" : "not called"}</Badge>
           {expanded ? (
-            <DownOutlined style={{ fontSize: 12, color: "#8c8c8c" }} />
+            <ChevronDown className="size-3 text-muted-foreground" />
           ) : (
-            <RightOutlined style={{ fontSize: 12, color: "#8c8c8c" }} />
+            <ChevronRight className="size-3 text-muted-foreground" />
           )}
         </div>
       </div>
 
       {/* Expanded Content */}
       {expanded && (
-        <div
-          style={{
-            padding: "16px",
-            borderTop: "1px solid #f0f0f0",
-            background: "#fff",
-          }}
-        >
+        <div className="border-t border-border bg-card p-4 text-card-foreground">
           <ToolExpandedContent tool={tool} />
         </div>
       )}

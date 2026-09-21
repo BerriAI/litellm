@@ -94,11 +94,13 @@ def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
             langfuse_public_key=None,
             langfuse_secret=None,
             langfuse_host=None,
+            langfuse_environment=None,
             allow_env_credentials=True,
         ):
             captured["langfuse_public_key"] = langfuse_public_key
             captured["langfuse_secret"] = langfuse_secret
             captured["langfuse_host"] = langfuse_host
+            captured["langfuse_environment"] = langfuse_environment
             captured["allow_env_credentials"] = allow_env_credentials
 
     class FakeDynamicLoggingCache:
@@ -117,6 +119,7 @@ def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
             "langfuse_public_key": "dynamic-public",
             "langfuse_secret_key": "dynamic-secret",
             "langfuse_host": "https://langfuse.example",
+            "langfuse_environment": "dynamic-environment",
         },
         in_memory_dynamic_logger_cache=FakeDynamicLoggingCache(),
     )
@@ -124,6 +127,7 @@ def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
     assert captured["langfuse_public_key"] == "dynamic-public"
     assert captured["langfuse_secret"] == "dynamic-secret"
     assert captured["langfuse_host"] == "https://langfuse.example"
+    assert captured["langfuse_environment"] == "dynamic-environment"
     assert captured["allow_env_credentials"] is False
     assert captured["cached_service_name"] == "langfuse"
     assert captured["cached_logging_obj"] is logger

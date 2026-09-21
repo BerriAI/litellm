@@ -1,14 +1,9 @@
-import sys
-import os
 import traceback
 import asyncio
 from dotenv import load_dotenv
 from fastapi import Request
 from datetime import datetime
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from litellm import Router
 import pytest
 import litellm

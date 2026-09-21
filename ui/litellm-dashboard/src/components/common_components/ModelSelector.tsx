@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from "react";
-import { TextInput, Text } from "@tremor/react";
-import { Select } from "antd";
-import { RobotOutlined } from "@ant-design/icons";
+import { Bot } from "lucide-react";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
+import { Input } from "@/components/ui/input";
+import { SearchSelect } from "@/components/shared/SearchSelect";
 import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_models";
 
 const MODEL_SELECT_DEBOUNCE_MS = 500;
 
 interface ModelSelectorProps {
   accessToken: string;
-  value?: string;
+  value?: string | null;
   placeholder?: string;
-  onChange?: (value: string) => void;
+  onChange?: (value: string | null) => void;
   disabled?: boolean;
   style?: React.CSSProperties;
   className?: string;
@@ -30,12 +30,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   showLabel = true,
   labelText = "Select Model",
 }) => {
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(value);
+  const [selectedModel, setSelectedModel] = useState<string | null>(value ?? null);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
 
   useEffect(() => {
-    setSelectedModel(value);
+    setSelectedModel(value ?? null);
   }, [value]);
 
   useEffect(() => {
@@ -56,13 +56,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     loadModels();
   }, [accessToken]);
 
-  const onModelChange = (value: string) => {
+  const onModelChange = (value: string | null) => {
     if (value === "custom") {
       setShowCustomModelInput(true);
-      setSelectedModel(undefined);
+      setSelectedModel(null);
     } else {
       setShowCustomModelInput(false);
-      setSelectedModel(value);
+      setSelectedModel(value ?? null);
       if (onChange) {
         onChange(value);
       }
@@ -71,7 +71,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const debouncedSelect = useDebouncedCallback(
     (value: string) => {
-      setSelectedModel(value);
+      setSelectedModel(value ?? null);
       onChange?.(value);
     },
     { wait: MODEL_SELECT_DEBOUNCE_MS },
@@ -80,32 +80,30 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   return (
     <div>
       {showLabel && (
-        <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-          <RobotOutlined className="mr-2" /> {labelText}
-        </Text>
+        <p className="font-medium block mb-2 text-foreground flex items-center">
+          <Bot className="mr-2 size-3.5" /> {labelText}
+        </p>
       )}
-      <Select
-        value={selectedModel}
-        placeholder={placeholder}
-        onChange={onModelChange}
-        options={[
-          ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group, index) => ({
-            value: model_group,
-            label: model_group,
-            key: index,
-          })),
-          { value: "custom", label: "Enter custom model", key: "custom" },
-        ]}
-        style={{ width: "100%", ...style }}
-        showSearch={true}
-        className={`rounded-md ${className || ""}`}
-        disabled={disabled}
-      />
+      <div style={{ width: "100%", ...style }} className={`rounded-md ${className || ""}`}>
+        <SearchSelect
+          options={[
+            ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group) => ({
+              value: model_group,
+              label: model_group,
+            })),
+            { value: "custom", label: "Enter custom model" },
+          ]}
+          value={selectedModel}
+          placeholder={placeholder}
+          onValueChange={onModelChange}
+          disabled={disabled}
+        />
+      </div>
       {showCustomModelInput && (
-        <TextInput
+        <Input
           className="mt-2"
           placeholder="Enter custom model name"
-          onValueChange={debouncedSelect}
+          onChange={(e) => debouncedSelect(e.target.value)}
           disabled={disabled}
         />
       )}

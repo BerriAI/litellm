@@ -7,14 +7,11 @@ Covers:
 - _raise_masked_sync_error and _raise_masked_async_error
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -287,10 +284,11 @@ class TestHTTPHandlerErrorPaths:
             "send",
             side_effect=_make_httpx_status_error(url="https://api.test.com?key=SECRET"),
         ):
+            kwargs = {"url": "https://api.test.com?key=SECRET"}
+            if method != "delete":
+                kwargs["data"] = {"test": 1}
+
             with pytest.raises(MaskedHTTPStatusError) as exc_info:
-                kwargs = {"url": "https://api.test.com?key=SECRET"}
-                if method != "delete":
-                    kwargs["data"] = {"test": 1}
                 getattr(sync_handler, method)(**kwargs)
 
             assert "SECRET" not in str(exc_info.value.request.url)
@@ -304,10 +302,11 @@ class TestHTTPHandlerErrorPaths:
             new_callable=AsyncMock,
             side_effect=_make_httpx_status_error(url="https://api.test.com?key=SECRET"),
         ):
+            kwargs = {"url": "https://api.test.com?key=SECRET"}
+            if method != "delete":
+                kwargs["data"] = {"test": 1}
+
             with pytest.raises(MaskedHTTPStatusError) as exc_info:
-                kwargs = {"url": "https://api.test.com?key=SECRET"}
-                if method != "delete":
-                    kwargs["data"] = {"test": 1}
                 await getattr(async_handler, method)(**kwargs)
 
             assert "SECRET" not in str(exc_info.value.request.url)

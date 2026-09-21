@@ -46,10 +46,10 @@ def _assert_budget_blocks(client: BudgetClient, key: str, *, user: str = "") -> 
     pytest.fail("budget never enforced within the call budget")
 
 
-def _assert_blocked_429(client: BudgetClient, key: str) -> StreamingResponse:
+def _assert_blocked_422(client: BudgetClient, key: str) -> StreamingResponse:
     blocked = _assert_budget_blocks(client, key)
-    assert blocked.status_code == 429, (
-        f"budget refusal must be 429, got {blocked.status_code}: {blocked.body[:200]}"
+    assert blocked.status_code == 422, (
+        f"budget refusal must be 422, got {blocked.status_code}: {blocked.body[:200]}"
     )
     return blocked
 
@@ -60,7 +60,7 @@ class TestBudgetBlocksPerLevel:
         key = client.generate_key(max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_key(key))
 
-        _assert_blocked_429(client, key)
+        _assert_blocked_422(client, key)
 
     @pytest.mark.covers("quota_management.budget.team.blocks_over_limit")
     def test_team_budget_blocks_every_team_key(self, client: BudgetClient, resources: ResourceManager) -> None:
@@ -71,17 +71,22 @@ class TestBudgetBlocksPerLevel:
         sibling_key = client.generate_key(team_id=team_id)
         resources.defer(lambda: client.delete_key(sibling_key))
 
-        _assert_blocked_429(client, spender_key)
+        _assert_blocked_422(client, spender_key)
         sibling = _chat(client, sibling_key)
-        assert is_budget_block(sibling) and sibling.status_code == 429, (
-            f"a sibling key on the capped team must get the same 429 budget_exceeded, "
+        assert is_budget_block(sibling) and sibling.status_code == 422, (
+            f"a sibling key on the capped team must get the same 422 budget_exceeded, "
             f"got {sibling.status_code}: {sibling.body[:200]}"
         )
 
     @pytest.mark.covers("quota_management.budget.internal_user.blocks_over_limit")
-    def test_user_budget_enforced_across_all_their_keys(
+    def test_user_budget_enforced_across_their_personal_keys(
         self, client: BudgetClient, resources: ResourceManager
     ) -> None:
+        """A user's max_budget follows the person across their personal keys, so a
+        second untouched key is not a fresh allowance. It stops at the team
+        boundary: the same user's team-scoped key is governed by the team and
+        team-member budgets, both uncapped here, so it is the control that must
+        keep serving while the personal keys are refused."""
         user_id = client.create_user(max_budget=TINY_CAP)
         resources.defer(lambda: client.delete_user(user_id))
         first_key = client.generate_key(user_id=user_id)
@@ -94,13 +99,18 @@ class TestBudgetBlocksPerLevel:
         team_key = client.generate_key(team_id=team_id, user_id=user_id)
         resources.defer(lambda: client.delete_key(team_key))
 
-        _assert_blocked_429(client, first_key)
-        for label, key in (("second personal key", second_key), ("team-member key", team_key)):
-            result = _chat(client, key)
-            assert is_budget_block(result) and result.status_code == 429, (
-                f"the {label} of a user over budget must get the same 429 budget_exceeded, "
-                f"got {result.status_code}: {result.body[:200]}"
-            )
+        _assert_blocked_422(client, first_key)
+        second = _chat(client, second_key)
+        assert is_budget_block(second) and second.status_code == 422, (
+            f"the second personal key of a user over budget must get the same 422 budget_exceeded, "
+            f"got {second.status_code}: {second.body[:200]}"
+        )
+        team_result = _chat(client, team_key)
+        assert not is_budget_block(team_result), (
+            f"the team-scoped key of a user over their personal budget must keep serving; "
+            f"got {team_result.status_code}: {team_result.body[:200]}"
+        )
+        require_successful_call(team_result)
 
     @pytest.mark.covers("quota_management.budget.end_user.blocks_over_limit")
     def test_end_user_budget_blocks_attributed_calls(
@@ -123,7 +133,7 @@ class TestBudgetBlocksPerLevel:
         key = client.generate_key(team_id=team_id)
         resources.defer(lambda: client.delete_key(key))
 
-        blocked = _assert_blocked_429(client, key)
+        blocked = _assert_blocked_422(client, key)
         assert f"Organization={org_id}" in blocked.body, (
             f"refusal must name the org as the blocker, got: {blocked.body[:200]}"
         )
@@ -145,7 +155,7 @@ class TestBudgetBlocksPerLevel:
         teammate_key = client.generate_key(team_id=team_id, user_id=teammate_id)
         resources.defer(lambda: client.delete_key(teammate_key))
 
-        _assert_blocked_429(client, member_key)
+        _assert_blocked_422(client, member_key)
         require_successful_call(_chat(client, teammate_key))
 
 
@@ -166,7 +176,7 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
         control_key = client.generate_key(user_id=user_id)
         resources.defer(lambda: client.delete_key(control_key))
 
-        _assert_blocked_429(client, capped_key)
+        _assert_blocked_422(client, capped_key)
         require_successful_call(_chat(client, control_key))
 
     @pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
@@ -178,7 +188,7 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
         control_key = client.generate_key(team_id=team_id)
         resources.defer(lambda: client.delete_key(control_key))
 
-        _assert_blocked_429(client, capped_key)
+        _assert_blocked_422(client, capped_key)
         require_successful_call(_chat(client, control_key))
 
     @pytest.mark.covers("quota_management.budget.key.blocks_over_limit")
@@ -195,5 +205,5 @@ class TestKeyBudgetBlocksAcrossKeyKinds:
         control_key = client.generate_key(team_id=team_id, user_id=member_id)
         resources.defer(lambda: client.delete_key(control_key))
 
-        _assert_blocked_429(client, capped_key)
+        _assert_blocked_422(client, capped_key)
         require_successful_call(_chat(client, control_key))

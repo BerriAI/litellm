@@ -1,16 +1,11 @@
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.llms.vertex_ai.vertex_ai_aws_wif import VertexAIAwsWifAuth
@@ -986,6 +981,116 @@ class TestVertexBase:
         )
 
         assert result_url == f"{gateway_api_base}:embedContent"
+
+    def test_check_custom_proxy_vertex_api_base_with_version_path_grafts_default_path(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://aiplatform.googleapis.com/v1beta1",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="generateContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert (
+            result_url
+            == "https://aiplatform.googleapis.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_version_path_trailing_slash_grafts_default_path(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com/v1/",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="generateContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_version_path_and_query_grafts_before_query(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com/v1beta1?key=abc",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="generateContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent?key=abc"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_version_path_and_query_streaming_appends_alt_sse(self):
+        vertex_base = VertexBase()
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base="https://internal-gateway.example.com/v1beta1?key=abc",
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="streamGenerateContent",
+            stream=True,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:streamGenerateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert (
+            result_url
+            == "https://internal-gateway.example.com/v1beta1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:streamGenerateContent?key=abc&alt=sse"
+        )
+
+    def test_check_custom_proxy_vertex_api_base_with_non_version_path_keeps_endpoint_append(self):
+        vertex_base = VertexBase()
+        gateway_api_base = "https://gateway.example.com/vertex-proxy"
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base=gateway_api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="generateContent",
+            stream=None,
+            auth_header="Bearer token123",
+            url="https://us-central1-aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-3.5-flash-lite:generateContent",
+            model="gemini-3.5-flash-lite",
+        )
+
+        assert result_url == f"{gateway_api_base}:generateContent"
+
+    def test_check_custom_proxy_vertex_api_base_without_projects_in_default_url_keeps_endpoint_append(self):
+        vertex_base = VertexBase()
+        gemma_api_base = "https://example.com/custom/gemma-deployment"
+
+        _, result_url = vertex_base._check_custom_proxy(
+            api_base=gemma_api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint="predict",
+            stream=False,
+            auth_header=None,
+            url=gemma_api_base,
+            model="gemma-3-27b-it",
+        )
+
+        assert result_url == f"{gemma_api_base}:predict"
 
     def test_check_custom_proxy_vertex_bare_host_streaming_keeps_single_alt_sse(self):
         vertex_base = VertexBase()

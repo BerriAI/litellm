@@ -1,0 +1,106 @@
+suite: "keda"
+templates:
+  - keda.yaml
+release:
+  name: rel
+  namespace: llm
+tests:
+  - it: "renders no scaled object by default"
+    asserts:
+      - hasDocuments: { count: 0 }
+
+  - it: "passes user triggers through and adds no prometheus triggers by default"
+    set:
+      keda.enabled: true
+      keda.triggers:
+        - type: cpu
+          metricType: Utilization
+          metadata: { value: "60" }
+    asserts:
+      - isKind: { of: ScaledObject }
+      - equal:
+          path: spec.triggers
+          value:
+            - type: cpu
+              metricType: Utilization
+              metadata: { value: "60" }
+
+  - it: "scales on release-wide requests per second divided by the per-replica target"
+    set:
+      keda.enabled: true
+      keda.prometheus.serverAddress: http://prometheus-operated.monitoring.svc:9090
+      keda.prometheus.requestsPerSecond: 90
+    asserts:
+      - lengthEqual: { path: spec.triggers, count: 1 }
+      - equal:
+          path: "spec.triggers[0]"
+          value:
+            type: prometheus
+            metadata:
+              serverAddress: http://prometheus-operated.monitoring.svc:9090
+              threshold: "90"
+              query: sum(rate(litellm_proxy_total_requests_metric_total{namespace="llm",job="rel-litellm"}[1m]))
+
+  - it: "scales on tokens per second on its own"
+    set:
+      keda.enabled: true
+      keda.prometheus.serverAddress: http://prom:9090
+      keda.prometheus.tokensPerSecond: 6000000
+    asserts:
+      - lengthEqual: { path: spec.triggers, count: 1 }
+      - equal: { path: "spec.triggers[0].type", value: prometheus }
+      - equal: { path: "spec.triggers[0].metadata.threshold", value: "6000000" }
+      - equal:
+          path: "spec.triggers[0].metadata.query"
+          value: sum(rate(litellm_total_tokens_metric_total{namespace="llm",job="rel-litellm"}[1m]))
+
+  - it: "appends requests and tokens triggers after user triggers and selects the metrics service job"
+    set:
+      keda.enabled: true
+      metricsServer.enabled: true
+      keda.triggers:
+        - type: cpu
+          metricType: Utilization
+          metadata: { value: "60" }
+      keda.prometheus.serverAddress: http://prom:9090
+      keda.prometheus.requestsPerSecond: 90
+      keda.prometheus.tokensPerSecond: 6000000
+    asserts:
+      - lengthEqual: { path: spec.triggers, count: 3 }
+      - equal: { path: "spec.triggers[0].type", value: cpu }
+      - equal: { path: "spec.triggers[1].metadata.threshold", value: "90" }
+      - equal:
+          path: "spec.triggers[1].metadata.query"
+          value: sum(rate(litellm_proxy_total_requests_metric_total{namespace="llm",job="rel-litellm-metrics"}[1m]))
+      - equal: { path: "spec.triggers[2].metadata.threshold", value: "6000000" }
+      - equal:
+          path: "spec.triggers[2].metadata.query"
+          value: sum(rate(litellm_total_tokens_metric_total{namespace="llm",job="rel-litellm-metrics"}[1m]))
+      - notMatchRegexRaw: { pattern: "\\* *60|per_minute|PerMinute" }
+
+  - it: "ignores the per-minute keys, which the chart never shipped"
+    set:
+      keda.enabled: true
+      keda.prometheus.serverAddress: http://prom:9090
+      keda.prometheus.requestsPerMinute: 5400
+      keda.prometheus.tokensPerMinute: 360000000
+    asserts:
+      - isKind: { of: ScaledObject }
+      - isNullOrEmpty: { path: spec.triggers }
+
+  - it: "refuses a workload target without a prometheus server address"
+    set:
+      keda.enabled: true
+      keda.prometheus.requestsPerSecond: 90
+    asserts:
+      - failedTemplate:
+          errorMessage: keda.prometheus.serverAddress is required when keda.prometheus.requestsPerSecond or tokensPerSecond is set
+
+  - it: "yields to the hpa when both autoscalers are enabled"
+    set:
+      autoscaling.enabled: true
+      keda.enabled: true
+      keda.prometheus.serverAddress: http://prom:9090
+      keda.prometheus.requestsPerSecond: 90
+    asserts:
+      - hasDocuments: { count: 0 }
