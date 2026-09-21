@@ -330,6 +330,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
@@ -3615,6 +3617,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_second_1080p: float | None = None
     output_cost_per_second_480p: float | None = None
     output_cost_per_second_720p: float | None = None
+    output_cost_per_second_768p: float | None = None
+    output_cost_per_second_2k: float | None = None
     output_cost_per_second_4k: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
@@ -4157,6 +4161,7 @@ class LlmProviders(str, Enum):
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
+    EDENAI = "edenai"
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"

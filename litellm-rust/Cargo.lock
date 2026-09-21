@@ -928,6 +928,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc16"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "338089f42c427b86394a5ee60ff321da23a5c89c9d89514c829687b26359fcff"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3781,9 +3787,11 @@ checksum = "2acbc41a996f7652b2ddd9dfd98cc4ff602cfd742ae35382f07f608405ab50ed"
 dependencies = [
  "arcstr",
  "combine",
+ "crc16",
  "itoa",
  "num-bigint 0.5.1",
  "percent-encoding",
+ "rand 0.10.2",
  "rustls 0.23.42",
  "rustls-native-certs",
  "ryu",

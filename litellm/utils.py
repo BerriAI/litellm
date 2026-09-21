@@ -3313,6 +3313,9 @@ def register_model(
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             if key not in litellm.vercel_ai_gateway_models:
                 litellm.vercel_ai_gateway_models.add(key)
+        elif value.get("litellm_provider") == "edenai":
+            if key not in litellm.edenai_models:
+                litellm.edenai_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
             if key not in litellm.vertex_text_models:
                 litellm.vertex_text_models.add(key)
@@ -4895,6 +4898,9 @@ def get_optional_params(
     return optional_params
 
 
+EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model"})
+
+
 def add_provider_specific_params_to_optional_params(
     optional_params: dict,
     passed_params: dict,
@@ -4920,10 +4926,8 @@ def add_provider_specific_params_to_optional_params(
                 **extra_body,
             }
 
-            if additional_drop_params is not None:
-                processed_extra_body = {k: v for k, v in initial_extra_body.items() if k not in additional_drop_params}
-            else:
-                processed_extra_body = initial_extra_body
+            dropped_keys: Final = EXTRA_BODY_ROUTING_KEYS | frozenset(additional_drop_params or ())
+            processed_extra_body: Final = {k: v for k, v in initial_extra_body.items() if k not in dropped_keys}
 
             _ensure_extra_body_is_safe: Final = getattr(sys.modules[__name__], "_ensure_extra_body_is_safe")
             optional_params["extra_body"] = _ensure_extra_body_is_safe(extra_body=processed_extra_body)
@@ -6100,6 +6104,8 @@ def _get_model_info_helper(
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
                 output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
                 output_cost_per_second_720p=_model_info.get("output_cost_per_second_720p", None),
+                output_cost_per_second_768p=_model_info.get("output_cost_per_second_768p", None),
+                output_cost_per_second_2k=_model_info.get("output_cost_per_second_2k", None),
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
@@ -6572,6 +6578,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
+        elif custom_llm_provider == "edenai":
+            if "EDENAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("EDENAI_API_KEY")
         elif custom_llm_provider == "datarobot":
             if "DATAROBOT_API_TOKEN" in os.environ:
                 keys_in_environment = True
@@ -6822,6 +6833,12 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
+        ## edenai
+        elif model in litellm.edenai_models:
+            if "EDENAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("EDENAI_API_KEY")
         ## datarobot
         elif model in litellm.datarobot_models:
             if "DATAROBOT_API_TOKEN" in os.environ:
@@ -8322,6 +8339,7 @@ class ProviderConfigManager:
                 lambda: litellm.VercelAIGatewayConfig(),
                 False,
             ),
+            LlmProviders.EDENAI: (litellm.EdenAIChatConfig, False),
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
             LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),
@@ -8624,6 +8642,8 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAIEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8744,6 +8764,8 @@ class ProviderConfigManager:
                 )
 
                 return GithubCopilotAnthropicMessagesConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAIAnthropicMessagesConfig()
 
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -8852,6 +8874,8 @@ class ProviderConfigManager:
             )
 
             return GeminiAudioTranscriptionConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAIAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8954,6 +8978,8 @@ class ProviderConfigManager:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIResponsesAPIConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAIResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
             # Both decisions are data-driven from the model's price-map entry, with
             # no model-name logic. Capability (can it serve Responses?) comes from
@@ -9026,7 +9052,7 @@ class ProviderConfigManager:
         return litellm.OpenAITextCompletionConfig()
 
     @staticmethod
-    def get_provider_model_info(
+    def get_provider_model_info(  # noqa: C901  # provider dispatch table, one branch per provider
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
@@ -9063,6 +9089,8 @@ class ProviderConfigManager:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
+        elif LlmProviders.EDENAI == provider:
+            return litellm.EdenAIChatConfig()
         elif LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
@@ -9411,6 +9439,8 @@ class ProviderConfigManager:
             )
 
             return get_modelscope_image_generation_config(model)
+        elif LlmProviders.EDENAI == provider:
+            return litellm.EdenAIImageGenerationConfig()
         return None
 
     @staticmethod
@@ -9446,6 +9476,8 @@ class ProviderConfigManager:
             from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 
             return get_hosted_vllm_video_config(model)
+        elif LlmProviders.EDENAI == provider:
+            return litellm.EdenAIVideoConfig()
         return None
 
     @staticmethod
@@ -9766,6 +9798,8 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAITextToSpeechConfig()
         return None
 
     @staticmethod
