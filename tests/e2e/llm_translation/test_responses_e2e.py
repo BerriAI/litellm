@@ -329,6 +329,7 @@ class TestResponses:
         arguments = WeatherArguments.model_validate(raw_arguments)
         assert arguments.location, f"function call arguments missing location: {function_call.arguments}"
 
+    @pytest.mark.provider_edge_host
     @pytest.mark.parametrize("endpoint", ["/v1/responses", "/v1/chat/completions"])
     def test_bedrock_forwards_allowed_safety_identifier_as_additional_model_request_field(
         self, endpoints_client: EndpointsClient, resources: ResourceManager, endpoint: str
