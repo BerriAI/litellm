@@ -3293,10 +3293,9 @@ async def _tinyfish_body_field_names(request: Request) -> frozenset[str]:
 def _tinyfish_route_timeout() -> float | None:
     # only raise the 600s default to cover legal 1200s runs; an operator's configured timeout still wins
     proxy_server: Final = sys.modules.get("litellm.proxy.proxy_server")
+    operator_settings: Final = getattr(proxy_server, "general_settings", None)
     operator_timeout: Final = (
-        getattr(proxy_server, "general_settings", {}).get("pass_through_request_timeout")
-        if proxy_server is not None
-        else None
+        operator_settings.get("pass_through_request_timeout") if isinstance(operator_settings, Mapping) else None
     )
     return None if operator_timeout is not None else TINYFISH_PASSTHROUGH_TIMEOUT_SECONDS
 
