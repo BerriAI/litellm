@@ -276,25 +276,15 @@ fn project_redis(
 
     let client = backend.getattr("redis_client")?;
     let pool = client.getattr("connection_pool")?;
-    if !instance_class_is(&pool, "redis.connection", "ConnectionPool")? {
+    let Ok((resolved, is_tls)) = project_connection_pool(&pool)? else {
         return Ok(Err(UnsupportedCacheConfig::RedisConnection));
-    }
-    let resolved = pool.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
+    };
     for key in ["credential_provider", "redis_connect_func"] {
         if has_value(&resolved, key)? {
             return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
         }
     }
-    let connection_class = resolved
-        .get_item("connection_class")?
-        .unwrap_or(pool.getattr("connection_class")?);
-    let tls = if class_is(&connection_class, "redis.connection", "Connection")? {
-        None
-    } else if class_is(&connection_class, "redis.connection", "SSLConnection")? {
-        Some(project_tls(&resolved)?)
-    } else {
-        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
-    };
+    let tls = is_tls.then(|| project_tls(&resolved)).transpose()?;
 
     let protocol = match optional_i64(&resolved, "protocol")?.unwrap_or(2) {
         2 => RedisProtocol::Resp2,
@@ -332,18 +322,9 @@ fn project_valkey_semantic(
 ) -> PyResult<Result<ValkeySemanticCacheConfig, UnsupportedCacheConfig>> {
     let client = backend.getattr("sync_client")?;
     let pool = client.getattr("connection_pool")?;
-    if !instance_class_is(&pool, "redis.connection", "ConnectionPool")? {
+    let Ok((resolved, _is_tls)) = project_connection_pool(&pool)? else {
         return Ok(Err(UnsupportedCacheConfig::RedisConnection));
-    }
-    let resolved = pool.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
-    let connection_class = resolved
-        .get_item("connection_class")?
-        .unwrap_or(pool.getattr("connection_class")?);
-    if !class_is(&connection_class, "redis.connection", "Connection")?
-        && !class_is(&connection_class, "redis.connection", "SSLConnection")?
-    {
-        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
-    }
+    };
     let connection = RedisConnectionConfig {
         host: required_string(&resolved, "host")?,
         port: u16::try_from(required_i64(&resolved, "port")?)
@@ -369,6 +350,27 @@ fn project_valkey_semantic(
         embedding_model: backend.getattr("embedding_model")?.extract()?,
         connection,
     }))
+}
+
+#[inline(never)]
+fn project_connection_pool<'py>(
+    pool: &Bound<'py, PyAny>,
+) -> PyResult<Result<(Bound<'py, PyDict>, bool), UnsupportedCacheConfig>> {
+    if !instance_class_is(pool, "redis.connection", "ConnectionPool")? {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    let resolved = pool.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
+    let connection_class = resolved
+        .get_item("connection_class")?
+        .unwrap_or(pool.getattr("connection_class")?);
+    let is_tls = if class_is(&connection_class, "redis.connection", "Connection")? {
+        false
+    } else if class_is(&connection_class, "redis.connection", "SSLConnection")? {
+        true
+    } else {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    };
+    Ok(Ok((resolved, is_tls)))
 }
 
 #[inline(never)]
@@ -643,6 +645,40 @@ mod tests {
             assert_eq!(tls.ca_data.as_deref(), Some("CA DATA"));
             assert_eq!(tls.client_certificate.as_deref(), Some("/client.pem"));
             assert_eq!(tls.client_key.as_deref(), Some("/client.key"));
+        });
+    }
+
+    #[test]
+    fn projects_valkey_semantic_configuration() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "pool = ConnectionPool()\n\
+                 pool.connection_class = Connection\n\
+                 pool.max_connections = 12\n\
+                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390, 'db': 2}\n\
+                 client = SimpleNamespace(connection_pool=pool)\n\
+                 backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
+                 facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("Valkey semantic cache should be supported");
+            };
+            let CacheBackendConfig::ValkeySemantic(valkey) = config.backend else {
+                panic!("expected Valkey semantic configuration");
+            };
+            assert_eq!(valkey.similarity_threshold, 0.85);
+            assert_eq!(valkey.index_name, "semantic_idx");
+            assert_eq!(valkey.embedding_model, "text-embedding-3-small");
+            assert_eq!(valkey.connection.host, "cache.internal");
+            assert_eq!(valkey.connection.port, 6390);
+            assert_eq!(valkey.connection.database, 2);
+            assert_eq!(valkey.connection.pool_size, 12);
+            assert_eq!(valkey.connection.protocol, RedisProtocol::Resp2);
+            assert!(valkey.connection.tls.is_none());
         });
     }
 
