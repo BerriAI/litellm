@@ -303,6 +303,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_general_settings = {}
         mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
         mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
         route_type = "acompletion"
 
         # Call the actual method.
@@ -316,6 +317,7 @@ class TestProxyBaseLLMRequestProcessing:
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
             route_type=route_type,
+            llm_router=self._router_with_free_and_paid_models(),
         )
 
         mock_proxy_logging_obj.pre_call_hook.assert_called_once()
@@ -396,14 +398,17 @@ class TestProxyBaseLLMRequestProcessing:
             "add_litellm_data_to_request",
             mock_add_litellm_data_to_request,
         )
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
 
         returned_data, _ = await processing_obj.common_processing_pre_call_logic(
             request=mock_request,
             general_settings={},
             user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
             proxy_logging_obj=mock_proxy_logging_obj,
-            proxy_config=MagicMock(spec=ProxyConfig),
+            proxy_config=mock_proxy_config,
             route_type="acompletion",
+            llm_router=self._router_with_free_and_paid_models(),
         )
 
         persisted_body = returned_data["proxy_server_request"]["body"]
@@ -414,6 +419,105 @@ class TestProxyBaseLLMRequestProcessing:
         # audit body, which needs to stay plain-JSON-serializable end to end.
         assert "litellm_logging_obj" not in persisted_body
         json.dumps(persisted_body)
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_rejects_unroutable_model_before_pre_call_hook(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from litellm.proxy.common_utils import registry_read_through
+        from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return {
+                "model": "does-not-exist",
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        monkeypatch.setattr(
+            registry_read_through,
+            "model_registry_read_through",
+            SimpleNamespace(attempt=AsyncMock(return_value=False)),
+        )
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                }
+            ]
+        )
+
+        with pytest.raises(ProxyModelNotFoundError) as exc_info:
+            await processing_obj.common_processing_pre_call_logic(
+                request=mock_request,
+                general_settings={},
+                user_api_key_dict=ProxyUserAPIKeyAuth(),
+                proxy_logging_obj=mock_proxy_logging_obj,
+                proxy_config=mock_proxy_config,
+                route_type="acompletion",
+                llm_router=router,
+            )
+
+        assert exc_info.value.status_code == 400
+        mock_proxy_logging_obj.pre_call_hook.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_common_processing_pre_call_logic_runs_pre_call_hook_for_routable_model(self, monkeypatch):
+        processing_obj = ProxyBaseLLMRequestProcessing(data={})
+        mock_request = MagicMock(spec=Request)
+        mock_request.headers = {}
+
+        async def mock_add_litellm_data_to_request(*args, **kwargs):
+            return {
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hi"}],
+            }
+
+        async def mock_pre_call_hook(user_api_key_dict, data, call_type):
+            return data
+
+        monkeypatch.setattr(
+            litellm.proxy.common_request_processing,
+            "add_litellm_data_to_request",
+            mock_add_litellm_data_to_request,
+        )
+        mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4o-mini",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                }
+            ]
+        )
+
+        await processing_obj.common_processing_pre_call_logic(
+            request=mock_request,
+            general_settings={},
+            user_api_key_dict=ProxyUserAPIKeyAuth(),
+            proxy_logging_obj=mock_proxy_logging_obj,
+            proxy_config=mock_proxy_config,
+            route_type="acompletion",
+            llm_router=router,
+        )
+
+        mock_proxy_logging_obj.pre_call_hook.assert_awaited_once()
 
     @staticmethod
     def _guardrail_tag_budget_harness(
@@ -1838,6 +1942,7 @@ class TestProxyBaseLLMRequestProcessing:
         mock_general_settings = {}
         mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
         mock_proxy_config = MagicMock(spec=ProxyConfig)
+        mock_proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
         route_type = "acompletion"
 
         (
@@ -1850,6 +1955,7 @@ class TestProxyBaseLLMRequestProcessing:
             proxy_logging_obj=mock_proxy_logging_obj,
             proxy_config=mock_proxy_config,
             route_type=route_type,
+            llm_router=self._router_with_free_and_paid_models(),
         )
 
         # Verify queue_time_seconds is set and non-negative. Ends at start_time
