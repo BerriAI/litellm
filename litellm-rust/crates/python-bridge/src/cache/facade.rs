@@ -25,9 +25,17 @@ struct ObjectGuard {
     config: Vec<Value>,
 }
 
+struct RedisPoolGuard {
+    reference: Py<PyAny>,
+    connection_class: Py<PyAny>,
+    connection_kwargs: Py<PyAny>,
+    max_connections: usize,
+}
+
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
+    redis_pool: Option<RedisPoolGuard>,
 }
 
 impl ObjectGuard {
@@ -129,6 +137,45 @@ impl ObjectGuard {
     }
 }
 
+impl RedisPoolGuard {
+    fn capture(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let pool = backend
+            .getattr("redis_client")?
+            .getattr("connection_pool")?;
+        Ok(Self {
+            reference: pool.clone().unbind(),
+            connection_class: pool.getattr("connection_class")?.unbind(),
+            connection_kwargs: pool
+                .getattr("connection_kwargs")?
+                .call_method0("copy")?
+                .unbind(),
+            max_connections: pool.getattr("max_connections")?.extract::<usize>()?,
+        })
+    }
+
+    fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let pool = backend
+            .getattr("redis_client")?
+            .getattr("connection_pool")?;
+        Ok(self.reference.bind(py).is(&pool)
+            && self
+                .connection_class
+                .bind(py)
+                .is(&pool.getattr("connection_class")?)
+            && self.max_connections == pool.getattr("max_connections")?.extract::<usize>()?
+            && self
+                .connection_kwargs
+                .bind(py)
+                .eq(pool.getattr("connection_kwargs")?)?)
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.reference)?;
+        visit.call(&self.connection_class)?;
+        visit.call(&self.connection_kwargs)
+    }
+}
+
 impl FacadeGuard {
     pub(super) fn capture(
         py: Python<'_>,
@@ -190,17 +237,33 @@ impl FacadeGuard {
                     "redis_flush_size",
                 ],
             )?,
+            redis_pool: (kind == "redis")
+                .then(|| RedisPoolGuard::capture(&backend))
+                .transpose()?,
         })
     }
 
     fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
-        Ok(self.outer.matches(py, facade)?
-            && self.backend.matches(py, &facade.getattr("cache")?)?)
+        if !self.outer.matches(py, facade)? {
+            return Ok(false);
+        }
+        let backend = facade.getattr("cache")?;
+        if !self.backend.matches(py, &backend)? {
+            return Ok(false);
+        }
+        match &self.redis_pool {
+            Some(guard) => guard.matches(py, &backend),
+            None => Ok(true),
+        }
     }
 
     pub(super) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.outer.traverse(&visit)?;
-        self.backend.traverse(&visit)
+        self.backend.traverse(&visit)?;
+        if let Some(guard) = &self.redis_pool {
+            guard.traverse(&visit)?;
+        }
+        Ok(())
     }
 }
 

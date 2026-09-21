@@ -381,6 +381,10 @@ async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
     with rebound(facade.cache, "redis_kwargs", {**facade.cache.redis_kwargs, "ssl": True}):
         assert _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "python_callback"
 
+    pool: Final = facade.cache.redis_client.connection_pool
+    with rebound(pool, "connection_kwargs", {**pool.connection_kwargs, "db": 1}):
+        assert _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "python_callback"
+
     await binding.async_store(request("first"), {"value": 1})
     assert client.get("first") is None
     await binding.async_store(request("second"), {"value": 2})
