@@ -44,7 +44,6 @@ from litellm.proxy.guardrails.anthropic_sse import (
     assemble_anthropic_sse_stream,
     is_anthropic_sse_stream,
     is_sse_error_stream,
-    model_response_text,
 )
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -1432,7 +1431,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     yield chunk
                 return
 
-            pre_text: Final = model_response_text(assembled_model_response)
+            pre_dump: Final = (
+                assembled_model_response.model_dump()  # pyright: ignore[reportUnknownMemberType]  # untyped
+            )
             await self._process_response_for_pii(
                 response=assembled_model_response,
                 request_data=request_data,
@@ -1443,7 +1444,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return
             for chunk in (
                 anthropic_sse_chunks_from_response(assembled_model_response)
-                if model_response_text(assembled_model_response) != pre_text
+                if (
+                    assembled_model_response.model_dump()  # pyright: ignore[reportUnknownMemberType]  # untyped
+                    != pre_dump
+                )
                 else raw_chunks
             ):
                 yield chunk
