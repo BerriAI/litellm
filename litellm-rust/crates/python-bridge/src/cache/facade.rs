@@ -32,10 +32,16 @@ struct RedisPoolGuard {
     max_connections: usize,
 }
 
+struct DiskStoreGuard {
+    reference: Py<PyAny>,
+    directory: String,
+}
+
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
     redis_pool: Option<RedisPoolGuard>,
+    disk_store: Option<DiskStoreGuard>,
 }
 
 impl ObjectGuard {
@@ -176,6 +182,26 @@ impl RedisPoolGuard {
     }
 }
 
+impl DiskStoreGuard {
+    fn capture(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let store = backend.getattr("disk_cache")?;
+        Ok(Self {
+            reference: store.clone().unbind(),
+            directory: store.getattr("directory")?.extract()?,
+        })
+    }
+
+    fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let store = backend.getattr("disk_cache")?;
+        Ok(self.reference.bind(py).is(&store)
+            && self.directory == store.getattr("directory")?.extract::<String>()?)
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.reference)
+    }
+}
+
 impl FacadeGuard {
     pub(super) fn capture(
         py: Python<'_>,
@@ -192,6 +218,7 @@ impl FacadeGuard {
         let (module, name, cache_kind) = match kind {
             "memory" => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
             "redis" => ("litellm.caching.redis_cache", "RedisCache", "redis"),
+            "disk" => ("litellm.caching.disk_cache", "DiskCache", "disk"),
             _ => unreachable!(),
         };
         let backend = facade.getattr("cache")?;
@@ -240,6 +267,9 @@ impl FacadeGuard {
             redis_pool: (kind == "redis")
                 .then(|| RedisPoolGuard::capture(&backend))
                 .transpose()?,
+            disk_store: (kind == "disk")
+                .then(|| DiskStoreGuard::capture(&backend))
+                .transpose()?,
         })
     }
 
@@ -253,7 +283,10 @@ impl FacadeGuard {
         }
         match &self.redis_pool {
             Some(guard) => guard.matches(py, &backend),
-            None => Ok(true),
+            None => match &self.disk_store {
+                Some(guard) => guard.matches(py, &backend),
+                None => Ok(true),
+            },
         }
     }
 
@@ -261,6 +294,9 @@ impl FacadeGuard {
         self.outer.traverse(&visit)?;
         self.backend.traverse(&visit)?;
         if let Some(guard) = &self.redis_pool {
+            guard.traverse(&visit)?;
+        }
+        if let Some(guard) = &self.disk_store {
             guard.traverse(&visit)?;
         }
         Ok(())
