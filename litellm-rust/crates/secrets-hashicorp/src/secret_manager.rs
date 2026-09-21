@@ -207,7 +207,7 @@ impl HashicorpVault {
                 (None, Some(tls)) => {
                     let login_client: VaultClient =
                         self.build_client(self.config.login_namespace(), "")?;
-                    let endpoint: CertLoginRequest = CertLoginRequest::new(tls.role.clone());
+                    let endpoint: CertLoginRequest = CertLoginRequest::new(tls.role.as_deref());
                     let auth = api::auth(&login_client, endpoint)
                         .await
                         .map_err(|error| map_api_error(error, ErrorContext::Login))?;
