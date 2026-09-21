@@ -3830,6 +3830,7 @@ bedrock_batch_litellm_params: Final = (
     "s3_region_name",
     "s3_endpoint_url",
     "s3_output_bucket_name",
+    "s3_bucket_owner",
     "bedrock_tags",
 )
 
