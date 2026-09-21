@@ -240,9 +240,7 @@ export const generateDailyWithKeysData = (
     [`${entityLabel} ID`]: item.entityId,
     "Key Alias": item.keyAlias || "-",
     "Key ID": item.keyId,
-    ...(entityLabel === "User"
-      ? {}
-      : { "User ID": item.userId || "-", "User Email": item.userEmail || "-" }),
+    ...(entityLabel === "User" ? {} : { "User ID": item.userId || "-", "User Email": item.userEmail || "-" }),
     "Spend ($)": formatNumberWithCommas(item.metrics.spend, 4),
     Requests: item.metrics.api_requests,
     "Successful Requests": item.metrics.successful_requests,
@@ -288,10 +286,7 @@ export const generateDailyWithUsersData = (
             userId,
             userEmail: null,
             keyIds: new Set(),
-            metrics: Object.fromEntries(METRIC_KEYS.map((k) => [k, 0])) as Record<
-              (typeof METRIC_KEYS)[number],
-              number
-            >,
+            metrics: Object.fromEntries(METRIC_KEYS.map((k) => [k, 0])) as Record<(typeof METRIC_KEYS)[number], number>,
           };
         }
         const bucket = aggregatedData[uniqueKey];
