@@ -1,5 +1,12 @@
 use std::sync::{Arc, Mutex};
 
+use futures_util::future::BoxFuture;
+use litellm_host::event::WireRequest;
+use litellm_llms::base_llm::ocr::{
+    error::Error,
+    handler::{CallHooks, OcrClient},
+    transformation::LiteLLMOcrResponse,
+};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -7,9 +14,24 @@ use tokio::{
 };
 
 use crate::ocr::{
-    LiteLLMOcrRequest, LiteLLMOcrResponse, LocalOcrHost, OcrClient, ocr_machine,
+    route::{LocalOcrHost, ocr_machine},
+    types::LiteLLMOcrRequest,
     wire::{OcrWireRequest, decode_request},
 };
+
+/// Stands in for a host with no hooks registered: the wire request goes out unchanged
+/// and response events go nowhere.
+pub(crate) struct NoHooks;
+
+impl CallHooks<Error> for NoHooks {
+    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, Error>> {
+        Box::pin(async move { Ok(wire) })
+    }
+
+    fn response_received<'a>(&'a self, _body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 pub(crate) fn ocr_client() -> OcrClient {
     let document_http = reqwest::Client::builder()
@@ -19,16 +41,12 @@ pub(crate) fn ocr_client() -> OcrClient {
     OcrClient::for_test(reqwest::Client::new(), document_http)
 }
 
-pub(crate) async fn perform_ocr(
-    request: LiteLLMOcrRequest,
-) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-    ocr_client().perform(request).await
+pub(crate) async fn perform_ocr(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
+    crate::ocr::client::perform(&ocr_client(), request).await
 }
 
-pub(crate) async fn perform_ocr_with(
-    host: LocalOcrHost,
-) -> Result<LiteLLMOcrResponse, crate::ocr::Error> {
-    litellm_callbacks::run::run(ocr_machine(ocr_client()), &host).await
+pub(crate) async fn perform_ocr_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
+    litellm_host::run::run(ocr_machine(ocr_client()), &host).await
 }
 
 pub(crate) fn wire_request(model: &str, base: &str, options: Value) -> LiteLLMOcrRequest {
@@ -49,7 +67,7 @@ pub(crate) fn wire_request_with_document(
     decode_request(OcrWireRequest {
         model: model.into(),
         document,
-        api_key: Some("test-key".into()),
+        api_key: Some(litellm_auth::SecretValue::new("test-key")),
         api_base: Some(base.into()),
         custom_llm_provider: None,
         extra_headers: None,

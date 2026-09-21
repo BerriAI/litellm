@@ -1612,6 +1612,82 @@ export interface paths {
         patch: operations["azure_proxy_route_azure_ai__endpoint__patch"];
         trace?: never;
     };
+    "/azure_speech/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        get: operations["azure_speech_proxy_route_azure_speech__endpoint__get"];
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        put: operations["azure_speech_proxy_route_azure_speech__endpoint__put"];
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        post: operations["azure_speech_proxy_route_azure_speech__endpoint__post"];
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        delete: operations["azure_speech_proxy_route_azure_speech__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Azure Speech Proxy Route
+         * @description Pass-through for the Azure AI Speech REST APIs (speech to text), e.g.
+         *     `POST /azure_speech/speech/recognition/conversation/cognitiveservices/v1?language=en-US`
+         *     with the raw audio as the body, or `POST /azure_speech/speechtotext/v3.2/transcriptions`.
+         *
+         *     The body is forwarded byte for byte and the proxy injects its own
+         *     `Ocp-Apim-Subscription-Key`; the caller's `Authorization` header is the LiteLLM key
+         *     and is never forwarded.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/azure_speech)
+         */
+        patch: operations["azure_speech_proxy_route_azure_speech__endpoint__patch"];
+        trace?: never;
+    };
     "/batches": {
         parameters: {
             query?: never;
@@ -5354,6 +5430,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/websearch_interception_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Websearch Interception Settings
+         * @description Get web search interception configuration.
+         *
+         *     Returns the current settings plus their schema, for the Admin UI to render.
+         */
+        get: operations["get_websearch_interception_settings_get_websearch_interception_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get_favicon": {
         parameters: {
             query?: never;
@@ -7617,6 +7715,10 @@ export interface paths {
          *         - max_budget: Optional[float] - Max budget for key
          *         - team_id: Optional[str] - Team ID associated with key
          *         - tags: Optional[List[str]] - Tags for organizing keys
+         *         - object_permission: Optional[LiteLLM_ObjectPermissionBase] - key-specific object permission, as on /key/update
+         *
+         *     Only the fields an item carries are written: a field left out keeps its current value, and a field
+         *     sent explicitly, null included, is applied exactly as /key/update applies it.
          *
          *     Returns:
          *     - total_requested: int - Total number of keys requested for update
@@ -7711,6 +7813,7 @@ export interface paths {
          *     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
          *     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+         *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Takes precedence over `litellm_settings.max_end_user_budget_id`.
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
          *     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -7724,7 +7827,7 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
-         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
          *     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
@@ -8035,6 +8138,7 @@ export interface paths {
          *     - team_id: Optional[str] - The team id of the key
          *     - user_id: Optional[str] - [NON-FUNCTIONAL] THIS WILL BE IGNORED. The user id of the key
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+         *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *     - aliases: Optional[dict] - Any alias mappings, on top of anything in the config.yaml model list. - https://docs.litellm.ai/docs/proxy/virtual_keys#managing-auth---upgradedowngrade-models
          *     - config: Optional[dict] - any key-specific configs, overrides config in config.yaml
@@ -8172,6 +8276,7 @@ export interface paths {
          *     - project_id: Optional[str] - Omit to retain the project, or send null to detach. A different project ID is rejected.
          *     - organization_id: Optional[str] - The organization id of the key.
          *     - budget_id: Optional[str] - The budget id associated with the key. Created by calling `/budget/new`.
+         *     - end_user_budget_id: Optional[str] - Proxy admin only. Budget id applied to end users first seen through this key that carry no budget of their own. Omit to keep the current value, pass an empty string to clear it.
          *     - models: Optional[list] - Model_name's a user is allowed to call
          *     - tags: Optional[List[str]] - Tags for organizing keys (Enterprise only)
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -8203,7 +8308,7 @@ export interface paths {
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
-         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
+         *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
          *     - blocked: Optional[bool] - Whether the key is blocked
          *     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
@@ -10740,6 +10845,8 @@ export interface paths {
          *     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - organization-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
          *     - allowed_models: Optional[List[str]] - List of models the organization is allowed to access. If not set, defaults to the models field.
+         *     - temp_budget_increase: *Optional[float]* - Stored on the org budget row but only enforced for team member budgets today.
+         *     - temp_budget_expiry: *Optional[str]* - Stored on the org budget row but only enforced for team member budgets today.
          *     Case 1: Create new org **without** a budget_id
          *
          *     ```bash
@@ -12456,6 +12563,23 @@ export interface paths {
          *     to serve the bundled catalog only. A restart picks up a newly published catalog.
          */
         get: operations["get_public_autorouter_presets_public_autorouter_presets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/public/complexity_router/fuse_presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Public Fuse Presets */
+        get: operations["get_public_fuse_presets_public_complexity_router_fuse_presets_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -16091,6 +16215,7 @@ export interface paths {
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
+         *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -16476,6 +16601,61 @@ export interface paths {
         patch: operations["toolset_mcp_route_toolset__toolset_name__mcp_patch"];
         trace?: never;
     };
+    "/transcribe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe Sdk Proxy Route
+         * @description AWS-SDK-shaped pass-through for Amazon Transcribe: point the SDK's `endpoint_url`
+         *     at `/transcribe` and the operation is read from the `X-Amz-Target` header, per the
+         *     AWS JSON 1.1 protocol.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+         */
+        post: operations["transcribe_sdk_proxy_route_transcribe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/transcribe/{operation}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Transcribe Proxy Route
+         * @description Pass-through for the Amazon Transcribe API, e.g. `POST /transcribe/StartTranscriptionJob`.
+         *
+         *     The request body is forwarded to the AWS JSON 1.1 API and signed with SigV4 using the
+         *     proxy's AWS credentials. Standard jobs are tagged with the calling key's owner so that
+         *     only that owner (or a proxy admin) can read or delete them, and keys other than proxy
+         *     admins may only read media from and write transcripts to the S3 buckets listed in
+         *     `general_settings.transcribe_media_buckets`; account-wide operations
+         *     such as ListTranscriptionJobs are limited to proxy admins. Streaming transcription
+         *     (`transcribestreaming`) uses a separate HTTP/2 event-stream protocol and is not served
+         *     by this route.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/pass_through/transcribe)
+         */
+        post: operations["transcribe_proxy_route_transcribe__operation__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/typesafe/{endpoint}": {
         parameters: {
             query?: never;
@@ -16678,6 +16858,28 @@ export interface paths {
          *     Only proxy admins are allowed to modify it.
          */
         patch: operations["update_user_banner_update_user_banner_patch"];
+        trace?: never;
+    };
+    "/update/websearch_interception_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Websearch Interception Settings
+         * @description Update web search interception settings in database.
+         *
+         *     Settings will be picked up by all pods within approximately 10 seconds via background polling.
+         */
+        patch: operations["update_websearch_interception_settings_update_websearch_interception_settings_patch"];
         trace?: never;
     };
     "/upload/logo": {
@@ -18977,7 +19179,7 @@ export interface paths {
         post: operations["store_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_post"];
         /**
          * Delete Mcp Oauth User Credential
-         * @description Revoke the calling user's stored OAuth2 token for an MCP server
+         * @description Revoke the calling user's stored OAuth2 token for an MCP server. A proxy admin may pass user_id to revoke another user's stored token.
          */
         delete: operations["delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete"];
         options?: never;
@@ -19041,9 +19243,29 @@ export interface paths {
         post: operations["store_mcp_user_credential_v1_mcp_server__server_id__user_credential_post"];
         /**
          * Delete Mcp User Credential
-         * @description Delete the calling user's stored API key for a BYOK MCP server
+         * @description Delete the calling user's stored API key for a BYOK MCP server. A proxy admin may pass user_id to revoke another user's stored key.
          */
         delete: operations["delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/server/{server_id}/user-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Mcp Server User Credentials
+         * @description List every user's stored BYOK or OAuth2 credential for an MCP server (admin only, no secrets)
+         */
+        get: operations["list_mcp_server_user_credentials_v1_mcp_server__server_id__user_credentials_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -19072,6 +19294,30 @@ export interface paths {
          * @description Clear the calling user's per-user MCP env var values for this server.
          */
         delete: operations["clear_mcp_user_env_vars_v1_mcp_server__server_id__user_env_vars_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Mcp Gateway Sessions
+         * @description Live stateful MCP gateway sessions on this proxy worker, grouped by AI client and by user.
+         */
+        get: operations["get_mcp_gateway_sessions_v1_mcp_sessions_get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Mcp Gateway Sessions
+         * @description Force-close live stateful MCP gateway sessions on this proxy worker, selected by session id prefix and/or by the LiteLLM user that opened them (proxy admin only).
+         */
+        delete: operations["delete_mcp_gateway_sessions_v1_mcp_sessions_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -23638,9 +23884,9 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description spend plus saved_spend: the estimated single-model cost
+             * @description Estimated single-model cost for covered turns only
              */
-            baseline_spend: number;
+            baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
             /**
              * Classifier Cost
@@ -23659,16 +23905,29 @@ export interface components {
             router_type: string;
             /**
              * Saved Pct
-             * @description saved_spend over baseline_spend, as a percentage
+             * @description Covered savings over covered baseline spend, as a percentage
              */
-            saved_pct: number;
-            /** Saved Per Session */
-            saved_per_session: number;
+            saved_pct: number | null;
+            /**
+             * Saved Per Session
+             * @description Average session savings; unavailable unless every turn is covered
+             */
+            saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed dollars saved versus each router's savings baseline (derived from its hardest tier, or the configured override), from the same per-request savings record the usage tab reads
+             * @description Signed savings for covered turns only; null when traffic has no current estimates
              */
-            saved_spend: number;
+            saved_spend: number | null;
+            /**
+             * Savings Estimated Actual Spend
+             * @description Actual spend, including classifier cost, for covered turns only
+             */
+            savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Turns
+             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             */
+            savings_estimated_turns: number;
             /** Sessions */
             sessions: number;
             /**
@@ -23699,9 +23958,9 @@ export interface components {
             avg_turns_per_session: number;
             /**
              * Baseline Spend
-             * @description spend plus saved_spend: the estimated single-model cost
+             * @description Estimated single-model cost for covered turns only
              */
-            baseline_spend: number;
+            baseline_spend: number | null;
             cache: components["schemas"]["AutoRouterCacheStats"];
             /**
              * Classifier Cost
@@ -23710,16 +23969,29 @@ export interface components {
             classifier_cost: number | null;
             /**
              * Saved Pct
-             * @description saved_spend over baseline_spend, as a percentage
+             * @description Covered savings over covered baseline spend, as a percentage
              */
-            saved_pct: number;
-            /** Saved Per Session */
-            saved_per_session: number;
+            saved_pct: number | null;
+            /**
+             * Saved Per Session
+             * @description Average session savings; unavailable unless every turn is covered
+             */
+            saved_per_session: number | null;
             /**
              * Saved Spend
-             * @description Signed dollars saved versus each router's savings baseline (derived from its hardest tier, or the configured override), from the same per-request savings record the usage tab reads
+             * @description Signed savings for covered turns only; null when traffic has no current estimates
              */
-            saved_spend: number;
+            saved_spend: number | null;
+            /**
+             * Savings Estimated Actual Spend
+             * @description Actual spend, including classifier cost, for covered turns only
+             */
+            savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Turns
+             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             */
+            savings_estimated_turns: number;
             /** Sessions */
             sessions: number;
             /**
@@ -23989,21 +24261,21 @@ export interface components {
         AutoRouterSessionResponse: {
             /**
              * Baseline Model
-             * @description The savings baseline most of this session's turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
+             * @description The savings baseline most covered turns were priced against, recorded turn by turn, so it still names the counterfactual after the router is reconfigured or removed. None when no turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, which derive no baseline and so report no savings
              */
             baseline_model: string | null;
             /**
              * Baseline Models
-             * @description Turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
+             * @description Covered turns priced against each baseline model; more than one entry means the router's baseline changed mid-session and baseline_spend mixes both
              */
             baseline_models: {
                 [key: string]: number;
             };
             /**
              * Baseline Spend
-             * @description spend plus saved_spend: the estimated single-model cost
+             * @description Estimated single-model cost; unavailable unless every turn is covered
              */
-            baseline_spend: number;
+            baseline_spend: number | null;
             /**
              * Last Model
              * @description The deployment model the most recent turn was routed to
@@ -24021,9 +24293,24 @@ export interface components {
             router_type: string;
             /**
              * Saved Spend
-             * @description Estimated savings against the baseline, net of classifier cost
+             * @description Estimated savings for covered turns only, net of classifier cost
              */
-            saved_spend: number;
+            saved_spend: number | null;
+            /**
+             * Savings Estimated Actual Spend
+             * @description Actual spend, including classifier cost, for covered turns only
+             */
+            savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Baseline Spend
+             * @description Estimated single-model cost for covered turns only
+             */
+            savings_estimated_baseline_spend: number | null;
+            /**
+             * Savings Estimated Turns
+             * @description Turns covered by the current savings estimator; legacy estimates are excluded
+             */
+            savings_estimated_turns: number;
             /** Session Id */
             session_id: string;
             /**
@@ -24272,7 +24559,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', and 'compresr'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
              * @default fail_closed
              * @enum {string}
              */
@@ -24587,10 +24874,16 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Requested Token Type */
+            requested_token_type?: string | null;
             /** Resource */
             resource?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Subject Token */
+            subject_token?: string | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
         };
         /** Body_token_endpoint_token_post */
         Body_token_endpoint_token_post: {
@@ -24608,10 +24901,16 @@ export interface components {
             redirect_uri?: string;
             /** Refresh Token */
             refresh_token?: string | null;
+            /** Requested Token Type */
+            requested_token_type?: string | null;
             /** Resource */
             resource?: string | null;
             /** Scope */
             scope?: string | null;
+            /** Subject Token */
+            subject_token?: string | null;
+            /** Subject Token Type */
+            subject_token_type?: string | null;
         };
         /** Body_upload_logo_upload_logo_post */
         Body_upload_logo_upload_logo_post: {
@@ -25045,7 +25344,7 @@ export interface components {
         };
         /**
          * BulkUpdateKeyRequestItem
-         * @description Individual key update request item
+         * @description One /key/bulk_update item; only the fields it carries are written.
          */
         BulkUpdateKeyRequestItem: {
             /** Budget Id */
@@ -25054,6 +25353,7 @@ export interface components {
             key: string;
             /** Max Budget */
             max_budget?: number | null;
+            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Tags */
             tags?: string[] | null;
             /** Team Id */
@@ -25890,6 +26190,8 @@ export interface components {
             /** Allowed Callers */
             allowed_callers?: string[];
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
+            /** Eager Input Streaming */
+            eager_input_streaming?: boolean;
             function: components["schemas"]["ChatCompletionToolParamFunctionChunk"];
             /** Type */
             type: "function" | string;
@@ -25898,6 +26200,8 @@ export interface components {
         ChatCompletionToolParamFunctionChunk: {
             /** Description */
             description?: string;
+            /** Eager Input Streaming */
+            eager_input_streaming?: boolean;
             /** Name */
             name: string;
             /** Parameters */
@@ -26389,10 +26693,21 @@ export interface components {
         };
         /** ConfigFieldInfo */
         ConfigFieldInfo: {
+            /**
+             * Editable
+             * @default true
+             */
+            editable: boolean;
             /** Field Name */
             field_name: string;
             /** Field Value */
             field_value: unknown;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "env" | "default" | "unset";
         };
         /** ConfigFieldUpdate */
         ConfigFieldUpdate: {
@@ -26492,6 +26807,13 @@ export interface components {
              */
             cancel_on_disconnect?: boolean | null;
             /**
+             * Claude Code Gateway Managed Settings
+             * @description Claude Code managed-settings.json served verbatim at the gateway's /claude_code_gateway/managed/settings endpoint. When unset the endpoint returns 404 (no managed policy)
+             */
+            claude_code_gateway_managed_settings?: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Completion Model
              * @description proxy level default model for all chat completion calls
              */
@@ -26508,6 +26830,11 @@ export interface components {
              * @description override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth
              */
             custom_auth?: string | null;
+            /**
+             * Dangerously Permit Weak Or Unset Master Key
+             * @description local development only: start even when master_key is unset, empty, or a publicly known default
+             */
+            dangerously_permit_weak_or_unset_master_key?: boolean | null;
             /** @description custom args for instantiating dynamodb client - e.g. billing provision */
             database_args?: components["schemas"]["DynamoDBArgs"] | null;
             /**
@@ -26586,6 +26913,11 @@ export interface components {
              */
             disable_responses_id_security?: boolean | null;
             /**
+             * Enable Claude Code Gateway
+             * @description serve the Claude Code gateway protocol (https://code.claude.com/docs/en/claude-apps-gateway) under /claude_code_gateway: OAuth device-flow sign-in reusing proxy SSO, plus managed settings and OTLP telemetry ingestion. Off by default
+             */
+            enable_claude_code_gateway?: boolean | null;
+            /**
              * Enable Openai Websocket Passthrough
              * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
              */
@@ -26601,6 +26933,16 @@ export interface components {
              * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.
              */
             enforce_fallback_model_access?: boolean | null;
+            /**
+             * Failed Login Block Seconds
+             * @description How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300
+             */
+            failed_login_block_seconds?: number | null;
+            /**
+             * Failed Login Window Seconds
+             * @description Fixed window in seconds over which failed Admin UI sign-in attempts are counted. The window starts at the first failure and is not extended by later ones. Set under `general_settings` in config.yaml. Defaults to 60
+             */
+            failed_login_window_seconds?: number | null;
             /**
              * Forward Client Headers To Llm Api
              * @description If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.
@@ -26645,6 +26987,18 @@ export interface components {
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max Failed Login Attempts Per Source
+             * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Half this value, rounded down but at least 1, is the allowance for one username from that address; one more blocks that address for that username only, and its further failures stop counting toward the address limit, so a script stuck on one account does not block everyone behind a shared address. The per-address limit is only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and only the per-username half runs. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
+             */
+            max_failed_login_attempts_per_source?: number | null;
+            /**
+             * Max Failed Login Attempts Per Source Overrides
+             * @description Per-address overrides of `max_failed_login_attempts_per_source`, keyed by IP address or CIDR range, e.g. {'1.2.3.4': 200, '5.6.0.0/24': 500}. The most specific matching range wins (between equivalent keys such as '1.2.3.4' and '1.2.3.4/32', an exemption wins, then the higher limit), and the per-username allowance for that address follows as half the override. A value of 0 exempts the address from both limits. Set under `general_settings` in config.yaml
+             */
+            max_failed_login_attempts_per_source_overrides?: {
+                [key: string]: number;
+            } | null;
             /**
              * Max File Size Mb
              * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider
@@ -26710,6 +27064,16 @@ export interface components {
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
              */
             maximum_spend_logs_retention_period?: string | null;
+            /**
+             * Mcp Allowed Clients
+             * @description MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.
+             */
+            mcp_allowed_clients?: components["schemas"]["MCPAllowedClient"][] | null;
+            /**
+             * Mcp Client Id Header
+             * @description Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.
+             */
+            mcp_client_id_header?: string | null;
             /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
@@ -26819,8 +27183,13 @@ export interface components {
              */
             supported_db_objects?: components["schemas"]["SupportedDBObjectType"][] | null;
             /**
+             * Transcribe Media Buckets
+             * @description S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.
+             */
+            transcribe_media_buckets?: string[] | null;
+            /**
              * Trusted Proxy Ranges
-             * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.
+             * @description CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler, and whose X-Forwarded-For is used to attribute Admin UI sign-in attempts to a source address. Set it to an empty list when clients connect directly, so the peer address is the source. Left unset, or containing an entry that is not an address or CIDR range, the per-source sign-in limit is off.
              */
             trusted_proxy_ranges?: string[] | null;
             /**
@@ -26874,6 +27243,11 @@ export interface components {
         };
         /** ConfigList */
         ConfigList: {
+            /**
+             * Editable
+             * @default true
+             */
+            editable: boolean;
             /** Field Default Value */
             field_default_value: unknown;
             /** Field Description */
@@ -26895,6 +27269,12 @@ export interface components {
              * @default false
              */
             premium_field: boolean;
+            /**
+             * Source
+             * @default unset
+             * @enum {string}
+             */
+            source: "config" | "db" | "env" | "default" | "unset";
             /** Stored In Db */
             stored_in_db: boolean | null;
         };
@@ -27587,6 +27967,11 @@ export interface components {
         /** DailySpendMetadata */
         DailySpendMetadata: {
             /**
+             * Api Key Limit
+             * @description When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.
+             */
+            api_key_limit?: number | null;
+            /**
              * Has More
              * @default false
              */
@@ -27596,6 +27981,11 @@ export interface components {
              * @default 1
              */
             page: number;
+            /**
+             * Total Api Keys
+             * @description Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.
+             */
+            total_api_keys?: number | null;
             /**
              * Total Api Requests
              * @default 0
@@ -28298,6 +28688,39 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** FuseHarnessPreset */
+        FuseHarnessPreset: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Sources */
+            sources: string[];
+            /** Text */
+            text: string;
+        };
+        /** FuseModelPreset */
+        FuseModelPreset: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Model */
+            model: string;
+            /** Sources */
+            sources: string[];
+            /** Text */
+            text: string;
+        };
+        /** FusePresetCatalog */
+        FusePresetCatalog: {
+            /** Harnesses */
+            harnesses: components["schemas"]["FuseHarnessPreset"][];
+            /** Models */
+            models: components["schemas"]["FuseModelPreset"][];
+            /** Version */
+            version: string;
+        };
         /**
          * GUARDRAIL_DEFINITION_LOCATION
          * @enum {string}
@@ -28425,6 +28848,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */
@@ -28589,6 +29014,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -28891,13 +29318,18 @@ export interface components {
              */
             vault_cert_role?: string | null;
             /**
+             * Vault Login Namespace
+             * @description Namespace for AppRole and TLS cert login (X-Vault-Namespace header); falls back to vault_namespace
+             */
+            vault_login_namespace?: string | null;
+            /**
              * Vault Mount Name
              * @description KV engine mount name (default: secret)
              */
             vault_mount_name?: string | null;
             /**
              * Vault Namespace
-             * @description Vault namespace (for multi-tenant Vault, sent as X-Vault-Namespace header)
+             * @description Vault namespace used for both login and secret operations unless overridden below
              */
             vault_namespace?: string | null;
             /**
@@ -28905,6 +29337,11 @@ export interface components {
              * @description Optional path prefix for secrets (e.g., myapp -> secret/data/myapp/{secret_name})
              */
             vault_path_prefix?: string | null;
+            /**
+             * Vault Secret Namespace
+             * @description Namespace for secret reads and writes (URL path segment); falls back to vault_namespace
+             */
+            vault_secret_namespace?: string | null;
             /**
              * Vault Token
              * @description Token for Vault token-based authentication
@@ -29163,6 +29600,8 @@ export interface components {
         KeyMetadata: {
             /** Key Alias */
             key_alias?: string | null;
+            /** Key Exists */
+            key_exists?: boolean | null;
             /** Team Id */
             team_id?: string | null;
             /** User Email */
@@ -29265,21 +29704,27 @@ export interface components {
         LLMV2Config: {
             calibration?: components["schemas"]["LLMV2Calibration"] | null;
             /** Capable Profile */
-            capable_profile: string;
+            capable_profile?: string | null;
+            /** Capable Profile Preset */
+            capable_profile_preset?: string | null;
             /**
              * Capable Tier
              * @default REASONING
              */
             capable_tier: string;
             /** Efficient Profile */
-            efficient_profile: string;
+            efficient_profile?: string | null;
+            /** Efficient Profile Preset */
+            efficient_profile_preset?: string | null;
             /**
              * Efficient Tier
              * @default SIMPLE
              */
             efficient_tier: string;
             /** Harness */
-            harness: string;
+            harness?: string | null;
+            /** Harness Preset */
+            harness_preset?: string | null;
             /**
              * Max Output Tokens
              * @default 1024
@@ -29508,6 +29953,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -29543,6 +29992,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -30366,6 +30819,8 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Annotation Cost Per Page Batches */
+            annotation_cost_per_page_batches?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -30595,6 +31050,8 @@ export interface components {
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
             ocr_cost_per_page?: number | null;
+            /** Ocr Cost Per Page Batches */
+            ocr_cost_per_page_batches?: number | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -30679,6 +31136,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Endpoint Url */
+            s3_endpoint_url?: string | null;
             /** S3 Output Bucket Name */
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
@@ -31494,9 +31953,8 @@ export interface components {
             /**
              * Api Version
              * @description API version for Javelin service
-             * @default v1
              */
-            api_version: string | null;
+            api_version?: string | null;
             /**
              * Application
              * @description Application name for Javelin service
@@ -32296,6 +32754,22 @@ export interface components {
              */
             status?: "healthy" | "unhealthy";
         };
+        /**
+         * MCPAllowedClient
+         * @description One entry of `general_settings.mcp_allowed_clients`.
+         */
+        MCPAllowedClient: {
+            /**
+             * Alias
+             * @description Human-readable name for this client application, shown in the dashboard and in gateway logs.
+             */
+            alias: string;
+            /**
+             * Value
+             * @description Exact value of the JWT claim named in litellm_jwtauth.mcp_client_id_jwt_field, or of the mcp_client_id_header header, that identifies this client application. Matched case-sensitively.
+             */
+            value: string;
+        };
         /** MCPConnectorEntry */
         MCPConnectorEntry: {
             /** Args */
@@ -32445,6 +32919,66 @@ export interface components {
          */
         MCPEnvVarScope: "global" | "user";
         /**
+         * MCPGatewaySession
+         * @description One live stateful Streamable HTTP session held by this proxy worker.
+         */
+        MCPGatewaySession: {
+            /** Client Ip */
+            client_ip?: string | null;
+            /** Client Name */
+            client_name?: string | null;
+            /** Client Version */
+            client_version?: string | null;
+            /** Idle Seconds */
+            idle_seconds: number;
+            /** In Flight Requests */
+            in_flight_requests: number;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Session Id Prefix */
+            session_id_prefix: string;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
+        /** MCPGatewaySessionGroupCount */
+        MCPGatewaySessionGroupCount: {
+            /** Count */
+            count: number;
+            /** Label */
+            label?: string | null;
+        };
+        /** MCPGatewaySessionsResponse */
+        MCPGatewaySessionsResponse: {
+            /** By Client */
+            by_client?: components["schemas"]["MCPGatewaySessionGroupCount"][];
+            /** By User */
+            by_user?: components["schemas"]["MCPGatewaySessionGroupCount"][];
+            /** Sessions */
+            sessions?: components["schemas"]["MCPGatewaySession"][];
+            /** Total Sessions */
+            total_sessions: number;
+            /** Worker Pid */
+            worker_pid: number;
+        };
+        /**
+         * MCPGatewaySessionsTerminateResponse
+         * @description Stateful sessions an administrator force-closed on this proxy worker.
+         */
+        MCPGatewaySessionsTerminateResponse: {
+            /** Sessions */
+            sessions?: components["schemas"]["MCPGatewaySession"][];
+            /** Terminated Sessions */
+            terminated_sessions: number;
+            /** Worker Pid */
+            worker_pid: number;
+        };
+        /**
          * MCPOAuthUserCredentialRequest
          * @description Stores a user's OAuth2 token for an OpenAPI MCP server.
          */
@@ -32547,6 +33081,25 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * MCPServerUserCredentialListItem
+         * @description One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.
+         */
+        MCPServerUserCredentialListItem: {
+            /** Connected At */
+            connected_at?: string | null;
+            /**
+             * Credential Type
+             * @enum {string}
+             */
+            credential_type: "oauth2" | "byok";
+            /** Expires At */
+            expires_at?: string | null;
+            /** Updated At */
+            updated_at: string;
+            /** User Id */
+            user_id: string;
         };
         /** MCPSubmissionsSummary */
         MCPSubmissionsSummary: {
@@ -33308,6 +33861,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Soft Budget */
             soft_budget?: number | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -33431,6 +33988,10 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id: string;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -33829,6 +34390,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Expires */
@@ -35710,6 +36273,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Grace Period */
@@ -36349,6 +36914,8 @@ export interface components {
             DefaultRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
+            /** Notfounderrorretries */
+            NotFoundErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
             /** Serviceunavailableerrorretries */
@@ -36612,7 +37179,9 @@ export interface components {
             /** Type */
             type?: string | null;
             /** Value */
-            value: string;
+            value?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /** SCIMPatchOp */
         SCIMPatchOp: {
@@ -37391,6 +37960,19 @@ export interface components {
              */
             total_tokens: number;
         };
+        /** StandardLoggingHeuristicV2Forecast */
+        StandardLoggingHeuristicV2Forecast: {
+            /** Predicted Tier */
+            predicted_tier: string;
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /** Request Type */
+            request_type: string;
+            /** Threshold */
+            threshold: number;
+        };
         /**
          * StandardLoggingRoutingDecision
          * @description Per-request provenance for a pre-routing strategy (auto-router) decision.
@@ -37447,6 +38029,7 @@ export interface components {
             escalated?: boolean;
             /** Escalation Keyword */
             escalation_keyword?: string;
+            heuristic_v2_forecast?: components["schemas"]["StandardLoggingHeuristicV2Forecast"];
             /** Matched Keyword */
             matched_keyword?: string;
             /** Reasoning Override Min Score */
@@ -37604,7 +38187,7 @@ export interface components {
          *     Use in general_settings.supported_db_objects to specify which objects to load from DB.
          * @enum {string}
          */
-        SupportedDBObjectType: "models" | "mcp" | "guardrails" | "policies" | "vector_stores" | "pass_through_endpoints" | "prompts" | "model_cost_map" | "tools" | "config_overrides";
+        SupportedDBObjectType: "models" | "mcp" | "guardrails" | "policies" | "vector_stores" | "pass_through_endpoints" | "prompts" | "model_cost_map" | "tools" | "config_overrides" | "websearch_interception_settings";
         /** SupportedEndpoint */
         SupportedEndpoint: {
             /** Endpoint */
@@ -38211,6 +38794,16 @@ export interface components {
             /** Team Id */
             team_id: string;
             /**
+             * Temp Budget Expiry
+             * @description UTC expiry for temp_budget_increase
+             */
+            temp_budget_expiry?: string | null;
+            /**
+             * Temp Budget Increase
+             * @description Temporary additive budget increase for this team member, active until temp_budget_expiry
+             */
+            temp_budget_increase?: number | null;
+            /**
              * Tpm Limit
              * @description Tokens per minute limit for this team member
              */
@@ -38232,6 +38825,10 @@ export interface components {
             rpm_limit?: number | null;
             /** Team Id */
             team_id: string;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
             /** User Email */
@@ -39048,6 +39645,8 @@ export interface components {
             duration?: string | null;
             /** Enable Prompt Caching */
             enable_prompt_caching?: boolean | null;
+            /** End User Budget Id */
+            end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
             /** Guardrails */
@@ -39398,6 +39997,10 @@ export interface components {
             tags?: string[] | null;
             /** Team Id */
             team_id?: string | null;
+            /** Temp Budget Expiry */
+            temp_budget_expiry?: string | null;
+            /** Temp Budget Increase */
+            temp_budget_increase?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -40716,6 +41319,53 @@ export interface components {
             /** Vector Store Name */
             vector_store_name?: string | null;
         };
+        /**
+         * WebSearchInterceptionSettings
+         * @description Configuration for server-side web search interception
+         */
+        WebSearchInterceptionSettings: {
+            /**
+             * Enabled
+             * @description Serve web search tool calls from a configured search tool instead of passing them upstream
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Enabled Providers
+             * @description LLM providers to intercept for (e.g. 'bedrock', 'vertex_ai'). Empty intercepts Bedrock only.
+             */
+            enabled_providers?: string[];
+            /**
+             * Max Agentic Loops
+             * @description How many follow-up model calls one intercepted request may chain. Empty applies the default of 3.
+             */
+            max_agentic_loops?: number | null;
+            /**
+             * Search Tool Name
+             * @description Name of the configured search tool to run searches through. Empty uses the first one available.
+             */
+            search_tool_name?: string | null;
+        };
+        /**
+         * WebSearchInterceptionSettingsResponse
+         * @description Response model for web search interception settings
+         */
+        WebSearchInterceptionSettingsResponse: {
+            /**
+             * Active On This Pod
+             * @description Whether the process answering this request has the interception callback registered. Read-only: it reports what is running here, while values.enabled is the cluster-wide setting, and the two disagree while a pod is still applying a change or failed to apply it.
+             * @default false
+             */
+            active_on_this_pod: boolean;
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
+        };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
             /** Name */
@@ -40886,6 +41536,8 @@ export interface components {
             allow_client_keepalive_override: boolean | null;
             /** Annotation Cost Per Page */
             annotation_cost_per_page?: number | null;
+            /** Annotation Cost Per Page Batches */
+            annotation_cost_per_page_batches?: number | null;
             /** Api Base */
             api_base?: string | null;
             /** Api Key */
@@ -41115,6 +41767,8 @@ export interface components {
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
             ocr_cost_per_page?: number | null;
+            /** Ocr Cost Per Page Batches */
+            ocr_cost_per_page_batches?: number | null;
             /** Organization */
             organization?: string | null;
             /** Otpm */
@@ -41199,6 +41853,8 @@ export interface components {
             s3_bucket_name?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
+            /** S3 Endpoint Url */
+            s3_endpoint_url?: string | null;
             /** S3 Output Bucket Name */
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
@@ -43561,6 +44217,161 @@ export interface operations {
         };
     };
     azure_proxy_route_azure_ai__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    azure_speech_proxy_route_azure_speech__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;
@@ -49019,6 +49830,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserBanner"];
+                };
+            };
+        };
+    };
+    get_websearch_interception_settings_get_websearch_interception_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebSearchInterceptionSettingsResponse"];
                 };
             };
         };
@@ -57179,6 +58010,26 @@ export interface operations {
             };
         };
     };
+    get_public_fuse_presets_public_complexity_router_fuse_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FusePresetCatalog"];
+                };
+            };
+        };
+    };
     get_complexity_scorer_defaults_public_complexity_router_scorer_defaults_get: {
         parameters: {
             query?: never;
@@ -61676,6 +62527,57 @@ export interface operations {
             };
         };
     };
+    transcribe_sdk_proxy_route_transcribe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    transcribe_proxy_route_transcribe__operation__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                operation: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     typesafe_proxy_route_typesafe__endpoint__get: {
         parameters: {
             query?: never;
@@ -62086,6 +62988,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UpdateUserBannerResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_websearch_interception_settings_update_websearch_interception_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebSearchInterceptionSettings"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -65431,7 +66366,9 @@ export interface operations {
     };
     delete_mcp_oauth_user_credential_v1_mcp_server__server_id__oauth_user_credential_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                user_id?: string | null;
+            };
             header?: never;
             path: {
                 server_id: string;
@@ -65563,7 +66500,9 @@ export interface operations {
     };
     delete_mcp_user_credential_v1_mcp_server__server_id__user_credential_delete: {
         parameters: {
-            query?: never;
+            query?: {
+                user_id?: string | null;
+            };
             header?: never;
             path: {
                 server_id: string;
@@ -65579,6 +66518,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPUserCredentialResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_mcp_server_user_credentials_v1_mcp_server__server_id__user_credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPServerUserCredentialListItem"][];
                 };
             };
             /** @description Validation Error */
@@ -65676,6 +66646,58 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MCPUserEnvVarsStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_mcp_gateway_sessions_v1_mcp_sessions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPGatewaySessionsResponse"];
+                };
+            };
+        };
+    };
+    delete_mcp_gateway_sessions_v1_mcp_sessions_delete: {
+        parameters: {
+            query?: {
+                session_id_prefix?: string | null;
+                user_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MCPGatewaySessionsTerminateResponse"];
                 };
             };
             /** @description Validation Error */
