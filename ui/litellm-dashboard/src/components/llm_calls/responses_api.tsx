@@ -5,6 +5,7 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { toast } from "@/lib/toast";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
 import { parseUsageCost } from "./usage_cost";
+import { buildPlaygroundHeaders, type CustomHeaders } from "./request_headers";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
 import {
@@ -85,6 +86,7 @@ export async function makeOpenAIResponsesRequest(
   mcpToolsets?: MCPToolset[],
   streamingEnabled: boolean = true,
   onTotalLatency?: (latency: number) => void,
+  customHeaders?: CustomHeaders,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -101,11 +103,7 @@ export async function makeOpenAIResponsesRequest(
   }
 
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
-  // Prepare headers with tags and trace ID
-  const headers: Record<string, string> = {};
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  const headers = buildPlaygroundHeaders(tags, customHeaders);
 
   const client = new openai.OpenAI({
     apiKey: accessToken,

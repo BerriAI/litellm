@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Final
 
 from fastapi import HTTPException
@@ -137,3 +138,15 @@ async def build_effective_auth_contexts(
     if admitted_context is None:
         return team_contexts
     return [*team_contexts, admitted_context]
+
+
+async def can_access_mcp_server(
+    user_api_key_auth: UserAPIKeyAuth,
+    server_id: str,
+    allowed_servers: Callable[[UserAPIKeyAuth], Awaitable[list[str]]],
+) -> bool:
+    """Resolve server access through the same credential contexts as MCP management."""
+    for context in await build_effective_auth_contexts(user_api_key_auth):
+        if server_id in await allowed_servers(context):
+            return True
+    return False

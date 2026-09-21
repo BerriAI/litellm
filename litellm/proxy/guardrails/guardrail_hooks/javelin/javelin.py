@@ -44,7 +44,7 @@ class JavelinGuardrail(CustomGuardrail):
         application: str | None = None,
         **kwargs,
     ):
-        f"""
+        """
         Initialize the JavelinGuardrail class.
 
         This calls: {api_base}/{api_version}/guardrail/{guardrail_name}/apply

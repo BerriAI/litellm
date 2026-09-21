@@ -37,6 +37,7 @@ from litellm.types.guardrails import (
     ApplyGuardrailResponse,
     BaseLitellmParams,
     BedrockGuardrailConfigModel,
+    BedrockGuardrailStreamingParams,
     Guardrail,
     GuardrailEventHooks,
     GuardrailInfoResponse,
@@ -1959,7 +1960,10 @@ async def get_provider_specific_params():
     ```
     """
     # Get fields from the models
-    bedrock_fields: Final = _get_fields_from_model(BedrockGuardrailConfigModel)
+    bedrock_fields: Final = {
+        **_get_fields_from_model(BedrockGuardrailConfigModel),
+        **_get_fields_from_model(BedrockGuardrailStreamingParams),
+    }
     presidio_fields: Final = _get_fields_from_model(PresidioPresidioConfigModelUserInterface)
     lakera_v2_fields: Final = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields: Final = _get_fields_from_model(ToolPermissionGuardrailConfigModel)

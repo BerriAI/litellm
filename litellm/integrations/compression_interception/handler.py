@@ -15,6 +15,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_logger
 from litellm.compression import compress
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.types.integrations.compression_interception import (
     CompressionInterceptionConfig,
     CompressionSavingsMetadata,
@@ -153,7 +154,7 @@ class CompressionInterceptionLogger(CustomLogger):
 
         self._prune_expired_cache()
 
-        compressed: Final = compress(
+        compressed: Final = await asyncify(compress)(
             messages=messages,
             model=model,
             call_type=CallTypes.anthropic_messages,

@@ -66,6 +66,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers=headers,
             optional_params=optional_params,
             custom_llm_provider=self.custom_llm_provider or "deepseek",
+            messages=messages,
         )
 
         return headers, api_base

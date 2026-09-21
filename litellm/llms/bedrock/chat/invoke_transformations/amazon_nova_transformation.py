@@ -6,12 +6,21 @@ Inherits from `AmazonConverseConfig`
 Nova + Invoke API Tutorial: https://docs.aws.amazon.com/nova/latest/userguide/using-invoke-api.html
 """
 
-from typing import TYPE_CHECKING, Final
+from collections.abc import Callable, Mapping, Sequence
+from functools import reduce
+from typing import TYPE_CHECKING, Final, TypeVar
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
+from litellm.types.llms.bedrock import (
+    BedrockInvokeNovaRequest,
+    CachePointBlock,
+    ContentBlock,
+    MessageBlock,
+    SystemContentBlock,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -20,6 +29,50 @@ from .base_invoke_transformation import AmazonInvokeConfig
 
 if TYPE_CHECKING:
     import tiktoken
+
+_CachePointCarrier = TypeVar("_CachePointCarrier", SystemContentBlock, ContentBlock)
+_INJECTION_POINTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _without_tool_config_injection_points(optional_params: Mapping[str, object]) -> dict[str, object]:
+    """InvokeModel has no tool caching, and a ``tool_config`` point the Converse transform
+    placed would credit the gateway for a cachePoint this request cannot carry.
+    """
+    raw_points: Final = optional_params.get("cache_control_injection_points")
+    if raw_points is None:
+        return dict(optional_params)
+    try:
+        points = _INJECTION_POINTS.validate_python(raw_points)
+    except ValidationError:
+        return dict(optional_params)
+    return {
+        **optional_params,
+        "cache_control_injection_points": [point for point in points if point.get("location") != "tool_config"],
+    }
+
+
+def _system_block_with_cache_point(block: SystemContentBlock, cache_point: CachePointBlock) -> SystemContentBlock:
+    return {**block, "cachePoint": cache_point}
+
+
+def _content_block_with_cache_point(block: ContentBlock, cache_point: CachePointBlock) -> ContentBlock:
+    return {**block, "cachePoint": cache_point}
+
+
+def _inline_block_cache_points(
+    blocks: Sequence[_CachePointCarrier],
+    with_cache_point: Callable[[_CachePointCarrier, CachePointBlock], _CachePointCarrier],
+) -> list[_CachePointCarrier]:
+    def attach(inlined: tuple[_CachePointCarrier, ...], block: _CachePointCarrier) -> tuple[_CachePointCarrier, ...]:
+        cache_point: Final = block.get("cachePoint")
+        if cache_point is None or len(block) != 1:
+            return (*inlined, block)
+        anchor: Final = next((index for index in reversed(range(len(inlined))) if "text" in inlined[index]), None)
+        if anchor is None:
+            return inlined
+        return (*inlined[:anchor], with_cache_point(inlined[anchor], cache_point), *inlined[anchor + 1 :])
+
+    return list(reduce(attach, blocks, ()))
 
 
 class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
@@ -46,7 +99,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         headers: dict,
     ) -> dict:
@@ -54,11 +107,13 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             self,
             model=model,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=_without_tool_config_injection_points(optional_params),
             litellm_params=litellm_params,
             headers=headers,
         )
-        _bedrock_invoke_nova_request: Final = BedrockInvokeNovaRequest(**_transformed_nova_request)
+        _bedrock_invoke_nova_request: Final = self._inline_cache_points(
+            BedrockInvokeNovaRequest(**_transformed_nova_request)
+        )
         self._remove_empty_system_messages(_bedrock_invoke_nova_request)
         bedrock_invoke_nova_request: Final = self._filter_allowed_fields(_bedrock_invoke_nova_request)
         return bedrock_invoke_nova_request
@@ -91,6 +146,24 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             api_key,
             json_mode,
         )
+
+    @staticmethod
+    def _inline_cache_points(request: BedrockInvokeNovaRequest) -> BedrockInvokeNovaRequest:
+        """InvokeModel takes ``cachePoint`` as a key of the text block it caches: it rejects the
+        standalone ``{"cachePoint": ...}`` blocks Converse accepts and the key on image, toolUse,
+        and toolResult blocks, so a point behind one of those moves back to the last text block.
+        """
+        return {
+            **request,
+            "system": _inline_block_cache_points(request.get("system", []), _system_block_with_cache_point),
+            "messages": [
+                MessageBlock(
+                    role=message["role"],
+                    content=_inline_block_cache_points(message["content"], _content_block_with_cache_point),
+                )
+                for message in request.get("messages", [])
+            ],
+        }
 
     def _filter_allowed_fields(self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest) -> dict:
         """

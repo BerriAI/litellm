@@ -9,6 +9,7 @@ rows instead of the internal routing key `model_name_{team_id}_{uuid}`.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -238,7 +239,7 @@ async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=admin, litellm_model_id=None)
 
-    names = [m["model_name"] for m in resp["data"]]
+    names = [m["model_name"] for m in json.loads(resp.body)["data"]]
     assert "team-claude-sonnet" in names
     assert "model_name_team-abc-123_4a6b8" not in names
 
@@ -271,7 +272,7 @@ async def test_model_info_v1_unrestricted_key_returns_all_deployments(monkeypatc
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_name"] for m in resp["data"]] == ["gpt-4"]
+    assert [m["model_name"] for m in json.loads(resp.body)["data"]] == ["gpt-4"]
 
 
 @pytest.mark.asyncio
@@ -303,7 +304,7 @@ async def test_model_info_v1_restricted_key_filters_deployments(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_name"] for m in resp["data"]] == ["gpt-4"]
+    assert [m["model_name"] for m in json.loads(resp.body)["data"]] == ["gpt-4"]
 
 
 def _other_team_row() -> dict:
@@ -367,10 +368,11 @@ async def test_model_info_v1_unrestricted_key_hides_other_team_byok(monkeypatch)
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    returned_ids = {m["model_info"]["id"] for m in resp["data"]}
+    data = json.loads(resp.body)["data"]
+    returned_ids = {m["model_info"]["id"] for m in data}
     assert returned_ids == {"global-id-1", "byok-id-1"}
     assert "byok-id-other" not in returned_ids
-    names = [m["model_name"] for m in resp["data"]]
+    names = [m["model_name"] for m in data]
     assert "team-claude-sonnet" in names
     assert "gpt-4" in names
 
@@ -412,7 +414,7 @@ async def test_model_info_v1_service_key_hides_all_team_byok(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_info"]["id"] for m in resp["data"]] == ["global-id-1"]
+    assert [m["model_info"]["id"] for m in json.loads(resp.body)["data"]] == ["global-id-1"]
 
 
 @pytest.mark.asyncio
@@ -466,7 +468,7 @@ async def test_model_info_v1_team_key_sees_own_byok_regardless_of_user_lookup(
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_info"]["id"] for m in resp["data"]] == ["byok-id-1", "global-id-1"]
+    assert [m["model_info"]["id"] for m in json.loads(resp.body)["data"]] == ["byok-id-1", "global-id-1"]
 
 
 @pytest.mark.asyncio
@@ -509,7 +511,7 @@ async def test_model_info_v1_user_team_membership_grants_byok(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
-    assert [m["model_info"]["id"] for m in resp["data"]] == [
+    assert [m["model_info"]["id"] for m in json.loads(resp.body)["data"]] == [
         "byok-id-other",
         "global-id-1",
     ]
@@ -557,7 +559,7 @@ async def test_model_info_v1_populates_access_via_team_ids(monkeypatch):
     )
     resp = await ps.model_info_v1(user_api_key_dict=admin, litellm_model_id=None)
 
-    by_id = {m["model_info"]["id"]: m for m in resp["data"]}
+    by_id = {m["model_info"]["id"]: m for m in json.loads(resp.body)["data"]}
     assert by_id["byok-id-1"]["model_info"]["access_via_team_ids"] == [team_id]
     assert by_id["byok-id-1"]["model_info"]["direct_access"] is False
     assert by_id["global-id-1"]["model_info"]["direct_access"] is True
@@ -816,7 +818,7 @@ async def test_model_info_v1_litellm_model_id_include_team_models_filters_inacce
         include_team_models=True,
     )
 
-    assert resp["data"] == []
+    assert json.loads(resp.body)["data"] == []
 
 
 @pytest.mark.asyncio
@@ -852,7 +854,7 @@ async def test_model_info_v1_litellm_model_id_team_id_applies_team_filter(monkey
         teamId="other-team",
     )
 
-    assert resp["data"] == []
+    assert json.loads(resp.body)["data"] == []
     team_filter.assert_awaited_once()
     assert team_filter.await_args.kwargs["team_id"] == "other-team"
     assert team_filter.await_args.kwargs["all_models"] == [team_row]

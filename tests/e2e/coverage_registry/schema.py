@@ -64,6 +64,7 @@ LlmCapability = Literal[
     "assume_role",
     "basic",
     "count_tokens",
+    "govcloud_partition",
     "input_validation",
     "long_context_1m",
     "mid_conversation_system",

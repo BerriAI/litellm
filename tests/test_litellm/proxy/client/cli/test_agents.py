@@ -1,7 +1,9 @@
 import inspect
 import json
 import os
+import subprocess
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 import click
@@ -9,10 +11,9 @@ import pytest
 import requests
 from click.testing import CliRunner
 
-
-
 from litellm.proxy.client.cli.commands.agents import (
     AgentRunError,
+    ModelSyncArgs,
     ModelSyncSkipped,
     _hand_off,
     _replace_process,
@@ -22,6 +23,7 @@ from litellm.proxy.client.cli.commands.agents import (
     agent_model_sync_env,
     agent_profile,
     build_agent_env,
+    codex_model_sync_args,
     opencode_model_sync_env,
     run_agent,
     verify_proxy_key,
@@ -53,6 +55,112 @@ class _Recorder:
     def __call__(self, *args):
         self.calls.append(args)
         return self.returns
+
+
+_STOCK_REASONING_LEVELS = [
+    {"effort": "low", "description": "Fast responses with lighter reasoning"},
+    {"effort": "medium", "description": "Balances speed and reasoning depth for everyday tasks"},
+    {"effort": "high", "description": "Greater reasoning depth for complex problems"},
+]
+
+_STOCK_MODELS = {
+    "gpt-5.6-terra": {
+        "slug": "gpt-5.6-terra",
+        "display_name": "GPT-5.6 Terra",
+        "description": "Balanced agentic coding model for everyday work.",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": _STOCK_REASONING_LEVELS,
+        "shell_type": "unified_exec",
+        "visibility": "list",
+        "supported_in_api": True,
+        "priority": 7,
+        "availability_nux": None,
+        "upgrade": None,
+        "base_instructions": "You are Codex, a coding agent based on GPT-5.6.",
+        "apply_patch_tool_type": "freeform",
+        "supports_parallel_tool_calls": True,
+        "context_window": 272000,
+        "comp_hash": "terra-hash",
+    },
+    "gpt-5.5": {
+        "slug": "gpt-5.5",
+        "display_name": "GPT-5.5",
+        "description": "Frontier model for complex coding, research, and real-world work.",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": _STOCK_REASONING_LEVELS,
+        "shell_type": "unified_exec",
+        "visibility": "list",
+        "supported_in_api": True,
+        "priority": 12,
+        "availability_nux": None,
+        "upgrade": None,
+        "base_instructions": "You are Codex, a coding agent based on GPT-5.",
+        "apply_patch_tool_type": "freeform",
+        "supports_parallel_tool_calls": True,
+        "context_window": 272000,
+        "comp_hash": "gpt-5.5-hash",
+    },
+    "gpt-5.4": {
+        "slug": "gpt-5.4",
+        "display_name": "GPT-5.4",
+        "description": "Strong model for everyday coding.",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": _STOCK_REASONING_LEVELS,
+        "shell_type": "unified_exec",
+        "visibility": "hide",
+        "supported_in_api": True,
+        "priority": 16,
+        "availability_nux": None,
+        "upgrade": {
+            "model": "gpt-5.6-terra",
+            "migration_markdown": "GPT-5.4 is no longer available. Switch to GPT-5.6 Terra to continue.",
+            "retirement_at": "2026-08-31T19:00:00Z",
+        },
+        "base_instructions": "You are Codex, a coding agent based on GPT-5.",
+        "apply_patch_tool_type": "freeform",
+        "supports_parallel_tool_calls": True,
+        "context_window": 272000,
+        "comp_hash": "gpt-5.4-hash",
+    },
+    "codex-auto-review": {
+        "slug": "codex-auto-review",
+        "display_name": "Codex Auto Review",
+        "description": None,
+        "supported_reasoning_levels": [],
+        "shell_type": "unified_exec",
+        "visibility": "hide",
+        "supported_in_api": False,
+        "priority": 43,
+        "availability_nux": None,
+        "upgrade": None,
+        "base_instructions": "You are Codex, reviewing a change.",
+        "apply_patch_tool_type": None,
+        "supports_parallel_tool_calls": True,
+        "context_window": 272000,
+        "comp_hash": "review-hash",
+    },
+}
+
+_STOCK_CATALOG = json.dumps({"models": list(_STOCK_MODELS.values())})
+
+
+class _FakeRun:
+    """A `codex` that prints `stock` from a bare `debug models` and answers a catalog override with `returncode`.
+
+    `stock=None` is a Codex with no `debug models` at all: every call answers with `returncode` and `stderr`.
+    """
+
+    def __init__(self, returncode=0, stderr="", stock=_STOCK_CATALOG):
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stock = stock
+        self.calls = []
+
+    def __call__(self, args, **kwargs):
+        self.calls.append((args, kwargs))
+        if self.stock is not None and "model_catalog_json=" not in str(args):
+            return subprocess.CompletedProcess(args, 0, self.stock, "")
+        return subprocess.CompletedProcess(args, self.returncode, "", self.stderr)
 
 
 class _FakeJsonResponse:
@@ -90,9 +198,7 @@ class TestAgentProfile:
 
 class TestBuildAgentEnv:
     def test_anthropic_profile_uses_bare_root_and_bearer(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"anthropic"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"anthropic"}))
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
         assert env["ENABLE_TOOL_SEARCH"] == "true"
@@ -128,9 +234,7 @@ class TestBuildAgentEnv:
         assert "ANTHROPIC_API_KEY" not in env
 
     def test_openai_profile_appends_v1(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"openai"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"openai"}))
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["OPENAI_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in env
@@ -138,9 +242,7 @@ class TestBuildAgentEnv:
         assert "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY" not in env
 
     def test_both_profiles_set_everything(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000", "sk-key", frozenset({"anthropic", "openai"})
-        )
+        env = build_agent_env({}, "http://localhost:4000", "sk-key", frozenset({"anthropic", "openai"}))
         assert env["ANTHROPIC_BASE_URL"] == "http://localhost:4000"
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
@@ -148,9 +250,7 @@ class TestBuildAgentEnv:
         assert env["ENABLE_TOOL_SEARCH"] == "true"
 
     def test_litellm_profile_exports_only_the_proxy_key(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000/", "sk-key", frozenset({"litellm"})
-        )
+        env = build_agent_env({}, "http://localhost:4000/", "sk-key", frozenset({"litellm"}))
         assert env["LITELLM_PROXY_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in env
         assert "OPENAI_BASE_URL" not in env
@@ -158,9 +258,7 @@ class TestBuildAgentEnv:
 
     def test_preserves_unrelated_env_and_does_not_mutate_input(self):
         base = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
-        env = build_agent_env(
-            base, "http://localhost:4000", "sk-key", frozenset({"anthropic"})
-        )
+        env = build_agent_env(base, "http://localhost:4000", "sk-key", frozenset({"anthropic"}))
         assert env["PATH"] == "/usr/bin"
         assert base == {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
 
@@ -322,9 +420,7 @@ class TestOpencodeModelSync:
         assert "refused" in result.reason
 
     def test_non_200_is_reported(self):
-        result = opencode_model_sync_env(
-            {}, "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500)
-        )
+        result = opencode_model_sync_env({}, "http://localhost:4000", "sk-key", get=lambda *a, **k: _FakeResponse(500))
         assert isinstance(result, ModelSyncSkipped)
         assert "HTTP 500" in result.reason
 
@@ -335,10 +431,10 @@ class TestOpencodeModelSync:
         assert isinstance(result, ModelSyncSkipped)
         assert "unexpected body" in result.reason
 
-    @pytest.mark.parametrize("command", ["claude", "codex", "/usr/bin/claude"])
-    def test_only_opencode_syncs(self, command):
+    @pytest.mark.parametrize("command", ["claude", "pi", "/usr/bin/claude"])
+    def test_only_opencode_and_codex_sync(self, command):
         def boom(*a, **k):
-            raise AssertionError("no agent other than opencode should call the proxy")
+            raise AssertionError("no agent other than opencode or codex should call the proxy")
 
         assert agent_model_sync_env(command, {}, "http://localhost:4000", "sk-key", False, get=boom) == {}
 
@@ -367,7 +463,369 @@ class TestOpencodeModelSync:
         assert _default_of(opencode_model_sync_env, "get") is requests.get
 
 
+class TestCodexModelSync:
+    @staticmethod
+    def _listing(*models):
+        return {"object": "list", "data": list(models)}
+
+    @staticmethod
+    def _row(model_id, **extra):
+        return {"id": model_id, "object": "model", "created": 1, "owned_by": "openai", **extra}
+
+    def _sync(self, listing, codex_home, base_url="http://localhost:4000/", run=None):
+        captured = {}
+
+        def fake_get(url, headers, timeout):
+            captured["url"] = url
+            captured["headers"] = headers
+            return _FakeResponse(200, listing)
+
+        result = codex_model_sync_args(
+            {"CODEX_HOME": str(codex_home)},
+            base_url,
+            "sk-key",
+            get=fake_get,
+            run=_FakeRun() if run is None else run,
+        )
+        return captured, result
+
+    @staticmethod
+    def _catalog_path(result):
+        assert isinstance(result, ModelSyncArgs)
+        flag, override = result.args
+        assert flag == "-c"
+        key, _, value = override.partition("=")
+        assert key == "model_catalog_json"
+        return json.loads(value)
+
+    def test_writes_catalog_under_codex_home_and_points_codex_at_it(self, tmp_path):
+        listing = self._listing(self._row("gpt-5.5", mode="chat"), self._row("claude-opus-4-7"))
+        captured, result = self._sync(listing, tmp_path / "codex")
+
+        assert captured["url"] == "http://localhost:4000/v1/models"
+        assert captured["headers"] == {"Authorization": "Bearer sk-key"}
+        path = self._catalog_path(result)
+        assert path == str(tmp_path / "codex" / "litellm-models.json")
+        text = (tmp_path / "codex" / "litellm-models.json").read_text()
+        assert "sk-key" not in text
+        catalog = json.loads(text)
+        assert [m["slug"] for m in catalog["models"]] == ["gpt-5.5", "claude-opus-4-7"]
+        assert [m["display_name"] for m in catalog["models"]] == ["GPT-5.5", "claude-opus-4-7"]
+        assert [m["priority"] for m in catalog["models"]] == [0, 1]
+
+    def _entries(self, codex_home):
+        return {m["slug"]: m for m in json.loads((codex_home / "litellm-models.json").read_text())["models"]}
+
+    def test_known_model_keeps_the_installed_codex_entry(self, tmp_path):
+        self._sync(self._listing(self._row("gpt-5.5", mode="chat")), tmp_path)
+        assert self._entries(tmp_path)["gpt-5.5"] == {**_STOCK_MODELS["gpt-5.5"], "priority": 0}
+
+    def test_hidden_stock_model_is_listed_when_the_proxy_serves_it(self, tmp_path):
+        self._sync(self._listing(self._row("gpt-5.4")), tmp_path)
+        entry = self._entries(tmp_path)["gpt-5.4"]
+        assert entry["visibility"] == "list"
+        assert entry["upgrade"] is None
+        assert entry["supported_reasoning_levels"] == _STOCK_REASONING_LEVELS
+
+    def test_api_disabled_stock_model_is_selectable_when_the_proxy_serves_it(self, tmp_path):
+        self._sync(self._listing(self._row("codex-auto-review")), tmp_path)
+        entry = self._entries(tmp_path)["codex-auto-review"]
+        assert entry["supported_in_api"] is True
+        assert entry["visibility"] == "list"
+        assert entry["base_instructions"] == _STOCK_MODELS["codex-auto-review"]["base_instructions"]
+
+    def test_stock_upgrade_nudge_survives_when_its_target_is_listed(self, tmp_path):
+        self._sync(self._listing(self._row("gpt-5.4"), self._row("gpt-5.6-terra")), tmp_path)
+        entries = self._entries(tmp_path)
+        assert entries["gpt-5.4"]["upgrade"] == _STOCK_MODELS["gpt-5.4"]["upgrade"]
+        assert [entries["gpt-5.4"]["priority"], entries["gpt-5.6-terra"]["priority"]] == [0, 1]
+
+    def test_stock_catalog_is_decoded_as_utf8_regardless_of_locale(self, tmp_path):
+        description = "Modelo equilibrado para el trabajo diario, con acentos y ñ."
+        catalog = {"models": [{**_STOCK_MODELS["gpt-5.5"], "description": description}]}
+        stock = json.dumps(catalog, ensure_ascii=False).encode("utf-8")
+
+        def locale_bound_run(args, **kwargs):
+            if "model_catalog_json=" in str(args):
+                return subprocess.CompletedProcess(args, 0, "", "")
+            return subprocess.CompletedProcess(args, 0, stock.decode(kwargs.get("encoding") or "ascii"), "")
+
+        _, result = self._sync(self._listing(self._row("gpt-5.5")), tmp_path, run=locale_bound_run)
+
+        assert isinstance(result, ModelSyncArgs)
+        written = json.loads((tmp_path / "litellm-models.json").read_text(encoding="utf-8"))["models"]
+        assert [m["description"] for m in written] == [description]
+
+    def test_unparseable_stock_catalog_is_reported(self, tmp_path):
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(stock="not json"))
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason.startswith("`codex debug models` printed no model catalog: ")
+        assert not (tmp_path / "litellm-models.json").exists()
+
+    def test_unknown_model_gets_the_fields_codex_requires(self, tmp_path):
+        _, result = self._sync(self._listing(self._row("m")), tmp_path)
+        entry = json.loads((tmp_path / "litellm-models.json").read_text())["models"][0]
+
+        assert entry["visibility"] == "list"
+        assert entry["supported_in_api"] is True
+        assert entry["shell_type"] == "unified_exec"
+        assert entry["supported_reasoning_levels"] == []
+        assert entry["truncation_policy"] == {"mode": "bytes", "limit": 10000}
+        assert entry["experimental_supported_tools"] == []
+        assert entry["support_verbosity"] is False
+        assert entry["supports_reasoning_summaries"] is False
+        assert entry["supports_parallel_tool_calls"] is False
+        for nullable in ("description", "availability_nux", "upgrade", "default_verbosity", "apply_patch_tool_type"):
+            assert nullable in entry and entry[nullable] is None
+        assert entry["base_instructions"].startswith("You are a coding agent running in the Codex CLI")
+
+    def test_context_window_comes_from_max_input_tokens_for_unknown_models_only(self, tmp_path):
+        listing = self._listing(
+            self._row("big", max_input_tokens=400000),
+            self._row("unknown"),
+            self._row("gpt-5.5", max_input_tokens=400000),
+        )
+        self._sync(listing, tmp_path)
+        models = self._entries(tmp_path)
+        assert models["big"]["context_window"] == 400000
+        assert models["unknown"]["context_window"] is None
+        assert models["gpt-5.5"]["context_window"] == 272000
+
+    def test_non_chat_models_are_left_out(self, tmp_path):
+        listing = self._listing(
+            self._row("chat", mode="chat"),
+            self._row("resp", mode="responses"),
+            self._row("embed", mode="embedding"),
+            self._row("img", mode="image_generation"),
+        )
+        self._sync(listing, tmp_path)
+        slugs = {m["slug"] for m in json.loads((tmp_path / "litellm-models.json").read_text())["models"]}
+        assert slugs == {"chat", "resp"}
+
+    def test_listing_without_chat_models_is_skipped_and_writes_nothing(self, tmp_path):
+        _, result = self._sync(self._listing(self._row("embed", mode="embedding")), tmp_path)
+        assert isinstance(result, ModelSyncSkipped)
+        assert "no chat models" in result.reason
+        assert not (tmp_path / "litellm-models.json").exists()
+
+    def test_catalog_is_rewritten_on_every_launch(self, tmp_path):
+        self._sync(self._listing(self._row("old")), tmp_path)
+        self._sync(self._listing(self._row("new")), tmp_path)
+        slugs = [m["slug"] for m in json.loads((tmp_path / "litellm-models.json").read_text())["models"]]
+        assert slugs == ["new"]
+
+    def test_catalog_is_replaced_whole_and_leaves_no_temp_files(self, tmp_path):
+        self._sync(self._listing(*(self._row(f"m{i}") for i in range(50))), tmp_path)
+        self._sync(self._listing(self._row("new")), tmp_path)
+        assert [p.name for p in tmp_path.iterdir()] == ["litellm-models.json"]
+        assert json.loads((tmp_path / "litellm-models.json").read_text())["models"][0]["slug"] == "new"
+
+    def test_defaults_to_dot_codex_in_home(self, tmp_path):
+        result = codex_model_sync_args(
+            {},
+            "http://localhost:4000",
+            "sk-key",
+            get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            run=_FakeRun(),
+            home=lambda: tmp_path,
+        )
+        assert self._catalog_path(result) == str(tmp_path / ".codex" / "litellm-models.json")
+
+    def test_default_home_is_the_users(self):
+        assert _default_of(codex_model_sync_args, "home") == Path.home
+
+    def test_missing_base_instructions_is_reported_not_raised(self, tmp_path):
+        result = codex_model_sync_args(
+            {"CODEX_HOME": str(tmp_path)},
+            "http://localhost:4000",
+            "sk-key",
+            get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            instructions_path=tmp_path / "missing.md",
+        )
+        assert isinstance(result, ModelSyncSkipped)
+        assert "could not read" in result.reason
+        assert not (tmp_path / "litellm-models.json").exists()
+
+    def test_unwritable_catalog_path_is_reported_not_raised(self, tmp_path):
+        blocker = tmp_path / "file"
+        blocker.write_text("")
+        _, result = self._sync(self._listing(self._row("m")), blocker / "codex")
+        assert isinstance(result, ModelSyncSkipped)
+        assert "could not write" in result.reason
+
+    def test_failed_replace_is_reported_and_leaves_no_temp_file(self, tmp_path):
+        (tmp_path / "litellm-models.json").mkdir()
+        _, result = self._sync(self._listing(self._row("m")), tmp_path)
+        assert isinstance(result, ModelSyncSkipped)
+        assert "could not write" in result.reason
+        assert [p.name for p in tmp_path.iterdir()] == ["litellm-models.json"]
+
+    def test_unreachable_proxy_is_reported_not_raised(self, tmp_path):
+        def boom(*a, **k):
+            raise requests.ConnectionError("refused")
+
+        result = codex_model_sync_args({"CODEX_HOME": str(tmp_path)}, "http://localhost:4000", "sk-key", get=boom)
+        assert isinstance(result, ModelSyncSkipped)
+        assert "refused" in result.reason
+        assert not (tmp_path / "litellm-models.json").exists()
+
+    @pytest.mark.parametrize(
+        ("response", "reason"),
+        [(_FakeResponse(500), "HTTP 500"), (_FakeResponse(200, {"data": "nope"}), "unexpected body")],
+    )
+    def test_bad_response_is_reported(self, tmp_path, response, reason):
+        result = codex_model_sync_args(
+            {"CODEX_HOME": str(tmp_path)}, "http://localhost:4000", "sk-key", get=lambda *a, **k: response
+        )
+        assert isinstance(result, ModelSyncSkipped)
+        assert reason in result.reason
+
+    @pytest.mark.parametrize("binary", ["codex", "/opt/bin/codex", "codex.cmd", "/c/npm/codex.CMD"])
+    def test_codex_syncs_through_the_agent_dispatch_with_the_binary_it_will_run(self, tmp_path, binary):
+        run = _FakeRun()
+        result = agent_model_sync_env(
+            binary,
+            {"CODEX_HOME": str(tmp_path)},
+            "http://localhost:4000",
+            "sk-key",
+            False,
+            get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            run=run,
+        )
+        assert self._catalog_path(result) == str(tmp_path / "litellm-models.json")
+        assert len(run.calls) == 2
+        assert all(binary in command for command, _ in run.calls)
+
+    def test_opencode_dispatch_never_runs_codex(self):
+        def boom(*a, **k):
+            raise AssertionError("only the Codex sync reads its catalog back")
+
+        result = agent_model_sync_env(
+            "opencode",
+            {},
+            "http://localhost:4000",
+            "sk-key",
+            False,
+            get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            run=boom,
+        )
+        assert "OPENCODE_CONFIG_CONTENT" in result
+
+    def test_codex_lists_its_own_models_then_reads_the_catalog_back_before_launch(self, tmp_path):
+        run = _FakeRun()
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=run)
+        path = self._catalog_path(result)
+
+        assert [command for command, _ in run.calls] == [
+            ("codex", "debug", "models"),
+            ("codex", "-c", f"model_catalog_json={json.dumps(path)}", "debug", "models"),
+        ]
+        for _, options in run.calls:
+            assert options["env"] == {"CODEX_HOME": str(tmp_path)}
+            assert options["stdin"] is subprocess.DEVNULL
+            assert options["capture_output"] is True
+            assert options["encoding"] == "utf-8"
+            assert options["timeout"] == 10
+
+    def test_codex_rejecting_the_catalog_skips_the_sync_and_keeps_the_file(self, tmp_path):
+        stderr = (
+            "Error: failed to parse model_catalog_json path `/home/me/.codex/litellm-models.json` as JSON: "
+            "missing field `supports_parallel_tool_calls` at line 1 column 21648\n"
+        )
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(1, stderr))
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason == (
+            "`codex debug models` exited 1: Error: failed to parse model_catalog_json path "
+            "`/home/me/.codex/litellm-models.json` as JSON: missing field `supports_parallel_tool_calls` "
+            "at line 1 column 21648"
+        )
+        assert (tmp_path / "litellm-models.json").exists()
+
+    def test_codex_without_debug_models_skips_the_sync(self, tmp_path):
+        stderr = "error: unrecognized subcommand 'models'\n\nUsage: codex debug [OPTIONS] <COMMAND>\n"
+        run = _FakeRun(2, stderr, stock=None)
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=run)
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason == "`codex debug models` exited 2: error: unrecognized subcommand 'models'"
+        assert len(run.calls) == 1
+        assert not (tmp_path / "litellm-models.json").exists()
+
+    def test_codex_failing_silently_is_reported(self, tmp_path):
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=_FakeRun(1))
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason == "`codex debug models` exited 1: no output"
+
+    @pytest.mark.parametrize(
+        "error", [OSError("codex vanished"), subprocess.TimeoutExpired("codex", 10)], ids=["oserror", "timeout"]
+    )
+    def test_unrunnable_preflight_is_reported_not_raised(self, tmp_path, error):
+        def failing_run(*a, **k):
+            raise error
+
+        _, result = self._sync(self._listing(self._row("m")), tmp_path, run=failing_run)
+        assert isinstance(result, ModelSyncSkipped)
+        assert result.reason.startswith("`codex debug models` failed: ")
+        assert str(error) in result.reason
+
+    def test_windows_shim_preflight_goes_through_cmd_exe(self, tmp_path):
+        shim = _WINDOWS_CLAUDE_CMD.replace("claude", "codex")
+        run = _FakeRun()
+        result = codex_model_sync_args(
+            {"CODEX_HOME": str(tmp_path)},
+            "http://localhost:4000",
+            "sk-key",
+            binary=shim,
+            get=lambda *a, **k: _FakeResponse(200, self._listing(self._row("m"))),
+            run=run,
+        )
+        override = f"model_catalog_json={json.dumps(self._catalog_path(result))}"
+        doubled = override.replace('"', '""')
+        assert [command for command, _ in run.calls] == [
+            f'{_CMD_PREFIX}""{shim}" "debug" "models""',
+            f'{_CMD_PREFIX}""{shim}" "-c" "{doubled}" "debug" "models""',
+        ]
+
+    def test_default_binary_is_codex_on_path(self):
+        assert _default_of(codex_model_sync_args, "binary") == "codex"
+
+    def test_default_runner_is_subprocess_run(self):
+        assert _default_of(codex_model_sync_args, "run") is subprocess.run
+        assert _default_of(agent_model_sync_env, "run") is subprocess.run
+
+    def test_skip_verify_keeps_the_launch_offline(self):
+        def boom(*a, **k):
+            raise AssertionError("--skip-verify must not touch the proxy")
+
+        result = agent_model_sync_env("codex", {}, "http://localhost:4000", "sk-key", True, get=boom)
+        assert isinstance(result, ModelSyncSkipped)
+        assert "--skip-verify" in result.reason
+
+    def test_default_http_client_is_requests_get(self):
+        assert _default_of(codex_model_sync_args, "get") is requests.get
+
+
 class TestRunAgent:
+    def test_synced_args_precede_user_args_and_follow_provider_overrides(self):
+        calls = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["codex", "exec", "hi"],
+            base_env={},
+            sync_models=lambda *a: ModelSyncArgs(("-c", 'model_catalog_json="/tmp/c.json"')),
+            which=lambda name: "/usr/local/bin/codex",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(args=tuple(a), env=dict(e)),
+        )
+        args = calls["args"]
+        assert args[-2:] == ("exec", "hi")
+        assert args[args.index('model_catalog_json="/tmp/c.json"') - 1] == "-c"
+        assert (
+            args.index('model_provider="litellm"') < args.index('model_catalog_json="/tmp/c.json"') < args.index("exec")
+        )
+        assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
+        assert "model_catalog_json" not in json.dumps(calls["env"])
+
     def test_synced_model_config_reaches_the_agent_alongside_profile_env(self):
         calls = {}
         run_agent(
@@ -405,7 +863,13 @@ class TestRunAgent:
             launcher=lambda p, a, e: order.append("launch"),
         )
         assert order == ["verify", "sync", "launch"]
-        assert calls["args"] == ("opencode", {"HOME": "/home/me"}, "http://localhost:4000", "sk-key", False)
+        assert calls["args"] == (
+            "/usr/local/bin/opencode",
+            {"HOME": "/home/me"},
+            "http://localhost:4000",
+            "sk-key",
+            False,
+        )
 
     def test_unreachable_proxy_is_not_asked_for_models(self):
         def failing_verify(*a):
@@ -1050,10 +1514,7 @@ class TestAgentCommands:
         assert captured["api_key"] == "sk-key"
         assert captured["command"] == ["claude", "--resume", "-p", "hi"]
         assert captured["skip_verify"] is False
-        assert (
-            "routing Claude Code through proxy at http://localhost:4000"
-            in result.output
-        )
+        assert "routing Claude Code through proxy at http://localhost:4000" in result.output
 
     def test_codex_shows_friendly_name(self):
         captured = {}
@@ -1126,14 +1587,10 @@ class TestAgentCommands:
         with (
             patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
             patch(f"{AGENTS_MODULE}.login", fake_login),
-            patch(
-                f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login"
-            ) as mock_get,
+            patch(f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login") as mock_get,
             patch(
                 f"{AGENTS_MODULE}.run_agent",
-                side_effect=lambda base_url, api_key, command, **k: captured.update(
-                    api_key=api_key
-                ),
+                side_effect=lambda base_url, api_key, command, **k: captured.update(api_key=api_key),
             ),
         ):
             result = self.runner.invoke(

@@ -193,10 +193,12 @@ async def _upsert_rows_with_retry(
 
 
 def guardrail_status_to_action(status: str | None) -> str:
-    """Map StandardLogging guardrail_status to blocked/passed/flagged."""
+    """Map StandardLogging guardrail_status to blocked/passed/flagged/not_run."""
     if not status:
         return "passed"
     s: Final = (status or "").lower()
+    if s == "not_run":
+        return "not_run"
     if "intervened" in s or "block" in s:
         return "blocked"
     if "flagged" in s or "fail" in s or "error" in s:
@@ -354,37 +356,49 @@ async def process_spend_logs_guardrail_usage(
             "flagged_count": 0,
         }
     )
-    index_rows: Final[list[dict[str, object]]] = []
+    index_rows_by_key: Final[dict[tuple[str, str], dict[str, object]]] = {}
 
     for payload in logs_to_process:
         request_id = payload.get("request_id")
         start_time = _parse_payload_start_time(payload)
-        if not request_id or start_time is None:
+        if not isinstance(request_id, str) or not request_id or start_time is None:
             continue
         date_key = _date_str(start_time)
 
-        for entry in _parse_guardrail_info_from_payload(payload):
-            guardrail_id = entry.get("guardrail_id") or entry.get("guardrail_name") or ""
-            if not guardrail_id:
+        entries = _parse_guardrail_info_from_payload(payload)
+        ids_by_name = MappingProxyType(
+            {
+                e["guardrail_name"]: e["guardrail_id"]
+                for e in entries
+                if e.get("guardrail_id") and isinstance(e.get("guardrail_name"), str) and e["guardrail_name"]
+            }
+        )
+        for entry in entries:
+            raw_name = entry.get("guardrail_name")
+            guardrail_name = raw_name if isinstance(raw_name, str) else ""
+            guardrail_id = entry.get("guardrail_id") or ids_by_name.get(guardrail_name) or guardrail_name
+            if not isinstance(guardrail_id, str) or not guardrail_id:
                 continue
-            key = _MetricsKey(guardrail_id, date_key)
-            daily_guardrail[key]["requests_evaluated"] += 1
             action = guardrail_status_to_action(entry.get("guardrail_status"))
-            if action == "passed":
-                daily_guardrail[key]["passed_count"] += 1
-            elif action == "blocked":
-                daily_guardrail[key]["blocked_count"] += 1
-            else:
-                daily_guardrail[key]["flagged_count"] += 1
+            if action != "not_run":
+                key = _MetricsKey(guardrail_id, date_key)
+                daily_guardrail[key]["requests_evaluated"] += 1
+                if action == "passed":
+                    daily_guardrail[key]["passed_count"] += 1
+                elif action == "blocked":
+                    daily_guardrail[key]["blocked_count"] += 1
+                else:
+                    daily_guardrail[key]["flagged_count"] += 1
             policy_id = entry.get("policy_id")
-            index_rows.append(
-                {
+            prior = index_rows_by_key.get((request_id, guardrail_id))
+            if prior is None or (prior["policy_id"] is None and policy_id is not None):
+                index_rows_by_key[(request_id, guardrail_id)] = {
                     "request_id": request_id,
                     "guardrail_id": guardrail_id,
                     "policy_id": policy_id,
                     "start_time": start_time,
                 }
-            )
+    index_rows: Final = tuple(index_rows_by_key.values())
 
     async with pending.lock:
         pending_metrics: Final = pending.metrics

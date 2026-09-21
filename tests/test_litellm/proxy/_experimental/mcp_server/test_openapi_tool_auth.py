@@ -78,6 +78,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
             allowed_mcp_servers=[fake_server],
             start_time=datetime.now(timezone.utc),
             user_api_key_auth=user,
+            guardrail_context={"metadata": {"guardrails": ("block-all",)}},
         )
 
     pre_call.assert_awaited_once()
@@ -88,6 +89,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     # records call order indirectly — we already asserted both were
     # called; the relative ordering is enforced by the source change.
     pre_call_kwargs = pre_call.await_args.kwargs
+    assert pre_call_kwargs["guardrail_context"] == {"metadata": {"guardrails": ("block-all",)}}
     assert pre_call_kwargs["name"] == "list_pets"
     assert pre_call_kwargs["server"] is fake_server
     assert pre_call_kwargs["user_api_key_auth"] is user
@@ -457,7 +459,7 @@ async def test_legacy_local_tool_fallback_still_dispatches_entitled_caller(
         user_api_key_auth=user,
     )
 
-    assert result.isError is False
+    assert result.is_error is False
     assert executed == [{}]
     assert "legacy local tool ran" in result.content[0].text
 
@@ -661,12 +663,12 @@ async def test_local_dispatch_reports_the_outcome_instead_of_success(failure: st
     failure may propagate.
 
     `_handle_local_mcp_tool` used to catch every exception and return it as TextContent, and both of
-    its callers then stamped `isError=False`, so an upstream rejection was served as tool output and
+    its callers then stamped `is_error=False`, so an upstream rejection was served as tool output and
     `extract_mcp_tool_result_error_message` logged the request as a success.
 
     The two kinds are split by consequence. `MCPUpstreamAuthError` propagates because both renderers
     know it: the streamable path names the status and the REST path relays a real 401 with the
-    upstream's WWW-Authenticate. Anything else is reported as `isError=True` right here, because
+    upstream's WWW-Authenticate. Anything else is reported as `is_error=True` right here, because
     `call_tool_rest_api` turns an unrecognized exception into HTTP 500 and an upstream 403 or 429 is
     not a gateway crash.
     """
@@ -727,7 +729,7 @@ async def test_local_dispatch_reports_the_outcome_instead_of_success(failure: st
         result = await call
 
     # A non-auth upstream failure stays a 200 with isError, so REST does not report it as a gateway 500
-    assert result.isError is True
+    assert result.is_error is True
     assert "upstream returned HTTP 429" in result.content[0].text
 
 

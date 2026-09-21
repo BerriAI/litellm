@@ -119,31 +119,46 @@ def encrypt_value_helper(value: str, new_encryption_key: str | None = None):
         raise e
 
 
+def _legacy_ciphertext_bytes(value: str) -> bytes:
+    # Try URL-safe base64 decoding first (new format)
+    # Fall back to standard base64 decoding for backwards compatibility (old format)
+    try:
+        return base64.urlsafe_b64decode(value)
+    except Exception:
+        return base64.b64decode(value)
+
+
+def _decrypt_with_signing_key(value: str, signing_key: str) -> str:
+    # Versioned AES-256-GCM values are detected before any base64 decode.
+    # The prefix is the algorithm tag the legacy nacl format never carried.
+    if value.startswith(_V2_GCM_PREFIX):
+        return _decrypt_aes_gcm(value=value, signing_key=signing_key)
+
+    return decrypt_value(value=_legacy_ciphertext_bytes(value), signing_key=signing_key)
+
+
+def decrypt_if_encrypted_with(value: str, signing_key: str) -> str | None:
+    """None unless value is a ciphertext under signing_key."""
+    try:
+        # base64 decoding skips characters outside its alphabet, so "" and "*" decode to no bytes,
+        # which decrypt_value reads as an empty plaintext under any key.
+        decodes_to_nothing: Final = not value.startswith(_V2_GCM_PREFIX) and not _legacy_ciphertext_bytes(value)
+        return None if decodes_to_nothing else _decrypt_with_signing_key(value=value, signing_key=signing_key)
+    except Exception:  # noqa: BLE001  # base64, nacl and AES-GCM each raise their own "not a ciphertext" type
+        return None
+
+
 def decrypt_value_helper(
     value: str,
     key: str,  # this is just for debug purposes, showing the k,v pair that's invalid. not a signing key.
     exception_type: Literal["debug", "error"] = "error",
     return_original_value: bool = False,
-):
+) -> str | None:
     signing_key: Final = _get_salt_key()
 
     try:
         if isinstance(value, str):
-            # Versioned AES-256-GCM values are detected before any base64 decode.
-            # The prefix is the algorithm tag the legacy nacl format never carried.
-            if value.startswith(_V2_GCM_PREFIX):
-                return _decrypt_aes_gcm(value=value, signing_key=cast(str, signing_key))
-
-            # Try URL-safe base64 decoding first (new format)
-            # Fall back to standard base64 decoding for backwards compatibility (old format)
-            try:
-                decoded_b64 = base64.urlsafe_b64decode(value)
-            except Exception:
-                # If URL-safe decoding fails, try standard base64 decoding for backwards compatibility
-                decoded_b64 = base64.b64decode(value)
-
-            value = decrypt_value(value=decoded_b64, signing_key=signing_key)
-            return value
+            return _decrypt_with_signing_key(value=value, signing_key=cast(str, signing_key))
 
         # if it's not str - do not decrypt it, return the value
         return value

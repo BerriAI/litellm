@@ -40,7 +40,7 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([]),
 }));
 
-vi.mock("@/components/HelpLink", () => ({
+vi.mock("@/components/DocsMenu", () => ({
   DocsMenu: () => null,
 }));
 

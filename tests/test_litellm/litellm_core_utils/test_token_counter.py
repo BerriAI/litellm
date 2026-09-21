@@ -98,6 +98,13 @@ def test_token_counter_short_text_matches_tiktoken(text):
     assert token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text) == expected
 
 
+def test_token_counter_default_encoding_matches_cl100k():
+    encoding: Final = tiktoken.get_encoding("cl100k_base")
+    expected: Final = len(encoding.encode("hello world", disallowed_special=()))
+
+    assert token_counter_new(model=None, text="hello world") == expected
+
+
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
     text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
     encoding = tiktoken.get_encoding("cl100k_base")
