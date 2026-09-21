@@ -336,6 +336,22 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return int(wire_cache_control is not None) + tool_blocks + envelope_blocks
 
     @staticmethod
+    def count_external_cache_breakpoints_on_messages_route(
+        tools: Iterable[object] | None, cache_control: object, request_kwargs: object
+    ) -> int:
+        """The /v1/messages census before the route splits.
+
+        The native messages transforms drop the ``extra_body`` envelope while the
+        chat bridge merges it, so the cap reserves for whichever census is larger
+        rather than letting an envelope that unmarks a direct tool free a slot the
+        provider still counts.
+        """
+        return max(
+            AnthropicCacheControlHook.count_external_cache_breakpoints(tools, cache_control),
+            AnthropicCacheControlHook.count_external_cache_breakpoints(tools, cache_control, request_kwargs),
+        )
+
+    @staticmethod
     def _blocks_reserved_outside_messages(
         remaining_points: Sequence[CacheControlInjectionPoint], external_breakpoints: int, openai_dialect: bool
     ) -> int:
@@ -968,7 +984,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             system=system,
             injection_points=injection_points,
             openai_dialect=openai_dialect,
-            external_breakpoints=AnthropicCacheControlHook.count_external_cache_breakpoints(
+            external_breakpoints=AnthropicCacheControlHook.count_external_cache_breakpoints_on_messages_route(
                 tools, cache_control, kwargs
             ),
         )

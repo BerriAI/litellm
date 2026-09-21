@@ -2608,13 +2608,13 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         "kwargs,tools,marked_turns,expected_system",
         [
             ({"extra_body": {"tools": [MARKED_V1_TOOL]}}, [MARKED_V1_TOOL], 2, MARKED_SYSTEM),
-            ({"extra_body": {"tools": [UNMARKED_V1_TOOL]}}, [MARKED_V1_TOOL], 3, MARKED_SYSTEM),
+            ({"extra_body": {"tools": [UNMARKED_V1_TOOL]}}, [MARKED_V1_TOOL], 3, "sys"),
             ({"extra_body": {"tools": [MARKED_V1_TOOL]}}, [UNMARKED_V1_TOOL], 3, "sys"),
             ({"extra_body": {"cache_control": EPHEMERAL}, "cache_control": EPHEMERAL}, None, 2, MARKED_SYSTEM),
         ],
         ids=["same_marked_tool_both_ways", "extra_body_unmarks", "extra_body_marks", "root_cache_control_both_ways"],
     )
-    def test_v1_messages_cap_counts_extra_body_fields_in_place_of_the_direct_ones(
+    def test_v1_messages_cap_reserves_for_the_larger_of_direct_and_extra_body_marks(
         self, kwargs, tools, marked_turns, expected_system
     ):
         kwargs = {"cache_control_injection_points": copy.deepcopy(self.CONFIGURED), **copy.deepcopy(kwargs)}
