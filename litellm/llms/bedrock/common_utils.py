@@ -853,10 +853,15 @@ BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
 )
 
 
-def _response_format_constrains_output(response_format: object) -> bool:
+def _response_format_needs_converse(model: str, response_format: object) -> bool:
     if response_format is None:
         return False
-    return not (isinstance(response_format, Mapping) and response_format.get("type") == "text")
+    if not isinstance(response_format, Mapping):
+        return not bedrock_runtime_chat_completions_enforces_response_format(model)
+    if response_format.get("type") == "text":
+        return False
+    carries_schema: Final = "json_schema" in response_format or "response_schema" in response_format
+    return not (carries_schema and bedrock_runtime_chat_completions_enforces_response_format(model))
 
 
 def bedrock_request_needs_converse(model: str, request_params: Mapping[str, object]) -> bool:
@@ -867,16 +872,17 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     AWS's native OpenAI surface, operator-owned request metadata is only written onto the Converse body,
     function tools (``tools`` or legacy ``functions``) on a model without
     ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
-    ``reasoning_effort`` is exactly ``"none"``, and a constraining ``response_format`` on a model without
-    ``supports_bedrock_runtime_chat_completions_response_format`` is only honored by Converse.
+    ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as a JSON schema
+    (a ``json_schema`` or ``response_schema`` mapping, or a pydantic model) on a model with
+    ``supports_bedrock_runtime_chat_completions_response_format``: a schema on any other model is only
+    honored by Converse, and a schema-less ``json_object`` keeps Converse's handling everywhere, since AWS's
+    native surface rejects it with a 400 unless the prompt mentions json.
     """
     if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
         return True
     if bedrock_request_metadata_is_owned():
         return True
-    if _response_format_constrains_output(
-        request_params.get("response_format")
-    ) and not bedrock_runtime_chat_completions_enforces_response_format(model):
+    if _response_format_needs_converse(model, request_params.get("response_format")):
         return True
     if not (request_params.get("tools") or request_params.get("functions")):
         return False

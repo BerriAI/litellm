@@ -799,11 +799,30 @@ def test_gpt_oss_response_format_falls_back_to_converse(local_cost_map, model, r
     assert BedrockModelInfo.get_bedrock_route(model, params) == expected_route
 
 
-@pytest.mark.parametrize("model", ["global.openai.gpt-5.6-sol", "us.xai.grok-4.6", "bedrock/us-gov.xai.grok-4.6"])
-def test_response_format_stays_on_chat_completions_where_aws_enforces_it(local_cost_map, model):
-    params = {"response_format": RESPONSE_FORMAT_JSON_SCHEMA}
+RESPONSE_FORMAT_ENFORCING_MODELS = ["global.openai.gpt-5.6-sol", "us.xai.grok-4.6", "bedrock/us-gov.xai.grok-4.6"]
+
+
+@pytest.mark.parametrize("model", RESPONSE_FORMAT_ENFORCING_MODELS)
+@pytest.mark.parametrize(
+    "response_format",
+    [
+        RESPONSE_FORMAT_JSON_SCHEMA,
+        {"type": "json_object", "response_schema": RESPONSE_FORMAT_JSON_SCHEMA["json_schema"]["schema"]},
+        Answer,
+    ],
+    ids=["json_schema", "response_schema", "pydantic"],
+)
+def test_schema_response_format_stays_on_chat_completions_where_aws_enforces_it(local_cost_map, model, response_format):
+    params = {"response_format": response_format}
     assert bedrock_request_needs_converse(model, params) is False
     assert BedrockModelInfo.get_bedrock_route(model, params) == "chat_completions"
+
+
+@pytest.mark.parametrize("model", RESPONSE_FORMAT_ENFORCING_MODELS)
+def test_schema_less_json_object_keeps_converse_where_aws_would_demand_the_word_json(local_cost_map, model):
+    params = {"response_format": {"type": "json_object"}}
+    assert bedrock_request_needs_converse(model, params) is True
+    assert BedrockModelInfo.get_bedrock_route(model, params) == "converse"
 
 
 SYNTHETIC_NATIVE_MODEL = "vendor.native-model-v1:0"
@@ -886,3 +905,20 @@ def test_gpt56_response_format_is_sent_as_is_on_chat_completions(local_cost_map,
     assert str(requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
     assert json.loads(requests[0].content)["response_format"] == RESPONSE_FORMAT_JSON_SCHEMA
     assert response.choices[0].message.content == '{"word": "pong"}'
+
+
+def test_gpt56_schema_less_json_object_goes_to_converse_without_a_schema_tool(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    litellm.completion(
+        model="bedrock/global.openai.gpt-5.6-sol",
+        messages=[{"role": "user", "content": "Reply with the single word pong."}],
+        response_format={"type": "json_object"},
+        max_tokens=64,
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-5.6-sol/converse")
+    body = json.loads(requests[0].content)
+    assert "toolConfig" not in body
+    assert "response_format" not in body
+    assert body["inferenceConfig"]["maxTokens"] == 64
