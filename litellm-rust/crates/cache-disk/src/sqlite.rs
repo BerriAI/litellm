@@ -49,6 +49,7 @@ impl DiskcacheSqliteStore {
     pub fn open(directory: impl AsRef<Path>) -> Result<Self, Error> {
         let directory = directory.as_ref().to_path_buf();
         fs::create_dir_all(&directory).map_err(|_| Error::Unavailable)?;
+        let directory = std::path::absolute(&directory).map_err(|_| Error::Unavailable)?;
         let database = directory.join("cache.db");
         let connection = Connection::open(database).map_err(|_| Error::Unavailable)?;
         connection

@@ -102,9 +102,10 @@ impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> BaseCache for DiskCache<S, D,
         context: ExactCacheContext,
     ) -> Result<(), Error> {
         let value = self.adapter.write(self.codec.encode(&value)?);
-        let expire_time = context.ttl.map(|ttl| unix_now() + ttl.as_secs_f64());
+        let ttl = context.ttl;
         let key = key.to_string();
         Self::run_blocking(Arc::clone(&self.store), move |store| {
+            let expire_time = ttl.map(|ttl| unix_now() + ttl.as_secs_f64());
             store.set(&key, value, expire_time, unix_now())
         })
         .await
