@@ -389,6 +389,10 @@ gateway:
   #     maxUnavailable: 0
   #     maxSurge: 1
   strategy: {}
+  # Fixed replica count, rendered as the Deployment's spec.replicas only when
+  # hpa.enabled is false (with the HPA on, the autoscaler owns the count and
+  # minReplicas/maxReplicas bound it).
+  replicaCount: 1
   # Optional startupProbe. Empty by default, so existing installs are unchanged
   # and liveness/readiness apply from container start. Set it to gate
   # liveness/readiness until a slow cold start finishes — a high failureThreshold
@@ -522,6 +526,8 @@ backend:
     timeoutSeconds: 10
   # Same shape as gateway.strategy.
   strategy: {}
+  # Same shape as gateway.replicaCount.
+  replicaCount: 1
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
   hpa:
@@ -588,6 +594,8 @@ ui:
     periodSeconds: 10
   # Same shape as gateway.strategy.
   strategy: {}
+  # Same shape as gateway.replicaCount.
+  replicaCount: 1
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
   hpa:
