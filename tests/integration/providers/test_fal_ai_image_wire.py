@@ -5,8 +5,7 @@ from typing import Final
 
 import httpx
 import pytest
-from integration._support.client import Gateway, eventually
-from integration._support.database import read_rows
+from integration._support.client import Gateway
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -53,36 +52,8 @@ def _image_response(urls: tuple[str, ...], prompt: str) -> bytes:
     ).encode()
 
 
-def _response_data(response: httpx.Response) -> list[JsonValue]:
-    payload: Final = _JSON_OBJECT.validate_json(response.content)
-    data: Final = payload["data"]
-    assert isinstance(data, list)
-    return data
-
-
-def _image_urls(response: httpx.Response) -> tuple[str, ...]:
-    data: Final = _response_data(response)
-    values: Final = tuple(
-        image["url"] for image in data if isinstance(image, dict) and isinstance(image.get("url"), str)
-    )
-    assert len(values) == len(data)
-    return tuple(value for value in values if isinstance(value, str))
-
-
-def _response_cost(response: httpx.Response) -> tuple[float, str]:
-    headers: Final = response.headers
-    if "x-litellm-response-cost" in headers:
-        return float(headers["x-litellm-response-cost"]), "x-litellm-response-cost"
-    call_id: Final = headers["x-litellm-call-id"]
-    assert isinstance(call_id, str)
-    rows: Final = eventually(
-        lambda: read_rows('SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)),
-        lambda values: len(values) == 1,
-        seconds=70,
-    )
-    spend: Final = rows[0]["spend"]
-    assert isinstance(spend, (int, float, str))
-    return float(spend), "LiteLLM_SpendLogs.spend"
+def _response_cost(response: httpx.Response) -> float:
+    return float(response.headers["x-litellm-response-cost"])
 
 
 def _approx(value: float) -> object:
@@ -97,7 +68,7 @@ def test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_ro
         assert request.target == "/openai/gpt-image-2.5/flare/text-to-image"
         body: Final = _JSON_OBJECT.validate_json(request.body)
         if body.get("quality") == "high":
-            assert body == {"prompt": _PROMPT, "quality": "high", "image_size": {"width": 1536, "height": 1024}}
+            assert body == {"prompt": _PROMPT, "quality": "high", "image_size": {"width": 1024, "height": 1536}}
             return Reply(body=_image_response((f"{wire_url}/files/high.png",), _PROMPT))
         assert body == {"prompt": _PROMPT, "quality": "low"}
         return Reply(body=_image_response((f"{wire_url}/files/low.png",), _PROMPT))
@@ -110,12 +81,13 @@ def test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_ro
         high_response: Final = gateway.request(
             "POST",
             "/v1/images/generations",
-            {"model": model, "prompt": _PROMPT, "quality": "high", "size": "1536x1024"},
+            {"model": model, "prompt": _PROMPT, "quality": "high", "size": "1024x1536"},
         )
         assert high_response.status_code == 200, high_response.text
-        assert _image_urls(high_response) == (f"{wire.url}/files/high.png",)
-        high_cost, high_cost_path = _response_cost(high_response)
-        assert high_cost == _approx(_catalog_cost("fal_ai/high/1536-x-1024/openai/gpt-image-2.5/flare/text-to-image"))
+        high_payload: Final = _JSON_OBJECT.validate_json(high_response.content)
+        assert high_payload["data"] == [{"url": f"{wire.url}/files/high.png", "b64_json": None, "revised_prompt": None}]
+        high_cost: Final = _response_cost(high_response)
+        assert high_cost == _approx(_catalog_cost("fal_ai/high/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"))
 
         low_response: Final = gateway.request(
             "POST",
@@ -123,12 +95,11 @@ def test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_ro
             {"model": model, "prompt": _PROMPT, "quality": "low"},
         )
         assert low_response.status_code == 200, low_response.text
-        assert _image_urls(low_response) == (f"{wire.url}/files/low.png",)
-        low_cost, low_cost_path = _response_cost(low_response)
+        low_payload: Final = _JSON_OBJECT.validate_json(low_response.content)
+        assert low_payload["data"] == [{"url": f"{wire.url}/files/low.png", "b64_json": None, "revised_prompt": None}]
+        low_cost: Final = _response_cost(low_response)
         assert low_cost == _approx(_catalog_cost("fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/text-to-image"))
         assert high_cost != low_cost
-        assert high_cost_path in ("x-litellm-response-cost", "LiteLLM_SpendLogs.spend")
-        assert low_cost_path in ("x-litellm-response-cost", "LiteLLM_SpendLogs.spend")
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/openai/gpt-image-2.5/flare/text-to-image"),
             ("POST", "/openai/gpt-image-2.5/flare/text-to-image"),
@@ -162,13 +133,13 @@ def test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image(gate
             {"model": model, "prompt": _PROMPT, "n": 2, "size": "1024x1024"},
         )
         assert response.status_code == 200, response.text
-        assert _image_urls(response) == (
-            f"{wire.url}/files/flux-1.png",
-            f"{wire.url}/files/flux-2.png",
-        )
-        cost, cost_path = _response_cost(response)
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        assert payload["data"] == [
+            {"url": f"{wire.url}/files/flux-1.png", "b64_json": None, "revised_prompt": None},
+            {"url": f"{wire.url}/files/flux-2.png", "b64_json": None, "revised_prompt": None},
+        ]
+        cost: Final = _response_cost(response)
         assert cost == _approx(2 * _catalog_cost("fal_ai/fal-ai/flux/dev"))
-        assert cost_path in ("x-litellm-response-cost", "LiteLLM_SpendLogs.spend")
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/fal-ai/flux/dev")]
 
 
@@ -196,10 +167,10 @@ def test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row(
             headers={"Authorization": f"Bearer {gateway.key}"},
         )
         assert response.status_code == 200, response.text
-        assert _image_urls(response) == (f"{wire.url}/files/edit.png",)
-        cost, cost_path = _response_cost(response)
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        assert payload["data"] == [{"url": f"{wire.url}/files/edit.png", "b64_json": None, "revised_prompt": None}]
+        cost: Final = _response_cost(response)
         assert cost == _approx(_catalog_cost("fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/edit"))
-        assert cost_path in ("x-litellm-response-cost", "LiteLLM_SpendLogs.spend")
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/openai/gpt-image-2.5/flare/edit")
         ]
