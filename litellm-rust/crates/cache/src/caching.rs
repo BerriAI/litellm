@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use crate::{BaseCache, CacheKwargs, Error};
-
 pub use crate::BaseCache as Cache;
+use crate::{BaseCache, CacheKwargs, Error};
 
 pub fn get_cache<B: BaseCache>(
     cache: &B,

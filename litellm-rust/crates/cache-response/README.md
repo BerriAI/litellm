@@ -28,17 +28,21 @@ cache.store(&request, json!({"answer": 7}), now)?;
 assert_eq!(cache.async_lookup(&request, now).await?, Some(json!({"answer": 7})));
 ```
 
-For Redis, inject `RedisCache::new(url, ttl, ResponseCacheCodec)` instead. Namespaces are optional and existing namespace prefixes are preserved. Sync operations check out independent connections from a bounded pool, while async callers move that blocking work off the executor
+For Redis, inject `RedisCache::new(url, ttl, ResponseCacheCodec)` instead. Namespaces are optional and existing namespace prefixes are preserved. Sync operations check out independent connections from a bounded pool, while async callers, including counters and claims, move that blocking work off the executor. The pool skips the checkout PING and instead discards any connection whose command failed
 
 Callers supply Unix time for response freshness. Backend TTL uses its own clock. A read can reject an entry through `max_age` even while the backend still retains it
 
 ## Python integration boundary
 
-The extension exposes `NativeCacheHandle`, `CacheResolver`, and captured `CacheBinding` objects for host integration. Memory and Redis handles support single and batch response lookup and storage. Batch lookup returns ordered values plus missing indices for embedding partial-hit wiring
+The extension keeps a private test harness for memory and Redis single and batch response lookup and storage. Batch lookup returns ordered values plus missing indices for embedding partial-hit wiring. No bridge-only cache type is part of the public API
+
+Object responses are written as they are, and every other response shape is written as a serialized string, which is the pair of shapes Python reads. A string on the wire is therefore always a serialized response, so string-valued responses round trip. Typed backends such as memory never pass through the codec
 
 The resolver reads the namespace's `cache` attribute each time it resolves. A captured binding retains the selected service for its operation, including background writes. `None` disables caching. Custom Python cache objects keep their original methods, arguments, returned awaitables, exceptions, and caller-task execution
 
-Explicit facade registration checks object identity, method overrides, effective TTL, and configuration changes before selecting native execution. Redis defaults come from the Python settings snapshot, including `litellm.default_redis_ttl`, and buffered async writes honor `redis_flush_size`. Registration does not migrate entries or replace Python methods. Until activation configures one shared service, a registered facade and its native handle can hold separate data. Existing public cache constructors remain on Python
+Python callbacks use the built-in `Cache` API, so a `Cache` subclass works unchanged. A batch lookup takes one original kwargs mapping per request and returns the list of `get_cache` or gathered `async_get_cache` results, while native bindings return `{values, missing_indices}`. A batch store hands the caller's original result to `async_add_cache_pipeline`. `ping` calls `ping`, and a flush goes to the facade's backend
+
+The private facade test harness checks object identity, method overrides, effective TTL, Redis namespace, memory capacity, and configuration changes before selecting native execution. It does not compare Redis connection settings. Redis defaults come from the Python settings snapshot, including `litellm.default_redis_ttl`, and buffered async writes honor `redis_flush_size`. A buffered entry keeps the time it was produced, and a failed flush drops its batch instead of growing the buffer during an outage. The harness does not migrate entries or replace Python methods. Until activation configures one shared service, the Python facade and native test service can hold separate data. Existing public cache constructors remain on Python
 
 Native cache handles must be recreated after fork. The bridge releases the GIL around native operations, and Redis runs blocking connection operations off the async executor. Native errors propagate to the host, which owns the existing fail-open and logging policy
 
@@ -52,4 +56,4 @@ Verify typed values, TTL precedence, missing entries, serialization failures, na
 
 Public SDK, Router, and proxy activation still need constructor parity, stream replay, embedding partial-batch integration, response reconstruction, callback scheduling, and failure-policy integration. This foundation does not switch those request paths
 
-Redis cluster, disk, cloud stores, and semantic caching remain follow-ups. The generic dual cache now provides L2-first counters and atomic affinity claims with local fallback, but public Router integration remains follow-up work. Reservations, queues, and pubsub still need explicit capabilities owned by their consuming features. Adding a cache backend does not establish those guarantees
+Redis cluster, disk, cloud stores, and semantic caching remain follow-ups. The generic dual cache takes read, write, and remote-failure policies, runs its async operations through the async L2 methods, and provides L2-first counters and atomic affinity claims. Errors propagate by default, and `RemoteFailurePolicy::UseLocal` opts key-value operations and claims into the local tier when L2 is unavailable. Claims compare decoded values, so a pin written by Python still matches. Public Router integration remains follow-up work. Reservations, queues, and pubsub still need explicit capabilities owned by their consuming features. Adding a cache backend does not establish those guarantees

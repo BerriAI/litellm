@@ -3,21 +3,21 @@ mod native;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use facade::FacadeGuard;
 use litellm_cache::Error;
 use litellm_cache_response::{CacheControls, CacheKeyInput, PartialHits, ResponseCacheRequest};
 use litellm_host_python::{ExecutionStep, from_py, release_gil, run_async, to_py};
+use native::NativeResponseCache;
 use pyo3::{
     PyTraverseError, PyVisit,
     exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
-    types::{PyDict, PyList},
+    types::{PyDict, PyList, PyTuple},
 };
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::python_settings::PythonSettings;
-use facade::FacadeGuard;
-use native::NativeResponseCache;
 
 const PYTHON_REDIS_DEFAULT_TTL: Duration = Duration::from_secs(60);
 
@@ -84,14 +84,14 @@ fn cache_error(error: Error) -> PyErr {
     }
 }
 
-#[pyclass(frozen)]
-pub(crate) struct NativeCacheHandle {
+#[pyclass(frozen, name = "_CacheTestHandle")]
+pub(crate) struct CacheTestHandle {
     service: NativeResponseCache,
     guard: Option<FacadeGuard>,
     pid: u32,
 }
 
-impl NativeCacheHandle {
+impl CacheTestHandle {
     fn service(&self) -> PyResult<NativeResponseCache> {
         if self.pid != std::process::id() {
             return Err(PyRuntimeError::new_err(
@@ -103,7 +103,7 @@ impl NativeCacheHandle {
 }
 
 #[pymethods]
-impl NativeCacheHandle {
+impl CacheTestHandle {
     #[staticmethod]
     #[pyo3(signature = (*, capacity=200, ttl_seconds=600.0, max_entry_bytes=1048576))]
     fn memory(capacity: usize, ttl_seconds: f64, max_entry_bytes: usize) -> PyResult<Self> {
@@ -140,9 +140,9 @@ impl NativeCacheHandle {
         self.service.kind()
     }
 
-    fn bind_facade(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn _bind_facade(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<()> {
         let service = self.service()?;
-        let guard = FacadeGuard::capture(py, facade, self.backend(), service.default_ttl())?;
+        let guard = FacadeGuard::capture(py, facade, &service)?;
         let service = service.with_redis_flush_size(
             facade
                 .getattr("redis_flush_size")?
@@ -173,7 +173,7 @@ enum CacheBinding {
     PythonCallback(Py<PyAny>),
 }
 
-#[pyclass(frozen, name = "CacheBinding")]
+#[pyclass(frozen, name = "_CacheTestBinding")]
 pub(crate) struct ResolvedCache {
     binding: CacheBinding,
     pid: u32,
@@ -285,12 +285,15 @@ impl ResolvedCache {
         }
     }
 
+    /// Native bindings return `{values, missing_indices}`. The built-in `Cache` API has no batch
+    /// read, so a Python callback receives one `get_cache(**kwargs)` call per request, in order,
+    /// and the results come back as a list.
     #[pyo3(signature = (requests, *, callback_kwargs=None))]
     fn lookup_batch(
         &self,
         py: Python<'_>,
         requests: &Bound<'_, PyAny>,
-        callback_kwargs: Option<&Bound<'_, PyDict>>,
+        callback_kwargs: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Py<PyAny>> {
         self.check_process()?;
         match &self.binding {
@@ -305,14 +308,17 @@ impl ResolvedCache {
                     .map_err(cache_error)?;
                 to_py(py, &response)
             }
-            CacheBinding::PythonCallback(object) => object
-                .bind(py)
-                .call_method(
-                    "batch_get_cache",
-                    (callback_keys(py, requests)?,),
-                    Some(self::callback_kwargs(callback_kwargs)?),
-                )
-                .map(Bound::unbind),
+            CacheBinding::PythonCallback(object) => {
+                let results = PyList::empty(py);
+                for kwargs in batch_callback_kwargs(requests, callback_kwargs)? {
+                    results.append(object.bind(py).call_method(
+                        "get_cache",
+                        (),
+                        Some(&kwargs),
+                    )?)?;
+                }
+                Ok(results.into_any().unbind())
+            }
         }
     }
 
@@ -364,7 +370,7 @@ impl ResolvedCache {
         &self,
         py: Python<'py>,
         requests: &Bound<'py, PyAny>,
-        callback_kwargs: Option<&Bound<'py, PyDict>>,
+        callback_kwargs: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
         match &self.binding {
@@ -381,20 +387,30 @@ impl ResolvedCache {
                     cache_error,
                 )
             }
-            CacheBinding::PythonCallback(object) => object.bind(py).call_method(
-                "async_batch_get_cache",
-                (callback_keys(py, requests)?,),
-                Some(self::callback_kwargs(callback_kwargs)?),
-            ),
+            CacheBinding::PythonCallback(object) => {
+                let awaitables = batch_callback_kwargs(requests, callback_kwargs)?
+                    .iter()
+                    .map(|kwargs| {
+                        object
+                            .bind(py)
+                            .call_method("async_get_cache", (), Some(kwargs))
+                    })
+                    .collect::<PyResult<Vec<_>>>()?;
+                py.import("asyncio")?
+                    .call_method1("gather", PyTuple::new(py, awaitables)?)
+            }
         }
     }
 
-    #[pyo3(signature = (requests, responses, *, callback_kwargs=None))]
+    /// A Python callback receives the caller's original result through `callback_result`, because
+    /// the built-in `Cache.async_add_cache_pipeline` splits the batch itself.
+    #[pyo3(signature = (requests, responses, *, callback_result=None, callback_kwargs=None))]
     fn async_store_batch<'py>(
         &self,
         py: Python<'py>,
         requests: &Bound<'py, PyAny>,
         responses: &Bound<'py, PyAny>,
+        callback_result: Option<&Bound<'py, PyAny>>,
         callback_kwargs: Option<&Bound<'py, PyDict>>,
     ) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
@@ -417,20 +433,14 @@ impl ResolvedCache {
                 )
             }
             CacheBinding::PythonCallback(object) => {
-                let keys = callback_keys(py, requests)?;
-                let responses = responses.try_iter()?.collect::<PyResult<Vec<_>>>()?;
-                if keys.len() != responses.len() {
-                    return Err(PyValueError::new_err(
-                        "batch cache requests and responses must have equal lengths",
-                    ));
-                }
-                let cache_list = PyList::empty(py);
-                for (key, response) in keys.iter().zip(responses) {
-                    cache_list.append((key, response))?;
-                }
+                let result = callback_result.ok_or_else(|| {
+                    PyTypeError::new_err(
+                        "Python cache callbacks require their original callback_result",
+                    )
+                })?;
                 object.bind(py).call_method(
-                    "async_set_cache_pipeline",
-                    (cache_list,),
+                    "async_add_cache_pipeline",
+                    (result,),
                     Some(self::callback_kwargs(callback_kwargs)?),
                 )
             }
@@ -445,8 +455,17 @@ impl ResolvedCache {
                 let service = service.clone();
                 run_async(py, async move { service.async_flush().await }, cache_error)
             }
+            // The built-in `Cache` facade has no flush of its own; its backend does.
             CacheBinding::PythonCallback(object) => {
-                object.bind(py).call_method0("flush_cache")?;
+                let object = object.bind(py);
+                let backend = match object.getattr_opt("cache")? {
+                    Some(backend) if !backend.is_none() => backend,
+                    _ => object.clone(),
+                };
+                if backend.hasattr("async_flush_cache")? {
+                    return backend.call_method0("async_flush_cache");
+                }
+                backend.call_method0("flush_cache")?;
                 ready_none(py)
             }
         }
@@ -464,7 +483,7 @@ impl ResolvedCache {
                     cache_error,
                 )
             }
-            CacheBinding::PythonCallback(object) => object.bind(py).call_method0("test_connection"),
+            CacheBinding::PythonCallback(object) => object.bind(py).call_method0("ping"),
         }
     }
 
@@ -484,16 +503,25 @@ fn callback_kwargs<'a, 'py>(
     })
 }
 
-fn callback_keys<'py>(
-    py: Python<'py>,
+fn batch_callback_kwargs<'py>(
     requests: &Bound<'py, PyAny>,
-) -> PyResult<Bound<'py, PyList>> {
-    PyList::new(
-        py,
-        self::requests(requests)?
-            .into_iter()
-            .map(|request| litellm_cache_response::cache_key(&request.key)),
-    )
+    kwargs: Option<&Bound<'py, PyAny>>,
+) -> PyResult<Vec<Bound<'py, PyDict>>> {
+    let kwargs = kwargs
+        .ok_or_else(|| {
+            PyTypeError::new_err(
+                "Python cache callbacks require one original callback_kwargs mapping per request",
+            )
+        })?
+        .try_iter()?
+        .map(|item| Ok(item?.cast_into::<PyDict>()?))
+        .collect::<PyResult<Vec<_>>>()?;
+    if kwargs.len() != requests.len()? {
+        return Err(PyValueError::new_err(
+            "batch cache requests and callback_kwargs must have equal lengths",
+        ));
+    }
+    Ok(kwargs)
 }
 
 fn ready_none(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
@@ -512,13 +540,13 @@ fn ready_value<'py, T: serde::Serialize>(
     Ok(future)
 }
 
-#[pyclass(frozen)]
-pub(crate) struct CacheResolver {
+#[pyclass(frozen, name = "_CacheTestResolver")]
+pub(crate) struct CacheTestResolver {
     namespace: Py<PyAny>,
 }
 
 #[pymethods]
-impl CacheResolver {
+impl CacheTestResolver {
     #[new]
     fn new(namespace: Py<PyAny>) -> Self {
         Self { namespace }
@@ -528,7 +556,7 @@ impl CacheResolver {
         let object = self.namespace.bind(py).getattr("cache")?;
         let binding = if object.is_none() {
             CacheBinding::Disabled
-        } else if let Ok(handle) = object.extract::<PyRef<'_, NativeCacheHandle>>() {
+        } else if let Ok(handle) = object.extract::<PyRef<'_, CacheTestHandle>>() {
             CacheBinding::Native(handle.service()?)
         } else if let Some(service) = facade::resolve(py, &object)? {
             CacheBinding::Native(service)

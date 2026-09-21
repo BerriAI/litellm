@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use litellm_host_python::from_py;
 use pyo3::{
     PyTraverseError, PyVisit,
@@ -6,9 +8,8 @@ use pyo3::{
     types::{PyDict, PyTuple, PyType},
 };
 use serde_json::Value;
-use std::time::Duration;
 
-use super::{NativeCacheHandle, native::NativeResponseCache};
+use super::{CacheTestHandle, native::NativeResponseCache};
 
 struct ClassGuard {
     class: Py<PyType>,
@@ -130,9 +131,10 @@ impl FacadeGuard {
     pub(super) fn capture(
         py: Python<'_>,
         facade: &Bound<'_, PyAny>,
-        kind: &str,
-        native_default_ttl: Duration,
+        service: &NativeResponseCache,
     ) -> PyResult<Self> {
+        let kind = service.kind();
+        let native_default_ttl: Duration = service.default_ttl();
         let cache_type = py.import("litellm.caching.caching")?.getattr("Cache")?;
         if !facade.get_type().is(&cache_type) {
             return Err(PyTypeError::new_err(
@@ -158,6 +160,23 @@ impl FacadeGuard {
                 "facade and native backend default TTLs must match",
             ));
         }
+        let namespace = match backend.getattr_opt("namespace")? {
+            Some(namespace) => namespace.extract::<Option<String>>()?,
+            None => None,
+        }
+        .filter(|namespace| !namespace.is_empty());
+        if kind == "redis" && namespace.as_deref() != service.namespace() {
+            return Err(PyTypeError::new_err(
+                "facade and native backend namespaces must match",
+            ));
+        }
+        if let Some(capacity) = service.capacity()
+            && backend.getattr("max_size_in_memory")?.extract::<usize>()? != capacity
+        {
+            return Err(PyTypeError::new_err(
+                "facade and native backend capacities must match",
+            ));
+        }
         Ok(Self {
             outer: ObjectGuard::capture(
                 py,
@@ -169,6 +188,7 @@ impl FacadeGuard {
                     "namespace",
                     "supported_call_types",
                     "redis_flush_size",
+                    "semantic_cache_scope",
                 ],
             )?,
             backend: ObjectGuard::capture(
@@ -179,6 +199,8 @@ impl FacadeGuard {
                     "default_ttl",
                     "max_size_in_memory",
                     "max_size_per_item",
+                    "redis_kwargs",
+                    "redis_flush_size",
                 ],
             )?,
         })
@@ -208,7 +230,7 @@ pub(super) fn resolve(
     let Some(handle) = dict.get_item("_native_cache_handle")? else {
         return Ok(None);
     };
-    let Ok(handle) = handle.extract::<PyRef<'_, NativeCacheHandle>>() else {
+    let Ok(handle) = handle.extract::<PyRef<'_, CacheTestHandle>>() else {
         return Ok(None);
     };
     let Some(guard) = &handle.guard else {

@@ -15,7 +15,7 @@ import pytest
 import redis
 
 import litellm
-from litellm.caching.caching import Cache
+from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
@@ -50,20 +50,43 @@ def test_existing_constructor_and_global_are_unchanged() -> None:
     assert type(facade.cache) is InMemoryCache
     assert "_native_cache_handle" not in vars(facade)
     with rebound(litellm, "cache", facade):
-        resolver: Final = _native.CacheResolver(litellm)
+        resolver: Final = _native._CacheTestResolver(litellm)
         assert resolver.resolve().kind == "python_callback"
         resolver.resolve().store(None, {"answer": 7}, callback_kwargs={"cache_key": "key"})
         assert cast(CacheLookup, facade).get_cache(cache_key="key") == {"answer": 7}
 
 
+def test_existing_global_lifecycle_remains_the_resolver_source_of_truth() -> None:
+    resolver: Final = _native._CacheTestResolver(litellm)
+
+    enable_cache(type=LiteLLMCacheType.LOCAL, ttl=30)
+    enabled: Final = litellm.cache
+    assert isinstance(enabled, Cache)
+    assert enabled.ttl == 30
+    assert resolver.resolve().kind == "python_callback"
+
+    enable_cache(type=LiteLLMCacheType.LOCAL, ttl=60)
+    assert litellm.cache is enabled
+
+    update_cache(type=LiteLLMCacheType.LOCAL, ttl=60)
+    updated: Final = litellm.cache
+    assert isinstance(updated, Cache)
+    assert updated is not enabled
+    assert updated.ttl == 60
+
+    disable_cache()
+    assert litellm.cache is None
+    assert resolver.resolve().kind == "disabled"
+
+
 async def test_native_bindings_survive_replacement_and_capture_writes_before_dispatch() -> None:
-    namespace: Final = SimpleNamespace(cache=_native.NativeCacheHandle.memory())
-    resolver: Final = _native.CacheResolver(namespace)
+    namespace: Final = SimpleNamespace(cache=_native._CacheTestHandle.memory())
+    resolver: Final = _native._CacheTestResolver(namespace)
     selected: Final = resolver.resolve()
     assert selected.kind == "native"
     selected.store(request(), {"answer": 1})
     assert await selected.async_lookup(request()) == {"answer": 1}
-    with rebound(namespace, "cache", _native.NativeCacheHandle.memory()):
+    with rebound(namespace, "cache", _native._CacheTestHandle.memory()):
         replacement: Final = resolver.resolve()
         await selected.async_store(request(), {"answer": 2})
         assert replacement.lookup(request()) is None
@@ -96,7 +119,7 @@ async def test_python_callback_preserves_identity_caller_task_context_and_errors
             raise failure
 
     namespace: Final = SimpleNamespace(cache=CustomCache())
-    binding: Final = _native.CacheResolver(namespace).resolve()
+    binding: Final = _native._CacheTestResolver(namespace).resolve()
     assert binding.kind == "python_callback"
     assert await binding.async_lookup(None, callback_kwargs={"marker": sentinel}) is sentinel
     assert context.get() == "callback"
@@ -117,7 +140,7 @@ async def test_callback_cancellation_stays_in_the_callers_task() -> None:
             finally:
                 finished.set()
 
-    binding: Final = _native.CacheResolver(SimpleNamespace(cache=CustomCache())).resolve()
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=CustomCache())).resolve()
 
     async def lookup() -> object:
         return await binding.async_lookup(None, callback_kwargs={})
@@ -132,9 +155,9 @@ async def test_callback_cancellation_stays_in_the_callers_task() -> None:
 
 def test_registered_facade_uses_native_and_instance_overrides_fall_back() -> None:
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    handle: Final = _native.NativeCacheHandle.memory()
-    handle.bind_facade(facade)
-    resolver: Final = _native.CacheResolver(SimpleNamespace(cache=facade))
+    handle: Final = _native._CacheTestHandle.memory()
+    handle._bind_facade(facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
     native: Final = resolver.resolve()
     assert native.kind == "native"
     native.store(request(), {"source": "native"})
@@ -165,15 +188,17 @@ def test_facade_subclasses_backend_replacement_and_configuration_changes_are_not
     class CustomCache(Cache):
         pass
 
-    handle: Final = _native.NativeCacheHandle.memory()
+    handle: Final = _native._CacheTestHandle.memory()
     with pytest.raises(TypeError):
-        handle.bind_facade(CustomCache(type=LiteLLMCacheType.LOCAL))
+        handle._bind_facade(CustomCache(type=LiteLLMCacheType.LOCAL))
     facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
-    handle.bind_facade(facade)
-    resolver: Final = _native.CacheResolver(SimpleNamespace(cache=facade))
+    handle._bind_facade(facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
     with rebound(facade, "cache", InMemoryCache()):
         assert resolver.resolve().kind == "python_callback"
     with rebound(facade, "ttl", 12):
+        assert resolver.resolve().kind == "python_callback"
+    with rebound(facade, "semantic_cache_scope", "end_user"):
         assert resolver.resolve().kind == "python_callback"
 
     def custom_key(**_kwargs: object) -> str:
@@ -193,7 +218,7 @@ def test_resolver_and_callback_cycles_can_be_collected() -> None:
     def cyclic_reference() -> weakref.ReferenceType[CustomCache]:
         callback: Final = CustomCache()
         namespace: Final = SimpleNamespace(cache=callback)
-        binding: Final = _native.CacheResolver(namespace).resolve()
+        binding: Final = _native._CacheTestResolver(namespace).resolve()
         setattr(callback, "binding", binding)
         return weakref.ref(callback)
 
@@ -204,8 +229,8 @@ def test_resolver_and_callback_cycles_can_be_collected() -> None:
 
 async def test_redis_reads_python_sync_and_async_entries_and_writes_without_hidden_prefix(redis_url: str) -> None:
     client: Final = redis.Redis.from_url(redis_url)
-    namespace: Final = SimpleNamespace(cache=_native.NativeCacheHandle.redis(redis_url, namespace="team"))
-    binding: Final = _native.CacheResolver(namespace).resolve()
+    namespace: Final = SimpleNamespace(cache=_native._CacheTestHandle.redis(redis_url, namespace="team"))
+    binding: Final = _native._CacheTestResolver(namespace).resolve()
     response: Final = {"choices": [{"text": "cached"}], "usage": {"total_tokens": 3}, "flag": True, "empty": None}
     envelope: Final = {"timestamp": time.time(), "response": json.dumps(response)}
     client.set("team:sync", str(envelope))
@@ -227,33 +252,33 @@ async def test_redis_reads_python_sync_and_async_entries_and_writes_without_hidd
 
 
 def test_invalid_duration_and_request_shape_fail_before_storage() -> None:
-    binding: Final = _native.CacheResolver(SimpleNamespace(cache=_native.NativeCacheHandle.memory())).resolve()
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=_native._CacheTestHandle.memory())).resolve()
     for seconds in (-1.0, float("nan"), float("inf")):
         with pytest.raises(ValueError, match="cache durations must be finite and nonnegative"):
             binding.store({**request(), "ttl_seconds": seconds}, {"answer": 1})
     assert binding.lookup(request()) is None
     with pytest.raises(ValueError, match="cache durations must be finite and nonnegative"):
-        _native.NativeCacheHandle.memory(ttl_seconds=-1)
+        _native._CacheTestHandle.memory(ttl_seconds=-1)
 
 
 async def test_memory_size_policy_is_applied_by_the_native_host() -> None:
-    handle: Final = _native.NativeCacheHandle.memory(capacity=2, max_entry_bytes=128)
-    binding: Final = _native.CacheResolver(SimpleNamespace(cache=handle)).resolve()
+    handle: Final = _native._CacheTestHandle.memory(capacity=2, max_entry_bytes=128)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
     small: Final = {"answer": "ok"}
     binding.store(request("small"), small)
     assert await binding.async_lookup(request("small")) == small
     await binding.async_store(request("large"), {"answer": "x" * 256})
     assert binding.lookup(request("large")) is None
     assert binding.lookup(request("small")) == small
-    disabled: Final = _native.CacheResolver(
-        SimpleNamespace(cache=_native.NativeCacheHandle.memory(capacity=0))
+    disabled: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=_native._CacheTestHandle.memory(capacity=0))
     ).resolve()
     await disabled.async_store(request(), small)
     assert await disabled.async_lookup(request()) is None
 
 
 async def test_native_batch_lookup_and_store_report_partial_hits() -> None:
-    binding: Final = _native.CacheResolver(SimpleNamespace(cache=_native.NativeCacheHandle.memory())).resolve()
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=_native._CacheTestHandle.memory())).resolve()
     requests: Final = [request("hit"), request("miss"), request("disabled")]
     requests[2]["controls"] = {
         "supported_call_type": True,
@@ -275,50 +300,72 @@ async def test_native_batch_lookup_and_store_report_partial_hits() -> None:
     }
 
 
-async def test_python_batch_callbacks_receive_keys_and_key_value_pairs() -> None:
-    first: Final = object()
-    second: Final = object()
-
-    class CustomCache:
-        def batch_get_cache(self, keys: list[str], *, marker: object) -> tuple[list[str], object]:
-            return keys, marker
-
-        async def async_batch_get_cache(self, keys: list[str], *, marker: object) -> tuple[list[str], object]:
-            return keys, marker
-
-        async def async_set_cache_pipeline(
-            self, cache_list: list[tuple[str, object]], *, marker: object
-        ) -> tuple[list[tuple[str, object]], object]:
-            return cache_list, marker
-
+async def test_python_batch_callbacks_use_the_builtin_cache_api() -> None:
+    result: Final = object()
     marker: Final = object()
-    binding: Final = _native.CacheResolver(SimpleNamespace(cache=CustomCache())).resolve()
-    requests: Final = [request("first"), request("second")]
 
-    assert binding.lookup_batch(requests, callback_kwargs={"marker": marker}) == (["first", "second"], marker)
-    assert await binding.async_lookup_batch(requests, callback_kwargs={"marker": marker}) == (
-        ["first", "second"],
-        marker,
-    )
+    class CustomCache(Cache):
+        def get_cache(self, dynamic_cache_object: object = None, **kwargs: object) -> object:
+            return ("sync", kwargs)
+
+        async def async_get_cache(self, dynamic_cache_object: object = None, **kwargs: object) -> object:
+            return ("async", kwargs)
+
+        async def async_add_cache_pipeline(
+            self, result: object, dynamic_cache_object: object = None, **kwargs: object
+        ) -> object:
+            return result, kwargs
+
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=CustomCache(type=LiteLLMCacheType.LOCAL))
+    ).resolve()
+    assert binding.kind == "python_callback"
+    requests: Final = [request("first"), request("second")]
+    kwargs: Final = [{"cache_key": "first"}, {"cache_key": "second"}]
+
+    assert binding.lookup_batch(requests, callback_kwargs=kwargs) == [("sync", kwargs[0]), ("sync", kwargs[1])]
+    assert await binding.async_lookup_batch(requests, callback_kwargs=kwargs) == [
+        ("async", kwargs[0]),
+        ("async", kwargs[1]),
+    ]
+    with pytest.raises(ValueError, match="equal lengths"):
+        binding.lookup_batch(requests, callback_kwargs=kwargs[:1])
+    with pytest.raises(TypeError, match="callback_result"):
+        await binding.async_store_batch(requests, [1, 2], callback_kwargs={"marker": marker})
     stored: Final = cast(
-        tuple[list[tuple[str, object]], object],
-        await binding.async_store_batch(
-            requests,
-            [first, second],
-            callback_kwargs={"marker": marker},
-        ),
+        tuple[object, dict[str, object]],
+        await binding.async_store_batch(requests, [1, 2], callback_result=result, callback_kwargs={"marker": marker}),
     )
-    assert [key for key, _ in stored[0]] == ["first", "second"]
-    assert stored[1] is marker
-    assert stored[0][0][1] is first
-    assert stored[0][1][1] is second
+    assert stored[0] is result
+    assert stored[1] == {"marker": marker}
+
+
+async def test_unmodified_builtin_cache_callbacks_can_ping_and_flush() -> None:
+    async def ping() -> str:
+        return "pong"
+
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    cache.cache.set_cache("key", "value")
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=cache)).resolve()
+    assert binding.kind == "python_callback"
+
+    setattr(cache.cache, "ping", ping)
+    assert await binding.ping() == "pong"
+    await binding.async_flush()
+    assert cache.cache.get_cache("key") is None
+
+
+def test_facade_registration_rejects_mismatched_capacity() -> None:
+    facade: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    with pytest.raises(TypeError, match="capacities must match"):
+        _native._CacheTestHandle.memory(capacity=7)._bind_facade(facade)
 
 
 async def test_redis_handle_reads_the_python_default_ttl(redis_url: str) -> None:
     client: Final = redis.Redis.from_url(redis_url)
     with rebound(litellm, "default_redis_ttl", 7):
-        binding: Final = _native.CacheResolver(
-            SimpleNamespace(cache=_native.NativeCacheHandle.redis(redis_url))
+        binding: Final = _native._CacheTestResolver(
+            SimpleNamespace(cache=_native._CacheTestHandle.redis(redis_url))
         ).resolve()
         await binding.async_store(request("native-default"), {"value": 1})
 
@@ -336,10 +383,15 @@ async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
             redis_flush_size=2,
         )
         with pytest.raises(TypeError, match="default TTLs must match"):
-            _native.NativeCacheHandle.redis(redis_url, ttl_seconds=61).bind_facade(facade)
-        _native.NativeCacheHandle.redis(redis_url).bind_facade(facade)
-    binding: Final = _native.CacheResolver(SimpleNamespace(cache=facade)).resolve()
+            _native._CacheTestHandle.redis(redis_url, ttl_seconds=61)._bind_facade(facade)
+        with pytest.raises(TypeError, match="namespaces must match"):
+            _native._CacheTestHandle.redis(redis_url, namespace="other")._bind_facade(facade)
+        _native._CacheTestHandle.redis(redis_url)._bind_facade(facade)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
     client: Final = redis.Redis.from_url(redis_url)
+
+    with rebound(facade.cache, "redis_kwargs", {**facade.cache.redis_kwargs, "ssl": True}):
+        assert _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "python_callback"
 
     await binding.async_store(request("first"), {"value": 1})
     assert client.get("first") is None

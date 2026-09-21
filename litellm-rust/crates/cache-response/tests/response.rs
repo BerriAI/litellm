@@ -273,22 +273,45 @@ async fn invalid_entries_are_misses_and_disabled_reads_do_not_touch_redis() {
 }
 
 #[test]
-fn malformed_memory_entries_are_treated_as_misses() {
-    let backend = Arc::new(InMemoryCache::default());
-    BaseCache::set_cache(
-        backend.as_ref(),
-        "tenant:key",
-        CacheEntry {
+fn string_responses_round_trip_through_typed_and_wire_backends() {
+    let cache = ResponseCache::new(Arc::new(InMemoryCache::default()));
+    let now = Duration::from_secs(100);
+    for response in [json!("hello world"), json!("123"), json!("null")] {
+        cache.store(&request(), response.clone(), now).unwrap();
+        assert_eq!(
+            cache.lookup(&request(), now).unwrap(),
+            Some(response.clone())
+        );
+
+        let wire = ResponseCacheCodec
+            .encode(&CacheEntry {
+                timestamp: Some(100.0),
+                response: response.clone(),
+            })
+            .unwrap();
+        assert_eq!(ResponseCacheCodec.decode(&wire).unwrap().response, response);
+    }
+}
+
+#[test]
+fn non_object_responses_are_written_as_python_readable_serialized_strings() {
+    let wire = ResponseCacheCodec
+        .encode(&CacheEntry {
             timestamp: Some(100.0),
-            response: json!("not a serialized response"),
-        },
-        Default::default(),
-    )
-    .unwrap();
-    let cache = ResponseCache::new(backend);
+            response: json!([1, 2]),
+        })
+        .unwrap();
     assert_eq!(
-        cache.lookup(&request(), Duration::from_secs(100)).unwrap(),
-        None
+        serde_json::from_slice::<serde_json::Value>(&wire).unwrap(),
+        json!({"timestamp": 100.0, "response": "[1,2]"})
+    );
+    assert_eq!(
+        ResponseCacheCodec.decode(&wire).unwrap().response,
+        json!([1, 2])
+    );
+    assert_eq!(
+        ResponseCacheCodec.decode(br#"{"timestamp": 100.0, "response": "not serialized"}"#),
+        Err(Error::InvalidEntry)
     );
 }
 
@@ -364,6 +387,30 @@ async fn batch_lookup_reports_partial_hits_and_batch_store_populates_misses() {
         cache
             .lookup(&requests[2], Duration::from_secs(100))
             .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
+async fn deferred_entries_keep_the_time_they_were_produced() {
+    let cache = ResponseCache::new(Arc::new(InMemoryCache::default()));
+    let mut request = request();
+    request.max_age = Some(Duration::from_secs(10));
+    cache
+        .async_store_entries(vec![(
+            request.clone(),
+            json!({"answer": 7}),
+            Duration::from_secs(100),
+        )])
+        .await
+        .unwrap();
+
+    assert_eq!(
+        cache.lookup(&request, Duration::from_secs(110)).unwrap(),
+        Some(json!({"answer": 7}))
+    );
+    assert_eq!(
+        cache.lookup(&request, Duration::from_secs(111)).unwrap(),
         None
     );
 }

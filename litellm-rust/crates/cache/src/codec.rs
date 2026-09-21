@@ -14,6 +14,14 @@ pub trait CacheCodec: Send + Sync {
 
 pub struct JsonCodec<V>(PhantomData<fn() -> V>);
 
+impl<V> Clone for JsonCodec<V> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<V> Copy for JsonCodec<V> {}
+
 impl<V> Default for JsonCodec<V> {
     fn default() -> Self {
         Self::new()

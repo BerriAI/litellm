@@ -1,5 +1,7 @@
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use litellm_cache::{
     BaseCache, BatchEntry, CacheCodec, CacheConnectionResult, CacheConnectionStatus, CacheKwargs,
@@ -11,8 +13,59 @@ const DEFAULT_TTL: Duration = Duration::from_secs(600);
 const REDIS_TIMEOUT: Duration = Duration::from_secs(5);
 const REDIS_POOL_SIZE: u32 = 16;
 
+struct PooledConnection {
+    connection: redis::Connection,
+    failed: bool,
+}
+
+/// Pools connections without a checkout PING, which would double every operation's round trips.
+/// A timed-out command leaves its reply on the socket while redis still reports the connection
+/// open, so any connection whose operation failed is discarded instead of being reused.
+struct ConnectionManager(redis::Client);
+
+impl r2d2::ManageConnection for ConnectionManager {
+    type Connection = PooledConnection;
+    type Error = redis::RedisError;
+
+    fn connect(&self) -> Result<PooledConnection, redis::RedisError> {
+        let connection = self.0.get_connection()?;
+        connection.set_read_timeout(Some(REDIS_TIMEOUT))?;
+        connection.set_write_timeout(Some(REDIS_TIMEOUT))?;
+        Ok(PooledConnection {
+            connection,
+            failed: false,
+        })
+    }
+
+    fn is_valid(&self, connection: &mut PooledConnection) -> Result<(), redis::RedisError> {
+        redis::cmd("PING").query::<String>(&mut connection.connection)?;
+        Ok(())
+    }
+
+    fn has_broken(&self, connection: &mut PooledConnection) -> bool {
+        connection.failed || !redis::ConnectionLike::is_open(&connection.connection)
+    }
+}
+
+const INCREMENT_SCRIPT: &str = concat!(
+    "local value = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1]); ",
+    "if redis.call('TTL', KEYS[1]) == -1 then ",
+    "redis.call('EXPIRE', KEYS[1], ARGV[2]); end; return value"
+);
+
+// Compare-and-set against the exact bytes the claim decision was made on.
+// ARGV: [1] expected payload or "" when absent, [2] ttl, [3] new payload, [4] refresh ttl.
+const CLAIM_SCRIPT: &str = concat!(
+    "local current = redis.call('GET', KEYS[1]); ",
+    "if ARGV[1] == '' then if current ~= false and current ~= '' then return 0; end; ",
+    "elseif current ~= ARGV[1] then return 0; end; ",
+    "if ARGV[3] ~= '' then redis.call('SET', KEYS[1], ARGV[3], 'EX', ARGV[2]); ",
+    "elseif ARGV[4] == '1' then redis.call('EXPIRE', KEYS[1], ARGV[2]); end; return 1"
+);
+const CLAIM_ATTEMPTS: usize = 8;
+
 enum Connections<C> {
-    Pool(r2d2::Pool<redis::Client>),
+    Pool(r2d2::Pool<ConnectionManager>),
     Fixed(Mutex<C>),
 }
 
@@ -59,14 +112,10 @@ where
     ) -> Result<T, Error> {
         match self {
             Self::Pool(pool) => {
-                let mut connection = pool.get().map_err(|_| Error::Unavailable)?;
-                connection
-                    .set_read_timeout(Some(REDIS_TIMEOUT))
-                    .map_err(|_| Error::Unavailable)?;
-                connection
-                    .set_write_timeout(Some(REDIS_TIMEOUT))
-                    .map_err(|_| Error::Unavailable)?;
-                operation(&mut ConnectionRef(&mut *connection))
+                let mut pooled = pool.get().map_err(|_| Error::Unavailable)?;
+                let result = operation(&mut ConnectionRef(&mut pooled.connection));
+                pooled.failed = matches!(result, Err(Error::Unavailable));
+                result
             }
             Self::Fixed(connection) => {
                 let mut connection = connection.lock().map_err(|_| Error::Unavailable)?;
@@ -90,7 +139,8 @@ impl<S: CacheCodec> RedisCache<S> {
             .max_size(REDIS_POOL_SIZE)
             .min_idle(Some(0))
             .connection_timeout(REDIS_TIMEOUT)
-            .build(client)
+            .test_on_check_out(false)
+            .build(ConnectionManager(client))
             .map_err(|_| Error::Unavailable)?;
         Ok(Self {
             connections: Arc::new(Connections::Pool(pool)),
@@ -120,6 +170,10 @@ where
             namespace: namespace.filter(|value| !value.is_empty()),
             ..self
         }
+    }
+
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
     }
 
     fn namespaced_key(&self, key: &str) -> String {
@@ -407,29 +461,105 @@ where
     C: redis::ConnectionLike + Send + 'static,
 {
     fn increment_cache(&self, key: &str, amount: f64, kwargs: CacheKwargs) -> Result<f64, Error> {
-        const SCRIPT: &str = concat!(
-            "local value = redis.call('INCRBYFLOAT', KEYS[1], ARGV[1]); ",
-            "if redis.call('TTL', KEYS[1]) == -1 then ",
-            "redis.call('EXPIRE', KEYS[1], ARGV[2]); end; return value"
-        );
         let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
-        self.connections.execute(|connection| {
-            redis::cmd("EVAL")
-                .arg(SCRIPT)
-                .arg(1)
-                .arg(key)
-                .arg(amount)
-                .arg(ttl)
-                .query(connection)
-                .map_err(|_| Error::Unavailable)
-        })
+        self.connections
+            .execute(|connection| increment(connection, key, amount, ttl))
     }
+
+    async fn async_increment_cache(
+        &self,
+        key: &str,
+        amount: f64,
+        kwargs: CacheKwargs,
+    ) -> Result<f64, Error> {
+        let key = self.namespaced_key(key);
+        let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
+        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+            increment(connection, key, amount, ttl)
+        })
+        .await
+    }
+}
+
+fn increment(
+    connection: &mut ConnectionRef<'_>,
+    key: String,
+    amount: f64,
+    ttl: u64,
+) -> Result<f64, Error> {
+    redis::cmd("EVAL")
+        .arg(INCREMENT_SCRIPT)
+        .arg(1)
+        .arg(key)
+        .arg(amount)
+        .arg(ttl)
+        .query(connection)
+        .map_err(|_| Error::Unavailable)
+}
+
+fn stored_bytes(value: redis::Value) -> Result<Option<Vec<u8>>, Error> {
+    match value {
+        redis::Value::Nil => Ok(None),
+        redis::Value::BulkString(bytes) => Ok(Some(bytes)),
+        redis::Value::SimpleString(text) => Ok(Some(text.into_bytes())),
+        _ => Err(Error::InvalidEntry),
+    }
+}
+
+/// Eligibility is decided on decoded values, so a pin written by another encoder (Python's
+/// `json.dumps` spacing or key order) still matches. The write is a compare-and-set on the
+/// bytes that decision was made on, retried when another claimant wins the race.
+fn claim<S: CacheCodec>(
+    connection: &mut ConnectionRef<'_>,
+    codec: &S,
+    key: &str,
+    candidate: S::Value,
+    eligible: &[S::Value],
+    ttl: u64,
+) -> Result<S::Value, Error>
+where
+    S::Value: PartialEq,
+{
+    let payload = codec.encode(&candidate)?;
+    if payload.is_empty() {
+        return Err(Error::InvalidEntry);
+    }
+    for _ in 0..CLAIM_ATTEMPTS {
+        let current = stored_bytes(
+            connection
+                .get::<_, redis::Value>(key)
+                .map_err(|_| Error::Unavailable)?,
+        )?
+        .filter(|bytes| !bytes.is_empty());
+        let existing = current
+            .as_deref()
+            .and_then(|bytes| codec.decode(bytes).ok())
+            .filter(|existing| eligible.is_empty() || eligible.contains(existing));
+        let refresh = existing
+            .as_ref()
+            .is_some_and(|existing| !eligible.is_empty() || *existing == candidate);
+        let write: &[u8] = if existing.is_some() { b"" } else { &payload };
+        let applied = redis::cmd("EVAL")
+            .arg(CLAIM_SCRIPT)
+            .arg(1)
+            .arg(key)
+            .arg(current.as_deref().unwrap_or_default())
+            .arg(ttl)
+            .arg(write)
+            .arg(u8::from(refresh))
+            .query::<bool>(connection)
+            .map_err(|_| Error::Unavailable)?;
+        if applied {
+            return Ok(existing.unwrap_or(candidate));
+        }
+    }
+    Err(Error::Unavailable)
 }
 
 impl<S, C> ClaimCache for RedisCache<S, C>
 where
-    S: CacheCodec,
+    S: CacheCodec + Clone + 'static,
     S::Value: PartialEq,
     C: redis::ConnectionLike + Send + 'static,
 {
@@ -440,44 +570,38 @@ where
         eligible: &[S::Value],
         kwargs: CacheKwargs,
     ) -> Result<S::Value, Error> {
-        const SCRIPT: &str = concat!(
-            "local current = redis.call('GET', KEYS[1]); ",
-            "if current == false then redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2]); ",
-            "return ARGV[1]; end; if #ARGV > 2 then for index = 3, #ARGV do ",
-            "if current == ARGV[index] then redis.call('EXPIRE', KEYS[1], ARGV[2]); ",
-            "return current; end; end; redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2]); ",
-            "return ARGV[1]; end; if current == ARGV[1] then ",
-            "redis.call('EXPIRE', KEYS[1], ARGV[2]); end; return current"
-        );
         let key = self.namespaced_key(key);
-        let candidate = self.codec.encode(&candidate)?;
-        let eligible = eligible
-            .iter()
-            .map(|value| self.codec.encode(value))
-            .collect::<Result<Vec<_>, _>>()?;
         let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
-        let value = self.connections.execute(|connection| {
-            redis::cmd("EVAL")
-                .arg(SCRIPT)
-                .arg(1)
-                .arg(key)
-                .arg(candidate)
-                .arg(ttl)
-                .arg(eligible)
-                .query::<redis::Value>(connection)
-                .map_err(|_| Error::Unavailable)
-        })?;
-        self.decode_response(value)?.ok_or(Error::Unavailable)
+        self.connections
+            .execute(|connection| claim(connection, &self.codec, &key, candidate, eligible, ttl))
+    }
+
+    async fn async_claim_cache(
+        &self,
+        key: &str,
+        candidate: S::Value,
+        eligible: Vec<S::Value>,
+        kwargs: CacheKwargs,
+    ) -> Result<S::Value, Error> {
+        let key = self.namespaced_key(key);
+        let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
+        let codec = self.codec.clone();
+        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+            claim(connection, &codec, &key, candidate, &eligible, ttl)
+        })
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::RedisCache;
+    use std::time::Duration;
+
     use litellm_cache::{BaseCache, CacheCodec, CacheKwargs, JsonCodec};
     use redis_test::{MockCmd, MockRedisConnection};
     use serde_json::json;
-    use std::time::Duration;
+
+    use super::RedisCache;
 
     fn entry() -> serde_json::Value {
         json!({"deployment": "model-a", "cooldown_seconds": 30})

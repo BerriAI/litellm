@@ -1,5 +1,4 @@
-use std::future::Future;
-use std::time::Duration;
+use std::{future::Future, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

@@ -1,5 +1,6 @@
-use litellm_cache::{BaseCache, CacheConnectionResult, CacheKwargs, Error};
 use std::{sync::Mutex, time::Duration};
+
+use litellm_cache::{BaseCache, CacheConnectionResult, CacheKwargs, Error};
 
 struct TestCache {
     default_ttl: Duration,

@@ -3,12 +3,11 @@ use std::{sync::Arc, time::Duration};
 use litellm_cache::{CacheCodec, CacheConnectionResult, Error};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
-use serde_json::Value;
-use tokio::sync::Mutex;
-
 use litellm_cache_response::{
     CacheEntry, PartialHits, ResponseCache, ResponseCacheCodec, ResponseCacheRequest,
 };
+use serde_json::Value;
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub(super) enum NativeResponseCache {
@@ -21,7 +20,7 @@ pub(super) enum NativeResponseCache {
 
 pub(super) struct RedisWriteBuffer {
     flush_size: usize,
-    entries: Mutex<Vec<(ResponseCacheRequest, Value)>>,
+    entries: Mutex<Vec<(ResponseCacheRequest, Value, Duration)>>,
 }
 
 impl NativeResponseCache {
@@ -64,6 +63,20 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
+        }
+    }
+
+    pub fn namespace(&self) -> Option<&str> {
+        match self {
+            Self::Memory(_) => None,
+            Self::Redis { cache, .. } => cache.backend().namespace(),
+        }
+    }
+
+    pub fn capacity(&self) -> Option<usize> {
+        match self {
+            Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
+            Self::Redis { .. } => None,
         }
     }
 
@@ -145,19 +158,15 @@ impl NativeResponseCache {
             } => {
                 let pending = {
                     let mut entries = buffer.entries.lock().await;
-                    entries.push((request.clone(), response));
+                    entries.push((request.clone(), response, now));
                     (entries.len() >= buffer.flush_size).then(|| std::mem::take(&mut *entries))
                 };
-                let Some(pending) = pending else {
-                    return Ok(());
-                };
-                if let Err(error) = cache.async_store_batch(pending.clone(), now).await {
-                    let mut entries = buffer.entries.lock().await;
-                    let current = std::mem::take(&mut *entries);
-                    *entries = pending.into_iter().chain(current).collect();
-                    return Err(error);
+                // A failed flush drops its batch, as Python does. Requeueing would grow the
+                // buffer and re-send an ever larger pipeline on every write during an outage.
+                match pending {
+                    Some(pending) => cache.async_store_entries(pending).await,
+                    None => Ok(()),
                 }
-                Ok(())
             }
         }
     }

@@ -1,8 +1,9 @@
 use litellm_cache::{CacheCodec, Error};
-
-use crate::CacheEntry;
 use serde_json::Value;
 
+use crate::CacheEntry;
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ResponseCacheCodec;
 
 impl CacheCodec for ResponseCacheCodec {
@@ -15,7 +16,18 @@ impl CacheCodec for ResponseCacheCodec {
         {
             return Err(Error::InvalidEntry);
         }
-        serde_json::to_vec(value).map_err(|_| Error::InvalidEntry)
+        // Python reads a `response` that is either a dict or a serialized string, so every
+        // other shape is written serialized. A string on the wire is therefore always a
+        // serialized response, which keeps string-valued responses unambiguous.
+        if value.timestamp.is_none() || value.response.is_object() {
+            return serde_json::to_vec(value).map_err(|_| Error::InvalidEntry);
+        }
+        let response = serde_json::to_string(&value.response).map_err(|_| Error::InvalidEntry)?;
+        serde_json::to_vec(&CacheEntry {
+            timestamp: value.timestamp,
+            response: Value::String(response),
+        })
+        .map_err(|_| Error::InvalidEntry)
     }
 
     fn decode(&self, bytes: &[u8]) -> Result<CacheEntry, Error> {
@@ -30,7 +42,10 @@ impl CacheCodec for ResponseCacheCodec {
         let Some(timestamp) = timestamp.as_f64().filter(|timestamp| timestamp.is_finite()) else {
             return Err(Error::InvalidEntry);
         };
-        let response = value.get("response").cloned().ok_or(Error::InvalidEntry)?;
+        let response = match value.get("response").ok_or(Error::InvalidEntry)? {
+            Value::String(text) => decode_value(text)?,
+            response => response.clone(),
+        };
         Ok(CacheEntry {
             timestamp: Some(timestamp),
             response,
@@ -38,7 +53,7 @@ impl CacheCodec for ResponseCacheCodec {
     }
 }
 
-pub(crate) fn decode_value(text: &str) -> Result<Value, Error> {
+fn decode_value(text: &str) -> Result<Value, Error> {
     if let Ok(value) = serde_json::from_str(text) {
         return Ok(value);
     }

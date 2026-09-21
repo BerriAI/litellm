@@ -1,6 +1,10 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use litellm_cache::{
     BaseCache, CacheBackend, CacheConnectionStatus, CacheKwargs, ClaimCache, CounterCache, Error,
@@ -202,6 +206,17 @@ fn claims_are_atomic_and_refresh_eligible_winners() {
             .unwrap(),
         "first"
     );
+    clock.store(103, Ordering::SeqCst);
+    assert_eq!(
+        cache
+            .claim_cache("affinity", "second".to_string(), &[], kwargs.clone())
+            .unwrap(),
+        "first"
+    );
+    assert_eq!(
+        cache.expires_at("affinity").unwrap(),
+        Some(Duration::from_secs(110))
+    );
     clock.store(105, Ordering::SeqCst);
     assert_eq!(
         cache
@@ -231,4 +246,62 @@ fn counters_increment_under_one_lock() {
         CounterCache::increment_cache(&cache, "counter", 2.0, CacheKwargs::default()).unwrap(),
         3.5
     );
+}
+
+#[rstest]
+fn rewriting_an_existing_key_at_capacity_keeps_other_entries(clock: Arc<AtomicU64>) {
+    let cache = cache(clock, 2);
+    cache
+        .set_cache("hot", "1".into(), Some(Duration::from_secs(10)))
+        .unwrap();
+    cache
+        .set_cache("cold", "2".into(), Some(Duration::from_secs(20)))
+        .unwrap();
+
+    cache.set_cache("cold", "3".into(), None).unwrap();
+    assert_eq!(cache.get_cache("hot").unwrap(), Some("1".into()));
+    assert_eq!(cache.get_cache("cold").unwrap(), Some("3".into()));
+
+    cache
+        .claim_cache("cold", "4".into(), &[], CacheKwargs::default())
+        .unwrap();
+    assert_eq!(cache.get_cache("hot").unwrap(), Some("1".into()));
+
+    cache.set_cache("new", "5".into(), None).unwrap();
+    assert_eq!(cache.get_cache("hot").unwrap(), None);
+    assert_eq!(cache.get_cache("cold").unwrap(), Some("3".into()));
+    assert_eq!(cache.get_cache("new").unwrap(), Some("5".into()));
+}
+
+#[test]
+fn incrementing_an_existing_counter_at_capacity_keeps_every_counter() {
+    let cache = InMemoryCache::<f64>::new(Some(2), None);
+    for key in ["a", "b", "a", "b"] {
+        cache
+            .increment_cache(key, 1.0, CacheKwargs::default())
+            .unwrap();
+    }
+    assert_eq!(cache.get_cache("a").unwrap(), Some(2.0));
+    assert_eq!(cache.get_cache("b").unwrap(), Some(2.0));
+}
+
+#[test]
+fn disabled_cache_does_not_retain_claims_or_counters() {
+    let claims = InMemoryCache::<String>::new(Some(0), None);
+    assert_eq!(
+        claims
+            .claim_cache("key", "first".into(), &[], CacheKwargs::default())
+            .unwrap(),
+        "first"
+    );
+    assert_eq!(claims.get_cache("key").unwrap(), None);
+
+    let counters = InMemoryCache::<f64>::new(Some(0), None);
+    assert_eq!(
+        counters
+            .increment_cache("key", 2.0, CacheKwargs::default())
+            .unwrap(),
+        2.0
+    );
+    assert_eq!(counters.get_cache("key").unwrap(), None);
 }
