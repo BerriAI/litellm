@@ -222,7 +222,7 @@ def main(
         ("Python extension entry point is present", extension_entry_point_present),
         ("Native module loads", native_module_loads),
         ("Production module omits the panic test hook", panic_test_hook_absent),
-        ("Native extension does not exceed 40 MB", native_size_within_limit),
+        (f"Native extension does not exceed {native_size_limit / 1_000_000:.0f} MB", native_size_within_limit),
         ("Wheel contents are valid", not unexpected_members),
     )
 
@@ -267,7 +267,8 @@ def main(
             ),
             (
                 not native_size_within_limit,
-                f"native extension exceeds 40 MB: {native_member.file_size / 1_000_000:.2f} MB",
+                f"native extension exceeds {native_size_limit / 1_000_000:.0f} MB: "
+                f"{native_member.file_size / 1_000_000:.2f} MB",
             ),
             (bool(unexpected_members), f"wheel contains unexpected build artifacts: {', '.join(unexpected_members)}"),
         )
