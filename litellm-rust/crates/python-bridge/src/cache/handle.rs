@@ -1,16 +1,18 @@
 use std::env;
 
 use litellm_cache_redis::{RedisNode, RedisTopology};
+use litellm_http::ClientVariant;
 
 use litellm_cache_qdrant_semantic::{OpenAiEmbedderConfig, Quantization};
 use litellm_host_python::{release_gil, run_sync_value};
-use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*};
+use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*, types::PyDict};
 use url::Url;
 
 use super::{
     cache_error, config::QdrantSemanticCacheConfig, facade::FacadeGuard,
     native::NativeResponseCache, request::duration,
 };
+use crate::http;
 
 #[pyclass(frozen, name = "_CacheTestHandle")]
 pub(crate) struct CacheTestHandle {
@@ -154,9 +156,13 @@ impl CacheTestHandle {
             },
             quantization,
         };
+        let http_config = http::call_config(py, &PyDict::new(py), true)?;
+        let client = http::pool()
+            .client(&http_config, ClientVariant::Provider)
+            .map_err(http::client_error)?;
         let service = run_sync_value(py, async move {
             let handle = tokio::runtime::Handle::current();
-            NativeResponseCache::qdrant_semantic(config, handle)
+            NativeResponseCache::qdrant_semantic(config, client, handle)
                 .await
                 .map_err(cache_error)
         })?;

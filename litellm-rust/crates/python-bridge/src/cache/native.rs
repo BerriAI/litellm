@@ -54,17 +54,18 @@ impl NativeResponseCache {
 
     pub async fn qdrant_semantic(
         config: QdrantSemanticCacheConfig,
+        client: reqwest::Client,
         runtime: tokio::runtime::Handle,
     ) -> Result<Self, Error> {
-        let client = qdrant_client::Qdrant::from_url(&config.grpc_url)
+        let qdrant = qdrant_client::Qdrant::from_url(&config.grpc_url)
             .skip_compatibility_check()
             .api_key(config.api_key.as_deref())
             .build()
             .map_err(|_| Error::Unavailable)?;
         let qdrant_config = config.to_qdrant_config();
-        let embedder = OpenAiEmbedder::new(config.embedding)?;
+        let embedder = OpenAiEmbedder::new(client, config.embedding);
         let cache = QdrantSemanticCache::connect(
-            client,
+            qdrant,
             embedder,
             ResponseCacheCodec,
             qdrant_config,

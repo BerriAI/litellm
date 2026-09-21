@@ -216,17 +216,14 @@ impl NativeCacheConfig {
     }
 
     pub(super) fn service_mismatch(&self, service: &NativeResponseCache) -> Option<&'static str> {
-        let default_ttl = match &self.backend {
-            CacheBackendConfig::Memory(config) => Some(config.default_ttl),
-            CacheBackendConfig::Redis(config) => Some(config.default_ttl),
-            CacheBackendConfig::AzureBlob(_) | CacheBackendConfig::QdrantSemantic(_) => None,
-        };
-        if service.default_ttl() != default_ttl {
-            return Some("facade and native backend default TTLs must match");
-        }
         match &self.backend {
             CacheBackendConfig::Memory(_) if service.kind() != "memory" => {
                 Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::Memory(config)
+                if service.default_ttl() != Some(config.default_ttl) =>
+            {
+                Some("facade and native backend default TTLs must match")
             }
             CacheBackendConfig::Memory(config) if service.capacity() != Some(config.capacity) => {
                 Some("facade and native backend capacities must match")
@@ -245,7 +242,11 @@ impl NativeCacheConfig {
             }
             CacheBackendConfig::Redis(config) => (service.namespace()
                 != config.namespace.as_deref())
-            .then_some("facade and native backend namespaces must match"),
+            .then_some("facade and native backend namespaces must match")
+            .or_else(|| {
+                (service.default_ttl() != Some(config.default_ttl))
+                    .then_some("facade and native backend default TTLs must match")
+            }),
             CacheBackendConfig::QdrantSemantic(config) if service.kind() != "qdrant_semantic" => {
                 Some("facade and native backend types must match")
             }
