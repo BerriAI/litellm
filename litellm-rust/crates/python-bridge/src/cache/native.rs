@@ -10,9 +10,14 @@ use litellm_cache_response::{
     ResponseCacheRequest, WriteBuffer,
 };
 use litellm_cache_valkey_semantic::{ValkeySemanticCache, ValkeySemanticConfig};
+use pyo3::prelude::*;
 use serde_json::Value;
 
-use super::{embedder::PythonEmbedder, request::NativeRequest};
+use super::{
+    embedder::PythonEmbedder,
+    request::NativeRequest,
+    semantic_step::{SemanticEmbedExecution, drive_semantic},
+};
 
 fn semantic_key(request: &NativeRequest, scope: &str) -> litellm_cache_response::CacheKeyInput {
     let mut key = request.key.clone();
@@ -59,6 +64,7 @@ pub(super) enum NativeResponseCache {
     },
     ValkeySemantic {
         cache: Arc<ResponseCache<ValkeySemanticCache<PythonEmbedder, ResponseCacheCodec>>>,
+        embedder: PythonEmbedder,
         scope: String,
     },
 }
@@ -100,7 +106,7 @@ impl NativeResponseCache {
     ) -> Result<Self, Error> {
         let backend = ValkeySemanticCache::new(
             url,
-            embedder,
+            embedder.clone(),
             ResponseCacheCodec,
             ValkeySemanticConfig {
                 similarity_threshold,
@@ -109,6 +115,7 @@ impl NativeResponseCache {
         )?;
         Ok(Self::ValkeySemantic {
             cache: Arc::new(ResponseCache::new(Arc::new(backend))),
+            embedder,
             scope: String::from("key"),
         })
     }
@@ -152,7 +159,13 @@ impl NativeResponseCache {
 
     pub fn with_scope(self, scope: String) -> Self {
         match self {
-            Self::ValkeySemantic { cache, .. } => Self::ValkeySemantic { cache, scope },
+            Self::ValkeySemantic {
+                cache, embedder, ..
+            } => Self::ValkeySemantic {
+                cache,
+                embedder,
+                scope,
+            },
             value => value,
         }
     }
@@ -215,7 +228,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.lookup(&Self::exact(request), now),
             Self::Redis { cache, .. } => cache.lookup(&Self::exact(request), now),
-            Self::ValkeySemantic { cache, scope } => {
+            Self::ValkeySemantic { cache, scope, .. } => {
                 cache.lookup(&Self::semantic(request, scope), now)
             }
         }
@@ -230,7 +243,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.store(&Self::exact(request), response, now),
             Self::Redis { cache, .. } => cache.store(&Self::exact(request), response, now),
-            Self::ValkeySemantic { cache, scope } => {
+            Self::ValkeySemantic { cache, scope, .. } => {
                 cache.store(&Self::semantic(request, scope), response, now)
             }
         }
@@ -262,11 +275,41 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.async_lookup(&Self::exact(request), now).await,
             Self::Redis { cache, .. } => cache.async_lookup(&Self::exact(request), now).await,
-            Self::ValkeySemantic { cache, scope } => {
+            Self::ValkeySemantic { cache, scope, .. } => {
                 cache
                     .async_lookup(&Self::semantic(request, scope), now)
                     .await
             }
+        }
+    }
+
+    pub(super) fn async_lookup_py<'py>(
+        &self,
+        py: Python<'py>,
+        request: NativeRequest,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            Self::Memory(_) | Self::Redis { .. } => {
+                let service = self.clone();
+                litellm_host_python::run_async(
+                    py,
+                    async move { service.async_lookup(&request, super::request::now()).await },
+                    super::cache_error,
+                )
+            }
+            Self::ValkeySemantic {
+                cache,
+                embedder,
+                scope,
+            } => drive_semantic(
+                py,
+                SemanticEmbedExecution::lookup(
+                    Arc::clone(cache.backend_arc()),
+                    embedder.clone(),
+                    Self::semantic(&request, scope),
+                    super::request::now(),
+                ),
+            ),
         }
     }
 
@@ -298,11 +341,47 @@ impl NativeResponseCache {
                     .async_store(cache, &Self::exact(request), response, now)
                     .await
             }
-            Self::ValkeySemantic { cache, scope } => {
+            Self::ValkeySemantic { cache, scope, .. } => {
                 cache
                     .async_store(&Self::semantic(request, scope), response, now)
                     .await
             }
+        }
+    }
+
+    pub(super) fn async_store_py<'py>(
+        &self,
+        py: Python<'py>,
+        request: NativeRequest,
+        response: Value,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            Self::Memory(_) | Self::Redis { .. } => {
+                let service = self.clone();
+                litellm_host_python::run_async(
+                    py,
+                    async move {
+                        service
+                            .async_store(&request, response, super::request::now())
+                            .await
+                    },
+                    super::cache_error,
+                )
+            }
+            Self::ValkeySemantic {
+                cache,
+                embedder,
+                scope,
+            } => drive_semantic(
+                py,
+                SemanticEmbedExecution::store(
+                    Arc::clone(cache.backend_arc()),
+                    embedder.clone(),
+                    Self::semantic(&request, scope),
+                    response,
+                    super::request::now(),
+                ),
+            ),
         }
     }
 
@@ -344,12 +423,10 @@ impl NativeResponseCache {
                     .collect();
                 cache.async_store_batch(entries, now).await
             }
-            Self::ValkeySemantic { cache, scope } => {
-                let entries = entries
-                    .into_iter()
-                    .map(|(request, value)| (Self::semantic(&request, scope), value))
-                    .collect();
-                cache.async_store_batch(entries, now).await
+            Self::ValkeySemantic { cache, scope, .. } => {
+                entries.into_iter().try_for_each(|(request, value)| {
+                    cache.store(&Self::semantic(&request, scope), value, now)
+                })
             }
         }
     }

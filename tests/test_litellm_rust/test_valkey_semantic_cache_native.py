@@ -1,6 +1,9 @@
+import asyncio
+import contextvars
 import hashlib
 import os
 import struct
+import threading
 import time
 from collections.abc import Generator, Mapping
 from types import SimpleNamespace
@@ -16,6 +19,7 @@ from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
 
 pytestmark: Final = pytest.mark.requires_rust_extension
+embedding_context: Final = contextvars.ContextVar("embedding_context")
 
 
 @pytest.fixture
@@ -169,6 +173,43 @@ async def test_async_lookup_and_store(
     request: Final = {**_request(), "ttl_seconds": 2.0}
     await binding.async_store(request, {"answer": "async"})
     assert await binding.async_lookup(request) == {"answer": "async"}
+
+
+async def test_async_embedding_runs_inline_in_caller_task(
+    valkey_url: str,
+    index_name: str,
+) -> None:
+    backend: Final = _backend(valkey_url, index_name)
+    observed: dict[str, object] = {}
+
+    async def async_embedding(prompt: str, metadata: dict[str, object] | None = None) -> list[float]:
+        observed["context"] = embedding_context.get("missing")
+        observed["task"] = asyncio.current_task()
+        observed["thread"] = threading.get_ident()
+        embedding_context.set("embedder")
+        return [1.0, 0.0]
+
+    backend._get_async_embedding = async_embedding
+    handle: Final = _native._CacheTestHandle.valkey_semantic(
+        valkey_url,
+        0.8,
+        index_name,
+        backend,
+    )
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    request: Final = {**_request(), "ttl_seconds": 2.0}
+    caller_task: Final = asyncio.current_task()
+    caller_thread: Final = threading.get_ident()
+    token: Final = embedding_context.set("caller")
+    try:
+        await binding.async_store(request, {"answer": "inline"})
+        assert observed["context"] == "caller"
+        assert observed["task"] is caller_task
+        assert observed["thread"] == caller_thread
+        assert embedding_context.get() == "embedder"
+        assert await binding.async_lookup(request) == {"answer": "inline"}
+    finally:
+        embedding_context.reset(token)
 
 
 def test_facade_activation_and_mutation_fallback(

@@ -24,6 +24,22 @@ pub trait Embedder: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Vec<f32>, Error>> + Send;
 }
 
+pub struct PreparedEmbedding(pub Vec<f32>);
+
+impl Embedder for PreparedEmbedding {
+    fn embed(&self, _prompt: &str, _metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
+        Ok(self.0.clone())
+    }
+
+    async fn async_embed(
+        &self,
+        _prompt: &str,
+        _metadata: Option<&Value>,
+    ) -> Result<Vec<f32>, Error> {
+        Ok(self.0.clone())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValkeySemanticConfig {
     pub similarity_threshold: f64,
@@ -108,6 +124,23 @@ where
             prefix: format!("{}:", self.config.index_name),
             dimension: Arc::clone(&self.index_dimension),
             similarity_threshold: self.config.similarity_threshold,
+        }
+    }
+}
+
+impl<E, S, C> ValkeySemanticCache<E, S, C>
+where
+    E: Embedder,
+    S: CacheCodec<Value = CacheEntry> + Clone,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    pub fn with_embedder<E2: Embedder>(&self, embedder: E2) -> ValkeySemanticCache<E2, S, C> {
+        ValkeySemanticCache {
+            connections: Arc::clone(&self.connections),
+            embedder,
+            codec: self.codec.clone(),
+            config: self.config.clone(),
+            index_dimension: Arc::clone(&self.index_dimension),
         }
     }
 }
@@ -597,8 +630,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        Embedder, ValkeySemanticCache, ValkeySemanticConfig, index_dimension_from_info,
-        prompt_from_context, scope_tag,
+        Embedder, PreparedEmbedding, ValkeySemanticCache, ValkeySemanticConfig,
+        index_dimension_from_info, prompt_from_context, scope_tag,
     };
 
     #[derive(Clone)]
@@ -755,6 +788,47 @@ mod tests {
         assert_eq!(
             cache.test_connection().await,
             Err(super::Error::UnsupportedOperation)
+        );
+    }
+
+    #[tokio::test]
+    async fn prepared_embedding_returns_its_vector_for_any_prompt() {
+        let embedding = PreparedEmbedding(vec![1.0, 2.0]);
+        assert_eq!(
+            embedding
+                .async_embed("different prompt", None)
+                .await
+                .unwrap(),
+            vec![1.0, 2.0]
+        );
+    }
+
+    #[test]
+    fn with_embedder_shares_index_state_and_connections() {
+        let entry = CacheEntry {
+            timestamp: Some(1.0),
+            response: json!({"answer": "ok"}),
+        };
+        let encoded = ResponseCacheCodec.encode(&entry).unwrap();
+        let cache = ValkeySemanticCache::with_connection(
+            RecordingConnection::new([ok(), ok(), Ok(search_hit(encoded, "0.1"))]),
+            FixedEmbedder {
+                vector: vec![1.0, 0.0],
+                calls: Arc::default(),
+            },
+            ResponseCacheCodec,
+            ValkeySemanticConfig {
+                similarity_threshold: 0.8,
+                index_name: "test".into(),
+            },
+        );
+        cache
+            .set_cache("key", entry.clone(), &semantic_context(None))
+            .unwrap();
+        let prepared = cache.with_embedder(PreparedEmbedding(vec![1.0, 0.0]));
+        assert_eq!(
+            prepared.get_cache("key", &semantic_context(None)).unwrap(),
+            Some(entry)
         );
     }
 
