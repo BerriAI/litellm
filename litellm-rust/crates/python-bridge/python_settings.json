@@ -176,14 +176,6 @@
         "shapes": [],
         "unsupported_live": null
       },
-      "premium_user": {
-        "adapter": "Truthy",
-        "required": true,
-        "precedence": "module_global",
-        "sensitive": false,
-        "shapes": [],
-        "unsupported_live": null
-      },
       "store_virtual_keys": {
         "adapter": "Truthy",
         "required": true,

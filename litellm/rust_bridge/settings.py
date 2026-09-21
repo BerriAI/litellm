@@ -37,7 +37,6 @@ class SecretManager:
     access_mode: object
     hosted_keys: object
     primary_secret_name: object
-    premium_user: object
     store_virtual_keys: object
     prefix_for_stored_virtual_keys: object
     kms_key_id: object
@@ -73,7 +72,6 @@ def secret_manager() -> SecretManager:
         access_mode=settings.access_mode,
         hosted_keys=settings.hosted_keys,
         primary_secret_name=settings.primary_secret_name,
-        premium_user=getattr(litellm, "premium_user", False),
         store_virtual_keys=settings.store_virtual_keys,
         prefix_for_stored_virtual_keys=settings.prefix_for_stored_virtual_keys,
         kms_key_id=settings.kms_key_id,

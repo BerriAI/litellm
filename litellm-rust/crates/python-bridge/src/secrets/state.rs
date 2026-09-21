@@ -49,11 +49,8 @@ pub(crate) fn secret_manager_state(
         ),
         litellm_secrets::KeyManagementSystem::GoogleSecretManager => {
             SecretManager::GoogleSecretManager(
-                litellm_secrets_google::GoogleSecretManager::new(
-                    environment.clone(),
-                    snapshot.premium_user,
-                )
-                .map_err(|error| invalid_configuration(system, error))?,
+                litellm_secrets_google::GoogleSecretManager::new(environment.clone(), true)
+                    .map_err(|error| invalid_configuration(system, error))?,
             )
         }
         litellm_secrets::KeyManagementSystem::GoogleKms => SecretManager::GoogleKms(
@@ -95,18 +92,11 @@ fn invalid_configuration(
     ))
 }
 
-fn system_name(system: litellm_secrets::KeyManagementSystem) -> &'static str {
-    match system {
-        litellm_secrets::KeyManagementSystem::GoogleKms => "google_kms",
-        litellm_secrets::KeyManagementSystem::AzureKeyVault => "azure_key_vault",
-        litellm_secrets::KeyManagementSystem::AwsSecretManager => "aws_secret_manager",
-        litellm_secrets::KeyManagementSystem::GoogleSecretManager => "google_secret_manager",
-        litellm_secrets::KeyManagementSystem::HashicorpVault => "hashicorp_vault",
-        litellm_secrets::KeyManagementSystem::Cyberark => "cyberark",
-        litellm_secrets::KeyManagementSystem::Local => "local",
-        litellm_secrets::KeyManagementSystem::AwsKms => "aws_kms",
-        litellm_secrets::KeyManagementSystem::Custom => "custom",
-    }
+fn system_name(system: litellm_secrets::KeyManagementSystem) -> String {
+    serde_json::to_value(system)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| format!("{system:?}"))
 }
 
 #[cfg(test)]
@@ -129,7 +119,6 @@ mod tests {
             let system = serde_json::from_value(serde_json::Value::String(system.into())).unwrap();
             let snapshot = SecretManagerSnapshot {
                 system: Some(system),
-                premium_user: false,
                 settings: KeyManagementSettings::default(),
             };
             let error: PyErr = match secret_manager_state(py, snapshot) {
@@ -147,7 +136,6 @@ mod tests {
         Python::attach(|py| {
             let snapshot = SecretManagerSnapshot {
                 system: Some(KeyManagementSystem::Local),
-                premium_user: false,
                 settings: KeyManagementSettings {
                     access_mode: AccessMode::ReadOnly,
                     ..Default::default()
@@ -159,7 +147,6 @@ mod tests {
 
             let different = SecretManagerSnapshot {
                 system: Some(KeyManagementSystem::Local),
-                premium_user: false,
                 settings: KeyManagementSettings {
                     hosted_keys: Some(vec!["different".into()]),
                     ..Default::default()

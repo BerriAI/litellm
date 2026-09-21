@@ -231,15 +231,6 @@ mod tests {
         },
         SettingSpec {
             group: "secret_manager",
-            name: "premium_user",
-            adapter: "Truthy",
-            precedence: "module_global",
-            sensitive: false,
-            shapes: &[],
-            unsupported_live: None,
-        },
-        SettingSpec {
-            group: "secret_manager",
             name: "store_virtual_keys",
             adapter: "Truthy",
             precedence: "module_global",

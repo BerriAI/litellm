@@ -127,14 +127,12 @@ def test_secret_manager_projects_custom_settings(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(litellm, "secret_manager_client", _VaultSecrets({"MISTRAL_API_KEY": "vault-key"}))
     monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
     monkeypatch.setattr(litellm, "_key_management_settings", manager_settings)
-    monkeypatch.setattr(litellm, "premium_user", True, raising=False)
 
     assert settings.secret_manager() == settings.SecretManager(
         system="custom",
         access_mode="read_and_write",
         hosted_keys=["MISTRAL_API_KEY"],
         primary_secret_name="primary",
-        premium_user=True,
         store_virtual_keys=manager_settings.store_virtual_keys,
         prefix_for_stored_virtual_keys=manager_settings.prefix_for_stored_virtual_keys,
         kms_key_id=manager_settings.kms_key_id,
@@ -168,7 +166,6 @@ def test_secret_manager_uses_key_management_defaults(monkeypatch: pytest.MonkeyP
         access_mode=defaults.access_mode,
         hosted_keys=defaults.hosted_keys,
         primary_secret_name=defaults.primary_secret_name,
-        premium_user=getattr(litellm, "premium_user", False),
         store_virtual_keys=defaults.store_virtual_keys,
         prefix_for_stored_virtual_keys=defaults.prefix_for_stored_virtual_keys,
         kms_key_id=defaults.kms_key_id,

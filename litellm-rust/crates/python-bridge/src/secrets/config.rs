@@ -7,7 +7,6 @@ use crate::coercion::{Field, ProjectionError};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct SecretManagerSnapshot {
     pub(crate) system: Option<KeyManagementSystem>,
-    pub(crate) premium_user: bool,
     pub(crate) settings: KeyManagementSettings,
 }
 
@@ -68,13 +67,7 @@ pub(crate) fn project(value: &Bound<'_, PyAny>) -> Result<SecretManagerSnapshot,
         replica_regions,
         ..KeyManagementSettings::default()
     };
-    Ok(SecretManagerSnapshot {
-        system,
-        premium_user: Field::read(value, "secret_manager.premium_user")?
-            .truthy()?
-            .0,
-        settings,
-    })
+    Ok(SecretManagerSnapshot { system, settings })
 }
 
 fn parse_optional_system(
@@ -110,13 +103,15 @@ mod tests {
         py: Python<'py>,
         system: &str,
         access_mode: &str,
-        premium_user: Bound<'py, PyAny>,
+        store_virtual_keys: Bound<'py, PyAny>,
         hosted_keys: Bound<'py, PyAny>,
     ) -> Bound<'py, PyAny> {
         let locals = PyDict::new(py);
         locals.set_item("system", system).unwrap();
         locals.set_item("access_mode", access_mode).unwrap();
-        locals.set_item("premium_user", premium_user).unwrap();
+        locals
+            .set_item("store_virtual_keys", store_virtual_keys)
+            .unwrap();
         locals.set_item("hosted_keys", hosted_keys).unwrap();
         py.run(
             cr#"
@@ -129,7 +124,6 @@ class SecretManager:
     access_mode: object
     hosted_keys: object
     primary_secret_name: object
-    premium_user: object
     store_virtual_keys: object
     prefix_for_stored_virtual_keys: object
     kms_key_id: object
@@ -148,8 +142,7 @@ root = SimpleNamespace(secret_manager=SecretManager(
     access_mode=access_mode,
     hosted_keys=hosted_keys,
     primary_secret_name=None,
-    premium_user=premium_user,
-    store_virtual_keys=False,
+    store_virtual_keys=store_virtual_keys,
     prefix_for_stored_virtual_keys="litellm/",
     kms_key_id=None,
     custom_secret_manager=None,
@@ -188,7 +181,7 @@ root = SimpleNamespace(secret_manager=SecretManager(
     ) {
         Python::initialize();
         Python::attach(|py| {
-            let premium_user = match string_value {
+            let store_virtual_keys = match string_value {
                 Some(value) => value.into_pyobject(py).unwrap().into_any(),
                 None => bool_value.into_pyobject(py).unwrap().to_owned().into_any(),
             };
@@ -197,11 +190,11 @@ root = SimpleNamespace(secret_manager=SecretManager(
                 py,
                 "local",
                 "read_only",
-                premium_user,
+                store_virtual_keys,
                 hosted_keys,
             ))
             .unwrap();
-            assert_eq!(projected.premium_user, expected);
+            assert_eq!(projected.settings.store_virtual_keys, Some(expected));
         });
     }
 
