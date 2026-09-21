@@ -35240,6 +35240,12 @@ export interface components {
          */
         PolicyAttachmentCreateRequest: {
             /**
+             * Default
+             * @description Apply this attachment only when no non-default attachment matches the request.
+             * @default false
+             */
+            default: boolean;
+            /**
              * Keys
              * @description Key aliases or patterns this attachment applies to.
              */
@@ -35295,6 +35301,12 @@ export interface components {
              * @description Who created the attachment.
              */
             created_by?: string | null;
+            /**
+             * Default
+             * @description Apply this attachment only when no non-default attachment matches the request.
+             * @default false
+             */
+            default: boolean;
             /**
              * Definition Location
              * @description Where this attachment is defined: 'db' (database) or 'config' (config.yaml).
