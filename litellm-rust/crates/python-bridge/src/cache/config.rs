@@ -642,14 +642,12 @@ fn optional_attribute_chain<'py>(
     value: &Bound<'py, PyAny>,
     names: &[&str],
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let mut current = value.clone();
-    for name in names {
-        match optional_attribute(&current, name)? {
-            Some(next) => current = next,
-            None => return Ok(None),
-        }
-    }
-    Ok(Some(current))
+    names
+        .iter()
+        .try_fold(Some(value.clone()), |current, name| match current {
+            Some(current) => optional_attribute(&current, name),
+            None => Ok(None),
+        })
 }
 
 #[inline(never)]

@@ -162,6 +162,7 @@ class _CacheTestHandle:
         *,
         ttl_seconds: float = 60.0,
         namespace: str | None = None,
+        startup_nodes: Sequence[tuple[str, int]] | None = None,
     ) -> _CacheTestHandle: ...
     @staticmethod
     def s3(
