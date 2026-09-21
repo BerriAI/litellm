@@ -1429,7 +1429,10 @@ class ComplexityRouter(CustomLogger):
             _ClassifierCircuitBreaker(circuit_breaker_cooldown) if circuit_breaker_cooldown is not None else None
         )
         self._tier_success_predictor: TierSuccessPredictor | None = (
-            TierSuccessPredictor(resolve_tier_artifact(self.config.heuristic_v2_artifact))
+            TierSuccessPredictor(
+                resolve_tier_artifact(self.config.heuristic_v2_artifact),
+                routing_threshold=self.config.heuristic_v2_success_threshold,
+            )
             if self.config.classifier_type == "heuristic_v2"
             else None
         )

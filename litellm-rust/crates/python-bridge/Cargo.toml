@@ -10,10 +10,13 @@ name = "_native"
 crate-type = ["cdylib"]
 
 [features]
-default = ["abi3"]
+default = ["abi3", "fast"]
 abi3 = ["pyo3/abi3-py310"]
 extension-module = ["pyo3/extension-module"]
 panic-test = []
+fast = ["litellm-token-counter/fast"]
+huggingface = ["litellm-token-counter/huggingface"]
+tiktoken = ["litellm-token-counter/tiktoken"]
 
 [dependencies]
 bytes.workspace = true
@@ -26,7 +29,7 @@ litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-types.workspace = true
 litellm-host-python.workspace = true
-litellm-token-counter.workspace = true
+litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
 serde_json.workspace = true

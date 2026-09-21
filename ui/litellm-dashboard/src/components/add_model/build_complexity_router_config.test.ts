@@ -5,6 +5,7 @@ import {
   normalizeClassifierLlmConfig,
   getKeywordTierRulesError,
   getClassifierModelError,
+  getHeuristicV2SuccessThresholdError,
   getClassifierReasoningEffortError,
   getMissingTiersError,
   hydrateCustomTierSet,
@@ -310,7 +311,27 @@ describe("buildComplexityRouterConfig", () => {
     expect(config.classifier_llm_config).toBeUndefined();
     expect(config.classifier_context_window_size).toBeUndefined();
     expect(config.classifier_fallback).toBeUndefined();
+    expect(config).not.toHaveProperty("heuristic_v2_success_threshold");
   });
+
+  it.each([0, 0.95, 1])("serializes a heuristic v2 success threshold of %s", (heuristicV2SuccessThreshold) => {
+    const config = buildComplexityRouterConfig({
+      ...baseParams,
+      classifierType: "heuristic_v2",
+      heuristicV2SuccessThreshold,
+    });
+    expect(config.heuristic_v2_success_threshold).toBe(heuristicV2SuccessThreshold);
+  });
+
+  it.each(["heuristic", "llm", "heuristic_first", "hybrid", "capability", "llm_v2"] as const)(
+    "retains the inactive success threshold under %s",
+    (classifierType) => {
+      expect(
+        buildComplexityRouterConfig({ ...baseParams, classifierType, heuristicV2SuccessThreshold: 0.91 })
+          .heuristic_v2_success_threshold,
+      ).toBe(0.91);
+    },
+  );
 
   it("includes classifier_context_window_size and classifier_context_budget_chars only when classifier_type is llm", () => {
     const params: BuildComplexityRouterConfigParams = {
@@ -981,6 +1002,19 @@ describe("buildComplexityRouterConfig tier model params", () => {
       COMPLEX: [{ model_name: "claude-sonnet-4", litellm_params: { reasoning_effort: "high" } }],
     });
   });
+});
+
+describe("getHeuristicV2SuccessThresholdError", () => {
+  it.each([undefined, 0, 0.95, 1])("accepts the optional probability %s", (threshold) => {
+    expect(getHeuristicV2SuccessThresholdError(threshold)).toBeNull();
+  });
+
+  it.each([-0.01, 1.01, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects invalid success threshold %s",
+    (threshold) => {
+      expect(getHeuristicV2SuccessThresholdError(threshold)).toBe("Success threshold must be a number between 0 and 1");
+    },
+  );
 });
 
 describe("getClassifierModelError", () => {

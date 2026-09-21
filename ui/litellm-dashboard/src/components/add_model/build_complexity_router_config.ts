@@ -150,6 +150,7 @@ export interface StoredComplexityRouterConfig {
   hybrid_boundary_margin?: unknown;
   tier_labels?: unknown;
   classifier_type?: ClassifierType;
+  heuristic_v2_success_threshold?: unknown;
   capability_classifier_config?: unknown;
   llm_v2_config?: unknown;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -190,6 +191,7 @@ export interface BuildComplexityRouterConfigParams {
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
+  heuristicV2SuccessThreshold?: number;
   capabilityClassifierConfig?: CapabilitySettings;
   llmV2Config?: FuseSettings;
   classifierLlmConfig: ClassifierLLMConfigWire | undefined;
@@ -258,6 +260,7 @@ export interface ComplexityRouterConfigPayload {
   plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
+  heuristic_v2_success_threshold?: number;
   capability_classifier_config?: CapabilitySettings;
   llm_v2_config?: FuseSettings;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -365,6 +368,12 @@ export const getKeywordTierRulesError = (
   const orphaned = keywordTierRules.flatMap((rule, index) => (names.includes(rule.tier) ? [] : [index + 1]));
   if (orphaned.length === 0) return null;
   return `Keyword rule(s) ${orphaned.join(", ")} route to a tier this router no longer has`;
+};
+
+export const getHeuristicV2SuccessThresholdError = (threshold: number | undefined): string | null => {
+  if (threshold === undefined) return null;
+  const validProbability = Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
+  return validProbability ? null : "Success threshold must be a number between 0 and 1";
 };
 
 export const getClassifierModelError = (
@@ -589,6 +598,7 @@ export const buildComplexityRouterConfig = ({
   planModeMinTier,
   tierLabels,
   classifierType,
+  heuristicV2SuccessThreshold,
   capabilityClassifierConfig,
   llmV2Config,
   classifierLlmConfig,
@@ -674,6 +684,9 @@ export const buildComplexityRouterConfig = ({
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
     ...(effectiveType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
+    ...(heuristicV2SuccessThreshold !== undefined && {
+      heuristic_v2_success_threshold: heuristicV2SuccessThreshold,
+    }),
     ...classifierWireFields(effectiveType, classifierInputs),
     ...(effectiveType === "capability" &&
       capabilityClassifierConfig && { capability_classifier_config: capabilityClassifierConfig }),
