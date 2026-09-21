@@ -849,7 +849,7 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
 
 
 BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
-    ("guardrailConfig", "performanceConfig", "serviceTier", "requestMetadata", "outputConfig")
+    ("guardrailConfig", "performanceConfig", "serviceTier", "requestMetadata", "outputConfig", "thinking")
 )
 
 
@@ -862,12 +862,13 @@ def _response_format_constrains_output(response_format: object) -> bool:
 def bedrock_request_needs_converse(model: str, request_params: Mapping[str, object]) -> bool:
     """Whether a request on a runtime-Chat-Completions model must still be served by Converse.
 
-    Converse-shaped body keys (``BEDROCK_CONVERSE_ONLY_REQUEST_KEYS``) are rejected as malformed input by
+    Converse-shaped body keys (``BEDROCK_CONVERSE_ONLY_REQUEST_KEYS``, the Anthropic-style ``thinking``
+    block included, which only Converse forwards as ``additionalModelRequestFields``) have no field on
     AWS's native OpenAI surface, operator-owned request metadata is only written onto the Converse body,
-    function tools on a model without ``supports_bedrock_runtime_chat_completions_tools_with_reasoning``
-    are rejected there unless ``reasoning_effort`` is exactly ``"none"``, and a constraining
-    ``response_format`` on a model without ``supports_bedrock_runtime_chat_completions_response_format``
-    is only honored by Converse.
+    function tools (``tools`` or legacy ``functions``) on a model without
+    ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
+    ``reasoning_effort`` is exactly ``"none"``, and a constraining ``response_format`` on a model without
+    ``supports_bedrock_runtime_chat_completions_response_format`` is only honored by Converse.
     """
     if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
         return True
@@ -877,7 +878,7 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
         request_params.get("response_format")
     ) and not bedrock_runtime_chat_completions_enforces_response_format(model):
         return True
-    if not request_params.get("tools"):
+    if not (request_params.get("tools") or request_params.get("functions")):
         return False
     return (
         not bedrock_runtime_chat_completions_serves_tools_with_reasoning(model)

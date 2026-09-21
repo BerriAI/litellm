@@ -38,6 +38,27 @@ if TYPE_CHECKING:
 REASONING_OPEN_TAG: Final = "<reasoning>"
 REASONING_CLOSE_TAG: Final = "</reasoning>"
 
+CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY: Final = MappingProxyType(
+    {
+        "openai.gpt-5": frozenset(("frequency_penalty", "presence_penalty", "stop", "logprobs", "top_logprobs")),
+        "openai.gpt-oss": frozenset(("logit_bias",)),
+        "xai.": frozenset(("frequency_penalty", "presence_penalty")),
+    }
+)
+
+
+def chat_completions_params_refused_for(model: str) -> frozenset[str]:
+    """The OpenAI params AWS's Chat Completions endpoint rejects for this model whatever else the request says.
+
+    Each family answers them with a 400 (GPT-5.6, gpt-oss) or a 503 (Grok), where Converse dropped the same
+    params under ``drop_params``, so the native config leaves them out of its supported list and the usual
+    drop-or-raise handling applies before the request reaches AWS.
+    """
+    model_id: Final = split_bedrock_region_path(model)[1]
+    return frozenset().union(
+        *(refused for family, refused in CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY.items() if family in model_id)
+    )
+
 
 def _held_close_tag_prefix(text: str) -> int:
     return next(
@@ -362,7 +383,8 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         return {**validated, "OpenAI-Project": project_id}  # mutable-ok: BaseConfig signature returns a dict
 
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseConfig signature
-        base_params: Final = [param for param in super().get_supported_openai_params(model) if param != "n"]
+        refused: Final = {"n", *chat_completions_params_refused_for(model)}
+        base_params: Final = [param for param in super().get_supported_openai_params(model) if param not in refused]
         if "reasoning_effort" in base_params or not litellm.supports_reasoning(
             model=model, custom_llm_provider=self.custom_llm_provider
         ):

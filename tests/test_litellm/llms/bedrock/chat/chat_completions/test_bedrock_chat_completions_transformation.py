@@ -264,6 +264,26 @@ def test_gpt_oss_tools_with_any_reasoning_effort_stay_on_chat_completions(local_
     assert BedrockModelInfo.get_bedrock_route("openai.gpt-oss-120b-1:0", params) == "chat_completions"
 
 
+@pytest.mark.parametrize(
+    "request_params, expected_route",
+    [
+        ({"functions": [GET_WEATHER_TOOL["function"]]}, "converse"),
+        ({"functions": [GET_WEATHER_TOOL["function"]], "reasoning_effort": "low"}, "converse"),
+        ({"functions": [GET_WEATHER_TOOL["function"]], "reasoning_effort": "none"}, "chat_completions"),
+        ({"functions": [], "reasoning_effort": "low"}, "chat_completions"),
+    ],
+)
+def test_gpt56_legacy_functions_route_like_tools(local_cost_map, request_params, expected_route):
+    assert BedrockModelInfo.get_bedrock_route("global.openai.gpt-5.6-sol", request_params) == expected_route
+    assert BedrockModelInfo.get_bedrock_route("openai.gpt-oss-120b-1:0", request_params) == "chat_completions"
+
+
+def test_thinking_block_goes_to_converse(local_cost_map):
+    thinking = {"type": "enabled", "budget_tokens": 1024}
+    assert BedrockModelInfo.get_bedrock_route("us.xai.grok-4.6", {"thinking": thinking}) == "converse"
+    assert BedrockModelInfo.get_bedrock_route("us.xai.grok-4.6", {"thinking": None}) == "chat_completions"
+
+
 def test_explicit_converse_prefix_wins_for_openai_models(local_cost_map):
     assert BedrockModelInfo.get_bedrock_route("bedrock/converse/openai.gpt-oss-20b-1:0") == "converse"
     assert BedrockModelInfo.get_bedrock_route("converse/global.openai.gpt-5.6-sol", {}) == "converse"
@@ -299,6 +319,54 @@ def test_supported_params_include_reasoning_effort_for_gpt56(local_cost_map):
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
     assert "reasoning_effort" in cfg.get_supported_openai_params("global.openai.gpt-5.6-sol")
     assert "reasoning_effort" in cfg.get_supported_openai_params("openai.gpt-oss-20b-1:0")
+
+
+@pytest.mark.parametrize(
+    "model, refused, kept",
+    [
+        (
+            "bedrock/global.openai.gpt-5.6-sol",
+            ("frequency_penalty", "presence_penalty", "stop", "logprobs", "top_logprobs", "n"),
+            ("temperature", "top_p", "logit_bias", "reasoning_effort", "tools", "functions"),
+        ),
+        (
+            "us.xai.grok-4.6",
+            ("frequency_penalty", "presence_penalty", "n"),
+            ("stop", "logprobs", "top_p", "logit_bias", "reasoning_effort"),
+        ),
+        (
+            "bedrock/us-gov-west-1/openai.gpt-oss-20b-1:0",
+            ("logit_bias", "n"),
+            ("frequency_penalty", "presence_penalty", "stop", "logprobs", "reasoning_effort"),
+        ),
+    ],
+)
+def test_supported_params_leave_out_what_each_family_refuses(local_cost_map, model, refused, kept):
+    supported = set(AmazonBedrockRuntimeChatCompletionsConfig().get_supported_openai_params(model))
+    assert supported.isdisjoint(refused)
+    assert set(kept) <= supported
+
+
+@pytest.mark.parametrize(
+    "model, param",
+    [
+        ("bedrock/global.openai.gpt-5.6-sol", {"frequency_penalty": 0.5}),
+        ("bedrock/global.openai.gpt-5.6-sol", {"logprobs": True, "top_logprobs": 2}),
+        ("bedrock/us.xai.grok-4.6", {"presence_penalty": 0.5}),
+        ("bedrock/openai.gpt-oss-20b-1:0", {"logit_bias": {"1": 1}}),
+    ],
+    ids=lambda value: value if isinstance(value, str) else next(iter(value)),
+)
+def test_refused_params_are_dropped_or_refused_before_reaching_aws(local_cost_map, fake_aws_env, model, param):
+    requests, client = _recording_client(json=_chat_completion_json("ok", model.removeprefix("bedrock/")))
+    with pytest.raises(litellm.UnsupportedParamsError, match=next(iter(param))):
+        litellm.completion(model=model, messages=[{"role": "user", "content": "hello"}], client=client, **param)
+    litellm.completion(
+        model=model, messages=[{"role": "user", "content": "hello"}], drop_params=True, client=client, **param
+    )
+
+    assert str(requests[0].url).endswith("/openai/v1/chat/completions")
+    assert param.keys().isdisjoint(json.loads(requests[0].content))
 
 
 def test_split_reasoning_tag_splits_leading_tag():
@@ -577,6 +645,45 @@ def test_legacy_functions_stay_on_chat_completions(local_cost_map, fake_aws_env)
 
     assert str(requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
     assert json.loads(requests[0].content)["functions"] == [GET_WEATHER_TOOL["function"]]
+
+
+def test_gpt56_legacy_functions_with_reasoning_fall_back_to_converse(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    with pytest.raises(litellm.UnsupportedParamsError, match="functions"):
+        litellm.completion(
+            model="bedrock/global.openai.gpt-5.6-sol",
+            messages=[{"role": "user", "content": "hello"}],
+            functions=[GET_WEATHER_TOOL["function"]],
+            reasoning_effort="low",
+            client=client,
+        )
+    litellm.completion(
+        model="bedrock/global.openai.gpt-5.6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        functions=[GET_WEATHER_TOOL["function"]],
+        reasoning_effort="low",
+        drop_params=True,
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-5.6-sol/converse")
+    body = json.loads(requests[0].content)
+    assert "functions" not in body
+    assert "toolConfig" not in body
+
+
+def test_grok_thinking_block_is_served_by_converse(local_cost_map, fake_aws_env):
+    requests, client = _recording_client(json=CONVERSE_JSON)
+    thinking = {"type": "enabled", "budget_tokens": 1024}
+    litellm.completion(
+        model="bedrock/us.xai.grok-4.6",
+        messages=[{"role": "user", "content": "hello"}],
+        thinking=thinking,
+        client=client,
+    )
+
+    assert requests[0].url.raw_path.endswith(b"/model/us.xai.grok-4.6/converse")
+    assert json.loads(requests[0].content)["additionalModelRequestFields"]["thinking"] == thinking
 
 
 def test_converse_fallback_validates_against_converse_params(local_cost_map, fake_aws_env):
