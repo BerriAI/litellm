@@ -32,6 +32,7 @@ from opentelemetry.util.types import Attributes, AttributeValue
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.langfuse.langfuse import PROMPT_CACHE_TTL_ENV, whole_number
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 
@@ -70,8 +71,7 @@ _CHANNEL_RETIRE_GRACE_SECONDS: Final = 60.0
 _DEFAULT_TIMEOUT_SECONDS: Final = 20.0
 _DEFAULT_MAX_RETRIES: Final = 3
 _DEFAULT_PROMPT_CACHE_TTL_SECONDS: Final = 60.0
-_INT64_MIN: Final = -(2**63)
-_INT64_MAX: Final = 2**63 - 1
+_JSON_SAFE_INT: Final = 2**53 - 1
 _COMMON_RELEASE_ENVS: Final = (
     "RENDER_GIT_COMMIT",
     "CI_COMMIT_SHA",
@@ -162,10 +162,11 @@ def _present(entries: Iterable[tuple[str, AttributeValue | None]]) -> Mapping[st
 
 
 def _metadata_value(value: object) -> AttributeValue | None:
-    """A metadata value as OTLP can carry it: ints past int64 go as strings, as the v2 serializer sent them."""
+    """A metadata value as it survives the trip: OTLP drops ints past int64 and a JSON reader rounds ints past
+    2**53, so those go as strings, which is how v2's readback showed them."""
     if isinstance(value, (str, bool)):
         return value
-    if isinstance(value, int) and _INT64_MIN <= value <= _INT64_MAX:
+    if isinstance(value, int) and -_JSON_SAFE_INT <= value <= _JSON_SAFE_INT:
         return value
     return _serialize(value)
 
@@ -488,19 +489,21 @@ def configured_release() -> str | None:
 
 
 def configured_prompt_cache_ttl() -> float:
-    """``LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS``, the SDK's knob, with its 60 s default when unset or unusable."""
-    raw: Final = os.environ.get("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS")
+    """``LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS`` in whole seconds as the SDK reads it, its 60 s default when unset
+    or unusable; ``raise_if_unusable_prompt_cache_ttl`` has already named a value that is not a whole number."""
+    raw: Final = os.environ.get(PROMPT_CACHE_TTL_ENV)
     if raw is None:
         return _DEFAULT_PROMPT_CACHE_TTL_SECONDS
-    parsed: Final = _parse_float(raw)
+    parsed: Final = whole_number(raw)
     if parsed is None or parsed < 0:
         verbose_logger.warning(
-            "LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS=%r is not a number of seconds at or above 0; caching prompts for %.0f s",
+            "%s=%r is not a whole number of seconds at or above 0; caching prompts for %.0f s",
+            PROMPT_CACHE_TTL_ENV,
             raw,
             _DEFAULT_PROMPT_CACHE_TTL_SECONDS,
         )
         return _DEFAULT_PROMPT_CACHE_TTL_SECONDS
-    return parsed
+    return float(parsed)
 
 
 def configured_flush_at() -> int:
@@ -538,8 +541,12 @@ class DiscardingSpanExporter(SpanExporter):
         return True
 
 
-_RETRYABLE_EXPORT_STATUSES: Final = frozenset({408, 429, 500, 502, 503, 504})
 _ExportOutcome = Literal["delivered", "retry", "rejected"]
+
+
+def _retryable_status(status: int) -> bool:
+    """Any 5xx, a timeout or a rate limit: what the v2 consumer re-sent, plus the 408 the OTLP exporter retries."""
+    return status in (408, 429) or 500 <= status <= 599
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,7 +588,7 @@ class LangfuseSpanExporter(SpanExporter):
             self.handler.post(self.endpoint, data=body, headers=dict(self.headers), timeout=self.timeout)
         except httpx.HTTPStatusError as error:
             status: Final = error.response.status_code
-            if status in _RETRYABLE_EXPORT_STATUSES:
+            if _retryable_status(status):
                 return "retry"
             verbose_logger.error("Langfuse rejected an export to %s with HTTP %d", self.endpoint, status)
             return "rejected"

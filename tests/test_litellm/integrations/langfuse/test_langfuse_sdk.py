@@ -527,17 +527,30 @@ def test_host_otel_resource_env_does_not_reach_the_langfuse_resource(monkeypatch
 @pytest.mark.parametrize(
     ("value", "encoded"),
     [
-        (2**63 - 1, ("int_value", 2**63 - 1)),
+        (2**53 - 1, ("int_value", 2**53 - 1)),
+        (-(2**53) + 1, ("int_value", -(2**53) + 1)),
+        (2**53, ("string_value", str(2**53))),
+        (2**63 - 1, ("string_value", str(2**63 - 1))),
         (2**63, ("string_value", str(2**63))),
         (10**20, ("string_value", str(10**20))),
         (-(2**63) - 1, ("string_value", str(-(2**63) - 1))),
         (True, ("bool_value", True)),
     ],
-    ids=["int64-max", "int64-max-plus-one", "huge", "int64-min-minus-one", "bool"],
+    ids=[
+        "json-safe-max",
+        "json-safe-min",
+        "json-safe-plus-one",
+        "int64-max",
+        "int64-max-plus-one",
+        "huge",
+        "int64-min-minus-one",
+        "bool",
+    ],
 )
-def test_metadata_ints_past_int64_reach_the_wire_as_strings(value, encoded):
-    """OTLP carries int64 only and its encoder silently drops any attribute it cannot fit, while the
-    export still succeeds; v2's serializer sent such ints as strings, so the value has to survive."""
+def test_metadata_ints_past_the_json_safe_range_reach_the_wire_as_strings(value, encoded):
+    """OTLP carries int64 only and its encoder silently drops any attribute it cannot fit, while the export
+    still succeeds, and Langfuse's reader rounds ints past 2**53 (int64 max read back as 9223372036854776000
+    on 2026-09-21, where the v2 leg showed the exact digits as a string), so both ranges go as strings."""
     from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
 
     exporter = InMemorySpanExporter()
@@ -562,18 +575,19 @@ def test_metadata_ints_past_int64_reach_the_wire_as_strings(value, encoded):
 
 @pytest.mark.parametrize(
     ("raw", "expected"),
-    [(None, 60.0), ("5", 5.0), ("0", 0.0), ("2.5", 2.5), ("-1", 60.0), ("abc", 60.0)],
-    ids=["unset", "whole", "zero", "fraction", "negative", "text"],
+    [(None, 60.0), ("5", 5.0), ("0", 0.0), (" -1 ", 60.0), ("2.5", 60.0), ("abc", 60.0)],
+    ids=["unset", "whole", "zero", "negative", "fraction", "text"],
 )
 def test_prompt_cache_ttl_env_falls_back_instead_of_raising(monkeypatch: pytest.MonkeyPatch, raw, expected, caplog):
-    """A typo in the SDK's TTL knob used to raise out of logger construction and fail the request."""
+    """The SDK reads this knob as whole seconds; a negative one passes its import but must not cache forever,
+    and anything else falls back rather than raising out of logger construction."""
     if raw is None:
         monkeypatch.delenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raising=False)
     else:
         monkeypatch.setenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raw)
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         assert configured_prompt_cache_ttl() == expected
-    assert ("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS" in caplog.text) is (raw in ("-1", "abc"))
+    assert ("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS" in caplog.text) is (expected == 60.0 and raw is not None)
 
 
 def test_many_metadata_keys_never_evict_the_generation_input_and_output():
@@ -1088,11 +1102,11 @@ def test_exporter_posts_the_otlp_batch_through_litellm_http_handler(monkeypatch)
 
 @pytest.mark.parametrize(
     "failure",
-    [httpx.ReadTimeout("stalled"), httpx.ConnectError("refused"), 503, 429],
-    ids=["read-timeout", "connect-error", "http-503", "http-429"],
+    [httpx.ReadTimeout("stalled"), httpx.ConnectError("refused"), 503, 429, 408, 501, 507, 599],
+    ids=["read-timeout", "connect-error", "http-503", "http-429", "http-408", "http-501", "http-507", "http-599"],
 )
 def test_exporter_retries_a_failed_round_trip_and_then_succeeds(monkeypatch, failure):
-    """A stalled or restarting destination used to drop the batch outright; v2 backed off and re-sent it."""
+    """A stalled or restarting destination used to drop the batch outright; v2 backed off and re-sent every 5xx."""
     slept = []
     monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.sleep", slept.append)
     exporter, seen = _exporter_over([failure, failure, 200], delays=(0.5, 1.5, 2.5))
@@ -1113,7 +1127,7 @@ def test_exporter_gives_up_after_the_last_delay(monkeypatch):
     assert slept == [1.0, 2.0]
 
 
-@pytest.mark.parametrize("status", [400, 401, 403, 404])
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 413, 422, 499])
 def test_exporter_does_not_retry_a_rejected_batch(monkeypatch, status):
     """Bad credentials or a bad payload will not get better on the next attempt, so retrying only delays the flush."""
     slept = []

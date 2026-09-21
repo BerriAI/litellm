@@ -2305,6 +2305,27 @@ def test_missing_sdk_is_reported_as_not_installed(monkeypatch):
         _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-no-sdk")
 
 
+@pytest.mark.parametrize("raw", ["abc", "2.5", ""], ids=["text", "fraction", "empty"])
+def test_prompt_cache_ttl_typo_is_named_before_the_sdk_is_imported(monkeypatch, raw):
+    """The v4 SDK evaluates ``int(LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS)`` at import, so without this
+    gate every request failed with a bare ``invalid literal for int()`` that never named the variable."""
+    import sys
+
+    monkeypatch.setenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raw)
+    monkeypatch.setitem(sys.modules, "litellm.integrations.langfuse.langfuse_sdk", None)
+
+    with pytest.raises(ValueError, match="LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS") as raised:
+        _build_langfuse_logger(monkeypatch, langfuse_public_key="pk-ttl-typo")
+
+    assert repr(raw) in str(raised.value)
+
+
+@pytest.mark.parametrize("raw", ["5", " -3 ", "+0"], ids=["whole", "negative", "signed-zero"])
+def test_whole_second_prompt_cache_ttl_passes_the_gate(monkeypatch, raw):
+    monkeypatch.setenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raw)
+    langfuse_module.raise_if_unusable_prompt_cache_ttl()
+
+
 def test_stopped_logger_hands_its_export_channel_back(monkeypatch):
     """`DynamicLoggingCache` calls `stop()` on expiry; the channel must be retired once every
     logger that held it has stopped, or each credential rotation leaks a batch export thread."""

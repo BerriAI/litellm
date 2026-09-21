@@ -238,3 +238,18 @@ def test_old_sdk_fails_with_the_upgrade_message_before_the_otel_module_is_import
 
     assert "2.59.7" in str(raised.value)
     assert "langfuse_otel" in str(raised.value)
+
+
+@pytest.mark.parametrize("raw", ["abc", "2.5"], ids=["text", "fraction"])
+def test_prompt_cache_ttl_typo_is_named_instead_of_reported_as_not_installed(monkeypatch, raw):
+    """The v4 SDK runs ``int()`` on this variable at import, and ``langfuse_client_init`` wraps any import
+    failure as "Langfuse not installed", so the gate has to run before that import."""
+    monkeypatch.setenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raw)
+    monkeypatch.setitem(sys.modules, "litellm.integrations.langfuse.langfuse_sdk", None)
+    langfuse_client_init.cache_clear()
+
+    with pytest.raises(ValueError, match="LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS") as raised:
+        langfuse_client_init(langfuse_public_key="pk-ttl", langfuse_secret="sk-ttl", langfuse_host="http://127.0.0.1:1")
+
+    assert "not installed" not in str(raised.value)
+    assert repr(raw) in str(raised.value)

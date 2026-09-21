@@ -23,6 +23,7 @@ from .langfuse import (
     LangFuseLogger,
     installed_langfuse_version,
     raise_if_unsupported_langfuse_version,
+    raise_if_unusable_prompt_cache_ttl,
     resolve_langfuse_credentials,
     warn_if_upstream_langfuse_configured,
 )
@@ -70,6 +71,8 @@ def langfuse_client_init(
     Raises:
         Exception: If langfuse package is not installed
     """
+    raise_if_unsupported_langfuse_version(installed_langfuse_version())
+    raise_if_unusable_prompt_cache_ttl()
     try:
         from .langfuse_sdk import build_langfuse_client
     except Exception as e:
@@ -89,7 +92,6 @@ def langfuse_client_init(
         # add http:// if unset, assume communicating over private network - e.g. render
         langfuse_host = "http://" + langfuse_host
 
-    raise_if_unsupported_langfuse_version(installed_langfuse_version())
     warn_if_upstream_langfuse_configured()
 
     httpx_client: Final = create_mock_langfuse_client() if should_use_langfuse_mock() else HTTPHandler().client
@@ -119,6 +121,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
 
         self.langfuse_sdk_version = installed_langfuse_version()
         raise_if_unsupported_langfuse_version(self.langfuse_sdk_version)
+        raise_if_unusable_prompt_cache_ttl()
 
         from .langfuse_sdk import acquire_langfuse_tracing, configured_release
 

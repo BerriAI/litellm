@@ -174,6 +174,7 @@ def _as_steering_key_sequence(value: object) -> tuple[str, ...]:
 
 MINIMUM_LANGFUSE_VERSION: Final = "4.7"
 UNSUPPORTED_LANGFUSE_VERSION: Final = "5"
+PROMPT_CACHE_TTL_ENV: Final = "LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS"
 
 
 def installed_langfuse_version() -> str:
@@ -203,6 +204,22 @@ def raise_if_unsupported_langfuse_version(installed_version: str) -> None:
         f"'pip install \"langfuse>={MINIMUM_LANGFUSE_VERSION},<{UNSUPPORTED_LANGFUSE_VERSION}\"' to upgrade, or use "
         f"the 'langfuse_otel' callback, which does not depend on the langfuse SDK\033[0m"
     )
+
+
+def whole_number(raw: str) -> int | None:
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def raise_if_unusable_prompt_cache_ttl() -> None:
+    """The v4 SDK runs ``int()`` on this variable while it is being imported, so a value that is not a whole
+    number has to be named here, before that import fails with a bare ``ValueError`` on every request."""
+    raw: Final = os.environ.get(PROMPT_CACHE_TTL_ENV)
+    if raw is None or whole_number(raw) is not None:
+        return
+    raise ValueError(f"\033[91m{PROMPT_CACHE_TTL_ENV}={raw!r} must be a whole number of seconds\033[0m")
 
 
 def _optional_str(value: object) -> str | None:
@@ -284,6 +301,7 @@ class LangFuseLogger:
                 f"\033[91mLangfuse not installed, try running 'pip install langfuse' to fix this error: {e}\033[0m"
             ) from e
         raise_if_unsupported_langfuse_version(self.langfuse_sdk_version)
+        raise_if_unusable_prompt_cache_ttl()
         from litellm.integrations.langfuse.langfuse_sdk import configured_release
 
         self.public_key, self.secret_key, self.langfuse_host = resolve_langfuse_credentials(
