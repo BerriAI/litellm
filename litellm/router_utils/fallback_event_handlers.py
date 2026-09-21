@@ -199,6 +199,18 @@ class AttemptedFallbackTargets:
         self.keys = self.keys | frozenset((key,))
 
 
+def has_unattempted_fallback_target(
+    fallback_model_group: Sequence[object] | None, kwargs: Mapping[str, object]
+) -> bool:
+    """Whether a resolved chain still holds an entry this request has not tried."""
+    if fallback_model_group is None:
+        return False
+    attempted: Final = kwargs.get("attempted_targets")
+    if not isinstance(attempted, AttemptedFallbackTargets):
+        return True
+    return any((key := fallback_attempt_key(target)) is None or key not in attempted for target in fallback_model_group)
+
+
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     """
     Handles wildcard routing scenario

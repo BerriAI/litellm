@@ -3522,6 +3522,38 @@ async def test_acompletion_mid_stream_fallback_walks_every_entry_of_the_configur
     assert attempted_model_groups == ["primary", "fb1", "fb2"]
 
 
+def test_refusal_on_the_last_fallback_hop_is_returned_instead_of_raised():
+    """LIT-7400 follow-up: a refusal on the final hop of an exhausted list passes through."""
+    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "fake-key"}},
+            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+        num_retries=0,
+    )
+
+    attempted: Final = AttemptedFallbackTargets()
+    attempted.record("primary")
+    attempted.record("fb1")
+    attempted.record("fb2")
+    kwargs: Final = {
+        "attempted_targets": attempted,
+        "metadata": {"model_group": "fb2", "original_model_group": "primary"},
+    }
+
+    assert router._refusal_fallback_available("fb2", kwargs) is False
+    assert (
+        router._refusal_fallback_available(
+            "fb1", {"metadata": {"model_group": "fb1", "original_model_group": "primary"}}
+        )
+        is True
+    )
+
+
 def test_completion_streaming_iterator_adopts_fallback_response_headers():
     """LIT-6767, sync counterpart of the fallback-adoption test."""
     from unittest.mock import MagicMock, patch
