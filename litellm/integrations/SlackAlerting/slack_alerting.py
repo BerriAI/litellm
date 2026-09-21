@@ -1583,12 +1583,12 @@ Model Info:
         if not self.log_queue:
             return
 
-        squashed_queue: Final = squash_payloads(self.log_queue)
-        tasks: Final = [
-            send_to_webhook(slackAlertingInstance=self, item=item["item"], count=item["count"])
-            for item in squashed_queue.values()
-        ]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(
+            *(
+                send_to_webhook(slackAlertingInstance=self, item=squashed.item, count=squashed.count)
+                for squashed in squash_payloads(self.log_queue)
+            )
+        )
         self.log_queue.clear()
 
     async def _flush_digest_buckets(self):
