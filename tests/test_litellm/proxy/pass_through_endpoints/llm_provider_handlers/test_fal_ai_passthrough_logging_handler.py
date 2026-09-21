@@ -69,6 +69,38 @@ def test_handler_extracts_model_urls_and_resolution_keyed_cost():
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected_cost)
 
 
+def test_handler_charges_nothing_and_names_the_model_for_queue_status_and_result_polls():
+    for upstream_url in (
+        "https://queue.fal.run/fal-ai/trellis-2/requests/req-1/status",
+        "https://queue.fal.run/fal-ai/trellis-2/requests/req-1",
+    ):
+        logging_obj: Final = _logging_obj()
+        handler_result = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
+            response_body={"status": "COMPLETED"},
+            request_body={},
+            logging_obj=logging_obj,
+            url_route=upstream_url,
+            kwargs={},
+        )
+        assert handler_result["kwargs"]["model"] == "fal-ai/trellis-2"
+        assert handler_result["kwargs"]["response_cost"] is None
+        assert logging_obj.model_call_details["response_cost"] is None
+
+
+def test_handler_charges_for_queue_submit():
+    handler_result = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
+        response_body={"request_id": "req-1", "status": "IN_QUEUE"},
+        request_body={"image_url": "https://example.com/in.png", "resolution": 1536},
+        logging_obj=_logging_obj(),
+        url_route="https://queue.fal.run/fal-ai/trellis-2",
+        kwargs={},
+    )
+    assert handler_result["kwargs"]["model"] == "fal-ai/trellis-2"
+    assert handler_result["kwargs"]["response_cost"] == pytest.approx(
+        litellm.model_cost["fal_ai/fal-ai/trellis-2"]["output_cost_per_image_1536"]
+    )
+
+
 def test_handler_without_url_values_returns_empty_image_response_and_no_cost():
     handler_result = FalAIPassthroughLoggingHandler().fal_ai_passthrough_handler(
         response_body={"status": "COMPLETED"},

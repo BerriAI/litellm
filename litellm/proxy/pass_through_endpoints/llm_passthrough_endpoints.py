@@ -421,6 +421,22 @@ async def cohere_proxy_route(
     return received_value
 
 
+def _fal_target(endpoint: str) -> httpx.URL:
+    is_queue: Final = endpoint.startswith("queue/")
+    base_target_url: Final = (
+        (os.getenv("FAL_AI_QUEUE_API_BASE") or "https://queue.fal.run")
+        if is_queue
+        else (os.getenv("FAL_AI_API_BASE") or "https://fal.run")
+    )
+    stripped_endpoint: Final = endpoint.removeprefix("queue/")
+    encoded_endpoint: Final = httpx.URL(stripped_endpoint).path
+    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
+    base_url: Final = httpx.URL(base_target_url)
+    return base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
+    )
+
+
 @router.api_route(
     "/fal_ai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
@@ -432,13 +448,7 @@ async def fal_ai_proxy_route(
     fastapi_response: Response,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
-    base_target_url: Final = os.getenv("FAL_AI_API_BASE") or "https://fal.run"
-    encoded_endpoint: Final = httpx.URL(endpoint).path
-    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
-    base_url: Final = httpx.URL(base_target_url)
-    updated_url: Final = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
-    )
+    updated_url: Final = _fal_target(endpoint)
     fal_ai_api_key: Final = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="fal_ai",
         region_name=None,

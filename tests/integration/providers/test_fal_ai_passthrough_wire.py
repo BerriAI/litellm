@@ -63,3 +63,69 @@ def test_fal_passthrough_forwards_body_and_charges_resolution_tier(gateway: Gate
             )
             assert float(rows[0]["spend"]) == pytest.approx(_EXPECTED_SPEND)
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", f"/{_MODEL}")]
+
+
+@pytest.mark.covers("other.provider_wire.fal_ai.passthrough_queue_submit_charges_and_polls_do_not")
+def test_fal_queue_submit_charges_and_polls_pass_through_free(gateway: Gateway, tmp_path) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.headers["authorization"] == "Key synthetic-fal-key"
+        if request.method == "POST":
+            assert request.target == f"/{_MODEL}"
+            assert json.loads(request.body) == _REQUEST_BODY
+            return Reply(body=json.dumps({"request_id": "req-1", "status": "IN_QUEUE"}).encode())
+        if request.target == f"/{_MODEL}/requests/req-1/status":
+            return Reply(body=json.dumps({"status": "COMPLETED"}).encode())
+        assert request.target == f"/{_MODEL}/requests/req-1"
+        return Reply(body=json.dumps(_UPSTREAM_BODY).encode())
+
+    config: Final = tmp_path / "proxy_config.yaml"
+    config.write_text(
+        "model_list: []\n"
+        "general_settings:\n"
+        "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+        "  database_url: os.environ/DATABASE_URL\n"
+        "  store_model_in_db: true\n"
+        "  disable_spend_logs: false\n"
+        "  proxy_batch_write_at: 1\n"
+        "router_settings:\n"
+        "  disable_cooldowns: true\n"
+    )
+    with wire_server(respond) as wire:
+        with owned_proxy(
+            gateway,
+            tmp_path,
+            {"FAL_AI_QUEUE_API_BASE": wire.url, "FAL_AI_API_KEY": "synthetic-fal-key"},
+            config=config,
+        ) as candidate:
+            submit: Final = candidate.request("POST", f"/fal_ai/queue/{_MODEL}", _REQUEST_BODY)
+            assert submit.status_code == 200, submit.text
+            assert json.loads(submit.content) == {"request_id": "req-1", "status": "IN_QUEUE"}
+            status_response: Final = candidate.request("GET", f"/fal_ai/queue/{_MODEL}/requests/req-1/status")
+            assert status_response.status_code == 200, status_response.text
+            assert json.loads(status_response.content) == {"status": "COMPLETED"}
+            result_response: Final = candidate.request("GET", f"/fal_ai/queue/{_MODEL}/requests/req-1")
+            assert result_response.status_code == 200, result_response.text
+            assert json.loads(result_response.content) == _UPSTREAM_BODY
+            submit_spend: Final = eventually(
+                lambda: read_rows(
+                    'SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+                    (submit.headers["x-litellm-call-id"],),
+                ),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            assert float(submit_spend[0]["spend"]) == pytest.approx(_EXPECTED_SPEND)
+            poll_rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=ANY(%s)',
+                    ([status_response.headers["x-litellm-call-id"], result_response.headers["x-litellm-call-id"]],),
+                ),
+                lambda values: len(values) == 2,
+                seconds=70,
+            )
+            assert sorted(float(row["spend"]) for row in poll_rows) == [0.0, 0.0]
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", f"/{_MODEL}"),
+            ("GET", f"/{_MODEL}/requests/req-1/status"),
+            ("GET", f"/{_MODEL}/requests/req-1"),
+        ]

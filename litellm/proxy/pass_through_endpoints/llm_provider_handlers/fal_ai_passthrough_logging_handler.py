@@ -33,7 +33,9 @@ class FalAIPassthroughLoggingHandler:
         url_route: str,
         kwargs: Mapping[str, object],
     ) -> PassThroughEndpointLoggingTypedDict:
-        model: Final = urlparse(url_route).path.lstrip("/")
+        upstream_path: Final = urlparse(url_route).path.lstrip("/")
+        model: Final = upstream_path.partition("/requests/")[0]
+        is_submit: Final = "/requests/" not in upstream_path
         response: Final = ImageResponse(
             data=tuple(
                 ImageObject(url=url)
@@ -42,7 +44,7 @@ class FalAIPassthroughLoggingHandler:
                 if isinstance((url := part.get("url")), str)
             )
         )
-        response_cost: Final = fal_ai_passthrough_cost(model, request_body)
+        response_cost: Final = fal_ai_passthrough_cost(model, request_body) if is_submit else None
         response._hidden_params["response_cost"] = response_cost  # pyright: ignore[reportPrivateUsage]  # the logger reads a precomputed cost off the response's hidden params
         logging_obj.model = model  # rebind-ok: the spend logger reads model and cost off the shared logging object
         logging_obj.model_call_details["model"] = model  # rebind-ok: same shared logging object
