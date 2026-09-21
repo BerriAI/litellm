@@ -89,7 +89,9 @@ class TestRouterSettingsEndpoints:
         assert len(routing_strategy_field["options"]) > 0
 
     @pytest.mark.asyncio
-    async def test_get_router_settings_reports_sources(self, monkeypatch):
+    async def test_get_router_settings_reports_sources(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         store = SettingsStore("router_settings")
         store.load_yaml({"routing_strategy": "simple-shuffle"})
         store.apply_db_row("router_settings", {"num_retries": 3})
