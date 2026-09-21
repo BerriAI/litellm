@@ -869,6 +869,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
+                "supports_thinking_cache_preservation": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
@@ -940,6 +941,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
                             "/v1beta/interactions",
@@ -1069,6 +1071,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)

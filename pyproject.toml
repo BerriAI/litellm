@@ -71,8 +71,8 @@ proxy = [
     "mcp>=2.2.0,<3",
     "httpx2>=2.5.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.99",
-    "litellm-enterprise==0.1.68",
+    "litellm-proxy-extras==0.4.100",
+    "litellm-enterprise==0.1.69",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -196,6 +196,7 @@ dev = [
     "mypy==1.20.1",
     "keyring==25.7.0",
     "pytest==9.0.3",
+    "pytest-socket==0.8.1",
     "tomli==2.4.1; python_version < '3.11'",
     "pytest-mock==3.15.1",
     "pytest-asyncio==1.3.0",
@@ -302,6 +303,7 @@ editable-profile = "dev"
 include = [
     "litellm/proxy/_experimental/out/**",
     "litellm/router_strategy/complexity_router/artifacts/*.json",
+    "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/client/cli/commands/codex_base_instructions.md",
 ]
 exclude = [

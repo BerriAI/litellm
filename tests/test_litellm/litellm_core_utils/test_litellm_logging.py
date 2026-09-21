@@ -3532,6 +3532,24 @@ def test_function_setup_litellm_metadata_guardrail_writes_visible_after_setup():
     assert merged.get("applied_guardrails") == ["pam-ethical-request"]
 
 
+def test_get_standard_logging_metadata_merges_recorded_applied_guardrails():
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        metadata={"applied_guardrails": ["blocker"]},
+        litellm_params={},
+        applied_guardrails=["guard-a", "blocker", "guard-b"],
+    )
+    assert result["applied_guardrails"] == ["guard-a", "blocker", "guard-b"]
+
+    result = StandardLoggingPayloadSetup.get_standard_logging_metadata(
+        metadata={"applied_guardrails": ["blocker"]},
+        litellm_params={},
+        applied_guardrails=["guard-a"],
+    )
+    assert result["applied_guardrails"] == ["guard-a", "blocker"]
+
+
 def test_function_setup_metadata_takes_precedence_over_litellm_metadata():
     """
     Test that when BOTH metadata and litellm_metadata are present (e.g., user sets
