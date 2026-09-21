@@ -24,9 +24,18 @@ export interface RoutingDecision {
   matched_keyword?: string;
   escalation_keyword?: string;
   classifier_model?: string;
+  classifier_confidence?: number;
+  classifier_probabilities?: Record<string, number>;
+  classifier_cost?: number;
   escalated?: boolean;
   tier_boundaries?: RoutingDecisionTierBoundaries;
   reasoning_override_min_score?: number;
+  heuristic_v2_forecast?: {
+    probabilities: Record<string, number>;
+    threshold: number;
+    predicted_tier: string;
+    request_type: string;
+  };
 }
 
 const ROUTER_TYPE_LABELS: Record<string, string> = {
@@ -97,8 +106,8 @@ const CONSTANT_CAUSE_LABELS: Record<string, string> = {
   quality_tier: "Quality tier mapping",
   bandit: "Adaptive bandit",
   default_fallback: "Default model, no route matched",
-  classifier_fallback: "Fallback tier, LLM classifier failed",
-  default_model_fallback: "Default model, LLM classifier failed",
+  classifier_fallback: "Fallback tier, classifier failed",
+  default_model_fallback: "Default model, classifier failed",
 };
 
 function describeCause(decision: RoutingDecision): string {
@@ -118,6 +127,8 @@ function describeCause(decision: RoutingDecision): string {
       return describeReasoningOverride(tierLabel, overrideFloor);
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
+    case "jev_classifier":
+      return "JEV classifier";
     case "literal_keyword_match":
     case "keyword":
       return matchedKeyword ? `Keyword match: "${matchedKeyword}"` : "Keyword match";
@@ -171,6 +182,7 @@ export function RoutingDecisionCard({
     escalated,
     escalation_keyword: escalationKeyword,
     tier_boundaries: tierBoundaries,
+    heuristic_v2_forecast: forecast,
   } = decision;
 
   // On an override row the score did not decide the tier, so showing it against a
@@ -208,6 +220,20 @@ export function RoutingDecisionCard({
         {requestType && <Row label="Request type">{requestType}</Row>}
 
         <Row label="Decided by">{describeCause(decision)}</Row>
+        {decision.classifier_model && <Row label="Classifier model">{decision.classifier_model}</Row>}
+        {decision.classifier_confidence != null && (
+          <Row label="Confidence">{(decision.classifier_confidence * 100).toFixed(1)}%</Row>
+        )}
+        {decision.classifier_probabilities && (
+          <Row label="Probabilities">
+            {Object.entries(decision.classifier_probabilities).map(([name, probability]) => (
+              <div key={name}>
+                {name}: {(probability * 100).toFixed(1)}%
+              </div>
+            ))}
+          </Row>
+        )}
+        {decision.classifier_cost != null && <Row label="Classifier cost">${decision.classifier_cost.toFixed(8)}</Row>}
 
         {score !== undefined && (
           <Row label="Score">
@@ -219,6 +245,26 @@ export function RoutingDecisionCard({
         {routedModel && <Row label="Routed to">{routedModel}</Row>}
 
         {escalated !== undefined && <Row label="Escalated">{describeEscalation(escalated, escalationKeyword)}</Row>}
+
+        {forecast && (
+          <div className="mt-3 border-t pt-3">
+            <div className="mb-1 text-sm font-medium">Heuristic v2 estimates</div>
+            <Row label="Success by tier">
+              <span className="flex flex-wrap gap-1">
+                {["SIMPLE", "MEDIUM", "COMPLEX", "REASONING"].map((predictedTier) => (
+                  <Badge key={predictedTier} variant="outline" className="font-normal tabular-nums">
+                    {predictedTier} {(forecast.probabilities[predictedTier] * 100).toFixed(1)}%
+                  </Badge>
+                ))}
+              </span>
+            </Row>
+            <Row label="Threshold">
+              <span className="tabular-nums">{(forecast.threshold * 100).toFixed(1)}%</span>
+            </Row>
+            <Row label="Predicted tier">{forecast.predicted_tier}</Row>
+            <Row label="Request type">{forecast.request_type}</Row>
+          </div>
+        )}
 
         {signals && signals.length > 0 && (
           <Row label="Signals">

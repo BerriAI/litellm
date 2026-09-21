@@ -376,9 +376,10 @@ class TestCiscoAIDefenseMCPMode:
             assert sent_payload["result"]["content"][0]["text"] == text_content
             assert result is None
 
+    @pytest.mark.parametrize("use_wrapper", [True, False])
     @pytest.mark.asyncio
-    async def test_mcp_response_hook_through_real_logging_wrapper(self):
-        from mcp.types import CallToolResult, TextContent
+    async def test_mcp_response_hook_through_real_logging_wrapper(self, use_wrapper):
+        from mcp.types import AudioContent, CallToolResult, EmbeddedResource, ImageContent, TextContent, TextResourceContents
 
         from litellm.types.mcp import MCPPostCallResponseObject
 
@@ -387,22 +388,20 @@ class TestCiscoAIDefenseMCPMode:
         )
 
         real_result = CallToolResult(
-            content=[TextContent(type="text", text="leak 9045629876")],
+            content=[
+                TextContent(type="text", text="leak 9045629876"),
+                ImageContent(type="image", data="aGVsbG8=", mimeType="image/png"),
+                AudioContent(type="audio", data="aGVsbG8=", mimeType="audio/wav"),
+                EmbeddedResource(type="resource", resource=TextResourceContents(
+                    uri="memo://status", mimeType="text/plain", text="resource text"
+                )),
+            ],
             structuredContent={"patient": {"ssn": "123-45-6789"}},
             isError=False,
         )
         wrapped = MCPPostCallResponseObject(
             mcp_tool_call_response=real_result,
             hidden_params={},
-        )
-
-        assert isinstance(wrapped.mcp_tool_call_response, list)
-        assert all(
-            isinstance(item, tuple) and len(item) == 2
-            for item in wrapped.mcp_tool_call_response
-        ), (
-            "Pydantic coercion shape changed — update the normalizer to "
-            "match the new wire format."
         )
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
@@ -414,7 +413,7 @@ class TestCiscoAIDefenseMCPMode:
                     "mcp_server_name": "vault",
                     "litellm_call_id": "real-wire-call",
                 },
-                response_obj=wrapped,
+                response_obj=wrapped if use_wrapper else real_result,
                 start_time=datetime.now(),
                 end_time=datetime.now(),
             )
@@ -428,8 +427,8 @@ class TestCiscoAIDefenseMCPMode:
         sent_payload = post_mock.call_args.kwargs["json"]
         content_items = sent_payload["result"]["content"]
 
-        assert len(content_items) == 1, (
-            f"expected exactly 1 content item from the real "
+        assert len(content_items) == 4, (
+            f"expected exactly 4 content items from the real "
             f"CallToolResult.content list, got {len(content_items)}: "
             f"{content_items!r}"
         )
@@ -441,6 +440,11 @@ class TestCiscoAIDefenseMCPMode:
             f"``content`` field."
         )
         assert content_items[0].get("type") == "text"
+        assert content_items[1:] == [
+            {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"},
+            {"type": "audio", "data": "aGVsbG8=", "mimeType": "audio/wav"},
+            {"type": "resource", "resource": {"uri": "memo://status", "mimeType": "text/plain", "text": "resource text"}},
+        ]
         assert sent_payload["result"]["structuredContent"] == {
             "patient": {"ssn": "123-45-6789"}
         }
@@ -482,7 +486,6 @@ class TestCiscoAIDefenseMCPMode:
 
 
 class TestCiscoAIDefenseRedactListShape:
-
     @staticmethod
     def _violation_with_redact_response(text: str = "[REDACTED tool output]"):
         return _mock_inspect_response(
@@ -512,8 +515,8 @@ class TestCiscoAIDefenseRedactListShape:
         tuples_list = [
             ("meta", None),
             ("content", inner_content),
-            ("structuredContent", {"patient": {"ssn": "123-45-6789"}}),
-            ("isError", False),
+            ("structured_content", {"patient": {"ssn": "123-45-6789"}}),
+            ("is_error", False),
         ]
         return tuples_list, lambda: inner_content[0].text
 
@@ -526,16 +529,12 @@ class TestCiscoAIDefenseRedactListShape:
 
         from litellm.types.mcp import MCPPostCallResponseObject
 
-        g = _make_guardrail(
-            inspection_type="mcp", event_hook=["pre_mcp_call", "during_mcp_call"]
-        )
+        g = _make_guardrail(inspection_type="mcp", event_hook=["pre_mcp_call", "during_mcp_call"])
 
         content, get_text = getattr(self, factory_name)()
         response_obj = _mcp_response(content)
 
-        with _patch_inspection_post(
-            g, AsyncMock(return_value=self._violation_with_redact_response())
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=self._violation_with_redact_response())):
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "leak", "arguments": {}},
                 response_obj=response_obj,
@@ -544,15 +543,13 @@ class TestCiscoAIDefenseRedactListShape:
             )
 
         assert result is None or not isinstance(result, MCPPostCallResponseObject), (
-            f"Redact silently fell through to block for {factory_name}. "
-            f"result={result!r}"
+            f"Redact silently fell through to block for {factory_name}. result={result!r}"
         )
         assert get_text() == "[REDACTED tool output]", (
-            f"Redact silently failed for {factory_name}; original text "
-            f"not rewritten."
+            f"Redact silently failed for {factory_name}; original text not rewritten."
         )
         if factory_name == "_pydantic_tuple_list_factory":
-            structured_content = dict(content)["structuredContent"]
+            structured_content = dict(content)["structured_content"]
             assert structured_content == {"result": "[REDACTED tool output]"}
             assert "123-45-6789" not in json.dumps(structured_content)
 
@@ -591,12 +588,12 @@ class TestCiscoAIDefenseRedactListShape:
             )
 
         assert original_response.content[0].text == "[REDACTED tool output]"
-        assert "123-45-6789" not in json.dumps(original_response.structuredContent), (
+        assert "123-45-6789" not in json.dumps(original_response.structured_content), (
             "Redact verdict left the client-visible MCP tool output unchanged. "
             "The post-call hook receives a wrapped MCPPostCallResponseObject but "
             "the endpoint returns kwargs['original_response'], so the redaction "
             "must rewrite that object too. structuredContent still leaks: "
-            f"{original_response.structuredContent!r}"
+            f"{original_response.structured_content!r}"
         )
 
 
@@ -712,11 +709,11 @@ class TestCiscoAIDefenseMCPBlockingContract:
             "Hook must keep returning a MCPPostCallResponseObject for "
             "dispatcher paths that do honor returned replacements."
         )
-        assert raw_response.isError is True
+        assert raw_response.is_error is True
         assert "Blocked by Cisco AI Defense" in raw_response.content[0].text
-        assert raw_response.structuredContent is not None
-        assert "Blocked by Cisco AI Defense" in raw_response.structuredContent["result"]
-        assert "exfiltrated" not in raw_response.structuredContent["result"]
+        assert raw_response.structured_content is not None
+        assert "Blocked by Cisco AI Defense" in raw_response.structured_content["result"]
+        assert "exfiltrated" not in raw_response.structured_content["result"]
         logging_stub = Logging.__new__(Logging)
         logging_stub.model_call_details = {}
         parsed = logging_stub._parse_post_mcp_call_hook_response(response=result)
