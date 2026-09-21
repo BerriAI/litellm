@@ -25,7 +25,7 @@ from ...common_utils import (
     AnthropicModelInfo,
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
-    strip_claude_code_identity,
+    strip_claude_code_identity_from_system,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from .mid_conversation_system import (
@@ -147,32 +147,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         Returns:
             System parameter with the identity sentence removed, or None if all content was removed
         """
-        if isinstance(system_param, str):
-            return strip_claude_code_identity(system_param)
-        elif isinstance(system_param, list):
-            filtered_list: Final = []  # mutable-ok: API message payload
-            for content_block in system_param:
-                if isinstance(content_block, dict):
-                    text = content_block.get("text", "")
-                    content_type = content_block.get("type", "")
-                    if content_type != "text":
-                        filtered_list.append(content_block)
-                        continue
-                    stripped_text = strip_claude_code_identity(text)
-                    if stripped_text is None:
-                        continue
-                    # Only copy the block when the text changed.
-                    if stripped_text == text:
-                        filtered_list.append(content_block)
-                    else:
-                        rewritten = {**content_block, "text": stripped_text}  # mutable-ok: API message payload
-                        filtered_list.append(rewritten)
-                else:
-                    # Keep non-dict items as-is
-                    filtered_list.append(content_block)
-            return filtered_list if len(filtered_list) > 0 else None
-        else:
-            return system_param
+        return strip_claude_code_identity_from_system(system_param)
 
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
