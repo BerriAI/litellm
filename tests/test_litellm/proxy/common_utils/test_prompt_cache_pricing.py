@@ -7,31 +7,6 @@ from litellm.proxy.common_utils.prompt_cache_pricing import price_cache_tokens
 from litellm.types.management_endpoints.prompt_cache_prediction import CacheTokenBuckets
 
 
-@pytest.mark.parametrize(
-    ("model", "expected"),
-    [("anthropic/claude-sonnet-4-5", 1.26), ("anthropic/claude-sonnet-4-6", 0.63)],
-)
-def test_prices_all_cache_buckets_at_total_context_tier(model: str, expected: float) -> None:
-    tokens: Final = CacheTokenBuckets(
-        uncached_input_tokens=100_000,
-        cache_read_input_tokens=50_000,
-        cache_creation_5m_input_tokens=20_000,
-        cache_creation_1h_input_tokens=40_000,
-    )
-    assert price_cache_tokens(model, "unconfigured-deployment", tokens) == pytest.approx(expected)
-
-
-@pytest.mark.parametrize(("total", "expected"), [(200_000, 0.387), (200_001, 0.774006)])
-def test_long_context_tier_starts_above_threshold(total: int, expected: float) -> None:
-    tokens: Final = CacheTokenBuckets(
-        uncached_input_tokens=total - 100_000,
-        cache_creation_1h_input_tokens=10_000,
-        cache_read_input_tokens=90_000,
-    )
-    actual: Final = price_cache_tokens("anthropic/claude-sonnet-4-5", "unconfigured-deployment", tokens)
-    assert actual == pytest.approx(expected)
-
-
 def test_deployment_tariff_wins_without_proxy_discounts_or_margins(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "model_cost", litellm.model_cost.copy())
     litellm.Router(

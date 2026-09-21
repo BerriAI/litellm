@@ -8,12 +8,15 @@ from fastapi.exceptions import HTTPException
 from httpx import ReadTimeout, Request, Response
 
 import litellm
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security import (
     PromptSecurityGuardrail,
     PromptSecurityGuardrailMissingSecrets,
 )
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
 
 def test_prompt_security_guard_config(monkeypatch: pytest.MonkeyPatch):
@@ -413,6 +416,199 @@ async def test_apply_guardrail_modify_response(monkeypatch: pytest.MonkeyPatch):
         )
 
     assert result["texts"] == ["Your SSN is [REDACTED]"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_modify_response_keeps_multi_choice_texts_aligned():
+    """With n>1 each choice text gets its own verdict, so a rewrite lands on the choice it came from."""
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard",
+        event_hook="post_call",
+        default_on=True,
+        api_key="test-key",
+        api_base="https://test.prompt.security",
+    )
+
+    async def mock_post(*args, **kwargs):
+        text = kwargs["json"]["response"]
+        redacted = text.replace("123-45-6789", "[REDACTED]")
+        mock_response = Response(
+            json={
+                "result": {
+                    "response": {
+                        "action": "modify" if redacted != text else "log",
+                        "violations": [],
+                        "modified_text": redacted,
+                    }
+                }
+            },
+            status_code=200,
+            request=Request(method="POST", url="https://test.prompt.security/api/protect"),
+        )
+        mock_response.raise_for_status = lambda: None
+        return mock_response
+
+    with patch.object(guardrail.async_handler, "post", side_effect=mock_post):
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["all clear", "SSN 123-45-6789 on file"]},
+            request_data={},
+            input_type="response",
+        )
+
+    assert result["texts"] == ["all clear", "SSN [REDACTED] on file"]
+    assert result["stream_holdback_chars"] == [len("all clear"), len("SSN [REDACTED] on file")]
+
+
+def test_prompt_security_streaming_transform_mode_from_config(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
+    monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
+
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "prompt_security_streaming",
+                "litellm_params": {
+                    "guardrail": "prompt_security",
+                    "mode": "post_call",
+                    "default_on": True,
+                    "streaming_transform_mode": "incremental_diff",
+                },
+            }
+        ],
+        config_file_path="",
+    )
+
+    registered = [c for c in litellm.callbacks if isinstance(c, PromptSecurityGuardrail)]
+    assert len(registered) == 1
+    assert registered[0].streaming_transform_mode == "incremental_diff"
+    assert PromptSecurityGuardrail(api_key="k", api_base="https://b").streaming_transform_mode == "block_only"
+
+
+def _stream_chunk(content: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(content=content, role="assistant"), finish_reason=finish_reason)]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("chunks", "secret", "redacted_output"),
+    [
+        pytest.param(
+            (
+                "Sure. I checked the billing record for this account and confirmed the details below. Card 4111 1111 ",
+                "1111 1111 is on file.",
+            ),
+            "4111 1111 1111 1111",
+            "Sure. I checked the billing record for this account and confirmed the details below. "
+            "Card [REDACTED] is on file.",
+            id="spaced_value_after_full_sentence",
+        ),
+        pytest.param(
+            ("Ship to 12 Main St. ", "Springfield 62704 today."),
+            "12 Main St. Springfield 62704",
+            "Ship to [REDACTED] today.",
+            id="value_spanning_abbreviation_period",
+        ),
+        pytest.param(
+            (
+                "Customer record follows.\nName: John Smith\n"
+                "Address: 12 Main St, Springfield IL 62704, United States\n",
+                "SSN: 123-45-6789\nThat is all.",
+            ),
+            "Name: John Smith\nAddress: 12 Main St, Springfield IL 62704, United States\nSSN: 123-45-6789",
+            "Customer record follows.\n[REDACTED]\nThat is all.",
+            id="multi_line_record_redacted_as_one_span",
+        ),
+    ],
+)
+async def test_prompt_security_incremental_diff_redacts_value_split_across_chunks(
+    chunks: tuple[str, ...],
+    secret: str,
+    redacted_output: str,
+):
+    """A modify verdict reaches the client redacted even when the value straddles a sampled scan."""
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="prompt_security_streaming",
+        event_hook="post_call",
+        default_on=True,
+        api_key="test-key",
+        api_base="https://test.prompt.security",
+        streaming_transform_mode="incremental_diff",
+    )
+    guardrail.streaming_sampling_rate = 1
+
+    async def mock_post(*args, **kwargs):
+        text = kwargs["json"]["response"]
+        redacted = text.replace(secret, "[REDACTED]")
+        mock_response = Response(
+            json={
+                "result": {
+                    "response": {
+                        "action": "modify" if redacted != text else "log",
+                        "violations": ["pii"] if redacted != text else [],
+                        "modified_text": redacted,
+                    }
+                }
+            },
+            status_code=200,
+            request=Request(method="POST", url="https://test.prompt.security/api/protect"),
+        )
+        mock_response.raise_for_status = lambda: None
+        return mock_response
+
+    async def _upstream():
+        for chunk in chunks:
+            yield _stream_chunk(chunk)
+        yield _stream_chunk("", finish_reason="stop")
+
+    with patch.object(guardrail.async_handler, "post", side_effect=mock_post):
+        out = [
+            item
+            async for item in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+                response=_upstream(),
+                request_data={"guardrail_to_apply": guardrail, "model": "gpt-4"},
+            )
+        ]
+
+    assert all(isinstance(item, ModelResponseStream) for item in out)
+    deltas = [item.choices[0].delta.content for item in out if item.choices and item.choices[0].delta.content]
+    assert deltas == [redacted_output]
+    assert all(secret[:6] not in delta for delta in deltas)
+
+
+@pytest.mark.asyncio
+async def test_prompt_security_clean_non_streaming_response_logs_allow():
+    """A log verdict keeps the text (even if modified_text is present) and is logged as allow."""
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="prompt_security_streaming",
+        event_hook="post_call",
+        default_on=True,
+        api_key="test-key",
+        api_base="https://test.prompt.security",
+        streaming_transform_mode="incremental_diff",
+    )
+    mock_response = Response(
+        json={"result": {"response": {"action": "log", "violations": [], "modified_text": "order noted"}}},
+        status_code=200,
+        request=Request(method="POST", url="https://test.prompt.security/api/protect"),
+    )
+    mock_response.raise_for_status = lambda: None
+    request_data = {"metadata": {}}
+
+    with patch.object(guardrail.async_handler, "post", return_value=mock_response):
+        result = await guardrail.apply_guardrail(
+            inputs={"texts": ["order confirmed"]},
+            request_data=request_data,
+            input_type="response",
+        )
+
+    assert result["texts"] == ["order confirmed"]
+    info = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [entry["guardrail_response"] for entry in info] == ["allow"]
 
 
 @pytest.mark.asyncio

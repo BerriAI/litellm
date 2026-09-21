@@ -78,7 +78,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
         Coroutine[object, object, "HttpxBinaryResponseContent"],
