@@ -18,10 +18,18 @@ from dataclasses import dataclass
 from e2e_http import NoBody, ProbeResult, Result
 from idp import Keycloak, keycloak_from_env
 from models import (
+    JwtKeyMappingDeleteBody,
+    JwtKeyMappingDeleteResponse,
+    JwtKeyMappingListParams,
+    JwtKeyMappingListResponse,
     ReadinessDetailsResponse,
     ReadinessResponse,
+    UserInfoParams,
+    UserInfoWithKeysResponse,
     UserListParams,
     UserListResponse,
+    UserNewBody,
+    UserNewResponse,
 )
 from proxy_client import ProxyClient
 
@@ -64,6 +72,44 @@ class OtherClient:
             headers=NoBody(),
             params=NoBody(),
             response_type=ReadinessDetailsResponse,
+        )
+
+    def user_new(self, body: UserNewBody) -> Result[UserNewResponse]:
+        """POST /user/new under the master key: seed the litellm user a JWT
+        `sub` claim resolves to, before that token ever reaches the proxy."""
+        return self.proxy.transport.post(
+            "/user/new",
+            headers=self.proxy.transport.master,
+            json=body,
+            response_type=UserNewResponse,
+        )
+
+    def user_info(self, user_id: str) -> Result[UserInfoWithKeysResponse]:
+        """GET /user/info under the master key. Only the user's key rows are
+        modelled: `token` is the stored key hash, never the plaintext key."""
+        return self.proxy.transport.get(
+            "/user/info",
+            headers=self.proxy.transport.master,
+            params=UserInfoParams(user_id=user_id),
+            response_type=UserInfoWithKeysResponse,
+        )
+
+    def jwt_mapping_list(self) -> Result[JwtKeyMappingListResponse]:
+        """GET /jwt/key/mapping/list under the master key."""
+        return self.proxy.transport.get(
+            "/jwt/key/mapping/list",
+            headers=self.proxy.transport.master,
+            params=JwtKeyMappingListParams(size=100),
+            response_type=JwtKeyMappingListResponse,
+        )
+
+    def jwt_mapping_delete(self, mapping_id: str) -> Result[JwtKeyMappingDeleteResponse]:
+        """POST /jwt/key/mapping/delete under the master key."""
+        return self.proxy.transport.post(
+            "/jwt/key/mapping/delete",
+            headers=self.proxy.transport.master,
+            json=JwtKeyMappingDeleteBody(id=mapping_id),
+            response_type=JwtKeyMappingDeleteResponse,
         )
 
     def list_users_as(self, key: str) -> Result[UserListResponse]:
