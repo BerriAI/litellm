@@ -35,6 +35,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "litellm.migrationServiceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.migrationJob.extraInitContainers }}
       initContainers:
         {{- tpl (toYaml .) $ | nindent 8 }}
@@ -103,6 +105,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       restartPolicy: OnFailure
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}
@@ -113,4 +119,7 @@ spec:
       {{- end }}
   ttlSecondsAfterFinished: {{ .Values.migrationJob.ttlSecondsAfterFinished }}
   backoffLimit: {{ .Values.migrationJob.backoffLimit }}
+  {{- with .Values.migrationJob.activeDeadlineSeconds }}
+  activeDeadlineSeconds: {{ . }}
+  {{- end }}
 {{- end }}

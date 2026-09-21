@@ -1,8 +1,10 @@
 #!/bin/sh
 
-if [ "$USE_DDTRACE" = "true" ]; then
-    export DD_TRACE_OPENAI_ENABLED="False"
-    exec ddtrace-run litellm "$@"
-else
-    exec litellm "$@"
-fi
+case "$USE_DDTRACE" in
+    [Tt][Rr][Uu][Ee])
+        export DD_TRACE_OPENAI_ENABLED="False"
+        exec ddtrace-run litellm "$@"
+        ;;
+esac
+
+exec litellm "$@"

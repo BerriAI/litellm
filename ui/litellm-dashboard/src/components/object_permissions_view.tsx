@@ -1,12 +1,14 @@
 import React from "react";
-import { Text } from "@tremor/react";
 import VectorStorePermissions from "./permissions/VectorStorePermissions";
 import MCPServerPermissions from "./permissions/MCPServerPermissions";
 import AgentPermissions from "./permissions/AgentPermissions";
 import type { ObjectPermission } from "./object_permission_types";
+import type { InheritedGrant } from "./permissions/inheritedGrants";
 
 interface ObjectPermissionsViewProps {
   objectPermission?: ObjectPermission | null;
+  inheritedMcpServers?: InheritedGrant[];
+  inheritedAgents?: InheritedGrant[];
   variant?: "card" | "inline";
   className?: string;
   accessToken?: string | null;
@@ -14,6 +16,8 @@ interface ObjectPermissionsViewProps {
 
 export function ObjectPermissionsView({
   objectPermission,
+  inheritedMcpServers = [],
+  inheritedAgents = [],
   variant = "card",
   className = "",
   accessToken,
@@ -26,6 +30,7 @@ export function ObjectPermissionsView({
   const agents = objectPermission?.agents || [];
   const agentAccessGroups = objectPermission?.agent_access_groups || [];
   const searchTools = objectPermission?.search_tools || [];
+  const skills = objectPermission?.skills || [];
 
   const content = (
     <div className={variant === "card" ? "grid grid-cols-1 @xl:grid-cols-2 @4xl:grid-cols-3 gap-6" : "space-y-4"}>
@@ -35,17 +40,33 @@ export function ObjectPermissionsView({
         mcpAccessGroups={mcpAccessGroups}
         mcpToolPermissions={mcpToolPermissions}
         mcpToolsets={mcpToolsets}
+        inheritedMcpServers={inheritedMcpServers}
         accessToken={accessToken}
       />
-      <AgentPermissions agents={agents} agentAccessGroups={agentAccessGroups} accessToken={accessToken} />
-      <div className="rounded-md border border-gray-100 p-4">
-        <Text className="text-sm font-medium text-gray-800">Search tools</Text>
+      <AgentPermissions
+        agents={agents}
+        agentAccessGroups={agentAccessGroups}
+        inheritedAgents={inheritedAgents}
+        accessToken={accessToken}
+      />
+      <div className="min-w-0 rounded-md border border-border p-4">
+        <p className="text-sm font-medium text-foreground">Search tools</p>
         {searchTools.length === 0 ? (
-          <Text className="mt-1 block text-xs text-gray-500">
+          <p className="mt-1 block text-xs text-muted-foreground">
             No restriction — all configured search tools are allowed for this team.
-          </Text>
+          </p>
         ) : (
-          <Text className="mt-1 block text-xs text-gray-700">{searchTools.join(", ")}</Text>
+          <p className="mt-1 block text-xs break-words text-foreground">{searchTools.join(", ")}</p>
+        )}
+      </div>
+      <div className="min-w-0 rounded-md border border-border p-4">
+        <p className="text-sm font-medium text-foreground">Skills</p>
+        {skills.length === 0 ? (
+          <p className="mt-1 block text-xs text-muted-foreground">
+            No private skills granted. Only enabled (public) Claude Code plugins are visible.
+          </p>
+        ) : (
+          <p className="mt-1 block text-xs break-words text-foreground">{skills.join(", ")}</p>
         )}
       </div>
     </div>
@@ -53,11 +74,11 @@ export function ObjectPermissionsView({
 
   if (variant === "card") {
     return (
-      <div className={`@container bg-white border border-gray-200 rounded-lg p-6 ${className}`}>
+      <div className={`@container bg-card border border-border rounded-lg p-6 ${className}`}>
         <div className="flex items-center gap-2 mb-6">
           <div>
-            <Text className="font-semibold text-gray-900">Object Permissions</Text>
-            <Text className="text-xs text-gray-500">Access control for Vector Stores and MCP Servers</Text>
+            <p className="font-semibold text-foreground">Object Permissions</p>
+            <p className="text-xs text-muted-foreground">Access control for Vector Stores and MCP Servers</p>
           </div>
         </div>
         {content}
@@ -67,7 +88,7 @@ export function ObjectPermissionsView({
 
   return (
     <div className={`${className}`}>
-      <Text className="font-medium text-gray-900 mb-3">Object Permissions</Text>
+      <p className="font-medium text-foreground mb-3">Object Permissions</p>
       {content}
     </div>
   );

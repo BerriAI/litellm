@@ -307,25 +307,27 @@ def test_deepinfra_rerank_error_handling(mock_post):
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
-def test_deepinfra_rerank_missing_api_base_error(mock_post):
-    """Test error handling when API base is missing."""
-    # Note: The current implementation may have a default API base or the test environment
-    # may be providing one, so we'll test the actual behavior
-    try:
-        response = litellm.rerank(
-            model="deepinfra/Qwen/Qwen3-Reranker-0.6B",
-            query="hello",
-            documents=["hello", "world"],
-            custom_llm_provider="deepinfra",
-            api_key="test_key",
-            # api_base is intentionally missing
-        )
-        # If no error is raised, it means a default API base is being used
-        # This is acceptable behavior
-        assert response is not None
-    except ValueError as e:
-        # If an error is raised, it should match the expected message
-        assert "api_base must be provided for Deepinfra rerank" in str(e)
+def test_deepinfra_rerank_defaults_api_base_when_missing(mock_post, monkeypatch):
+    """With no api_base anywhere, the call still goes out against DeepInfra's own base."""
+    monkeypatch.delenv("DEEPINFRA_API_BASE", raising=False)
+
+    mock_response = MagicMock()
+    mock_response.json = lambda: {"scores": [0.9, 0.1], "input_tokens": 20}
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_post.return_value = mock_response
+
+    response = litellm.rerank(
+        model="deepinfra/Qwen/Qwen3-Reranker-0.6B",
+        query="hello",
+        documents=["hello", "world"],
+        custom_llm_provider="deepinfra",
+        api_key="test_key",
+        # api_base is intentionally missing
+    )
+
+    assert "api.deepinfra.com" in mock_post.call_args.kwargs["url"]
+    assert [result["relevance_score"] for result in response.results] == [0.9, 0.1]
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")
@@ -389,15 +391,10 @@ def test_deepinfra_rerank_models():
     ]
 
     for model in models:
-        # This should not raise any validation errors
-        try:
-            litellm.get_llm_provider(model=model)
-        except Exception as e:
-            # We expect this to potentially fail due to missing api_base/key
-            # but the model format should be recognized
-            assert "api_base" in str(e) or "API key" in str(
-                e
-            ), f"Unexpected error for model {model}: {e}"
+        resolved_model, provider, _, api_base = litellm.get_llm_provider(model=model)
+        assert provider == "deepinfra"
+        assert resolved_model == model.removeprefix("deepinfra/")
+        assert api_base == "https://api.deepinfra.com/v1/openai"
 
 
 @patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post")

@@ -13,7 +13,7 @@ from .handler import GenerateContentToCompletionHandler
 from .transformation import GoogleGenAIAdapter, GoogleGenAIStreamWrapper
 
 __all__ = [
+    "GenerateContentToCompletionHandler",
     "GoogleGenAIAdapter",
     "GoogleGenAIStreamWrapper",
-    "GenerateContentToCompletionHandler",
 ]

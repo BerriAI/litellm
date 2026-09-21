@@ -88,9 +88,6 @@ class TestDatadogMcpRoundTrip:
                 "from": DD_SEARCH_FROM,
                 "to": "now",
                 "max_tokens": 5000,
-                "telemetry": {
-                    "intent": "e2e assert seeded litellm completion log is searchable via MCP"
-                },
             },
         )
         assert call.is_error is not True, f"search_datadog_logs errored: {call}"

@@ -30,9 +30,12 @@ resource "litellm_key" "example" {
   permissions          = {
     "can_create_keys" = "true"
   }
-  model_max_budget     = {
-    "gpt-4" = 50.0
-  }
+  model_max_budget     = jsonencode({
+    "gpt-4" = {
+      budget_limit = 50.0
+      time_period  = "30d"
+    }
+  })
   model_rpm_limit      = {
     "gpt-3.5-turbo" = 30
   }
@@ -73,7 +76,7 @@ The following arguments are supported:
 
 * `key_alias` - (Optional) Alias for this key. This provides a human-readable identifier for the key.
 
-* `duration` - (Optional) Duration for which this key is valid. This sets an expiration time for the key.
+* `duration` - (Optional) How long the key stays valid, e.g. "30d" or "12h". The proxy stores this as an absolute `expires` timestamp. Changing the value resets the expiry to the time of the update plus the new duration; removing it from the configuration leaves the current expiry in place.
 
 * `aliases` - (Optional) Map of model aliases. This allows you to create custom names for models when using this key.
 
@@ -81,7 +84,7 @@ The following arguments are supported:
 
 * `permissions` - (Optional) Permissions associated with this key. This defines what actions are allowed with this key.
 
-* `model_max_budget` - (Optional) Maximum budget per model. This allows setting different budget limits for each model.
+* `model_max_budget` - (Optional) JSON string of per-model budget config, e.g. `jsonencode({"gpt-4" = {budget_limit = 50.0, time_period = "30d"}})`. Each model maps to an object with `budget_limit` (or `max_budget`), `time_period` (or `budget_duration`), `tpm_limit` and `rpm_limit`.
 
 * `model_rpm_limit` - (Optional) Requests per minute limit per model. This allows setting different RPM limits for each model.
 
@@ -92,6 +95,24 @@ The following arguments are supported:
 * `blocked` - (Optional) Whether this key is blocked. If set to true, the key will be unable to make any requests.
 
 * `tags` - (Optional) List of tags associated with this key. This can be used for organization and filtering of keys.
+
+* `budget_id` - (Optional) ID of a shared budget (created via `litellm_budget`) to attach to this key.
+
+* `enforced_params` - (Optional) List of request parameters that callers must supply when using this key (for example `user`).
+
+* `allowed_routes` - (Optional) List of proxy routes this key is allowed to call.
+
+* `allowed_passthrough_routes` - (Optional) List of pass-through routes this key is allowed to call.
+
+* `rpm_limit_type` - (Optional) How the RPM limit is enforced. One of `guaranteed_throughput`, `best_effort_throughput` or `dynamic`.
+
+* `tpm_limit_type` - (Optional) How the TPM limit is enforced. One of `guaranteed_throughput`, `best_effort_throughput` or `dynamic`.
+
+* `prompts` - (Optional) List of prompt IDs this key is allowed to use.
+
+* `organization_id` - (Optional) ID of the organization this key belongs to.
+
+* `project_id` - (Optional) ID of the project this key belongs to. Changing this forces a new key to be created.
 
 ## Attribute Reference
 

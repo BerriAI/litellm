@@ -53,7 +53,6 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [resolvedGuardrails, setResolvedGuardrails] = useState<string[]>([]);
-  const [isLoadingResolved, setIsLoadingResolved] = useState(false);
 
   const fetchPolicy = useCallback(async () => {
     if (!accessToken || !policyId) return;
@@ -64,14 +63,11 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
       setPolicy(data);
 
       // Also fetch resolved guardrails
-      setIsLoadingResolved(true);
       try {
         const resolvedData = await getResolvedGuardrails(accessToken, policyId);
         setResolvedGuardrails(resolvedData.resolved_guardrails || []);
       } catch (error) {
         console.error("Error fetching resolved guardrails:", error);
-      } finally {
-        setIsLoadingResolved(false);
       }
     } catch (error) {
       console.error("Error fetching policy:", error);

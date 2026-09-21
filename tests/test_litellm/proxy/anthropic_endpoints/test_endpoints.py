@@ -3,12 +3,14 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 """
 
 import json
+import logging
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 
@@ -123,6 +125,275 @@ class TestBlockedResponseUsage:
         assert response["content"][0]["text"] == "blocked by guardrail"
         assert response["usage"] == {"input_tokens": 12, "output_tokens": 5}
         mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+class TestProxyExceptionAnthropicEnvelope:
+    @pytest.mark.asyncio
+    async def test_anthropic_response_maps_proxy_exception_to_anthropic_envelope(self):
+        """LIT-6468: a 400 ProxyException from request validation must surface as
+        Anthropic's documented {"type": "error", "error": {...}} envelope with the
+        original status and message, not the OpenAI {"error": {...}} envelope."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+        exc = ProxyException(
+            message="Invalid type for 'metadata': expected an object, but got a string instead.",
+            type=ProxyErrorTypes.bad_request_error,
+            param="metadata",
+            code=400,
+        )
+        request = MagicMock()
+        request.headers = {"x-request-id": "req_test_6468"}
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={})),
+            patch.object(
+                ep.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert response.status_code == 400
+        body = json.loads(response.body)
+        assert body == {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Invalid type for 'metadata': expected an object, but got a string instead.",
+            },
+            "request_id": "req_test_6468",
+        }
+        mock_logging.post_call_failure_hook.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_anthropic_response_maps_429_to_rate_limit_error(self):
+        """The Anthropic error type follows the status code (429 -> rate_limit_error),
+        and a code-less exception falls back to 500 api_error."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy._types import ProxyException
+
+        request = MagicMock()
+        request.headers = {}
+
+        response = ep._anthropic_error_json_response(
+            ProxyException(message="Rate limit exceeded", type="rate_limit_error", param=None, code=429),
+            request,
+        )
+        assert response.status_code == 429
+        assert json.loads(response.body)["error"]["type"] == "rate_limit_error"
+
+        fallback = ep._anthropic_error_json_response(
+            ProxyException(message="boom", type="None", param=None, code=None),
+            request,
+        )
+        assert fallback.status_code == 500
+        assert json.loads(fallback.body)["error"]["type"] == "api_error"
+
+
+class TestHttpExceptionDictDetail:
+    @pytest.mark.asyncio
+    async def test_anthropic_response_serializes_dict_detail_http_exception(self):
+        """LIT-6466 + LIT-6468: a post_call guardrail's HTTPException(detail=<dict>)
+        must surface as Anthropic's {"type": "error", "error": {...}} envelope with
+        the guardrail's clean message plus provider_specific_fields, not the str()
+        of the exception and not the OpenAI envelope."""
+        from fastapi import HTTPException
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        detail = {
+            "error": "Content blocked: keyword 'kumquat' detected",
+            "keyword": "kumquat",
+            "guardrail": "keyword-block",
+        }
+        exc = HTTPException(status_code=400, detail=detail)
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(  # test-quality-ok: the guardrail raise happens deep inside this call; the test targets the endpoint's except block
+                ep.ProxyBaseLLMRequestProcessing,
+                "base_process_llm_request",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert response.status_code == 400
+        body = json.loads(response.body)
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "invalid_request_error"
+        assert body["error"]["message"] == "Content blocked: keyword 'kumquat' detected"
+        assert "{'error'" not in body["error"]["message"]
+        assert body["error"]["provider_specific_fields"] == detail
+        mock_logging.post_call_failure_hook.assert_awaited_once()
+
+
+class TestFailureHookRequestData:
+    @pytest.mark.asyncio
+    async def test_failure_hook_gets_post_setup_data_with_logging_obj(self):
+        """Request setup replaces the processor's data dict (adding the logging
+        object the failure hook needs to lift token usage from); the exception
+        handler must pass that replaced dict, not the raw request body dict."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        captured = {}
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_logging_obj": "logging-obj-sentinel"}
+            captured["processor_data"] = self.data
+            raise RuntimeError("provider timeout")
+
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),
+            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert response.status_code == 500
+        assert json.loads(response.body)["error"]["message"] == "provider timeout"
+
+        hook_request_data = mock_logging.post_call_failure_hook.await_args.kwargs["request_data"]
+        assert hook_request_data is captured["processor_data"]
+        assert hook_request_data["litellm_logging_obj"] == "logging-obj-sentinel"
+
+
+class TestErrorLogCarriesCallId:
+    """LIT-7836: the /v1/messages and /v1/messages/count_tokens error lines must carry
+    the request's litellm_call_id, rendered in the message and as a structured field."""
+
+    @pytest.fixture(autouse=True)
+    def propagating_proxy_logger(self):
+        verbose_proxy_logger.propagate = True
+        try:
+            yield
+        finally:
+            verbose_proxy_logger.propagate = False
+
+    @staticmethod
+    def _error_record(caplog: pytest.LogCaptureFixture) -> logging.LogRecord:
+        return next(r for r in caplog.records if "Exception occured" in r.getMessage())
+
+    @pytest.mark.asyncio
+    async def test_messages_failure_log_carries_call_id(self, caplog: pytest.LogCaptureFixture):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        call_id = "messages-call-7836"
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_call_id": call_id}
+            raise RuntimeError("provider timeout")
+
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the provider failure happens inside this call; the test targets the endpoint's except block
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert response.status_code == 500
+        record = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
+
+    @pytest.mark.asyncio
+    async def test_messages_already_shaped_failure_answers_with_the_call_id(self):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+
+        call_id = "messages-call-7836-shaped"
+
+        async def fake_process(self, **kwargs):
+            self.data = {**self.data, "litellm_call_id": call_id}
+            raise ProxyException(message="budget exceeded", type=ProxyErrorTypes.budget_exceeded, param="key", code=402)
+
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the proxy shaped failure happens inside this call; the test targets the endpoint's except block
+            patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+            response = await ep.anthropic_response(
+                fastapi_response=MagicMock(),
+                request=request,
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert response.status_code == 402
+        assert response.headers["x-litellm-call-id"] == call_id
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_failure_log_carries_callers_call_id(self, caplog: pytest.LogCaptureFixture):
+        from fastapi import HTTPException
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        call_id = "count-tokens-call-7836"
+        request = MagicMock()
+        request.headers = {"x-litellm-call-id": call_id}
+
+        with (
+            patch.object(  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+                ep,
+                "_read_request_body",
+                new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
+            ),
+            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+            caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
+            pytest.raises(HTTPException) as raised,
+        ):
+            await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+        assert raised.value.status_code == 500
+        record = self._error_record(caplog)
+        assert record.litellm_call_id == call_id
+        assert call_id in record.getMessage()
 
 
 class TestEventLoggingBatchEndpoint:

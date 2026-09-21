@@ -19,14 +19,11 @@ transformation is a standalone class with a different shape) cannot use this and
 keep fully standalone tests.
 """
 
-import os
-import sys
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../../.."))
 
 from litellm.types.utils import LiteLLMBatch, LlmProviders
 

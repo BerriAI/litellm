@@ -450,6 +450,281 @@ class TestCheckResponsesCost:
         assert "job-2" not in completion_call[1]["where"]["id"]["in"]
 
     @pytest.mark.asyncio
+    async def test_encoded_response_id_is_fetched_through_router(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/35131
+
+        A background response created against a deployment whose credentials only
+        exist in the config (e.g. Azure api_base/api_key) must be fetched through
+        the router so the deployment credentials are applied. Calling
+        litellm.aget_responses directly only sees provider env vars, fails, and
+        leaves the row in "queued" forever.
+        """
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="azure",
+            model_id="deployment-abc",
+            response_id="resp_upstream_123",
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-router"
+        mock_job.file_object = {"model": "azure-gpt-5", "id": encoded_response_id}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        mock_llm_router.aget_responses = AsyncMock(
+            return_value=ResponsesAPIResponse(
+                id=encoded_response_id,
+                object="response",
+                status="completed",
+                created_at=int(datetime.now().timestamp()),
+                output=[],
+                usage=ResponseAPIUsage(
+                    input_tokens=100, output_tokens=50, total_tokens=150
+                ),
+            )
+        )
+
+        with patch(
+            "litellm.aget_responses",
+            new_callable=AsyncMock,
+            side_effect=AssertionError(
+                "must not bypass the router for a deployment-scoped response id"
+            ),
+        ) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_not_called()
+        assert (
+            mock_llm_router.aget_responses.call_args[1]["response_id"]
+            == encoded_response_id
+        )
+
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
+        assert len(calls) == 1
+        assert calls[0][1]["data"]["status"] == "completed"
+        assert calls[0][1]["where"]["id"]["in"] == ["job-router"]
+
+    @pytest.mark.asyncio
+    async def test_encrypted_response_id_is_fetched_through_router(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router, monkeypatch
+    ):
+        """
+        Rows store the *encrypted* response id when responses id security is on.
+        After decryption the id still carries the deployment model_id, so the
+        fetch must go through the router (issue #35131).
+        """
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+        from litellm.types.utils import SpecialEnums
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-salt-key-for-response-ids")
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-xyz",
+            response_id="resp_upstream_456",
+        )
+        encrypted_response_id = "resp_" + str(
+            encrypt_value_helper(
+                value=SpecialEnums.LITELLM_MANAGED_RESPONSE_API_RESPONSE_ID_COMPLETE_STR.value.format(
+                    encoded_response_id, "test-user", "test-team"
+                )
+            )
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encrypted_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-encrypted"
+        mock_job.file_object = {"model": "gpt-5", "id": encrypted_response_id}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        mock_llm_router.aget_responses = AsyncMock(
+            return_value=ResponsesAPIResponse(
+                id=encoded_response_id,
+                object="response",
+                status="completed",
+                created_at=int(datetime.now().timestamp()),
+                output=[],
+                usage=None,
+            )
+        )
+
+        with patch(
+            "litellm.aget_responses",
+            new_callable=AsyncMock,
+            side_effect=AssertionError(
+                "must not bypass the router for a deployment-scoped response id"
+            ),
+        ) as mock_sdk_aget:
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_not_called()
+        assert (
+            mock_llm_router.aget_responses.call_args[1]["response_id"]
+            == encoded_response_id
+        )
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
+        assert len(calls) == 1
+        assert calls[0][1]["where"]["id"]["in"] == ["job-encrypted"]
+
+    @pytest.mark.asyncio
+    async def test_response_id_without_model_id_uses_sdk(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """Ids that carry no deployment info can't be routed, so fall back to the SDK."""
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_plain_upstream_id"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-plain"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_plain_upstream_id"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_llm_router.aget_responses = AsyncMock(
+            side_effect=AssertionError("router cannot route an id without a model_id")
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_plain_upstream_id",
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=None,
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            mock_sdk_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_sdk_aget.assert_called_once()
+        mock_llm_router.aget_responses.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_missing_deployment_falls_back_to_sdk(
+        self, check_responses_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """
+        An encoded id whose deployment was removed from the router must fall back
+        to the SDK so provider env credentials can still retrieve it, instead of
+        failing every poll cycle until stale expiration.
+        """
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        encoded_response_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai",
+            model_id="deployment-deleted",
+            response_id="resp_upstream_789",
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = encoded_response_id
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-missing-deployment"
+        mock_job.file_object = {"model": "gpt-5", "id": encoded_response_id}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_llm_router.get_deployment = MagicMock(return_value=None)
+        mock_llm_router.aget_responses = AsyncMock(
+            side_effect=AssertionError("router has no deployment for this model_id")
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id=encoded_response_id,
+            object="response",
+            status="completed",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=None,
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_sdk_aget:
+            mock_sdk_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        mock_llm_router.get_deployment.assert_called_once_with(model_id="deployment-deleted")
+        mock_llm_router.aget_responses.assert_not_called()
+        mock_sdk_aget.assert_called_once()
+        assert mock_sdk_aget.call_args[1]["response_id"] == encoded_response_id
+
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
+        assert len(calls) == 1
+        assert calls[0][1]["data"]["status"] == "completed"
+        assert calls[0][1]["where"]["id"]["in"] == ["job-missing-deployment"]
+
+    @pytest.mark.asyncio
+    async def test_check_responses_cost_with_incomplete_response(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """'incomplete' is terminal in the Responses API, so the row must not stay queued."""
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_incomplete"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-incomplete"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_incomplete"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        mock_response = ResponsesAPIResponse(
+            id="resp_incomplete",
+            object="response",
+            status="incomplete",
+            created_at=int(datetime.now().timestamp()),
+            output=[],
+            usage=None,
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        calls = (
+            mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args_list
+        )
+        assert len(calls) == 1
+        assert calls[0][1]["data"]["status"] == "completed"
+        assert calls[0][1]["where"]["id"]["in"] == ["job-incomplete"]
+
+    @pytest.mark.asyncio
     async def test_check_responses_cost_no_model_in_file_object(
         self, check_responses_cost_instance, mock_prisma_client
     ):
@@ -478,3 +753,41 @@ class TestCheckResponsesCost:
         call_kwargs = mock_aget.call_args[1]
         assert "model" not in call_kwargs.get("litellm_metadata", {})
         assert "model_group" not in call_kwargs.get("litellm_metadata", {})
+
+    @pytest.mark.asyncio
+    async def test_poll_stamps_internal_call_origin_so_the_read_is_billed(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """A background create returns queued with no usage, so this poll's retrieval is the only
+        place the job's spend is ever seen. Without the origin stamp it is priced at zero like a
+        user-facing read (LIT-5602) and the job is never billed."""
+        from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+        from litellm.litellm_core_utils.internal_call_metadata import (
+            is_unbilled_non_inference_call,
+        )
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_billed"
+        mock_job.created_by = "test-user"
+        mock_job.id = "job-billed"
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_billed"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = mock_response
+            await check_responses_cost_instance.check_responses_cost()
+
+        metadata = mock_aget.call_args[1]["litellm_metadata"]
+        foreground_read = {"background": False}
+        assert metadata[INTERNAL_CALL_ORIGIN_METADATA_KEY] == "background_response_cost_poll"
+        assert is_unbilled_non_inference_call("aget_responses", metadata, foreground_read) is False
+        assert is_unbilled_non_inference_call("aget_responses", None, foreground_read) is True
