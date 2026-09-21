@@ -3006,6 +3006,9 @@ async def test_delete_deployment_type_mismatch():
         return True  # Simulate successful deletion
 
     mock_llm_router.delete_deployment = MagicMock(side_effect=mock_delete_deployment)
+    # None means these ids are unknown to the router, so they must NOT be shielded
+    # from eviction (only a deployment declaring model_info.managed_by is spared).
+    mock_llm_router.get_deployment = MagicMock(return_value=None)
 
     async def mock_get_config(config_file_path):
         return {
@@ -11234,6 +11237,8 @@ class TestDeleteDeploymentSync:
         proxy_config = ProxyConfig()
         mock_router = MagicMock()
         mock_router.get_model_ids.return_value = ["model-id-to-evict"]
+        # None: the id is unknown to the router, so it must not be spared from eviction
+        mock_router.get_deployment.return_value = None
         mock_router.delete_deployment.return_value = MagicMock()
 
         with patch("litellm.proxy.proxy_server.llm_router", mock_router):
