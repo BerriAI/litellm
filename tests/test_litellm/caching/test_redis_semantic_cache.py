@@ -1387,3 +1387,32 @@ def test_redis_semantic_cache_defaults_embedding_timeout():
     cache = RedisSemanticCache.__new__(RedisSemanticCache)
     assert cache.embedding_timeout == SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
     assert SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS < 60
+
+
+@pytest.mark.asyncio
+async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
+    from tests.large_text import text
+    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    warm_tokenizer("sem-embed")
+    cache = RedisSemanticCache.__new__(RedisSemanticCache)
+    cache.embedding_model = "sem-embed"
+    cache.embedding_max_input_tokens = 5
+    cache.embedding_timeout = 5
+
+    router = MagicMock()
+    router.get_configured_token_limits.return_value = (8191, None)
+    router.aembedding = AsyncMock(return_value={"data": [{"embedding": [0.1, 0.2]}]})
+    _proxy_with_router(monkeypatch, router, "sem-embed")
+
+    embedding, took, lags = await timed_with_loop_lags(lambda: cache._get_async_embedding(text * 100))
+
+    assert embedding == [0.1, 0.2]
+    assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5
+    assert_loop_stayed_free(took, lags)

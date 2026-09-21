@@ -4,9 +4,9 @@ from typing import Final
 
 import litellm
 from litellm.utils import (
-    _is_explicitly_disabled_factory,
     _supports_factory,
     declared_value_factory,
+    is_explicitly_disabled_factory,
 )
 
 from .gpt_transformation import OpenAIGPTConfig
@@ -192,7 +192,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
         Use this for opt-out checks where unknown models should be allowed through.
         """
-        return _is_explicitly_disabled_factory(
+        return is_explicitly_disabled_factory(
             model=cls._model_map_lookup_name(model),
             custom_llm_provider=None,
             key=f"supports_{level}_reasoning_effort",

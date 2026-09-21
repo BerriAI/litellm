@@ -1,0 +1,26 @@
+{
+  "http_settings": [
+    "ssl_verify",
+    "ssl_certificate",
+    "ssl_security_level",
+    "ssl_ecdh_curve",
+    "force_ipv4",
+    "http2",
+    "aiohttp_trust_env",
+    "disable_aiohttp_trust_env",
+    "disable_aiohttp_transport",
+    "user_agent"
+  ],
+  "url_policy": [
+    "user_url_validation",
+    "user_url_allowed_hosts"
+  ],
+  "provider_defaults": [
+    "vertex_project",
+    "vertex_location",
+    "enable_azure_ad_token_refresh"
+  ],
+  "secret_manager": [
+    "readable"
+  ]
+}

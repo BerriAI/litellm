@@ -101,7 +101,8 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      For bug fixes: Before shows the reproduction, After shows the same steps passing
      For new features: Before shows the capability missing, After shows it working end-to-end
      If the change applies to all three LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), make each endpoint its own case, not just one
-     For UI changes: before/after screenshots under the same headings -->
+     For UI changes: before/after screenshots under the same headings
+     If the main use case runs through a coding tool like Claude Code or Codex, drive that tool interactively the way the user does (never `claude -p`, `codex exec`, or curl on its own) and embed before/after screenshots of its pane under the same headings; curl replays and headless runs can follow as extra cases, never as the only proof -->
 
 ## Type
 

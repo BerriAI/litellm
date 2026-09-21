@@ -15,6 +15,7 @@ from typing_extensions import ParamSpec, TypeVar
 
 import litellm
 from litellm import verbose_logger
+from litellm._lazy_imports import _get_default_encoding
 from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
@@ -29,7 +30,6 @@ from litellm.constants import (
     TOKEN_COUNTER_MAX_EXACT_CHARS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.default_encoding import encoding as default_encoding
 from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.types.llms.anthropic import (
@@ -638,7 +638,7 @@ def _get_exact_count_function(
     else:
 
         def encode_length(text: str) -> int:
-            return len(default_encoding.encode(text, disallowed_special=()))
+            return len(_get_default_encoding().encode(text, disallowed_special=()))
 
         return _get_tiktoken_count_function(encode_length)
 

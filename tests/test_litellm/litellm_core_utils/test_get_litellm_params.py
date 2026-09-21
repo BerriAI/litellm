@@ -55,6 +55,18 @@ class TestGetLitellmParamsKwargsExtraction:
         assert result["timeout"] == 30
         assert result["rpm"] == 100
 
+    def test_s3_endpoint_kwargs_are_extracted_when_provided(self):
+        result = get_litellm_params(
+            s3_endpoint_url="https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com",
+            s3_region_name="us-east-1",
+        )
+        assert result["s3_endpoint_url"] == "https://bucket.vpce-abc.s3.us-east-1.vpce.amazonaws.com"
+        assert result["s3_region_name"] == "us-east-1"
+
+        result_without_s3_kwargs = get_litellm_params()
+        assert "s3_endpoint_url" not in result_without_s3_kwargs
+        assert "s3_region_name" not in result_without_s3_kwargs
+
     def test_subset_of_kwargs_only_includes_provided(self):
         """Only provided kwargs appear, others remain absent."""
         result = get_litellm_params(azure_ad_token="token123")

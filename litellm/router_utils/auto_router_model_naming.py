@@ -113,7 +113,7 @@ def strategy_router_dependencies(
     """The model names a strategy-router deployment must reach, in no particular order.
 
     A field is a dependency only under the condition the runtime itself reads it: the
-    classifier model needs `classifier_type: llm`, and the complexity embedding model needs
+    classifier model needs an LLM-backed classifier type, and the complexity embedding model needs
     `semantic_keyword_matching`. Listing one the router never calls reds a working deployment.
 
     The two default-model spellings are not symmetric. A quality router falls back to its
@@ -218,9 +218,8 @@ class GatedAutoRouterCapability:
     stored ``litellm_params`` (``{config}`` is the caller's expression for the normalized
     ``complexity_router_config`` jsonb, substituted as many times as the predicate needs); they live
     on one record so they cannot drift apart. ``subject`` and ``remedy`` build the shared refusal
-    message. A validated config claims at most one capability, and the validator is what makes that
-    true: tier_definitions rejects every heuristic classifier_type, and it also rejects the
-    classifier system_prompt, which in turn only applies to the classifier types heuristic_v2 is not.
+    message. A validated config claims at most one capability: gated classifier types cannot be
+    combined with operator-defined tiers or classifier prompts.
     """
 
     key: str
@@ -236,6 +235,22 @@ HEURISTIC_V2_CAPABILITY: Final = GatedAutoRouterCapability(
     remedy="Use classifier_type 'heuristic' for this router or remove an existing heuristic_v2 router.",
     uses=uses_heuristic_v2_classifier,
     sql_config_predicate="{config} ->> 'classifier_type' = 'heuristic_v2'",
+)
+
+CAPABILITY_CLASSIFIER_CAPABILITY: Final = GatedAutoRouterCapability(
+    key="capability",
+    subject="with classifier_type 'capability' (Capability)",
+    remedy="Use a different classifier or remove an existing Capability router.",
+    uses=lambda config: _mapping(config).get("classifier_type") == "capability",
+    sql_config_predicate="{config} ->> 'classifier_type' = 'capability'",
+)
+
+LLM_V2_CAPABILITY: Final = GatedAutoRouterCapability(
+    key="llm_v2",
+    subject="with classifier_type 'llm_v2' (Fuse v2)",
+    remedy="Use a different classifier or remove an existing Fuse v2 router.",
+    uses=lambda config: _mapping(config).get("classifier_type") == "llm_v2",
+    sql_config_predicate="{config} ->> 'classifier_type' = 'llm_v2'",
 )
 
 _OPERATOR_PROMPT_FIELDS_SQL: Final = " OR ".join(
@@ -258,7 +273,12 @@ CUSTOMIZATION_CAPABILITY: Final = GatedAutoRouterCapability(
     ),
 )
 
-GATED_AUTO_ROUTER_CAPABILITIES: Final = (HEURISTIC_V2_CAPABILITY, CUSTOMIZATION_CAPABILITY)
+GATED_AUTO_ROUTER_CAPABILITIES: Final = (
+    HEURISTIC_V2_CAPABILITY,
+    CAPABILITY_CLASSIFIER_CAPABILITY,
+    LLM_V2_CAPABILITY,
+    CUSTOMIZATION_CAPABILITY,
+)
 
 
 def claimed_capability(complexity_router_config: object) -> GatedAutoRouterCapability | None:

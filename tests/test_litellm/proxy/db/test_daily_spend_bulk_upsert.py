@@ -85,10 +85,10 @@ def test_one_statement_carries_every_row_in_the_batch():
 
     assert sql.count("INSERT INTO") == 1
     assert len(re.findall(r"ON CONFLICT", sql)) == 1
-    # 23 bound columns per row plus the inlined updated_at, so the row count is what
+    # 25 bound columns per row plus the inlined updated_at, so the row count is what
     # separates one multi-row statement from a hundred single-row ones.
-    assert len(params) == 100 * 23
-    assert "$2300::text" in sql
+    assert len(params) == 100 * 25
+    assert "$2500::text" in sql
     assert sql.count("(NOW() AT TIME ZONE 'UTC')") == 100 + 1
 
 
@@ -104,7 +104,16 @@ def test_conflict_target_is_the_full_unique_constraint():
 
 @pytest.mark.parametrize(
     "column",
-    ["prompt_tokens", "completion_tokens", "spend", "api_requests", "successful_requests", "failed_requests"],
+    [
+        "prompt_tokens",
+        "completion_tokens",
+        "spend",
+        "api_requests",
+        "successful_requests",
+        "failed_requests",
+        "total_response_time_ms",
+        "timed_requests",
+    ],
 )
 def test_counters_increment_rather_than_overwrite(column):
     """An overwrite would silently discard every earlier flush's spend for that row."""

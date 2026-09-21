@@ -15,6 +15,7 @@ import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, Wre
 export interface RequestLogsTableColumnsDeps {
   onKeyHashClick: (keyHash: string) => void;
   onSessionClick: (log: LogEntry) => void;
+  resolveUserEmail?: (userId: string) => string | undefined;
 }
 
 const readMetaString = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
@@ -32,14 +33,25 @@ const readMcpLogoUrl = (metadata: Record<string, unknown> | undefined): string |
 const getLogoUrl = (row: LogEntry, provider: string): string =>
   readMcpLogoUrl(row.metadata) ?? (provider ? getProviderLogoAndName(provider).logo : "");
 
-function TruncatedText({ value }: { value: string | undefined }) {
+function TruncatedText({ value, tooltip }: { value: string | undefined; tooltip?: string }) {
   const display = value ?? "-";
-  return <CellTooltip content={display} trigger={<span className="max-w-[15ch] truncate block">{display}</span>} />;
+  return (
+    <CellTooltip
+      content={tooltip ?? display}
+      trigger={<span className="max-w-[15ch] truncate block">{display}</span>}
+    />
+  );
+}
+
+function UserCell({ userId, email }: { userId: string | undefined; email: string | undefined }) {
+  if (!userId || !email || email === userId) return <TruncatedText value={userId} />;
+  return <TruncatedText value={email} tooltip={`${email} (${userId})`} />;
 }
 
 export const getRequestLogsTableColumns = ({
   onKeyHashClick,
   onSessionClick,
+  resolveUserEmail = () => undefined,
 }: RequestLogsTableColumnsDeps): ColumnDef<LogEntry>[] => [
   {
     id: "startTime",
@@ -163,7 +175,8 @@ export const getRequestLogsTableColumns = ({
       const mcpCount = log.mcp_tool_call_count || 0;
       const mcpSpend = log.mcp_tool_call_spend || 0;
       const isMultiCallSession = (log.session_total_count || 1) > 1;
-      const spend = isMultiCallSession && log.session_total_spend != null ? log.session_total_spend : log.spend;
+      const sessionTotalSpend = isMultiCallSession ? log.session_total_spend : undefined;
+      const spend = sessionTotalSpend ?? log.spend;
       const money = (
         <span>
           <MoneyCell value={spend} decimals={6} />
@@ -173,7 +186,7 @@ export const getRequestLogsTableColumns = ({
       return (
         <div className="flex flex-col items-end">
           {spend ? <CellTooltip content={`$${String(spend)}`} trigger={money} /> : money}
-          {isMultiCallSession && <span className="text-[10px] text-muted-foreground">session total</span>}
+          {sessionTotalSpend != null && <span className="text-[10px] text-muted-foreground">session total</span>}
           {mcpCount > 0 && mcpSpend > 0 && (
             <span className="text-[10px] text-warning">
               incl. {getSpendString(mcpSpend)} from {mcpCount} MCP
@@ -190,13 +203,19 @@ export const getRequestLogsTableColumns = ({
     enableSorting: true,
     meta: { numeric: true },
     cell: ({ row }) => {
-      const ms = row.original.request_duration_ms;
+      const log = row.original;
+      const isMultiCallSession = (log.session_total_count || 1) > 1;
+      const sessionTotalMs = isMultiCallSession ? log.session_total_duration_ms : undefined;
+      const ms = sessionTotalMs ?? log.request_duration_ms;
       if (ms == null) return <span>-</span>;
       return (
-        <CellTooltip
-          content={`${ms}ms`}
-          trigger={<span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>}
-        />
+        <div className="flex flex-col items-end">
+          <CellTooltip
+            content={`${ms}ms`}
+            trigger={<span className="max-w-[15ch] truncate inline-block">{(ms / 1000).toFixed(2)}</span>}
+          />
+          {sessionTotalMs != null && <span className="text-[10px] text-muted-foreground">session total</span>}
+        </div>
       );
     },
   },
@@ -313,7 +332,12 @@ export const getRequestLogsTableColumns = ({
     header: "Internal User",
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedText value={row.original.user} />,
+    cell: ({ row }) => (
+      <UserCell
+        userId={row.original.user}
+        email={row.original.user ? resolveUserEmail(row.original.user) : undefined}
+      />
+    ),
   },
   {
     id: "end_user",

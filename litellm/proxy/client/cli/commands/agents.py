@@ -4,15 +4,16 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 import click
 import requests
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from .auth import CliContextObj, context_secret_vault, get_stored_api_key, login
 from .claude_settings import ClaudeSettingsError, install_statusline_script
@@ -65,6 +66,10 @@ _INSTALL_DOCS: Final[dict[str, str]] = {
 _HIDDEN_AGENTS: Final = frozenset({"pi"})
 
 CODEX_PROXY_PROVIDER: Final = "litellm"
+CODEX_HOME_ENV: Final = "CODEX_HOME"
+CODEX_MODEL_CATALOG_FILENAME: Final = "litellm-models.json"
+_CODEX_BASE_INSTRUCTIONS_PATH: Final = Path(__file__).with_name("codex_base_instructions.md")
+_CODEX_PREFLIGHT_TIMEOUT_SECONDS: Final = 10.0
 
 
 class AgentRunError(Exception):
@@ -252,7 +257,7 @@ def agent_launch_args(command: str, base_url: str) -> list[str]:
 
 
 class ListedModel(BaseModel):
-    """The fields of a /v1/models entry that an OpenCode model entry is built from."""
+    """The fields of a /v1/models entry that an OpenCode or Codex model entry is built from."""
 
     id: str
     mode: str | None = None
@@ -265,13 +270,47 @@ class _ModelListing(BaseModel):
 
 
 _MODEL_LISTING: Final = TypeAdapter(_ModelListing)
-_OPENCODE_CHAT_MODES: Final[frozenset[str]] = frozenset({"chat", "responses"})
+_CHAT_MODES: Final[frozenset[str]] = frozenset({"chat", "responses"})
 _NO_EXTRA_ENV: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
 class ModelSyncSkipped:
     reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ModelSyncArgs:
+    """CLI args, placed before the user's own, that hand an agent the synced model list."""
+
+    args: tuple[str, ...]
+
+
+ModelSyncResult: TypeAlias = Mapping[str, str] | ModelSyncArgs | ModelSyncSkipped
+
+
+def _chat_models(models: Sequence[ListedModel]) -> tuple[ListedModel, ...]:
+    return tuple(m for m in models if m.mode is None or m.mode in _CHAT_MODES)
+
+
+def _fetch_model_listing(
+    base_url: str,
+    api_key: str,
+    *,
+    get: Callable[..., requests.Response],
+) -> tuple[ListedModel, ...] | ModelSyncSkipped:
+    url: Final = base_url.rstrip("/") + "/v1/models"
+    try:
+        resp: Final = get(url, headers=MappingProxyType({"Authorization": f"Bearer {api_key}"}), timeout=10)
+    except requests.RequestException as e:
+        return ModelSyncSkipped(f"could not reach {url}: {e}")
+    if resp.status_code != 200:
+        return ModelSyncSkipped(f"{url} returned HTTP {resp.status_code}")
+    try:
+        listing: Final = _MODEL_LISTING.validate_json(resp.content)
+    except ValidationError:
+        return ModelSyncSkipped(f"{url} returned an unexpected body")
+    return listing.data
 
 
 class _OpenCodeLimit(BaseModel):
@@ -317,7 +356,7 @@ def opencode_provider_config(base_url: str, models: Sequence[ListedModel]) -> st
     it never lands in the config text. OpenCode merges this inline config over
     the user's own files, leaving unrelated keys and providers untouched.
     """
-    chat_models: Final = tuple(m for m in models if m.mode is None or m.mode in _OPENCODE_CHAT_MODES)
+    chat_models: Final = _chat_models(models)
     provider: Final = _OpenCodeProvider(
         npm=OPENCODE_PROVIDER_NPM,
         name=OPENCODE_PROVIDER_NAME,
@@ -347,40 +386,269 @@ def opencode_model_sync_env(
     """
     if OPENCODE_CONFIG_CONTENT_ENV in base_env:
         return ModelSyncSkipped(f"{OPENCODE_CONFIG_CONTENT_ENV} is already set")
-    url: Final = base_url.rstrip("/") + "/v1/models"
+    listing: Final = _fetch_model_listing(base_url, api_key, get=get)
+    if isinstance(listing, ModelSyncSkipped):
+        return listing
+    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing)})
+
+
+class _CodexTruncationPolicy(BaseModel):
+    mode: Literal["bytes"] = "bytes"
+    limit: int = 10_000
+
+
+class _CodexModel(BaseModel):
+    """One `ModelInfo` entry of a Codex model catalog for a model the installed Codex does not know.
+
+    Every field that some Codex release since `model_catalog_json` appeared
+    (0.105.0) deserializes without a default is spelled out here, so one catalog
+    parses on all of them; the values match the fallback metadata Codex uses for
+    a model slug it does not know, so picking such a proxy model behaves the
+    same as `codex -m` did.
+    """
+
+    slug: str
+    display_name: str
+    description: None = None
+    supported_reasoning_levels: tuple[()] = ()
+    shell_type: Literal["unified_exec"] = "unified_exec"
+    visibility: Literal["list"] = "list"
+    supported_in_api: Literal[True] = True
+    priority: int
+    availability_nux: None = None
+    upgrade: None = None
+    support_verbosity: Literal[False] = False
+    supports_reasoning_summaries: Literal[False] = False
+    supports_parallel_tool_calls: Literal[False] = False
+    default_verbosity: None = None
+    apply_patch_tool_type: None = None
+    truncation_policy: _CodexTruncationPolicy = _CodexTruncationPolicy()
+    experimental_supported_tools: tuple[()] = ()
+    context_window: int | None
+    base_instructions: str
+
+
+class _StockCodexUpgrade(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    model: str
+
+
+class _StockCodexModel(BaseModel):
+    """One `ModelInfo` entry as the installed Codex prints it from `codex debug models`.
+
+    Only the fields the sync rewrites are named; everything else that release
+    knows about the model (its reasoning levels, prompt, tool support) rides
+    along untouched, whatever the release's schema.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    slug: str
+    priority: int
+    visibility: str
+    supported_in_api: bool = True
+    upgrade: _StockCodexUpgrade | None = None
+
+
+class _StockCodexCatalog(BaseModel):
+    models: tuple[_StockCodexModel, ...]
+
+
+class _CodexCatalog(BaseModel):
+    models: tuple[_CodexModel | _StockCodexModel, ...]
+
+
+def _codex_catalog_entry(
+    priority: int,
+    listed: ListedModel,
+    stock: _StockCodexModel | None,
+    served: frozenset[str],
+    instructions: str,
+) -> _CodexModel | _StockCodexModel:
+    if stock is None:
+        return _CodexModel(
+            slug=listed.id,
+            display_name=listed.id,
+            priority=priority,
+            context_window=listed.max_input_tokens,
+            base_instructions=instructions,
+        )
+    upgrade: Final = stock.upgrade if stock.upgrade is not None and stock.upgrade.model in served else None
+    return stock.model_copy(
+        update={"priority": priority, "visibility": "list", "supported_in_api": True, "upgrade": upgrade}
+    )
+
+
+def codex_model_catalog(
+    models: Sequence[ListedModel], stock: Sequence[_StockCodexModel], instructions: str
+) -> str | None:
+    """The `model_catalog_json` body listing the proxy's chat models, or None if there are none.
+
+    Codex refuses an empty catalog, hence None instead of `{"models": []}`.
+    Passing a catalog replaces Codex's built-in one, so a proxy model the
+    installed Codex knows keeps that Codex's own entry and the proxy only
+    decides its place in the picker: the listing orders it, lists it even when
+    Codex hides it or keeps it off the API, and keeps Codex's upgrade nudge only
+    when the model it points at is served too. A model Codex does not know gets the fallback
+    entry, with the same base instructions Codex itself uses so the agent never
+    runs without a system prompt.
+    """
+    chat_models: Final = _chat_models(models)
+    if not chat_models:
+        return None
+    served: Final = frozenset(m.id for m in chat_models)
+    known: Final = MappingProxyType({m.slug: m for m in stock})
+    catalog: Final = _CodexCatalog(
+        models=tuple(
+            _codex_catalog_entry(index, m, known.get(m.id), served, instructions) for index, m in enumerate(chat_models)
+        )
+    )
+    return catalog.model_dump_json()
+
+
+def codex_model_catalog_path(env: Mapping[str, str], *, home: Callable[[], Path] = Path.home) -> Path:
+    override: Final = env.get(CODEX_HOME_ENV)
+    root: Final = Path(override) if override else home() / ".codex"
+    return root / CODEX_MODEL_CATALOG_FILENAME
+
+
+def _replace_file(path: Path, text: str) -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+        _ = tmp.write(text)
     try:
-        resp: Final = get(url, headers=MappingProxyType({"Authorization": f"Bearer {api_key}"}), timeout=10)
-    except requests.RequestException as e:
-        return ModelSyncSkipped(f"could not reach {url}: {e}")
-    if resp.status_code != 200:
-        return ModelSyncSkipped(f"{url} returned HTTP {resp.status_code}")
+        os.replace(tmp.name, path)
+    except OSError:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
+
+
+def _codex_debug_models(
+    binary: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    run: Callable[..., subprocess.CompletedProcess[str]],
+) -> str | ModelSyncSkipped:
+    """What `codex debug models` prints with `args` in front, or why the installed Codex could not run it.
+
+    The command prints the catalog Codex would launch with, without touching
+    the network, so it lists the installed Codex's own models and parses a
+    catalog override the way a launch does. Releases before 0.130.0 have no
+    such command and are reported the same way. A batch shim goes through
+    cmd.exe exactly as the launch will.
+    """
+    name: Final = os.path.basename(binary)
+    command: Final = _windows_command(binary, (binary, *args, "debug", "models"))
     try:
-        listing: Final = _MODEL_LISTING.validate_json(resp.content)
-    except ValidationError:
-        return ModelSyncSkipped(f"{url} returned an unexpected body")
-    return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing.data)})
+        completed: Final = run(
+            command,
+            env=dict(env),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=_CODEX_PREFLIGHT_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return ModelSyncSkipped(f"`{name} debug models` failed: {e}")
+    if completed.returncode == 0:
+        return completed.stdout
+    lines: Final = completed.stderr.strip().splitlines()
+    detail: Final = lines[0] if lines else "no output"
+    return ModelSyncSkipped(f"`{name} debug models` exited {completed.returncode}: {detail}")
+
+
+def _stock_codex_models(
+    binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
+) -> tuple[_StockCodexModel, ...] | ModelSyncSkipped:
+    printed: Final = _codex_debug_models(binary, (), env, run=run)
+    if isinstance(printed, ModelSyncSkipped):
+        return printed
+    try:
+        return _StockCodexCatalog.model_validate_json(printed).models
+    except ValidationError as e:
+        name: Final = os.path.basename(binary)
+        return ModelSyncSkipped(f"`{name} debug models` printed no model catalog: {e.errors()[0]['msg']}")
+
+
+def codex_model_sync_args(
+    base_env: Mapping[str, str],
+    base_url: str,
+    api_key: str,
+    *,
+    binary: str = "codex",
+    get: Callable[..., requests.Response] = requests.get,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    home: Callable[[], Path] = Path.home,
+    instructions_path: Path = _CODEX_BASE_INSTRUCTIONS_PATH,
+) -> ModelSyncArgs | ModelSyncSkipped:
+    """`-c model_catalog_json=...` pointing Codex at the proxy's model list, or why it was skipped.
+
+    Codex has no env or inline equivalent of OPENCODE_CONFIG_CONTENT: the catalog
+    must be a file, so it is written under $CODEX_HOME (default ~/.codex) and
+    atomically replaced on every launch. The Codex at `binary` first lists its
+    own models, so the ones the proxy serves keep that Codex's entries, and then
+    reads the file back once before it is handed over. The key never lands in
+    the file. A failed fetch, read, listing, write or read-back is reported
+    rather than raised: Codex still launches with its built-in catalog and takes
+    a proxy model by name via -m, and a rejected file stays on disk to be looked
+    at.
+    """
+    listing: Final = _fetch_model_listing(base_url, api_key, get=get)
+    if isinstance(listing, ModelSyncSkipped):
+        return listing
+    try:
+        instructions: Final = instructions_path.read_text(encoding="utf-8")
+    except OSError as e:
+        return ModelSyncSkipped(f"could not read {instructions_path}: {e}")
+    path: Final = codex_model_catalog_path(base_env, home=home)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return ModelSyncSkipped(f"could not write {path}: {e}")
+    stock: Final = _stock_codex_models(binary, base_env, run=run)
+    if isinstance(stock, ModelSyncSkipped):
+        return stock
+    catalog: Final = codex_model_catalog(listing, stock, instructions)
+    if catalog is None:
+        return ModelSyncSkipped(f"{base_url.rstrip('/')}/v1/models lists no chat models")
+    try:
+        _replace_file(path, catalog)
+    except OSError as e:
+        return ModelSyncSkipped(f"could not write {path}: {e}")
+    override: Final = f"model_catalog_json={json.dumps(str(path))}"
+    read_back: Final = _codex_debug_models(binary, ("-c", override), base_env, run=run)
+    if isinstance(read_back, ModelSyncSkipped):
+        return read_back
+    return ModelSyncArgs(("-c", override))
 
 
 def agent_model_sync_env(
-    command: str,
+    binary: str,
     base_env: Mapping[str, str],
     base_url: str,
     api_key: str,
     skip_verify: bool,
     *,
     get: Callable[..., requests.Response] = requests.get,
-) -> Mapping[str, str] | ModelSyncSkipped:
-    """Extra env an agent needs to see the proxy's model list.
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> ModelSyncResult:
+    """Extra env or args an agent needs to see the proxy's model list.
 
-    Only OpenCode needs one: Claude Code discovers models through
-    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY and Codex takes the model by name.
-    skip_verify means the caller wants no pre-launch proxy call at all, so the
-    listing is skipped too rather than hanging on an offline proxy.
+    binary is the resolved path the launch will run (`codex.cmd` on a Windows
+    npm install). OpenCode takes the list as env, Codex as a `-c` override that
+    binary has read back first; Claude Code discovers models itself through
+    CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY. skip_verify means the caller
+    wants no pre-launch proxy call at all, so the listing is skipped too rather
+    than hanging on an offline proxy.
     """
-    if os.path.basename(command) != "opencode":
+    agent: Final = os.path.splitext(os.path.basename(binary))[0]
+    if agent not in ("opencode", "codex"):
         return _NO_EXTRA_ENV
     if skip_verify:
         return ModelSyncSkipped(f"{_SKIP_VERIFY_FLAG} was passed")
+    if agent == "codex":
+        return codex_model_sync_args(base_env, base_url, api_key, binary=binary, get=get, run=run)
     return opencode_model_sync_env(base_env, base_url, api_key, get=get)
 
 
@@ -508,9 +776,7 @@ def run_agent(
     base_env: Mapping[str, str] | None = None,
     which: Callable[[str], str | None] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
-    sync_models: Callable[[str, Mapping[str, str], str, str, bool], Mapping[str, str] | ModelSyncSkipped] = (
-        agent_model_sync_env
-    ),
+    sync_models: Callable[[str, Mapping[str, str], str, str, bool], ModelSyncResult] = agent_model_sync_env,
     warn: Callable[[str], None] = _warn,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
@@ -537,7 +803,7 @@ def run_agent(
         verify(base_url, api_key)
 
     env_before_sync: Final = base_env if base_env is not None else os.environ
-    synced: Final = sync_models(command[0], env_before_sync, base_url, api_key, skip_verify)
+    synced: Final = sync_models(binary, env_before_sync, base_url, api_key, skip_verify)
     if isinstance(synced, ModelSyncSkipped):
         warn(f"litellm: not syncing {display_name} models from the proxy: {synced.reason}")
 
@@ -547,10 +813,11 @@ def run_agent(
     env: Final = MappingProxyType(
         {
             **build_agent_env(env_before_sync, base_url, api_key, profiles),
-            **(_NO_EXTRA_ENV if isinstance(synced, ModelSyncSkipped) else synced),
+            **(synced if isinstance(synced, Mapping) else _NO_EXTRA_ENV),
         }
     )
-    extra_args: Final = (*agent_launch_args(command[0], base_url), *prepared_args)
+    synced_args: Final = synced.args if isinstance(synced, ModelSyncArgs) else ()
+    extra_args: Final = (*agent_launch_args(command[0], base_url), *synced_args, *prepared_args)
     if reattach_terminal is not None:
         reattach_terminal()
     launcher(binary, [command[0], *extra_args, *command[1:]], env)

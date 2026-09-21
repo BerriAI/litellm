@@ -22,7 +22,7 @@ from typing import Final
 import pytest
 
 from e2e_config import unique_marker
-from e2e_http import Result, StreamingResponse, Success, UnknownApiError, unwrap
+from e2e_http import Result, StreamingResponse, Success, unwrap
 from lifecycle import ResourceManager
 from management_client import MODEL_ACCESS_DENIED_MARKER, ManagementClient
 from models import (
@@ -133,10 +133,6 @@ def _key_info_everywhere(
         "/key/info", params=KeyInfoParams(key=key), response_type=KeyInfoResponse, converged=converged
     )
     return MappingProxyType({replica: unwrap(read).info for replica, read in reads.items()})
-
-
-def _is_key_not_found(result: Result[KeyInfoResponse]) -> bool:
-    return isinstance(result, UnknownApiError) and result.status_code == 404
 
 
 def _assert_reads_back(info: KeyInfo, expected: KeyGenerateBody, replica: str) -> None:
@@ -290,10 +286,5 @@ class TestKeyLifecycle:
 
         client.delete_key_strict(created.key)
 
-        _ = client.proxy.read_back_everywhere(
-            "/key/info",
-            params=KeyInfoParams(key=created.key),
-            response_type=KeyInfoResponse,
-            converged=_is_key_not_found,
-        )
+        _ = _key_info_everywhere(client, created.key, lambda info: info.status == "deleted")
         _assert_chat_rejected_everywhere(client, created.key, mock_deployment)

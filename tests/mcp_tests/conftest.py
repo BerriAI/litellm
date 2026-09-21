@@ -74,3 +74,14 @@ def pytest_collection_modifyitems(config, items):
 
     # Reorder the items list
     items[:] = custom_logger_tests + other_tests
+
+
+@pytest.fixture
+def config_only_mcp_manager_factory():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    class ConfigOnlyManager(MCPServerManager):
+        def initialize_tool_name_to_mcp_server_name_mapping(self):
+            return None
+
+    return ConfigOnlyManager

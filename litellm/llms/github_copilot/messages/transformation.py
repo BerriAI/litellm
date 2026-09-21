@@ -92,7 +92,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             headers["anthropic-version"] = "2023-06-01"
 
         headers = self._update_headers_with_anthropic_beta(
-            headers, optional_params, custom_llm_provider="github_copilot"
+            headers, optional_params, custom_llm_provider="github_copilot", messages=messages
         )
 
         return headers, dynamic_api_base

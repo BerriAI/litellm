@@ -9,6 +9,7 @@ import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
 import { ProjectDetail } from "./ProjectDetailsPage";
 import { ProjectsTable } from "./ProjectsTable";
+import { useClearProjectKeysTableState, useProjectsTableState } from "./useProjectsUrlState";
 
 export function ProjectsPage() {
   const { data: projects, isLoading } = useProjects();
@@ -18,8 +19,9 @@ export function ProjectsPage() {
     "project",
     parseAsString.withOptions({ history: "push" }),
   );
+  const clearProjectKeysTableState = useClearProjectKeysTableState();
+  const { search: searchText, setSearch: setSearchText } = useProjectsTableState();
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
-  const [searchText, setSearchText] = useState("");
 
   const teamAliasMap = useMemo(() => {
     const map = new Map<string, string>();
@@ -44,13 +46,13 @@ export function ProjectsPage() {
     });
   }, [projects, searchText, teamAliasMap]);
 
+  const closeProject = () => {
+    void setSelectedProjectId(null, { history: "replace" });
+    clearProjectKeysTableState();
+  };
+
   if (selectedProjectId) {
-    return (
-      <ProjectDetail
-        projectId={selectedProjectId}
-        onBack={() => void setSelectedProjectId(null, { history: "replace" })}
-      />
-    );
+    return <ProjectDetail projectId={selectedProjectId} onBack={closeProject} />;
   }
 
   return (

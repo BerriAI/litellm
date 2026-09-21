@@ -10,19 +10,25 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 from __future__ import annotations
 
 import json
-from typing import cast
+import threading
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Final, cast
 
 import pytest
-from e2e_config import unique_marker
+from e2e_config import PROVIDER_EDGE_ADVERTISE_HOST, PROVIDER_EDGE_BIND_HOST, unique_marker
 from e2e_http import assert_client_error
 from lifecycle import ResourceManager
-from models import LiteLLMParamsBody
+from models import ChatBody, ChatMessage, LiteLLMParamsBody
 from openai.types.responses import (
     FunctionToolParam,
     Response,
     ResponseFunctionToolCall,
     ResponseInputParam,
 )
+from provider_edge import LiveEdge, start_provider_edge
+from provider_edge_bedrock import bedrock_signer
 from proxy_client import ProxyClient
 from pydantic import BaseModel
 from sdk_clients import SdkClients
@@ -39,6 +45,33 @@ class _OptionalResponsesBody(BaseModel):
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 INSTRUCTIONS = "You are a helpful assistant"
 CAT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
+BEDROCK_EDGE_REGION: Final = "us-east-1"
+BEDROCK_EDGE_MOUNT: Final = f"bedrock/{BEDROCK_EDGE_REGION}"
+
+
+class ConverseRequestBody(BaseModel):
+    additionalModelRequestFields: dict[str, str] | None = None
+
+
+@dataclass(slots=True)
+class ConverseRequestCapture:
+    """The Converse bodies the proxy actually sent upstream, as seen by a live
+    edge sitting between the proxy and Bedrock."""
+
+    _bodies: list[ConverseRequestBody] = field(default_factory=list)
+    _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def observe(self, url: str, headers: Mapping[str, str], body: bytes | None) -> None:
+        if body is None or "/converse" not in url:
+            return
+        with self._lock:
+            self._bodies.append(ConverseRequestBody.model_validate_json(body))
+
+    @property
+    def bodies(self) -> tuple[ConverseRequestBody, ...]:
+        with self._lock:
+            return tuple(self._bodies)
+
 
 WEATHER_TOOL: FunctionToolParam = {
     "type": "function",
@@ -239,6 +272,58 @@ class TestResponses:
             tools=[WEATHER_TOOL],
         )
         _assert_weather_call(response)
+
+    @pytest.mark.provider_edge_host
+    @pytest.mark.parametrize("endpoint", ["/v1/responses", "/v1/chat/completions"])
+    def test_bedrock_forwards_allowed_safety_identifier_as_additional_model_request_field(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, endpoint: str
+    ) -> None:
+        capture: Final = ConverseRequestCapture()
+        edge: Final = start_provider_edge(
+            LiveEdge(observe_request=capture.observe, sign=bedrock_signer(BEDROCK_EDGE_REGION)),
+            mounts=MappingProxyType({BEDROCK_EDGE_MOUNT: f"https://bedrock-runtime.{BEDROCK_EDGE_REGION}.amazonaws.com"}),
+            bind_host=PROVIDER_EDGE_BIND_HOST,
+            advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
+        )
+        resources.defer(edge.shutdown)
+        model: Final = f"e2e-responses-{unique_marker()}"
+        model_id: Final = proxy.create_model(
+            model,
+            LiteLLMParamsBody(
+                model=BEDROCK_CONVERSE_BACKEND,
+                api_base=edge.edge.api_base(BEDROCK_EDGE_MOUNT),
+                aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
+                aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
+                aws_region_name=BEDROCK_EDGE_REGION,
+                allowed_openai_params=["safety_identifier"],
+            ),
+        )
+        resources.defer(lambda: proxy.delete_model(model_id))
+        key: Final = resources.key()
+        safety_identifier: Final = f"end-user-{unique_marker()}"
+
+        if endpoint == "/v1/responses":
+            sdk.openai(key).responses.create(
+                model=model,
+                input="reply with one word",
+                instructions=INSTRUCTIONS,
+                safety_identifier=safety_identifier,
+            )
+        else:
+            proxy.chat(
+                key,
+                ChatBody(
+                    model=model,
+                    messages=[ChatMessage(role="user", content="reply with one word")],
+                    safety_identifier=safety_identifier,
+                ),
+            )
+
+        forwarded: Final = tuple(body.additionalModelRequestFields for body in capture.bodies)
+        assert forwarded, f"{endpoint} produced no Bedrock Converse request"
+        assert forwarded == ({"safety_identifier": safety_identifier},) * len(forwarded), (
+            f"{endpoint} did not forward safety_identifier to Bedrock Converse on every attempt: {capture.bodies}"
+        )
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/responses 500s (aresponses TypeError) on missing input instead of 400")
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")

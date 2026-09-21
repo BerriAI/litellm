@@ -344,6 +344,10 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         kept: Final = [item for item, _ in normalized if item is not None]  # mutable-ok: ResponseInputParam is a list
         return kept  # pyright: ignore[reportReturnType]  # Codex passthrough items sit outside the OpenAI input union
 
+    @staticmethod
+    def _model_map_lookup_name(model: str) -> str:
+        return model.split("/")[-1].removeprefix("openai.")
+
     def map_openai_params(
         self,
         response_api_optional_params: ResponsesAPIOptionalRequestParams,

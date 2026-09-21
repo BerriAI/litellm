@@ -43,6 +43,7 @@ export type LogEntry = {
   request_duration_ms?: number;
   session_total_count?: number;
   session_total_spend?: number;
+  session_total_duration_ms?: number;
   session_total_tokens?: number;
   session_total_prompt_tokens?: number;
   session_total_completion_tokens?: number;

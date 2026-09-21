@@ -34,11 +34,6 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
-try:
-    from fastapi.exceptions import HTTPException
-except ImportError:
-    HTTPException = None
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -106,9 +101,9 @@ def is_guardrail_intervention(e: Exception) -> bool:
         ),
     ):
         return True
-    if HTTPException is not None and isinstance(e, HTTPException) and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES:
-        return True
-    return False
+    from litellm.proxy.guardrails.exception_utils import is_fastapi_http_exception
+
+    return is_fastapi_http_exception(e, _GUARDRAIL_BLOCK_STATUS_CODES)
 
 
 def _strict_guardrail_modes_enabled() -> bool:
@@ -1379,8 +1374,9 @@ class CustomGuardrail(CustomLogger):
         raise e
 
     def _inputs_were_modified(self, original_inputs: Mapping[str, object], response: Mapping[str, object]) -> bool:
-        """True when any key of either mapping differs between them (mask), False otherwise (allow)."""
-        return any(original_inputs.get(key) != response.get(key) for key in original_inputs.keys() | response.keys())
+        """True when any content key of either mapping differs between them (mask), False otherwise (allow)."""
+        compared_keys: Final = (original_inputs.keys() | response.keys()) - _STREAM_CONTROL_KEYS
+        return any(original_inputs.get(key) != response.get(key) for key in compared_keys)
 
     def mask_content_in_string(
         self,
@@ -1490,6 +1486,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
 _PRE_CALL_CONTENT_KEYS: Final = frozenset(
     {"messages", "input", "prompt", "system", "instructions", "tools", "functions", "function_call", "tool_choice"}
 )
+_STREAM_CONTROL_KEYS: Final = frozenset({"stream_holdback_chars"})
 
 
 def _original_inputs_for(

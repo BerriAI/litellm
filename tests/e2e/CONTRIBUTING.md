@@ -2,14 +2,14 @@
 
 This directory holds the live end-to-end suites that prove product correctness against a real running proxy and real provider APIs. The goal of this guide is simple: when you ship a feature, you add e2e coverage that walks that feature the way production does, across every route and edge case it touches, so a later change that breaks it fails here first
 
-Read this before adding a test and i recommend reading through CLAUDE.md
+Read this before adding a test and i recommend reading through AGENTS.md
 
 When contributing to this directory, please first discuss the change you wish to make via issue or pull request. We require screenshots and proof of your tests working on a live proxy. 
 
 
 ## Setup
 
-The suites run against a live proxy, so bring one up first by running the litellm proxy locally. Point it at a config that prewires the example models the suites use (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) with keys from your `.env`, and enables prompt storage, a redis cache, and the fast budget rescheduler the quota suites rely on. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that config and read it back in the test rather than hardcoding values
+The suites run against a live proxy, so bring one up first by running the litellm proxy locally. Point it at a config that prewires the example models the suites use (`gpt-5.5`, `claude-haiku-4-5`, `gemini-2.5-flash`, `openai-text-embedding-3-small`) with keys from your `.env`, and enables prompt storage, a redis cache, the fast budget rescheduler the quota suites rely on, and `router_settings.optional_pre_call_checks: ["prompt_caching"]`, which the router suite's prompt-cache affinity test reads back from `GET /router/settings` and fails without. If your test needs another model, a pricing override, or a guardrail declared up front, add it to that config and read it back in the test rather than hardcoding values
 
 ## Running the tests locally
 
@@ -134,7 +134,7 @@ One sharp edge: a replayed response reuses the recorded provider response id, an
 
 Another sharp edge, same root: record and replay derive every per-test token deterministically (the model name included, so a replay regenerates the exact requests the record run sent), which means an edge-wired deployment left in the database by an interrupted earlier run carries the same model name as the fresh one the current run registers. The proxy then holds two deployments under one model group and load-balances across both, and because the leftover's `api_base` points at the earlier run's edge process, which is gone, the calls that land on it fail with a connection error that reads like a transport bug rather than the stale row it is. Give each record or replay run a fresh database, or let a run finish so its own teardown deletes what it registered, and never reuse one long-lived proxy across back-to-back record/replay sessions. CI hands every job its own empty database and its own proxy, so it never sees this
 
-Replay answers any provider call that drifted from the recording with an HTTP 599 whose body names the computed and closest recorded keys, so the test fails loudly instead of silently going live, and a bundle older than seven days fails at collection time naming its age; either way the fix is to re-record. Only tests that register edge-wired deployments participate: everything else hits its provider live in every mode, so record exactly the suite you replay. If the proxy runs in a container, set `E2E_PROVIDER_EDGE_ADVERTISE_HOST` (e.g. `host.docker.internal`) so the api_base the proxy stores can reach the edge on the pytest host, and `E2E_PROVIDER_EDGE_BIND_HOST=0.0.0.0` so the edge accepts it. The suites wired to the edge today are `quota_management/spend_tracking/test_provider_edge_spend_e2e.py`, `llm_translation/test_chat_completions_contract_e2e.py`, the OpenAI registrations in `llm_translation/test_embeddings_endpoint_e2e.py`, the Anthropic tests in `llm_translation/test_messages_e2e.py`, streamed and not, and the OpenAI batch deployment behind `batches/`. A streamed response replays as the chunk sequence the provider sent rather than one buffered body. See `CLAUDE.md` in this directory for the bundle format, the edge design, and the current limits (Bedrock). The scheduled CI record/replay lane is described above
+Replay answers any provider call that drifted from the recording with an HTTP 599 whose body names the computed and closest recorded keys, so the test fails loudly instead of silently going live, and a bundle older than seven days fails at collection time naming its age; either way the fix is to re-record. Only tests that register edge-wired deployments participate: everything else hits its provider live in every mode, so record exactly the suite you replay. If the proxy runs in a container, set `E2E_PROVIDER_EDGE_ADVERTISE_HOST` (e.g. `host.docker.internal`) so the api_base the proxy stores can reach the edge on the pytest host, and `E2E_PROVIDER_EDGE_BIND_HOST=0.0.0.0` so the edge accepts it. The suites wired to the edge today are `quota_management/spend_tracking/test_provider_edge_spend_e2e.py`, `llm_translation/test_chat_completions_contract_e2e.py`, the OpenAI registrations in `llm_translation/test_embeddings_endpoint_e2e.py`, the Anthropic tests in `llm_translation/test_messages_e2e.py`, streamed and not, and the OpenAI batch deployment behind `batches/`. A streamed response replays as the chunk sequence the provider sent rather than one buffered body. See `AGENTS.md` in this directory for the bundle format, the edge design, and the current limits (Bedrock). The scheduled CI record/replay lane is described above
 
 Tests marked `@pytest.mark.e2e` hard-fail when no proxy answers `/health/liveliness`, so a run that goes red with `No live proxy` at setup means the proxy isn't up; they never skip for a missing proxy, so an absent proxy can't be mistaken for a pass
 
@@ -218,7 +218,7 @@ Each suite provides its own `client` fixture (see `llm_translation/passthrough_c
 
 Request and response bodies are typed pydantic models in `models.py`; only the fields a test reads are modelled, and nothing passes raw dicts. Outcomes come back as a `Result[R]` tagged union (`Success`, `NetworkError`, `UnauthorizedError`, `RateLimitedError`, `ValidationError`, `UnknownApiError`). Handle them with `match`, or call `unwrap(...)` when a non-success should fail the test. The harness hard-fails and never skips: a test marked `e2e` fails when no proxy answers its liveness probe, and once a request reaches the proxy any wrong behavior is likewise a hard failure, so a missing proxy turns the run red instead of being mistaken for a pass
 
-Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
+Mark live tests with `@pytest.mark.e2e` (on the class or the module). Pure coverage of the harness itself carries no marker and runs regardless. A test that needs proxy configuration the default stack does not carry goes behind an opt-in marker (`managed_files`, `prompt_caching_stack`, `weekly`), each deselected unless its env var is set; `OPT_IN_MARKERS` in `conftest.py` maps marker to env var, and the coverage collector counts such a cell only where the env var is set. Use `scoped_key` for a fresh all-models key that auto-deletes, `resources` when you need to create and tear down more than a key, and `unique_marker()` from `e2e_config` to keep prompts, tags, and customer ids from colliding across concurrent runs and the shared response cache
 
 ## Pre-commit steps
 
@@ -250,3 +250,56 @@ The semantic header set is `content-type`, `accept`, `anthropic-version`, `anthr
 Excluded transport and telemetry headers are `host`, `content-length`, `connection`, `accept-encoding`, `user-agent`, `traceparent`, `tracestate`, `x-request-id`, `x-client-request-id` and `x-stainless-*`. Inbound transfer-encoding is unsupported; send JSON with content-length framing. The destination represents host identity and the relay carries original body bytes. Replay does not verify credentials, SDK timeout/retry behavior, transport performance, model availability or stateful remote IDs. Live relay uses original request bytes and header values, never the stored identity
 
 Strict replay harness regression tests live in `tests/code_coverage_tests/test_provider_replay_harness.py`. The CircleCI `provider_replay_harness` job runs them alongside the existing legacy harness files with `--noconftest -o pythonpath=tests/e2e`; they need only synthetic HTTP providers and temporary fixture storage
+
+
+## MCP OAuth happy path
+
+`test_mcp_oauth_happy_path_e2e.py` runs one shared scenario with four variants:
+aggregate gateway SSO and explicitly configured per-server JWT, each directly
+against Linear and through the live provider edge. The edge forwards to real
+Linear without replay and compares the forwarded bearer to the encrypted
+canonical user/server credential. This observes the forwarding boundary, not
+Linear's internal logs. Direct variants independently exercise discovery
+
+Use the existing database preparation, Prisma generation and Keycloak setup.
+Build and stage the dashboard from the tested checkout as in the UI runner.
+Provide `DATABASE_URL`, `LITELLM_MASTER_KEY`, `LITELLM_SALT_KEY`, `LITELLM_LICENSE`,
+and the `E2E_KEYCLOAK_*` settings. Capture a test-account Linear login using
+`mcp/linear_session_capture.py` and set `E2E_LINEAR_STORAGE_STATE` to that private
+file. The test workspace must contain a team. Do not publish browser state or
+raw test/proxy output
+
+```bash
+E2E_MCP_OAUTH_LIVE=1 E2E_FIXTURE_MODE=live E2E_PROVIDER_CACHE=0 \
+  uv run --no-sync pytest tests/e2e/mcp/test_mcp_oauth_happy_path_e2e.py \
+  --rootdir=. --reruns 0
+```
+
+The test starts and restarts its own source-built proxy on a free loopback port,
+retaining its database and SSO client but no Redis or process-local cache. It
+does not restart an existing proxy or clear shared databases. Gateway login,
+consent, immediate list/call and post-restart reconnect must all succeed. The
+aggregate client never injects a gateway header; the explicitly labeled JWT
+variant configures `x-litellm-api-key` for the first consent and reconnects with
+only its gateway JWT after restart
+
+`.github/workflows/test-mcp-oauth-e2e.yml` automatically requests a run for
+same-repository pull requests changing MCP, gateway authentication/SSO, consent
+UI, dependencies or the relevant E2E harness/workflow paths. It retains manual
+`workflow_dispatch` for targeted verification. The four cases run in the
+protected `e2e-changed` environment after its normal deployment approval;
+reviewers should approve and inspect this separate OAuth check when it appears.
+Fork pull requests do not run this credentialed job; use a reviewed
+same-repository branch for their verification. The workflow's path-filtered
+check is not configured here as a globally required branch-protection check.
+Provision `E2E_LINEAR_STORAGE_STATE_B64` as a secret there and retain the existing E2E license/AWS role configuration. A missing or
+expired session fails the job; collection, deselection and skips are not passes.
+The generic changed-test job excludes this file because it requires an owned
+proxy and consent UI. No LLM call is needed
+
+Coverage remains limited to authorization-code OAuth over HTTP. M2M, OBO,
+PKCE passthrough, static/BYOK, ID-JAG, forwarding, SigV4 and stdio are outside this
+scenario; consult the registry and LIT-3559 for their existing coverage and gaps.
+LIT-4506 owns broader isolation/failure regressions. LIT-7737 retains ownership
+of dependency/Python compatibility and its matrix; this test reuses its delivered
+environment and does not change dependency constraints or compatibility gates

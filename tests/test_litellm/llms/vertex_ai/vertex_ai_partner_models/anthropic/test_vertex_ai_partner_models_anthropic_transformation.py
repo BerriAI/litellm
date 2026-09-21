@@ -34,7 +34,6 @@ def test_get_supported_params_thinking():
 
 def test_vertex_ai_anthropic_web_search_header_in_completion():
     """Test that web search tool adds the required beta header for Vertex AI completion requests"""
-    from unittest.mock import MagicMock, patch
 
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -463,9 +462,6 @@ def test_vertex_ai_partner_models_anthropic_remove_prompt_caching_scope_beta_hea
     Test that remove_unsupported_beta correctly filters out prompt-caching-scope-2026-01-05
     from the anthropic-beta headers.
     """
-    from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
-        VertexAIPartnerModelsAnthropicMessagesConfig,
-    )
 
     # This beta header should be removed
     PROMPT_CACHING_BETA_HEADER = "prompt-caching-scope-2026-01-05"

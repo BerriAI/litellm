@@ -15,7 +15,6 @@ vi.mock("../networking", async (importOriginal) => {
     ...actual,
     uiSpendLogsCall: vi.fn(),
     keyInfoV1Call: vi.fn().mockResolvedValue({ info: {} }),
-    allEndUsersCall: vi.fn().mockResolvedValue([]),
   };
 });
 
