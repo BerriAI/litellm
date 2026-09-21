@@ -51,7 +51,7 @@ def supported_gpt_image_qualities(
         and "-x-" in parts[2]
         and "/".join(parts[3:]) == qualified_endpoint
     )
-    return qualities | {"auto"} if qualities else frozenset()
+    return qualities | frozenset({"auto"}) if qualities else frozenset()
 
 
 def map_gpt_image_quality(
