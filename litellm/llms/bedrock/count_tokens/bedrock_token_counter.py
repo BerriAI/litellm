@@ -2,6 +2,7 @@
 Bedrock Token Counter implementation using the CountTokens API.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from litellm._logging import verbose_logger
@@ -26,12 +27,12 @@ class BedrockTokenCounter(BaseTokenCounter):
     async def count_tokens(
         self,
         model_to_use: str,
-        messages: list[dict[str, Any]] | None,
-        contents: list[dict[str, Any]] | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        contents: Sequence[Mapping[str, object]] | None,
         deployment: dict[str, Any] | None = None,
         request_model: str = "",
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        system: object | None = None,
     ) -> TokenCountResponse | None:
         """
         Count tokens using AWS Bedrock's CountTokens API.
@@ -56,7 +57,7 @@ class BedrockTokenCounter(BaseTokenCounter):
         litellm_params: Final = deployment.get("litellm_params", {})
 
         # Build request data in the format expected by BedrockCountTokensHandler
-        request_data: Final[dict[str, Any]] = {
+        request_data: Final[dict[str, object]] = {
             "model": model_to_use,
             "messages": messages,
         }

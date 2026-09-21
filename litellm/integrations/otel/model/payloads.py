@@ -427,7 +427,7 @@ class LLMCallSpanData:
         # plain ``.get`` — no repeated ``isinstance`` guards.
         raw_response: Final = payload.get("response")
         response: Final = cast(Mapping[str, object], raw_response if isinstance(raw_response, dict) else {})
-        choices_out: Final = _dicts(response.get("choices")) or _responses_choices(response)
+        choices_out: Final = _dicts(response.get("choices")) or _responses_choices(response) or _ocr_choices(response)
         # ``finish_reasons`` is metadata, not content, so derive it from
         # ``choices_out`` before gating. The raw message/choice bodies are only
         # retained when content capture is enabled (see ``capture_span_content``);
@@ -749,6 +749,22 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
         "tool_calls": tool_calls or None,
     }
     choice: Final[_Choice] = {"message": message, "finish_reason": _responses_finish_reason(response, bool(tool_calls))}
+    return (choice,)
+
+
+def _ocr_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
+    markdowns: Final = tuple(
+        text for page in _dicts(response.get("pages")) if (text := as_str(page.get("markdown"))) is not None
+    )
+    if not markdowns:
+        return ()
+    message: Final[_AssistantMessage] = {
+        "role": "assistant",
+        "content": "\n\n".join(markdowns),
+        "refusal": None,
+        "tool_calls": None,
+    }
+    choice: Final[_Choice] = {"message": message, "finish_reason": None}
     return (choice,)
 
 

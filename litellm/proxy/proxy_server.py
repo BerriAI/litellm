@@ -601,6 +601,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.prompt_caching_requests import (
+    router as prompt_caching_requests_router,
+)
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -727,6 +730,9 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.types_utils.utils import get_instance_fn
+from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
+    router as latest_release_endpoints_router,
+)
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
 )
@@ -3541,6 +3547,16 @@ async def increment_spend_counter(counter_key: str, increment: float):
     shadow eval's per-leg spend), sharing the primitive the entity counters use so
     invalidation and read semantics can never drift."""
     return await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+
+
+async def refresh_spend_counter_ttl(counter_key: str) -> bool:
+    if spend_counter_cache.redis_cache is None:
+        return False
+    try:
+        return await spend_counter_cache.redis_cache.async_refresh_ttl(key=counter_key)
+    except Exception as e:
+        verbose_proxy_logger.debug("spend counter TTL refresh skipped for %s: %s", counter_key, e)
+        return False
 
 
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
@@ -6875,10 +6891,27 @@ class ProxyConfig:
         router_model_ids: Final = llm_router.get_model_ids()
         # Check for model IDs in llm_router not present in combined_id_list and delete them
 
+        kept_config_ids: Final[frozenset[str]] = (
+            frozenset(
+                model_id
+                for model_id in router_model_ids
+                if (deployment := llm_router.get_deployment(model_id=model_id)) is not None
+                and deployment.model_info.db_model is False
+            )
+            if model_list is None
+            else frozenset()
+        )
+        if kept_config_ids:
+            verbose_proxy_logger.warning(
+                "Config read in _delete_deployment returned no model_list. "
+                "Keeping %d config-defined deployments to avoid removing valid models.",
+                len(kept_config_ids),
+            )
+
         for model_id in router_model_ids:
-            if model_id not in combined_id_list:
+            if model_id not in combined_id_list and model_id not in kept_config_ids:
                 llm_router.delete_deployment(id=model_id)
-        return frozenset(combined_id_list)
+        return frozenset(combined_id_list) | kept_config_ids
 
     def _resolve_db_litellm_param(self, key: str, value: object) -> object:
         if not isinstance(value, str):
@@ -19264,6 +19297,7 @@ app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(user_banner_endpoints_router)
+app.include_router(latest_release_endpoints_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
@@ -19274,6 +19308,7 @@ app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
+app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
