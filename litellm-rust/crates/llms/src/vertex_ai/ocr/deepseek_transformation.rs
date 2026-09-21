@@ -94,9 +94,9 @@ struct DeepSeekPage {
 }
 
 #[derive(Clone, Debug)]
-pub struct VertexAIDeepSeekOCRConfig;
+pub struct VertexAiDeepSeekOcrConfig;
 
-impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
+impl BaseOcrConfig for VertexAiDeepSeekOcrConfig {
     type OcrParams = DeepSeekOcrParams;
     type ProviderRequest = DeepSeekOcrRequest;
     type Environment = vertex::VertexEnvironment;
@@ -379,7 +379,7 @@ pub fn provider_model(model: &str) -> Result<String, Error> {
     Ok(format!("{MODEL_PREFIX}{local_model}"))
 }
 
-impl VertexAIDeepSeekOCRConfig {
+impl VertexAiDeepSeekOcrConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -417,7 +417,7 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig, normalize_response,
+        DeepSeekOcrParams, DeepSeekOcrResponse, VertexAiDeepSeekOcrConfig, normalize_response,
         provider_model,
     };
     use crate::base_llm::ocr::transformation::{BaseOcrConfig, OcrDocument};
@@ -436,7 +436,7 @@ mod tests {
             serde_json::from_value(json!({"temperature":0.5,"extension":null})).unwrap();
         assert_eq!(
             serde_json::to_value(
-                VertexAIDeepSeekOCRConfig
+                VertexAiDeepSeekOcrConfig
                     .map_ocr_params(&arguments, "deepseek-ocr")
                     .unwrap()
             )
@@ -465,7 +465,7 @@ mod tests {
             "deepseek-ai/deepseek-ocr-maas"
         );
         assert_eq!(
-            VertexAIDeepSeekOCRConfig
+            VertexAiDeepSeekOcrConfig
                 .get_complete_url(None, "proj-1", "europe-west4")
                 .unwrap(),
             "https://aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/endpoints/openapi/chat/completions"
@@ -485,7 +485,7 @@ mod tests {
         let params: DeepSeekOcrParams =
             serde_json::from_value(json!({name: value.clone(), "ignored": true})).unwrap();
         let result = serde_json::to_value(
-            VertexAIDeepSeekOCRConfig
+            VertexAiDeepSeekOcrConfig
                 .transform_ocr_request("deepseek-ai/deepseek-ocr-maas", document(), &params, &[])
                 .unwrap(),
         )
@@ -503,7 +503,7 @@ mod tests {
     fn request_uses_greedy_defaults_unless_the_caller_overrides_them() {
         let request = |params: DeepSeekOcrParams| {
             serde_json::to_value(
-                VertexAIDeepSeekOCRConfig
+                VertexAiDeepSeekOcrConfig
                     .transform_ocr_request(
                         "deepseek-ai/deepseek-ocr-maas",
                         document(),
@@ -526,7 +526,7 @@ mod tests {
     #[test]
     fn caller_temperature_argument_overrides_the_greedy_default_in_the_composed_body() {
         let arguments = serde_json::from_value(json!({"temperature":0.7})).unwrap();
-        let body = VertexAIDeepSeekOCRConfig
+        let body = VertexAiDeepSeekOcrConfig
             .transform_ocr_request(
                 "deepseek-ai/deepseek-ocr-maas",
                 document(),
@@ -548,7 +548,7 @@ mod tests {
             .or_else(|| document.get("document_url"))
             .unwrap()
             .clone();
-        let request = VertexAIDeepSeekOCRConfig
+        let request = VertexAiDeepSeekOcrConfig
             .transform_ocr_request(
                 "deepseek-ai/deepseek-ocr-maas",
                 serde_json::from_value(document).unwrap(),

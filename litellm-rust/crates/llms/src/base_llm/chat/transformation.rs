@@ -1,8 +1,14 @@
+use litellm_core_utils::call_arguments::CallArguments;
 use litellm_types::{
     llms::openai::{ChatMessage, ChatMessageContent},
     utils::ChatCompletionsResponse,
 };
 use serde_json::{Map, Value};
+
+use crate::base_llm::translation::{
+    ExtensionPolicy, ProviderIdentity, ProviderResponse, StreamLimits, StreamTranslation,
+    TranslationError,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
@@ -53,7 +59,7 @@ pub use litellm_auth::RequestAuth;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Unsupported(pub &'static str);
 
-pub trait BaseConfig: Sync {
+pub trait ChatExecutionConfig: Sync {
     /// Supported OpenAI parameter names paired with their provider names.
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)];
 
@@ -175,3 +181,500 @@ pub fn unsupported_message(message: &ChatMessage) -> Option<Unsupported> {
             .then_some(Unsupported("non-text message content")),
     }
 }
+
+pub trait BaseConfig: Send + Sync {
+    type Params;
+    type StreamInput;
+    type CustomStream: futures_util::Stream<
+            Item = Result<
+                litellm_types::utils::ChatCompletionChunk,
+                crate::base_llm::translation::TranslationError,
+            >,
+        >;
+    type ParsedResponse;
+    type Credentials;
+    type Environment;
+    type ProviderRequest: serde::Serialize;
+    type Decoder: crate::base_llm::translation::SemanticDecoder<
+            Event = litellm_types::utils::ChatCompletionChunk,
+            Completion = ChatCompletionsResponse,
+        >;
+
+    fn get_config(&self) -> std::collections::BTreeMap<String, Value>;
+
+    fn get_json_schema_from_pydantic_object(&self, _response_format: &Value) -> Option<Value>;
+
+    fn is_thinking_enabled(&self, _params: &CallArguments) -> bool;
+
+    fn is_max_tokens_in_request(&self, _params: &CallArguments) -> bool;
+
+    fn update_optional_params_with_thinking_tokens(
+        &self,
+        _params: &CallArguments,
+        _optional_params: &Self::Params,
+    ) -> Result<Self::Params, TranslationError>;
+
+    fn should_fake_stream(&self, _params: &CallArguments) -> bool;
+
+    fn add_tools_to_optional_params(
+        &self,
+        _params: &CallArguments,
+        _tools: &[Value],
+    ) -> Result<Self::Params, TranslationError>;
+
+    fn translate_developer_role_to_system_role(
+        &self,
+        _messages: &[ChatMessage],
+    ) -> Result<Box<[ChatMessage]>, TranslationError>;
+
+    fn should_retry_llm_api_inside_llm_translation_on_http_error(
+        &self,
+        _response: ProviderResponse<'_>,
+        _arguments: &CallArguments,
+    ) -> bool;
+
+    fn transform_request_on_unprocessable_entity_error(
+        &self,
+        _response: ProviderResponse<'_>,
+        _request: &Self::ProviderRequest,
+    ) -> Result<Self::ProviderRequest, TranslationError>;
+
+    fn max_retry_on_unprocessable_entity_error(&self) -> usize;
+
+    fn get_supported_openai_params(&self, _provider: &ProviderIdentity) -> Box<[String]>;
+
+    fn add_response_format_to_tools(
+        &self,
+        _params: &CallArguments,
+        _response_format: &Value,
+    ) -> Result<Self::Params, TranslationError>;
+
+    fn map_openai_params(
+        &self,
+        _arguments: &CallArguments,
+        _provider: &ProviderIdentity,
+    ) -> Result<Self::Params, TranslationError>;
+
+    fn validate_environment(
+        &self,
+        _credentials: &Self::Credentials,
+        _arguments: &litellm_core_utils::call_arguments::CallArguments,
+        _headers: &[(String, String)],
+        _api_base: Option<&str>,
+        _params: &Self::Params,
+        _provider: &ProviderIdentity,
+    ) -> Result<Self::Environment, TranslationError>;
+
+    fn sign_request(
+        &self,
+        _request: reqwest::Request,
+        _environment: &Self::Environment,
+    ) -> Result<crate::base_llm::translation::SignedRequest, TranslationError>;
+
+    fn get_complete_url(
+        &self,
+        _api_base: Option<&str>,
+        _params: &Self::Params,
+        _provider: &ProviderIdentity,
+        _environment: &Self::Environment,
+    ) -> Result<String, TranslationError>;
+
+    fn transform_request(
+        &self,
+        _messages: &[ChatMessage],
+        _params: &Self::Params,
+        _provider: &ProviderIdentity,
+        _environment: &Self::Environment,
+    ) -> Result<Self::ProviderRequest, TranslationError>;
+
+    fn async_transform_request(
+        &self,
+        _messages: &[ChatMessage],
+        _params: &Self::Params,
+        _provider: &ProviderIdentity,
+        _environment: &Self::Environment,
+    ) -> impl std::future::Future<Output = Result<Self::ProviderRequest, TranslationError>> + Send;
+
+    fn transform_response(
+        &self,
+        _response: ProviderResponse<'_>,
+        _provider: &ProviderIdentity,
+    ) -> Result<ChatCompletionsResponse, TranslationError>;
+
+    fn transform_parsed_response_dict(
+        &self,
+        _response: Self::ParsedResponse,
+    ) -> Result<Self::ParsedResponse, TranslationError>;
+
+    fn get_error_class(
+        &self,
+        _error_message: &str,
+        _response: ProviderResponse<'_>,
+    ) -> TranslationError;
+
+    fn get_model_response_iterator(
+        &self,
+        _completion_stream: Self::StreamInput,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _params: &Self::Params,
+        _request: &Self::ProviderRequest,
+        _limits: crate::base_llm::translation::StreamLimits,
+    ) -> Result<Self::Decoder, crate::base_llm::translation::TranslationError>;
+
+    fn get_async_custom_stream_wrapper(
+        &self,
+        _completion_stream: Self::StreamInput,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _params: &Self::Params,
+        _request: &Self::ProviderRequest,
+        _limits: crate::base_llm::translation::StreamLimits,
+    ) -> impl std::future::Future<
+        Output = Result<Self::CustomStream, crate::base_llm::translation::TranslationError>,
+    > + Send;
+
+    fn get_sync_custom_stream_wrapper(
+        &self,
+        _completion_stream: Self::StreamInput,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _params: &Self::Params,
+        _request: &Self::ProviderRequest,
+        _limits: crate::base_llm::translation::StreamLimits,
+    ) -> Result<Self::CustomStream, crate::base_llm::translation::TranslationError>;
+
+    fn custom_llm_provider(&self) -> Option<&'static str>;
+
+    fn has_custom_stream_wrapper(&self) -> bool;
+
+    fn uses_async_transform_request(&self) -> bool;
+
+    fn supports_stream_param_in_request_body(&self) -> bool;
+
+    fn post_stream_processing(&self, _stream: Self::CustomStream) -> Self::CustomStream;
+
+    fn apply_assembled_streaming_response_metadata(
+        &self,
+        _response: ChatCompletionsResponse,
+    ) -> ChatCompletionsResponse;
+
+    fn calculate_additional_costs(
+        &self,
+        _model: &str,
+        _prompt_tokens: u64,
+        _completion_tokens: u64,
+    ) -> Option<Value>;
+
+    fn extension_policy(&self) -> ExtensionPolicy;
+
+    fn stream_decoder(
+        &self,
+        _provider: &ProviderIdentity,
+        _limits: StreamLimits,
+    ) -> Result<StreamTranslation<Self::Decoder>, TranslationError>;
+}
+
+macro_rules! scaffold_chat_translation_types {
+    () => {
+        pub enum Parameters {}
+        pub enum Credentials {}
+        pub enum Environment {}
+
+        #[derive(serde::Serialize)]
+        pub enum ProviderRequest {}
+
+        pub enum ProviderResponse {}
+        pub enum ProviderFrame {}
+        pub enum StreamInput {}
+        pub enum CustomStream {}
+
+        impl futures_util::Stream for CustomStream {
+            type Item = Result<
+                litellm_types::utils::ChatCompletionChunk,
+                crate::base_llm::translation::TranslationError,
+            >;
+
+            fn poll_next(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Self::Item>> {
+                todo!()
+            }
+        }
+
+        #[derive(Default)]
+        pub struct Decoder;
+
+        impl crate::base_llm::translation::SemanticDecoder for Decoder {
+            type Frame = ProviderFrame;
+            type Event = litellm_types::utils::ChatCompletionChunk;
+            type Completion = litellm_types::utils::ChatCompletionsResponse;
+
+            fn decode(
+                &mut self,
+                _frame: Self::Frame,
+            ) -> Result<
+                crate::base_llm::translation::StreamProgress<Self::Event, Self::Completion>,
+                crate::base_llm::translation::TranslationError,
+            > {
+                todo!()
+            }
+
+            fn end_of_input(
+                self,
+            ) -> Result<
+                crate::base_llm::base_model_iterator::StreamOutcome<Self::Completion>,
+                crate::base_llm::translation::TranslationError,
+            > {
+                todo!()
+            }
+        }
+    };
+}
+
+macro_rules! scaffold_chat_translation_config {
+    ($config:ident) => {
+        #[derive(Default)]
+        pub struct $config;
+
+        $crate::base_llm::chat::transformation::scaffold_chat_translation_config!(@existing $config);
+    };
+    (@existing $config:ident) => {
+        impl crate::base_llm::chat::transformation::BaseConfig for $config {
+            type Params = Parameters;
+            type StreamInput = StreamInput;
+            type CustomStream = CustomStream;
+            type ParsedResponse = ProviderResponse;
+            type Credentials = Credentials;
+            type Environment = Environment;
+            type ProviderRequest = ProviderRequest;
+            type Decoder = Decoder;
+
+    fn get_config(&self) -> std::collections::BTreeMap<String, serde_json::Value> {
+        todo!()
+    }
+
+    fn get_json_schema_from_pydantic_object(&self, _response_format: &serde_json::Value) -> Option<serde_json::Value> {
+        todo!()
+    }
+
+    fn is_thinking_enabled(&self, _params: &litellm_core_utils::call_arguments::CallArguments) -> bool {
+        todo!()
+    }
+
+    fn is_max_tokens_in_request(&self, _params: &litellm_core_utils::call_arguments::CallArguments) -> bool {
+        todo!()
+    }
+
+    fn update_optional_params_with_thinking_tokens(
+        &self,
+        _params: &litellm_core_utils::call_arguments::CallArguments,
+        _optional_params: &Self::Params,
+    ) -> Result<Self::Params, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn should_fake_stream(&self, _params: &litellm_core_utils::call_arguments::CallArguments) -> bool {
+        todo!()
+    }
+
+    fn add_tools_to_optional_params(
+        &self,
+        _params: &litellm_core_utils::call_arguments::CallArguments,
+        _tools: &[serde_json::Value],
+    ) -> Result<Self::Params, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn translate_developer_role_to_system_role(
+        &self,
+        _messages: &[litellm_types::llms::openai::ChatMessage],
+    ) -> Result<Box<[litellm_types::llms::openai::ChatMessage]>, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn should_retry_llm_api_inside_llm_translation_on_http_error(&self, _response: crate::base_llm::translation::ProviderResponse<'_>, _arguments: &litellm_core_utils::call_arguments::CallArguments) -> bool {
+        todo!()
+    }
+
+    fn transform_request_on_unprocessable_entity_error(
+        &self,
+        _response: crate::base_llm::translation::ProviderResponse<'_>,
+        _request: &Self::ProviderRequest,
+    ) -> Result<Self::ProviderRequest, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn max_retry_on_unprocessable_entity_error(&self) -> usize {
+        todo!()
+    }
+
+    fn get_supported_openai_params(&self, _provider: &crate::base_llm::translation::ProviderIdentity) -> Box<[String]> {
+        todo!()
+    }
+
+    fn add_response_format_to_tools(
+        &self,
+        _params: &litellm_core_utils::call_arguments::CallArguments,
+        _response_format: &serde_json::Value,
+    ) -> Result<Self::Params, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn map_openai_params(
+        &self,
+        _arguments: &litellm_core_utils::call_arguments::CallArguments,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+    ) -> Result<Self::Params, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn validate_environment(
+        &self,
+        _credentials: &Self::Credentials,
+        _arguments: &litellm_core_utils::call_arguments::CallArguments,
+        _headers: &[(String, String)],
+        _api_base: Option<&str>,
+        _params: &Self::Params,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+    ) -> Result<Self::Environment, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn sign_request(
+        &self,
+        _request: reqwest::Request,
+        _environment: &Self::Environment,
+    ) -> Result<crate::base_llm::translation::SignedRequest, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn get_complete_url(
+        &self,
+        _api_base: Option<&str>,
+        _params: &Self::Params,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _environment: &Self::Environment,
+    ) -> Result<String, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn transform_request(
+        &self,
+        _messages: &[litellm_types::llms::openai::ChatMessage],
+        _params: &Self::Params,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _environment: &Self::Environment,
+    ) -> Result<Self::ProviderRequest, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn async_transform_request(
+        &self,
+        _messages: &[litellm_types::llms::openai::ChatMessage],
+        _params: &Self::Params,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _environment: &Self::Environment,
+    ) -> impl std::future::Future<Output = Result<Self::ProviderRequest, crate::base_llm::translation::TranslationError>> + Send
+    {
+        async { todo!() }
+    }
+
+    fn transform_response(
+        &self,
+        _response: crate::base_llm::translation::ProviderResponse<'_>,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+    ) -> Result<litellm_types::utils::ChatCompletionsResponse, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn transform_parsed_response_dict(&self, _response: Self::ParsedResponse) -> Result<Self::ParsedResponse, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn get_error_class(&self, _error_message: &str, _response: crate::base_llm::translation::ProviderResponse<'_>) -> crate::base_llm::translation::TranslationError {
+        todo!()
+    }
+
+    fn get_model_response_iterator(
+        &self,
+        _completion_stream: Self::StreamInput,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _params: &Self::Params,
+        _request: &Self::ProviderRequest,
+        _limits: crate::base_llm::translation::StreamLimits,
+    ) -> Result<Self::Decoder, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn get_async_custom_stream_wrapper(
+        &self,
+        _completion_stream: Self::StreamInput,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _params: &Self::Params,
+        _request: &Self::ProviderRequest,
+        _limits: crate::base_llm::translation::StreamLimits,
+    ) -> impl std::future::Future<Output = Result<Self::CustomStream, crate::base_llm::translation::TranslationError>> + Send { async { todo!() } }
+
+    fn get_sync_custom_stream_wrapper(
+        &self,
+        _completion_stream: Self::StreamInput,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _params: &Self::Params,
+        _request: &Self::ProviderRequest,
+        _limits: crate::base_llm::translation::StreamLimits,
+    ) -> Result<Self::CustomStream, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+
+    fn custom_llm_provider(&self) -> Option<&'static str> {
+        todo!()
+    }
+
+    fn has_custom_stream_wrapper(&self) -> bool {
+        todo!()
+    }
+
+    fn uses_async_transform_request(&self) -> bool {
+        todo!()
+    }
+
+    fn supports_stream_param_in_request_body(&self) -> bool {
+        todo!()
+    }
+
+    fn post_stream_processing(&self, _stream: Self::CustomStream) -> Self::CustomStream {
+        todo!()
+    }
+
+    fn apply_assembled_streaming_response_metadata(
+        &self,
+        _response: litellm_types::utils::ChatCompletionsResponse,
+    ) -> litellm_types::utils::ChatCompletionsResponse {
+        todo!()
+    }
+
+    fn calculate_additional_costs(
+        &self,
+        _model: &str,
+        _prompt_tokens: u64,
+        _completion_tokens: u64,
+    ) -> Option<serde_json::Value> {
+        todo!()
+    }
+
+    fn extension_policy(&self) -> crate::base_llm::translation::ExtensionPolicy {
+        todo!()
+    }
+
+    fn stream_decoder(
+        &self,
+        _provider: &crate::base_llm::translation::ProviderIdentity,
+        _limits: crate::base_llm::translation::StreamLimits,
+    ) -> Result<crate::base_llm::translation::StreamTranslation<Self::Decoder>, crate::base_llm::translation::TranslationError> {
+        todo!()
+    }
+        }
+    };
+}
+
+pub(crate) use scaffold_chat_translation_config;
+pub(crate) use scaffold_chat_translation_types;

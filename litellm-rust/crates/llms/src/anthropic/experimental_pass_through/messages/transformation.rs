@@ -1,5 +1,5 @@
 use crate::base_llm::{
-    anthropic_messages::transformation::BaseAnthropicMessagesConfig, chat::transformation::Error,
+    anthropic_messages::transformation::MessagesExecutionConfig, chat::transformation::Error,
 };
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -11,7 +11,7 @@ pub struct AnthropicMessagesConfig;
 
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
-impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
+impl MessagesExecutionConfig for AnthropicMessagesConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -143,3 +143,5 @@ mod tests {
         );
     }
 }
+crate::base_llm::anthropic_messages::transformation::scaffold_messages_translation_types!();
+crate::base_llm::anthropic_messages::transformation::scaffold_messages_translation_config!(@existing AnthropicMessagesConfig);

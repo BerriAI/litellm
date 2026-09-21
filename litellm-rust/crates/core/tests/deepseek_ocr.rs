@@ -1,7 +1,7 @@
 use litellm_llms::{
     base_llm::ocr::transformation::{BaseOcrConfig, OcrDocument},
     vertex_ai::ocr::deepseek_transformation::{
-        DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig,
+        DeepSeekOcrParams, DeepSeekOcrResponse, VertexAiDeepSeekOcrConfig,
         normalize_response as transform_ocr_response,
     },
 };
@@ -24,7 +24,7 @@ fn request_mapping_matches_python(#[case] name: &str, #[case] value: Value) {
     let params: DeepSeekOcrParams =
         serde_json::from_value(json!({name: value.clone(), "ignored": true})).unwrap();
     let result = serde_json::to_value(
-        VertexAIDeepSeekOCRConfig
+        VertexAiDeepSeekOcrConfig
             .transform_ocr_request("deepseek-ai/deepseek-ocr-maas", document(), &params, &[])
             .unwrap(),
     )
@@ -47,7 +47,7 @@ fn request_maps_both_document_types_to_image_content(#[case] document: Value) {
         .or_else(|| document.get("document_url"))
         .unwrap()
         .clone();
-    let request = VertexAIDeepSeekOCRConfig
+    let request = VertexAiDeepSeekOcrConfig
         .transform_ocr_request(
             "deepseek-ai/deepseek-ocr-maas",
             serde_json::from_value(document).unwrap(),

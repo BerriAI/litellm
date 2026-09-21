@@ -1,6 +1,6 @@
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_llms::base_llm::anthropic_messages::transformation::{
-    BaseAnthropicMessagesConfig, MessagesAuthStrategy,
+    MessagesAuthStrategy, MessagesExecutionConfig,
 };
 use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 use serde_json::{Map, Value};
@@ -66,7 +66,7 @@ pub(super) fn prepare_provider_request(
 }
 
 fn validate_environment(
-    config: &dyn BaseAnthropicMessagesConfig,
+    config: &dyn MessagesExecutionConfig,
     extra_headers: Option<Map<String, Value>>,
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_llms::base_llm::chat::transformation::{BaseConfig, RequestAuth};
+use litellm_llms::base_llm::chat::transformation::{ChatExecutionConfig, RequestAuth};
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::{Map, Value};
 
@@ -23,7 +23,7 @@ pub struct ChatCompletionsRequest<'a> {
 
 pub struct ResolvedChatCompletionsRequest<'a> {
     pub model: String,
-    pub config: &'static dyn BaseConfig,
+    pub config: &'static dyn ChatExecutionConfig,
     pub messages: Vec<ChatMessage>,
     pub optional_params: Map<String, Value>,
     pub api_key: Option<&'a str>,
@@ -34,7 +34,7 @@ pub struct ResolvedChatCompletionsRequest<'a> {
 
 pub struct ProviderChatCompletionsRequest {
     pub model: String,
-    pub config: &'static dyn BaseConfig,
+    pub config: &'static dyn ChatExecutionConfig,
     pub url: String,
     pub body: Value,
     pub upstream_headers: Vec<(String, String)>,

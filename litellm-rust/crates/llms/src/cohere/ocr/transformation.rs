@@ -337,7 +337,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::azure_ai::ocr::cohere_parse_transformation::AzureAICohereParseConfig;
+    use crate::azure_ai::ocr::cohere_parse_transformation::AzureAiCohereParseConfig;
 
     #[rstest]
     #[case::cohere(false)]
@@ -348,7 +348,7 @@ mod tests {
         }))
         .unwrap();
         let mapped = if azure {
-            AzureAICohereParseConfig.map_ocr_params(&arguments, "parse")
+            AzureAiCohereParseConfig.map_ocr_params(&arguments, "parse")
         } else {
             CohereParseConfig.map_ocr_params(&arguments, "parse")
         }

@@ -17,9 +17,9 @@ use crate::{
 };
 
 #[derive(Default)]
-pub struct AzureAICohereParseConfig;
+pub struct AzureAiCohereParseConfig;
 
-impl BaseOcrConfig for AzureAICohereParseConfig {
+impl BaseOcrConfig for AzureAiCohereParseConfig {
     type OcrParams = CohereOptions;
     type ProviderRequest = CohereRequest;
     type Environment = Vec<(String, String)>;
@@ -114,7 +114,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
     }
 }
 
-impl AzureAICohereParseConfig {
+impl AzureAiCohereParseConfig {
     fn get_complete_url(&self, base: &str) -> Result<String, Error> {
         let mut url = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
         if !matches!(url.scheme(), "http" | "https") {
@@ -152,20 +152,20 @@ mod tests {
             "/providers/cohere/v2/parse",
         ] {
             assert_eq!(
-                AzureAICohereParseConfig
+                AzureAiCohereParseConfig
                     .get_complete_url(&format!("https://example.com{suffix}?tenant=a"))
                     .unwrap(),
                 "https://example.com/providers/cohere/v2/parse?tenant=a"
             );
         }
         assert_eq!(
-            AzureAICohereParseConfig
+            AzureAiCohereParseConfig
                 .get_complete_url("https://example.com/v2/parse?tenant=a")
                 .unwrap(),
             "https://example.com/v2/parse?tenant=a"
         );
         assert!(
-            AzureAICohereParseConfig
+            AzureAiCohereParseConfig
                 .get_complete_url("relative/path")
                 .is_err()
         );

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_llms::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
+use litellm_llms::base_llm::anthropic_messages::transformation::MessagesExecutionConfig;
 use serde_json::{Map, Value};
 
 pub struct MessagesRequest<'a> {
@@ -16,7 +16,7 @@ pub struct MessagesRequest<'a> {
 pub struct ProviderMessagesRequest {
     pub provider: String,
     pub model: String,
-    pub config: &'static dyn BaseAnthropicMessagesConfig,
+    pub config: &'static dyn MessagesExecutionConfig,
     pub url: String,
     pub body: Value,
     pub upstream_headers: Vec<(String, String)>,

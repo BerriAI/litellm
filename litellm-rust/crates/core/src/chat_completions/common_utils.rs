@@ -1,7 +1,7 @@
 use litellm_http::request::string_headers as shared_string_headers;
 use litellm_llms::{
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
-    base_llm::chat::transformation::BaseConfig,
+    base_llm::chat::transformation::ChatExecutionConfig,
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -10,7 +10,9 @@ use super::Error;
 
 const HEADER_CONTEXT: &str = "chat completions";
 
-pub(super) fn chat_completions_provider_config(provider: &str) -> Option<&'static dyn BaseConfig> {
+pub(super) fn chat_completions_provider_config(
+    provider: &str,
+) -> Option<&'static dyn ChatExecutionConfig> {
     match provider {
         "anthropic" => Some(&ANTHROPIC_CHAT_COMPLETIONS_CONFIG),
         "bedrock" => Some(&BEDROCK_CHAT_COMPLETIONS_CONFIG),

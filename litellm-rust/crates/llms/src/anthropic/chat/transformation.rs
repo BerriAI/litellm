@@ -16,7 +16,7 @@ use crate::{
         },
     },
     base_llm::chat::transformation::{
-        BaseConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth,
+        ChatExecutionConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth,
         Unsupported, unsupported_message, unsupported_param,
     },
 };
@@ -42,7 +42,7 @@ pub struct AnthropicConfig;
 
 pub const ANTHROPIC_CHAT_COMPLETIONS_CONFIG: AnthropicConfig = AnthropicConfig;
 
-impl BaseConfig for AnthropicConfig {
+impl ChatExecutionConfig for AnthropicConfig {
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }
@@ -181,6 +181,9 @@ impl BaseConfig for AnthropicConfig {
             })
     }
 }
+
+crate::base_llm::chat::transformation::scaffold_chat_translation_types!();
+crate::base_llm::chat::transformation::scaffold_chat_translation_config!(@existing AnthropicConfig);
 
 fn text_block(text: &str) -> Value {
     json!({"type": "text", "text": text})

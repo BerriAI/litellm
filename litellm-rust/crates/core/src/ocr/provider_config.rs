@@ -5,7 +5,7 @@ use litellm_llms::{
         transformation::TextractDetectTextConfig,
     },
     azure_ai::ocr::{
-        cohere_parse_transformation::AzureAICohereParseConfig,
+        cohere_parse_transformation::AzureAiCohereParseConfig,
         document_intelligence::transformation::AzureDocumentIntelligenceOcrConfig,
         transformation::AzureAiOcrConfig,
     },
@@ -21,7 +21,7 @@ use litellm_llms::{
     mistral::ocr::transformation::MistralOcrConfig,
     reducto::ocr::transformation::{ReductoParseLegacyConfig, ReductoParseV3Config},
     vertex_ai::ocr::{
-        deepseek_transformation::VertexAIDeepSeekOCRConfig, transformation::VertexAiOcrConfig,
+        deepseek_transformation::VertexAiDeepSeekOcrConfig, transformation::VertexAiOcrConfig,
     },
 };
 use strum::{EnumString, IntoStaticStr};
@@ -50,7 +50,7 @@ macro_rules! with_config {
                 $body
             }
             OcrConfigKind::AzureCohere => {
-                let $config = AzureAICohereParseConfig;
+                let $config = AzureAiCohereParseConfig;
                 $body
             }
             OcrConfigKind::AzureDocumentIntelligence => {
@@ -70,7 +70,7 @@ macro_rules! with_config {
                 $body
             }
             OcrConfigKind::VertexDeepSeek => {
-                let $config = VertexAIDeepSeekOCRConfig;
+                let $config = VertexAiDeepSeekOcrConfig;
                 $body
             }
         }

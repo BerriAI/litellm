@@ -17,8 +17,8 @@ use litellm_types::{
 use serde_json::{Map, Value, json};
 
 use crate::base_llm::chat::transformation::{
-    BaseConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth, Unsupported,
-    unsupported_message, unsupported_param,
+    ChatExecutionConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth,
+    Unsupported, unsupported_message, unsupported_param,
 };
 
 /// Converse parameter names, post `map_openai_params`, that the Rust path can
@@ -59,7 +59,7 @@ pub struct AmazonConverseConfig;
 
 pub const BEDROCK_CHAT_COMPLETIONS_CONFIG: AmazonConverseConfig = AmazonConverseConfig;
 
-impl BaseConfig for AmazonConverseConfig {
+impl ChatExecutionConfig for AmazonConverseConfig {
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }
@@ -253,6 +253,9 @@ impl BaseConfig for AmazonConverseConfig {
         })
     }
 }
+
+crate::base_llm::chat::transformation::scaffold_chat_translation_types!();
+crate::base_llm::chat::transformation::scaffold_chat_translation_config!(@existing AmazonConverseConfig);
 
 fn converse_body(conversation: &Conversation, optional_params: &Map<String, Value>) -> Value {
     let messages: Vec<Value> = conversation

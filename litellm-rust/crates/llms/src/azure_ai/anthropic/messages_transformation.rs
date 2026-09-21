@@ -11,7 +11,7 @@ use crate::{
         ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
     },
     base_llm::{
-        anthropic_messages::transformation::{BaseAnthropicMessagesConfig, MessagesAuthStrategy},
+        anthropic_messages::transformation::{MessagesAuthStrategy, MessagesExecutionConfig},
         chat::transformation::Error,
     },
 };
@@ -32,7 +32,7 @@ pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
         anthropic: ANTHROPIC_MESSAGES_CONFIG,
     };
 
-impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
+impl MessagesExecutionConfig for AzureAnthropicMessagesConfig {
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -522,3 +522,5 @@ mod tests {
         assert_eq!(value["content"][0]["text"], json!("hello"));
     }
 }
+crate::base_llm::anthropic_messages::transformation::scaffold_messages_translation_types!();
+crate::base_llm::anthropic_messages::transformation::scaffold_messages_translation_config!(@existing AzureAnthropicMessagesConfig);

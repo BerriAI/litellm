@@ -3,7 +3,7 @@ pub(super) use litellm_http::request::{has_bearer_auth, has_header, truncate_err
 use litellm_llms::{
     anthropic::experimental_pass_through::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::anthropic::messages_transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
-    base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
+    base_llm::anthropic_messages::transformation::MessagesExecutionConfig,
 };
 use serde_json::{Map, Value};
 
@@ -13,7 +13,7 @@ const HEADER_CONTEXT: &str = "messages";
 
 pub(super) fn messages_provider_config(
     provider: &str,
-) -> Option<&'static dyn BaseAnthropicMessagesConfig> {
+) -> Option<&'static dyn MessagesExecutionConfig> {
     match provider {
         "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
         "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),

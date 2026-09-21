@@ -1,6 +1,6 @@
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_http::request::has_header;
-use litellm_llms::base_llm::chat::transformation::{BaseConfig, RequestAuth};
+use litellm_llms::base_llm::chat::transformation::{ChatExecutionConfig, RequestAuth};
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::Value;
 
@@ -15,7 +15,7 @@ use crate::chat_completions::types::{
 pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
-) -> Result<(String, &'static dyn BaseConfig), Error> {
+) -> Result<(String, &'static dyn ChatExecutionConfig), Error> {
     let provider_info = get_custom_llm_provider(model, custom_llm_provider)
         .or_else(|| {
             custom_llm_provider.map(|provider| CustomLlmProvider {
@@ -66,7 +66,7 @@ pub(super) fn resolve_request(
 fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
-    config: &dyn BaseConfig,
+    config: &dyn ChatExecutionConfig,
 ) -> Result<(Vec<(String, String)>, RequestAuth), Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
     let mut headers = string_headers(request.extra_headers.clone())?;

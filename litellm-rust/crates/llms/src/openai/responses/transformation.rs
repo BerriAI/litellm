@@ -49,3 +49,5 @@ mod tests {
         assert!(OPENAI_RESPONSES_WS_CONFIG.supports_native_websocket());
     }
 }
+crate::base_llm::responses::transformation::scaffold_responses_translation_types!();
+crate::base_llm::responses::transformation::scaffold_responses_translation_config!(@existing OpenAiResponsesApiConfig);
