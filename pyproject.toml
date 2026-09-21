@@ -15,6 +15,7 @@ dependencies = [
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
     "fastuuid>=0.14.0,<1.0",
+    "filelock>=3.16.1,<4.0",
     "httpx[http2]>=0.28.0,<1.0",
     "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",

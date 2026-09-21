@@ -23,6 +23,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import click
+from filelock import FileLock
 from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
@@ -309,6 +310,13 @@ def statusline_command(script_path: Path, platform: str = sys.platform) -> str:
     return " ".join(quote(token) for token in (sys.executable, str(script_path)))
 
 
+def _statusline_version(value: str) -> Version | None:
+    try:
+        return Version(value)
+    except InvalidVersion:
+        return None
+
+
 def _installed_statusline_version(target: Path) -> Version | None:
     try:
         with target.open("rb") as script:
@@ -318,28 +326,39 @@ def _installed_statusline_version(target: Path) -> Version | None:
     if not header.startswith(STATUSLINE_VERSION_PREFIX):
         return None
     try:
-        return Version(header.removeprefix(STATUSLINE_VERSION_PREFIX).decode("ascii").strip())
-    except (InvalidVersion, UnicodeDecodeError):
+        return _statusline_version(header.removeprefix(STATUSLINE_VERSION_PREFIX).decode("ascii").strip())
+    except UnicodeDecodeError:
         return None
 
 
-def install_statusline_script(script_path: Path | None = None, *, package_version: str = litellm_version) -> str:
+def install_statusline_script(
+    script_path: Path | None = None,
+    *,
+    package_version: str = litellm_version,
+    write: Callable[[str, bytes], None] = write_private_bytes,
+) -> str:
     target: Final = script_path or STATUSLINE_SCRIPT_PATH
     try:
         ensure_private_dir(target.parent)
-        bundled_version: Final = Version(package_version)
-        installed_version: Final = _installed_statusline_version(target)
-        if installed_version is not None and installed_version > bundled_version:
-            click.echo(
-                f"Keeping the status line from LiteLLM {installed_version}; this CLI is {bundled_version}. "
-                "Upgrade the CLI to refresh it.",
-                err=True,
+        bundled_version: Final = _statusline_version(package_version)
+        with FileLock(str(target) + ".lock", timeout=10, mode=0o600):
+            installed_version: Final = _installed_statusline_version(target)
+            if installed_version is not None and (bundled_version is None or installed_version > bundled_version):
+                cli_version: Final = str(bundled_version) if bundled_version is not None else "unknown"
+                click.echo(
+                    f"Keeping the status line from LiteLLM {installed_version}; this CLI is {cli_version}. "
+                    "Upgrade the CLI to refresh it.",
+                    err=True,
+                )
+                return statusline_command(target)
+            source: Final = Path(statusline_script.__file__).read_bytes()
+            header: Final = (
+                STATUSLINE_VERSION_PREFIX + str(bundled_version).encode("ascii") + b"\n"
+                if bundled_version is not None
+                else b""
             )
-            return statusline_command(target)
-        source: Final = Path(statusline_script.__file__).read_bytes()
-        header: Final = STATUSLINE_VERSION_PREFIX + str(bundled_version).encode("ascii") + b"\n"
-        write_private_bytes(str(target), header + source)
-    except (OSError, InvalidVersion) as e:
+            write(str(target), header + source)
+    except OSError as e:
         raise ClaudeSettingsError(f"Could not install the status line script at {target}: {e}") from e
     return statusline_command(target)
 
