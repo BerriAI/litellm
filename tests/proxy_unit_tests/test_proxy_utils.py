@@ -1112,7 +1112,6 @@ def test_settings_store_preserves_yaml_team_configuration_when_db_value_is_null(
         },
         "param_name": "litellm_settings",
         "db_param_value": {
-            "telemetry": False,
             "drop_params": True,
             "num_retries": 5,
             "request_timeout": 600,
