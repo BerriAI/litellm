@@ -3,7 +3,6 @@
 import React, { useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Info } from "lucide-react";
 
-import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -81,7 +80,7 @@ const SortableHead = ({
 };
 
 const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
-  const { dateValue, onDateChange, results, loading, isFetchingMore } = activity;
+  const { results, loading, isFetchingMore, apiKeyTruncation } = activity;
   const [dimension, setDimension] = useState<CacheLeakageDimension>("key");
   const [sort, setSort] = useState<SortState>({ column: "potentialSavings", dir: "desc" });
   const leakage = useMemo(() => computeCacheLeakage(results, dimension), [results, dimension]);
@@ -111,9 +110,6 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
                 cached token, after cache-write premiums.
               </p>
             </div>
-            <div className="shrink-0">
-              <AdvancedDatePicker value={dateValue} onValueChange={onDateChange} />
-            </div>
           </div>
           <Tabs value={dimension} onValueChange={(value) => setDimension(value === "model" ? "model" : "key")}>
             <TabsList>
@@ -123,6 +119,13 @@ const CacheLeakageCard: React.FC<CacheLeakageCardProps> = ({ activity }) => {
           </Tabs>
         </CardHeader>
         <CardContent>
+          {dimension === "key" && apiKeyTruncation !== undefined && (
+            <p className="mb-2 text-sm text-muted-foreground" role="note">
+              Only the {apiKeyTruncation.limit.toLocaleString()} highest-spend keys of{" "}
+              {apiKeyTruncation.total.toLocaleString()} are loaded, so a lower-spend key that leaks more is not listed
+              here. Raise USAGE_TOP_API_KEYS_LIMIT on the proxy to load more keys.
+            </p>
+          )}
           {rows.length > 0 && isFetchingMore && (
             <p className="mb-2 text-sm text-muted-foreground">
               Data is still loading; rows and totals will update as the rest of the range arrives.

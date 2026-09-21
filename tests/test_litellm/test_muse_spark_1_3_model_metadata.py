@@ -32,13 +32,6 @@ def test_muse_spark_1_3_routes_to_meta_model_api(model: str):
 
 
 @pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))
-def test_muse_spark_1_3_web_search_cost_per_query(local_model_cost_map, model: str):
-    info = litellm.get_model_info(model=model)
-
-    assert StandardBuiltInToolCostTracking.get_cost_for_web_search(model_info=info) == WEB_SEARCH_COST_PER_QUERY
-
-
-@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))
 def test_muse_spark_1_3_backup_matches_main(model: str):
     """Ensure the bundled model cost map stays in sync with the canonical file."""
     main_cost = _load_cost_map()

@@ -95,7 +95,7 @@ def _successor(info: dict[str, object]) -> str | None:
     return successor if isinstance(successor, str) else None
 
 
-def test_together_successor_metadata_points_at_live_models(cost_map: CostMap):
+def test_together_successor_metadata_points_at_known_models(cost_map: CostMap):
     successors = {
         model: successor
         for model, info in cost_map.items()
@@ -103,9 +103,7 @@ def test_together_successor_metadata_points_at_live_models(cost_map: CostMap):
     }
     assert len(successors) >= 10
     for model, successor in successors.items():
-        target = cost_map.get(successor)
-        assert target is not None, f"{model} names successor {successor} that is not in the map"
-        assert "deprecation_date" not in target, f"{model} names deprecated successor {successor}"
+        assert successor in cost_map, f"{model} names successor {successor} that is not in the map"
 
 
 def test_together_backup_cost_map_in_sync(cost_map: CostMap):

@@ -150,7 +150,11 @@ def get_default_headers() -> dict:
     if user_agent is not None:
         return {"User-Agent": user_agent}
 
-    return {"User-Agent": f"litellm/{version}"}
+    return {"User-Agent": default_user_agent()}
+
+
+def default_user_agent() -> str:
+    return f"litellm/{version}"
 
 
 # Initialize headers (User-Agent)

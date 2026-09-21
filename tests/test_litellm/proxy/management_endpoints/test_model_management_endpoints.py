@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
+from litellm.models.credentials import CredentialItem
 
 from litellm.proxy._types import (
     LiteLLM_ModelTable,
@@ -17,6 +18,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
+    ProxyException,
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
@@ -27,6 +29,8 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _raise_if_rate_limits_required_but_missing,
     clear_cache,
     delete_team_models,
+    patch_model,
+    update_model,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
@@ -303,6 +307,62 @@ class TestModelManagementAuthChecks:
             user_api_key_dict=self.team_admin_user,
             existing_litellm_params=LiteLLM_Params(model="test_model", litellm_credential_name="shared-credential"),
         )
+        assert result is True
+
+    def test_can_user_attach_credential_non_admin_explicit_null_clear_fails(self):
+        from litellm.proxy._types import ProxyException
+        from litellm.types.router import updateLiteLLMParams as litellm_params
+
+        with pytest.raises(ProxyException) as exc_info:
+            ModelManagementAuthChecks.can_user_attach_credential(
+                litellm_params=litellm_params(litellm_credential_name=None),
+                user_api_key_dict=self.team_admin_user,
+                existing_litellm_params=LiteLLM_Params(
+                    model="test_model", litellm_credential_name="shared-credential"
+                ),
+                null_detaches=True,
+            )
+
+        assert exc_info.value.code == "403"
+        assert exc_info.value.param == "litellm_credential_name"
+
+    def test_can_user_attach_credential_admin_explicit_null_clear_succeeds(self):
+        from litellm.types.router import updateLiteLLMParams as litellm_params
+
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=litellm_params(litellm_credential_name=None),
+            user_api_key_dict=self.admin_user,
+            existing_litellm_params=LiteLLM_Params(
+                model="test_model", litellm_credential_name="shared-credential"
+            ),
+            null_detaches=True,
+        )
+
+        assert result is True
+
+    def test_can_user_attach_credential_null_without_existing_allows_any_role(self):
+        from litellm.types.router import updateLiteLLMParams as litellm_params
+
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=litellm_params(litellm_credential_name=None),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=LiteLLM_Params(model="test_model"),
+            null_detaches=True,
+        )
+
+        assert result is True
+
+    def test_can_user_attach_credential_null_is_noop_when_null_does_not_detach(self):
+        from litellm.types.router import updateLiteLLMParams as litellm_params
+
+        result = ModelManagementAuthChecks.can_user_attach_credential(
+            litellm_params=litellm_params(litellm_credential_name=None),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=LiteLLM_Params(
+                model="test_model", litellm_credential_name="shared-credential"
+            ),
+        )
+
         assert result is True
 
     def test_can_user_attach_credential_unchanged_encrypted_existing_allows_any_role(self, monkeypatch):
@@ -1245,6 +1305,60 @@ class TestUpdateModel:
 
             mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
             mock_clear_cache.assert_awaited_once_with()
+
+    @pytest.mark.asyncio
+    async def test_update_model_legacy_null_credential_name_is_not_a_detach_for_non_admin(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_model
+
+        model_id = "legacy-null-credential"
+        existing = Deployment(
+            model_name="legacy-model",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", litellm_credential_name="shared-credential"),
+            model_info={"id": model_id},
+        )
+        existing_row = MagicMock()
+        existing_row.litellm_params = existing.litellm_params.model_dump()
+        existing_row.model_dump.return_value = existing.model_dump()
+        updated_row = MagicMock()
+        updated_row.model_dump_json.return_value = "{}"
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(return_value=updated_row)
+        mock_router = MagicMock()
+        mock_router.get_model_ids.return_value = [model_id]
+        team_admin = UserAPIKeyAuth(user_id="team-admin", user_role=LitellmUserRoles.INTERNAL_USER)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value: value,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+        ):
+            await update_model(
+                model_params=updateDeployment(
+                    litellm_params=updateLiteLLMParams(
+                        model="openai/gpt-4o-mini", litellm_credential_name=None
+                    ),
+                    model_info=ModelInfo(id=model_id),
+                ),
+                user_api_key_dict=team_admin,
+            )
+
+        mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
+        persisted = json.loads(mock_prisma.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"])
+        assert persisted["litellm_credential_name"] == "shared-credential"
 
 
 class TestUpdatePublicModelGroups:
@@ -3709,6 +3823,91 @@ class TestModelInfoServerDerivedPricingFilter:
             assert field not in info, f"{field} was persisted as a per-deployment override"
             assert field not in params
 
+    def test_echoed_pricing_overrides_report_is_not_persisted(self):
+        """LIT-8064. `/model/info` reports which pricing fields a deployment overrides; a
+        client echoing that response back must not store the report as a field."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="dep-report-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-report-0", access_groups=["prod"], pricing_overrides=[]),
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert "pricing_overrides" not in info
+
+    def test_a_row_pinned_before_1_102_drops_its_cost_map_copy_on_its_next_save(self, monkeypatch: pytest.MonkeyPatch):
+        """LIT-8064. A stored ``model_info`` carrying ``key`` is a ``/model/info`` response an old
+        UI wrote back, so its pricing is the cost map of that day. The next edit of the row, here
+        only its reasoning level, leaves that copy behind and keeps everything the operator set."""
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-lit8064-heal-on-save")
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6", reasoning_effort="medium"),
+            model_info=ModelInfo(
+                id="dep-pinned-0",
+                key="gpt-5.6",
+                mode="chat",
+                access_groups=["prod"],
+                input_cost_per_token=4e-06,
+                output_cost_per_token=2e-05,
+                cache_read_input_token_cost_above_272k_tokens=8e-07,
+            ),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(reasoning_effort="low")),
+        )
+
+        info = json.loads(result["model_info"])
+        params = json.loads(result["litellm_params"])
+        assert decrypt_value_helper(value=params["reasoning_effort"], key="reasoning_effort") == "low"
+        assert (info["key"], info["mode"], info["access_groups"]) == ("gpt-5.6", "chat", ["prod"])
+        for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost_above_272k_tokens"):
+            assert field not in info, f"{field} still pins the row to the cost map of the day it was saved"
+            assert field not in params
+
+    def test_a_litellm_params_price_survives_the_cost_map_copy_being_dropped(self):
+        """The price an operator typed on ``litellm_params`` is the override the customer asked
+        for, so dropping the echoed ``model_info`` copy must leave it in place."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6", input_cost_per_token=3e-06),
+            model_info=ModelInfo(id="dep-typed-0", key="gpt-5.6", input_cost_per_token=3e-06),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(id="dep-typed-0", access_groups=["prod"])),
+        )
+
+        assert json.loads(result["litellm_params"])["input_cost_per_token"] == 3e-06
+        assert json.loads(result["model_info"])["access_groups"] == ["prod"]
+
     def test_tiered_above_threshold_pricing_is_dropped(self):
         """Tiered rates ride `get_model_info` on a pattern match and are declared on no
         model, so a filter built only from the declared pricing fields would miss them."""
@@ -3862,6 +4061,449 @@ class TestModelInfoServerDerivedPricingFilter:
         assert "input_cost_per_token" not in written
         assert written["id"] == model_id, "filtering must not mint a fresh deployment id"
         assert written["access_groups"] == ["prod"]
+
+
+class TestUpdateDBModelClearCacheControlInjectionPoints:
+    def test_explicit_null_removes_stored_injection_points(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import LiteLLM_Params, ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="haiku-cached",
+            litellm_params=LiteLLM_Params(
+                model="anthropic/claude-haiku-4-5",
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            ),
+            model_info=ModelInfo(id="dep-cache-0"),
+        )
+        patch = updateDeployment(
+            litellm_params=updateLiteLLMParams(cache_control_injection_points=None)
+        )
+
+        result = update_db_model(db_model=db_model, updated_patch=patch)
+
+        params = json.loads(result["litellm_params"])
+        assert "cache_control_injection_points" not in params
+        assert params["model"] == "anthropic/claude-haiku-4-5"
+
+    def test_omitted_key_keeps_stored_injection_points(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import LiteLLM_Params, ModelInfo, updateLiteLLMParams
+
+        db_model = Deployment(
+            model_name="haiku-cached",
+            litellm_params=LiteLLM_Params(
+                model="anthropic/claude-haiku-4-5",
+                cache_control_injection_points=[{"location": "message", "role": "system"}],
+            ),
+            model_info=ModelInfo(id="dep-cache-0"),
+        )
+        patch = updateDeployment(litellm_params=updateLiteLLMParams(tpm=10))
+
+        result = update_db_model(db_model=db_model, updated_patch=patch)
+
+        params = json.loads(result["litellm_params"])
+        assert params["cache_control_injection_points"] == [{"location": "message", "role": "system"}]
+        assert params["tpm"] == 10
+
+
+class TestUpdateDBModelClearCredentialName:
+    def test_explicit_null_removes_stored_credential_name(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                api_key="sk-real",
+                tpm=100,
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1", team_id="team-keep", access_groups=["prod"]),
+        )
+        update_patch: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(litellm_credential_name=None)
+        )
+
+        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+            result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
+
+        params: Final = json.loads(result["litellm_params"])
+        info: Final = json.loads(result["model_info"])
+        assert "litellm_credential_name" not in params
+        assert params["model"] == "openai/gpt-4o"
+        assert params["api_base"] == "https://api.openai.com/v1"
+        assert params["api_key"] == "sk-real"
+        assert params["tpm"] == 100
+        assert info["team_id"] == "team-keep"
+        assert info["access_groups"] == ["prod"]
+
+    def test_omitted_credential_name_keeps_stored_association(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                api_key="sk-real",
+                tpm=100,
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1", team_id="team-keep", access_groups=["prod"]),
+        )
+        update_patch: Final = updateDeployment(litellm_params=updateLiteLLMParams(tpm=10))
+
+        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+            result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
+
+        params: Final = json.loads(result["litellm_params"])
+        assert params["litellm_credential_name"] == "shared-credential"
+        assert params["tpm"] == 10
+
+    def test_null_clear_on_model_without_credential_is_noop(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o", api_base="https://api.openai.com/v1"),
+            model_info=ModelInfo(id="dep-cred-1", team_id="team-keep", access_groups=["prod"]),
+        )
+        update_patch: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(litellm_credential_name=None)
+        )
+
+        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+            result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
+
+        params: Final = json.loads(result["litellm_params"])
+        assert "litellm_credential_name" not in params
+        assert params["model"] == "openai/gpt-4o"
+        assert params["api_base"] == "https://api.openai.com/v1"
+
+    def test_null_credential_clear_alongside_pricing_clear(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                input_cost_per_token=0.000001,
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1", input_cost_per_token=0.000001),
+        )
+        update_patch: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(
+                litellm_credential_name=None,
+                input_cost_per_token=None,
+            )
+        )
+
+        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+            result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
+
+        params: Final = json.loads(result["litellm_params"])
+        info: Final = json.loads(result["model_info"])
+        assert "litellm_credential_name" not in params
+        assert "input_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+
+    def test_replace_credential_name_keeps_other_params(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                api_key="sk-real",
+                tpm=100,
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1", team_id="team-keep", access_groups=["prod"]),
+        )
+        update_patch: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(litellm_credential_name="other-credential")
+        )
+
+        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+            result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
+
+        params: Final = json.loads(result["litellm_params"])
+        assert params["litellm_credential_name"] == "other-credential"
+        assert params["api_base"] == "https://api.openai.com/v1"
+        assert params["api_key"] == "sk-real"
+        assert params["tpm"] == 100
+
+
+class TestPatchModelCredentialName:
+    @staticmethod
+    async def _patch_model(
+        monkeypatch,
+        db_model: Deployment,
+        user_api_key_dict: UserAPIKeyAuth,
+        credential_name: str | None,
+        db_credential: CredentialItem | None = None,
+        credentials_repository: MagicMock | None = None,
+    ) -> list[dict[str, object]]:
+        import litellm
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_db_model
+
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="shared-credential",
+                    credential_info={},
+                    credential_values={"api_key": "sk-shared"},
+                ),
+                CredentialItem(
+                    credential_name="other-credential",
+                    credential_info={},
+                    credential_values={"api_key": "sk-other"},
+                ),
+            ],
+        )
+        credentials_repository = credentials_repository or MagicMock()
+        credentials_repository.find_by_name = AsyncMock(return_value=db_credential)
+        persisted: Final[list[dict[str, object]]] = []
+
+        async def persist_model(**kwargs):
+            row: Final = update_db_model(db_model=kwargs["db_model"], updated_patch=kwargs["patch_data"])
+            persisted.append(row)
+            updated_row: Final = MagicMock()
+            updated_row.model_dump_json.return_value = "{}"
+            return updated_row
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.CredentialsRepository",
+                return_value=credentials_repository,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
+                new=AsyncMock(return_value=db_model),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints._update_team_model_in_db",
+                new=AsyncMock(side_effect=persist_model),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                side_effect=lambda value, **kwargs: value,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.raise_if_reload_degraded_serving"
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.create_object_audit_log",
+                new=AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.live_model_ids_snapshot",
+                return_value=frozenset(),
+            ),
+        ):
+            await patch_model(
+                model_id="dep-cred-1",
+                patch_data=updateDeployment(
+                    litellm_params=updateLiteLLMParams(litellm_credential_name=credential_name)
+                ),
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        return persisted
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rejects_empty_string_credential_name(self, monkeypatch):
+        from litellm.proxy._types import ProxyException
+
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._patch_model(
+                monkeypatch,
+                db_model,
+                self._admin_user(),
+                "",
+            )
+
+        assert exc_info.value.code == "400"
+        assert exc_info.value.param == "litellm_credential_name"
+        assert "empty" in exc_info.value.message.lower()
+
+    @staticmethod
+    def _admin_user() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    @staticmethod
+    def _team_admin_user() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id="team-admin", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team-keep")
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rejects_unknown_credential_name(self, monkeypatch):
+        from litellm.proxy._types import ProxyException
+
+        credentials_repository = MagicMock()
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._patch_model(
+                monkeypatch,
+                db_model,
+                self._admin_user(),
+                "ghost-credential",
+                credentials_repository=credentials_repository,
+            )
+
+        assert exc_info.value.code == "400"
+        assert "not found" in exc_info.value.message.lower()
+        credentials_repository.find_by_name.assert_awaited_once_with("ghost-credential")
+
+    @pytest.mark.asyncio
+    async def test_patch_model_accepts_credential_known_only_in_db(self, monkeypatch):
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        persisted: Final = await self._patch_model(
+            monkeypatch,
+            db_model,
+            self._admin_user(),
+            "db-only-credential",
+            db_credential=CredentialItem(
+                credential_name="db-only-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-db"},
+            ),
+        )
+        params: Final = json.loads(persisted[0]["litellm_params"])
+        assert params["litellm_credential_name"] == "db-only-credential"
+
+    @pytest.mark.asyncio
+    async def test_patch_model_replaces_credential_name_and_preserves_other_params(self, monkeypatch):
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        persisted: Final = await self._patch_model(monkeypatch, db_model, self._admin_user(), "other-credential")
+        params: Final = json.loads(persisted[0]["litellm_params"])
+        assert params["litellm_credential_name"] == "other-credential"
+        assert params["api_base"] == "https://api.openai.com/v1"
+
+    @pytest.mark.asyncio
+    async def test_patch_model_admin_null_clear_persists_without_credential(self, monkeypatch):
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        persisted: Final = await self._patch_model(monkeypatch, db_model, self._admin_user(), None)
+        params: Final = json.loads(persisted[0]["litellm_params"])
+        assert "litellm_credential_name" not in params
+        assert params["api_base"] == "https://api.openai.com/v1"
+
+    @pytest.mark.asyncio
+    async def test_patch_model_rejects_non_admin_explicit_null_clear(self, monkeypatch):
+        from litellm.proxy._types import ProxyException
+
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await self._patch_model(monkeypatch, db_model, self._team_admin_user(), None)
+
+        assert exc_info.value.code == "403"
+        assert exc_info.value.param == "litellm_credential_name"
+
+    @pytest.mark.asyncio
+    async def test_patch_model_clear_then_reattach_round_trip(self, monkeypatch):
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        cleared: Final = await self._patch_model(monkeypatch, db_model, self._admin_user(), None)
+        cleared_model: Final = Deployment.model_validate(
+            {
+                "model_name": db_model.model_name,
+                "litellm_params": json.loads(cleared[0]["litellm_params"]),
+                "model_info": json.loads(cleared[0]["model_info"]),
+            }
+        )
+        reattached: Final = await self._patch_model(
+            monkeypatch,
+            cleared_model,
+            self._admin_user(),
+            "shared-credential",
+        )
+        params: Final = json.loads(reattached[0]["litellm_params"])
+        assert params["litellm_credential_name"] == "shared-credential"
 
 
 class TestGetModelInfoWithIdBlocked:
@@ -6058,11 +6700,27 @@ class TestBlockModelResponseSerialization:
 
 
 class TestAccessGroupModelSync:
-    """A rename or delete of a deployment must land in every unified access group that names it."""
+    """A rename or delete of a deployment must land in every access group and models allowlist that names it."""
 
     _PS = "litellm.proxy.proxy_server"
     _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
     _INVALIDATE = "litellm.proxy.management_helpers.access_group_model_sync.invalidate_access_group_caches"
+    _EVICT = "litellm.proxy.management_helpers.model_allowlist_rename_sync.evict_and_broadcast"
+    _ALLOWLIST_TABLES = (
+        "LiteLLM_TeamTable",
+        "LiteLLM_VerificationToken",
+        "LiteLLM_OrganizationTable",
+        "LiteLLM_ProjectTable",
+        "LiteLLM_UserTable",
+    )
+    _ALLOWLIST_ROWS = [
+        {"kind": "team", "object_id": "team-1", "team_alias": "alias-1"},
+        {"kind": "team", "object_id": "team-2", "team_alias": None},
+        {"kind": "key", "object_id": "hashed-token-1", "team_alias": None},
+        {"kind": "org", "object_id": "org-1", "team_alias": None},
+        {"kind": "project", "object_id": "proj-1", "team_alias": None},
+        {"kind": "user", "object_id": "user-1", "team_alias": None},
+    ]
 
     @staticmethod
     def _admin():
@@ -6082,7 +6740,10 @@ class TestAccessGroupModelSync:
         async def query_raw(sql, *params):
             if sql.startswith("SELECT COUNT(*)"):
                 return [{"deployment_count": deployment_count}]
-            return [{"access_group_id": "ag-1"}]
+            if sql.startswith('UPDATE "LiteLLM_AccessGroupTable"'):
+                return [{"access_group_id": "ag-1"}]
+            assert sql.startswith("WITH ")
+            return TestAccessGroupModelSync._ALLOWLIST_ROWS
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
@@ -6101,8 +6762,16 @@ class TestAccessGroupModelSync:
             if call.args[0].startswith('UPDATE "LiteLLM_AccessGroupTable"')
         ]
 
+    @staticmethod
+    def _allowlist_updates(mock_prisma):
+        return [
+            call
+            for call in mock_prisma.db.query_raw.await_args_list
+            if call.args[0].startswith("WITH ") and 'SET "models"' in call.args[0]
+        ]
+
     @contextlib.contextmanager
-    def _endpoint_env(self, mock_prisma, router):
+    def _endpoint_env(self, mock_prisma, router, evict=None):
         with contextlib.ExitStack() as stack:
             for target in (
                 patch(f"{self._PS}.prisma_client", mock_prisma),
@@ -6111,7 +6780,10 @@ class TestAccessGroupModelSync:
                 patch(f"{self._PS}.premium_user", True),
                 patch(f"{self._PS}.proxy_logging_obj", MagicMock()),
                 patch(f"{self._PS}.user_api_key_cache", MagicMock()),
-                patch(f"{self._MOD}.ModelManagementAuthChecks.can_user_make_model_call", new=AsyncMock(return_value=None)),
+                patch(self._EVICT, new=evict or AsyncMock()),
+                patch(
+                    f"{self._MOD}.ModelManagementAuthChecks.can_user_make_model_call", new=AsyncMock(return_value=None)
+                ),
                 patch(
                     f"{self._MOD}.clear_cache",
                     new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
@@ -6171,7 +6843,9 @@ class TestAccessGroupModelSync:
         router.get_model_ids.return_value = ["m-same"]
 
         with self._endpoint_env(mock_prisma, router) as invalidate:
-            await patch_model(model_id="m-same", patch_data=updateDeployment(blocked=True), user_api_key_dict=self._admin())
+            await patch_model(
+                model_id="m-same", patch_data=updateDeployment(blocked=True), user_api_key_dict=self._admin()
+            )
 
         mock_prisma.db.query_raw.assert_not_awaited()
         invalidate.assert_not_awaited()
@@ -6231,6 +6905,97 @@ class TestAccessGroupModelSync:
         assert "array_replace" in update_call.args[0]
         assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
         invalidate.assert_awaited_once_with(("ag-1",))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    async def test_rename_rewrites_key_team_org_project_and_user_allowlists_and_evicts_their_caches(self, endpoint):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_model
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-rename"]
+        evict = AsyncMock()
+
+        with self._endpoint_env(mock_prisma, router, evict=evict):
+            if endpoint == "patch":
+                await patch_model(
+                    model_id="m-rename",
+                    patch_data=updateDeployment(model_name="gpt-5.6-eu"),
+                    user_api_key_dict=self._admin(),
+                )
+            else:
+                await update_model(
+                    model_params=updateDeployment(
+                        model_name="gpt-5.6-eu",
+                        litellm_params=updateLiteLLMParams(model="openai/gpt-5.6"),
+                        model_info=ModelInfo(id="m-rename"),
+                    ),
+                    user_api_key_dict=self._admin(),
+                )
+
+        (update_call,) = self._allowlist_updates(mock_prisma)
+        for table in self._ALLOWLIST_TABLES:
+            assert (
+                f'UPDATE "{table}" SET "models" = array_replace(array_remove("models", $2), $1, $2) '
+                'WHERE $1 = ANY("models") RETURNING'
+            ) in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+        evict.assert_awaited_once()
+        assert evict.await_args.args[0] == (
+            "team_id:team-1",
+            "team_alias:alias-1",
+            "team_id:team-2",
+            "hashed-token-1",
+            "org_id:org-1",
+            "org_id:org-1:with_budget",
+            "project_id:proj-1",
+            "user-1",
+        )
+
+    @pytest.mark.asyncio
+    async def test_rename_appends_to_allowlists_when_a_sibling_deployment_keeps_the_old_name(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=1)
+        router = MagicMock()
+        router.get_model_ids.return_value = ["m-rename"]
+
+        with self._endpoint_env(mock_prisma, router):
+            await patch_model(
+                model_id="m-rename",
+                patch_data=updateDeployment(model_name="gpt-5.6-eu"),
+                user_api_key_dict=self._admin(),
+            )
+
+        (update_call,) = self._allowlist_updates(mock_prisma)
+        for table in self._ALLOWLIST_TABLES:
+            assert (
+                f'UPDATE "{table}" SET "models" = array_append("models", $2) '
+                'WHERE $1 = ANY("models") AND NOT ($2 = ANY("models")) RETURNING'
+            ) in update_call.args[0]
+        assert update_call.args[1:] == ("gpt-5.6", "gpt-5.6-eu")
+
+    @pytest.mark.asyncio
+    async def test_unchanged_name_never_touches_allowlists(self):
+        from litellm.proxy.management_helpers.model_allowlist_rename_sync import (
+            sync_model_allowlists_for_renamed_model,
+        )
+
+        mock_prisma = self._prisma_with_row("m-rename", "gpt-5.6", deployment_count=0)
+        evict = AsyncMock()
+
+        with patch(self._EVICT, new=evict):
+            await sync_model_allowlists_for_renamed_model(
+                prisma_client=mock_prisma,
+                model_id="m-rename",
+                old_name="gpt-5.6",
+                new_name="gpt-5.6",
+                llm_router=None,
+                user_api_key_cache=MagicMock(),
+            )
+
+        assert self._allowlist_updates(mock_prisma) == []
+        evict.assert_not_awaited()
 
 
 class TestTeamMemberAutoRouterWrites:
@@ -6345,6 +7110,65 @@ class TestTeamMemberAutoRouterWrites:
         assert saved_info["member_auto_router"] is (change == "unrelated")
         assert saved_info["team_id"] == "member-team"
         assert saved_info["access_groups"] == ["retained-admin-group"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic"])
+    async def test_jev_dashboard_save_preserves_server_transport(self, endpoint: str, change: str) -> None:
+        original: Final = self._row()
+        transport: Final = {"api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com"}
+        stored_config: Final = {
+            "classifier_type": "jev",
+            "tiers": {"SIMPLE": "allowed"},
+            "jev_classifier_config": {**transport, "instructions": "Old instructions", "timeout_ms": 6100},
+        }
+        row: Final = original.model_copy(
+            update={
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": stored_config,
+                },
+            }
+        )
+        database: Final = self._database(self._team(), row)
+        overrides: Final = {
+            "save": {},
+            "rotate": {"api_key": "synthetic-replacement-jev-key"},
+            "move": {"api_base": "https://new-jev.example.com", "api_key": "synthetic-replacement-jev-key"},
+            "move-without-key": {"api_base": "https://new-jev.example.com"},
+            "reset": {"api_key": None, "api_base": None},
+            "heuristic": {},
+        }[change]
+        config: Final = {
+            "tiers": {"SIMPLE": "allowed"},
+            "classifier_type": "heuristic" if change == "heuristic" else "jev",
+            **({} if change == "heuristic" else {"jev_classifier_config": {"timeout_ms": 8100, **overrides}}),
+        }
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config=config),
+            model_info=ModelInfo(id=row.model_id),
+        )
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with self._environment(database, row):
+            operation: Final = (
+                patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+            )
+            if change == "move-without-key":
+                with pytest.raises(ProxyException, match="api_base requires"):
+                    await operation
+                database.db.litellm_proxymodeltable.update.assert_not_awaited()
+                return
+            await operation
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        expected: Final = (
+            config
+            if change == "heuristic"
+            else {**config, "jev_classifier_config": {**transport, "timeout_ms": 8100, **overrides}}
+        )
+        assert saved == expected
+        assert row.litellm_params["complexity_router_config"] == stored_config
+        assert request.litellm_params.complexity_router_config == config
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])

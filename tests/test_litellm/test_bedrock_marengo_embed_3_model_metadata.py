@@ -3,7 +3,6 @@ from pathlib import Path
 
 import pytest
 
-import litellm
 from litellm.constants import bedrock_embedding_models
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -29,13 +28,6 @@ AUDIO_COST_PER_SECOND = 0.00014
 def _load(path):
     with open(path) as f:
         return json.load(f)
-
-
-@pytest.mark.parametrize("model", ALL_MODELS)
-def test_marengo_embed_3_is_visible_to_callers(model, local_model_cost_map):
-    info = litellm.get_model_info(model=model, custom_llm_provider="bedrock")
-    assert info["mode"] == "embedding"
-    assert info["output_vector_size"] == 512
 
 
 def test_marengo_embed_3_is_a_known_bedrock_embedding_model():

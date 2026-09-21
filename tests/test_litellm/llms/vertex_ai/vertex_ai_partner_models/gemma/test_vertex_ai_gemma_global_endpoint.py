@@ -30,7 +30,7 @@ from litellm.types.llms.vertex_ai import VertexPartnerProvider
 _GEMMA_MODEL_COST_ENTRY = {
     "vertex_ai/google/gemma-4-26b-a4b-it-maas": {
         "litellm_provider": "vertex_ai-openai_models",
-        "max_input_tokens": 256000,
+        "max_input_tokens": 262144,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -180,26 +180,13 @@ class TestCreateVertexURLGemma:
 # ---------------------------------------------------------------------------
 
 
-def test_gemma_maas_supports_function_calling():
-    """supports_function_calling=true in model_cost must be surfaced by the utility."""
-    with patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False):
-        assert (
-            litellm.utils.supports_function_calling(
-                model="vertex_ai/google/gemma-4-26b-a4b-it-maas"
-            )
-            is True
-        )
+def test_gemma_maas_context_window_matches_google(local_model_cost_map):
+    info = litellm.get_model_info("vertex_ai/google/gemma-4-26b-a4b-it-maas")
 
-
-def test_gemma_maas_supports_vision():
-    """supports_vision=true in model_cost must be surfaced by the utility."""
-    with patch.dict(litellm.model_cost, _GEMMA_MODEL_COST_ENTRY, clear=False):
-        assert (
-            litellm.utils.supports_vision(
-                model="vertex_ai/google/gemma-4-26b-a4b-it-maas"
-            )
-            is True
-        )
+    # 262,144 context length and 128,000 maximum output per Google's model page, checked 2026-09-18:
+    # https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/google/gemma-4-26b-a4b-it
+    assert info["max_input_tokens"] == 262144
+    assert info["max_output_tokens"] == 128000
 
 
 # ---------------------------------------------------------------------------

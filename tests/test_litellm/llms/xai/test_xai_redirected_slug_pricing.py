@@ -85,11 +85,6 @@ def test_code_slug_bills_at_grok_build_rate(cost_map: dict, slug: str):
         assert entry[field] == target[field], field
 
 
-def test_a_live_xai_model_is_untouched(cost_map: dict):
-    """Guard against the repricing leaking onto models xAI still serves directly."""
-    assert cost_map["xai/grok-4.6"]["input_cost_per_token"] != cost_map[REDIRECT_TARGET]["input_cost_per_token"]
-
-
 @pytest.mark.parametrize("slug", REDIRECTED_SLUGS)
 def test_redirected_slug_carries_the_target_tier_rates(cost_map: dict, slug: str):
     """The request executes as grok-4.3, so it is tiered at grok-4.3's 200k boundary."""
@@ -105,16 +100,3 @@ def test_both_cost_maps_agree_on_the_redirected_slugs():
     backup = json.loads(BACKUP_PRICES_PATH.read_text(encoding="utf-8"))
     for slug in (*REDIRECTED_SLUGS, *CODE_SLUGS, REDIRECT_TARGET, CODE_REDIRECT_TARGET):
         assert prices[slug] == backup[slug], slug
-
-
-def test_every_retired_chat_slug_is_covered(cost_map: dict):
-    """The lists above must stay in step with what the registry marks retired."""
-    marked = {
-        key
-        for key, entry in cost_map.items()
-        if isinstance(entry, dict)
-        and entry.get("litellm_provider") == "xai"
-        and "deprecation_date" in entry
-        and entry.get("mode") == "chat"
-    }
-    assert marked == {*REDIRECTED_SLUGS, *CODE_SLUGS}

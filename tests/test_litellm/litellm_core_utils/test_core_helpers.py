@@ -151,6 +151,12 @@ class TestMapFinishReasonGemini:
             ("IMAGE_PROHIBITED_CONTENT", "content_filter"),
             ("TOO_MANY_TOOL_CALLS", "stop"),
             ("MALFORMED_RESPONSE", "stop"),
+            ("NO_IMAGE", "content_filter"),
+            ("IMAGE_RECITATION", "content_filter"),
+            ("IMAGE_OTHER", "content_filter"),
+            ("ESCALATION", "content_filter"),
+            ("UNEXPECTED_TOOL_CALL", "stop"),
+            ("MISSING_THOUGHT_SIGNATURE", "stop"),
         ],
     )
     def test_gemini_finish_reasons(self, gemini_reason, expected):

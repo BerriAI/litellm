@@ -1754,6 +1754,20 @@ class TestCustomGuardrailSpendLogMatchRedaction:
 class TestGuardrailInterventionClassification:
     """A routing decision is a deliberate guardrail intervention, not a failure."""
 
+    def test_http_exception_classification_returns_false_without_fastapi(self, monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def import_without_fastapi(name, *args, **kwargs):
+            if name == "fastapi.exceptions":
+                raise ImportError("fastapi is unavailable")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", import_without_fastapi)
+
+        assert CustomGuardrail._is_guardrail_intervention(Exception("not an intervention")) is False
+
     def test_sensitive_data_route_exception_is_intervention(self):
         from litellm.exceptions import SensitiveDataRouteException
 
@@ -3130,3 +3144,22 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         )
 
         assert self._logged_response(data) == "mask"
+
+    @pytest.mark.asyncio
+    async def test_apply_guardrail_adding_only_stream_holdback_logs_allow(self):
+        class HoldbackOnlyGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional["LiteLLMLoggingObj"] = None,
+            ) -> GenericGuardrailAPIInputs:
+                return {**inputs, "stream_holdback_chars": [6]}
+
+        data = self._request()
+        await HoldbackOnlyGuardrail(guardrail_name="g").apply_guardrail(
+            inputs={"texts": ["SECRET_PROMPT"]}, request_data=data, input_type="response"
+        )
+
+        assert self._logged_response(data) == "allow"
