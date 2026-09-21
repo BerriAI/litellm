@@ -4,6 +4,8 @@ Transformation logic from OpenAI format to Gemini format.
 Why separate file? Make it easy to see how transformation works
 """
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -637,6 +639,27 @@ def check_if_part_exists_in_parts(parts: list[PartType], part: PartType, exclude
     return False
 
 
+def _get_valid_base64_thought_signature(signature: Any) -> str | None:
+    """Validate that a thought signature is a non-empty, valid Base64-encoded string.
+
+    Returns the stripped Base64 string if valid, or None if malformed/invalid.
+    Vertex AI / Gemini rejects requests before inference with HTTP 400 (TYPE_BYTES
+    decoding failed) if an invalid Base64 string is forwarded as a thought_signature.
+    """
+    if not signature or not isinstance(signature, str):
+        return None
+    stripped = signature.strip()
+    if not stripped:
+        return None
+    try:
+        decoded = base64.b64decode(stripped.encode("utf-8"), validate=True)
+        if len(decoded) > 0:
+            return stripped
+    except (binascii.Error, ValueError):
+        pass
+    return None
+
+
 def _collect_tool_call_thought_signatures(
     assistant_msg: ChatCompletionAssistantMessage,
 ) -> frozenset[str]:
@@ -682,8 +705,9 @@ def _collect_tool_call_thought_signatures(
             continue
         for key in ("thought_signature", "response_thought_signature"):
             invocation_signature = invocation.get(key)
-            if isinstance(invocation_signature, str) and invocation_signature:
-                signatures += (invocation_signature,)
+            valid_sig = _get_valid_base64_thought_signature(invocation_signature)
+            if valid_sig:
+                signatures += (valid_sig,)
 
     return frozenset(signatures)
 
@@ -889,19 +913,25 @@ def _gemini_convert_messages_with_history(
                         if block["type"] == "thinking":
                             block_thinking_str = block.get("thinking")
                             block_signature = block.get("signature")
-                            if block_thinking_str is not None and block_signature is not None:
+                            valid_block_sig = _get_valid_base64_thought_signature(block_signature)
+                            if block_thinking_str is not None:
+                                sig_kwargs: dict[str, Any] = (
+                                    {"thoughtSignature": valid_block_sig}
+                                    if valid_block_sig is not None
+                                    else {}
+                                )
                                 try:
                                     assistant_content.append(
                                         PartType(
-                                            thoughtSignature=block_signature,
+                                            **sig_kwargs,
                                             **json.loads(block_thinking_str),
                                         )
                                     )
                                 except Exception:
                                     assistant_content.append(
                                         PartType(
-                                            thoughtSignature=block_signature,
                                             text=block_thinking_str,
+                                            **sig_kwargs,
                                         )
                                     )
                 if _message_content is not None and isinstance(_message_content, list):
@@ -927,17 +957,25 @@ def _gemini_convert_messages_with_history(
                     # reasoning token count on gemini-3 and newer models
                     tool_call_signatures = _collect_tool_call_thought_signatures(assistant_msg)
 
+                    valid_text_signature = (
+                        _get_valid_base64_thought_signature(thought_signatures[0])
+                        if (
+                            thought_signatures
+                            and isinstance(thought_signatures, list)
+                            and len(thought_signatures) > 0
+                        )
+                        else None
+                    )
+
                     if (
-                        thought_signatures
-                        and isinstance(thought_signatures, list)
-                        and len(thought_signatures) > 0
-                        and thought_signatures[0] not in tool_call_signatures
+                        valid_text_signature
+                        and valid_text_signature not in tool_call_signatures
                     ):
                         # Use the first signature for the text part (Gemini expects one signature per part)
                         assistant_content.append(
                             PartType(
                                 text=assistant_text,
-                                thoughtSignature=thought_signatures[0],
+                                thoughtSignature=valid_text_signature,
                             )
                         )
                     else:
@@ -1013,7 +1051,9 @@ def _gemini_convert_messages_with_history(
                                 }
                             }
                             if "thought_signature" in invocation:
-                                tc_part["thoughtSignature"] = invocation["thought_signature"]
+                                valid_inv_sig = _get_valid_base64_thought_signature(invocation["thought_signature"])
+                                if valid_inv_sig:
+                                    tc_part["thoughtSignature"] = valid_inv_sig
                             assistant_content.append(tc_part)
 
                             # Re-inject toolResponse part if response is present
@@ -1026,7 +1066,9 @@ def _gemini_convert_messages_with_history(
                                     tr_dict["toolType"] = invocation["tool_type"]
                                 tr_part: dict[str, object] = {"toolResponse": tr_dict}
                                 if "response_thought_signature" in invocation:
-                                    tr_part["thoughtSignature"] = invocation["response_thought_signature"]
+                                    valid_resp_sig = _get_valid_base64_thought_signature(invocation["response_thought_signature"])
+                                    if valid_resp_sig:
+                                        tr_part["thoughtSignature"] = valid_resp_sig
                                 assistant_content.append(tr_part)
 
                 msg_i += 1

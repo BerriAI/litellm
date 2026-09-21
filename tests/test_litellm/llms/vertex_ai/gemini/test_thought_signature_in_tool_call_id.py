@@ -285,3 +285,111 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
     sig2 = _get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
     assert sig2 is None
+
+
+def test_get_valid_base64_thought_signature_helper():
+    """Test that _get_valid_base64_thought_signature validates and strips Base64 strings."""
+    import base64
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _get_valid_base64_thought_signature,
+    )
+
+    valid_sig = base64.b64encode(b"valid_thought_signature_content").decode("utf-8")
+    assert _get_valid_base64_thought_signature(valid_sig) == valid_sig
+
+    # Strips whitespace
+    assert _get_valid_base64_thought_signature(f"  {valid_sig}  \n") == valid_sig
+
+    # Invalid signatures return None
+    assert _get_valid_base64_thought_signature(None) is None
+    assert _get_valid_base64_thought_signature("") is None
+    assert _get_valid_base64_thought_signature("   ") is None
+    assert _get_valid_base64_thought_signature("not_base64_content!@#") is None
+    assert _get_valid_base64_thought_signature("abc") is None
+    assert _get_valid_base64_thought_signature("====") is None
+    assert _get_valid_base64_thought_signature(12345) is None
+
+
+def test_gemini_transformation_omits_malformed_thought_signature_in_replayed_history():
+    """Test that malformed thought signatures in reconstructed session history are safely omitted (#42201)."""
+    import base64
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    valid_sig = base64.b64encode(b"gemini_replayed_thought_sig").decode("utf-8")
+    malformed_sig = "malformed_base64_thought_sig_!@#"
+
+    # 1. Malformed signature in provider_specific_fields["thought_signatures"]
+    messages_malformed = [
+        {"role": "user", "content": "Analyze this data."},
+        {
+            "role": "assistant",
+            "content": "Analysis complete.",
+            "provider_specific_fields": {"thought_signatures": [malformed_sig]},
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages_malformed)
+    model_parts = [part for content in contents if content["role"] == "model" for part in content["parts"]]
+    assert len(model_parts) >= 1
+    assert getattr(model_parts[0], "text", None) == "Analysis complete."
+    assert getattr(model_parts[0], "thoughtSignature", None) is None
+
+    # 2. Valid signature in provider_specific_fields["thought_signatures"]
+    messages_valid = [
+        {"role": "user", "content": "Analyze this data."},
+        {
+            "role": "assistant",
+            "content": "Analysis complete.",
+            "provider_specific_fields": {"thought_signatures": [valid_sig]},
+        },
+    ]
+
+    contents_valid = _gemini_convert_messages_with_history(messages=messages_valid)
+    model_parts_valid = [part for content in contents_valid if content["role"] == "model" for part in content["parts"]]
+    assert len(model_parts_valid) >= 1
+    assert getattr(model_parts_valid[0], "thoughtSignature", None) == valid_sig
+
+    # 3. Malformed signature in thinking_blocks
+    messages_thinking_malformed = [
+        {"role": "user", "content": "Plan next steps."},
+        {
+            "role": "assistant",
+            "content": "Here is the plan.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1: Check constraints.",
+                    "signature": malformed_sig,
+                }
+            ],
+        },
+    ]
+
+    contents_thinking = _gemini_convert_messages_with_history(messages=messages_thinking_malformed)
+    thinking_parts = [part for content in contents_thinking if content["role"] == "model" for part in content["parts"]]
+    assert len(thinking_parts) >= 1
+    assert getattr(thinking_parts[0], "thoughtSignature", None) is None
+
+    # 4. Valid signature in thinking_blocks
+    messages_thinking_valid = [
+        {"role": "user", "content": "Plan next steps."},
+        {
+            "role": "assistant",
+            "content": "Here is the plan.",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": "Step 1: Check constraints.",
+                    "signature": valid_sig,
+                }
+            ],
+        },
+    ]
+
+    contents_thinking_valid = _gemini_convert_messages_with_history(messages=messages_thinking_valid)
+    thinking_parts_valid = [part for content in contents_thinking_valid if content["role"] == "model" for part in content["parts"]]
+    assert len(thinking_parts_valid) >= 1
+    assert getattr(thinking_parts_valid[0], "thoughtSignature", None) == valid_sig
+
