@@ -108,6 +108,20 @@ CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude
             ],
             [{"type": "text", "text": "real system prompt", "cache_control": {"type": "ephemeral"}}],
         ),
+        # List form: identity + real content in the same block -> rewritten block.
+        (
+            [{"type": "text", "text": f"{CLAUDE_CODE_IDENTITY}\nreal system prompt"}],
+            [{"type": "text", "text": "real system prompt"}],
+        ),
+        # List form: a non-text block (type "other") is kept as-is.
+        (
+            [{"type": "text", "text": CLAUDE_CODE_IDENTITY}, {"type": "other", "foo": "bar"}],
+            [{"type": "other", "foo": "bar"}],
+        ),
+        # List form: non-dict items are kept as-is.
+        ([{"type": "text", "text": CLAUDE_CODE_IDENTITY}, "loose item"], ["loose item"]),
+        # Non-string, non-list system payload is passed through untouched.
+        (None, None),
     ],
 )
 def test_strip_claude_code_identity_from_system(system_param, expected):

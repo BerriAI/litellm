@@ -6565,3 +6565,26 @@ def test_eager_input_streaming_reaches_anthropic_request_tools():
 
     assert result["tools"][0]["eager_input_streaming"] is True
     assert result["tools"][0]["name"] == "write_file"
+
+
+def test_messages_request_strips_identity_only_system_for_minimax():
+    """Identity-only system drops the whole system param (pop path)."""
+    from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
+    from litellm.types.router import GenericLiteLLMParams
+
+    config = MinimaxMessagesConfig()
+    optional_params = {
+        "max_tokens": 16,
+        "system": [
+            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+        ],
+    }
+    result = config.transform_anthropic_messages_request(
+        model="MiniMax-M2",
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "system" not in result
