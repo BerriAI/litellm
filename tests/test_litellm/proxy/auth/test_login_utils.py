@@ -733,7 +733,12 @@ async def _db_login(throttle, username: str, password: str, *, correct: bool):
         ),
     ):
         return await authenticate_user(
-            username=username, password=password, master_key="sk-master", prisma_client=MagicMock(), throttle=throttle
+            username=username,
+            password=password,
+            master_key="sk-master",
+            prisma_client=MagicMock(),
+            throttle=throttle,
+            general_settings=_POLICY_NO_BREACH_CHECK,
         )
 
 
@@ -2122,6 +2127,7 @@ class TestPasswordResetRequiredSessionMinting:
                     password="Str0ng!Passw0rd",
                     master_key="sk-1234",
                     prisma_client=mock_prisma_client,
+                    throttle=_unlimited_throttle(),
                     general_settings=_POLICY_NO_BREACH_CHECK,
                 )
         return result, mock_generate_key.call_args.kwargs
@@ -2163,6 +2169,7 @@ class TestPasswordResetRequiredSessionMinting:
                         password="Str0ng!Passw0rd",
                         master_key="sk-1234",
                         prisma_client=mock_prisma_client,
+                        throttle=_unlimited_throttle(),
                         general_settings=_POLICY_NO_BREACH_CHECK,
                     )
         return result, mock_generate_key.call_args.kwargs, mock_screen.call_args.kwargs
