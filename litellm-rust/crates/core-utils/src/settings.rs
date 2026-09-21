@@ -1,5 +1,7 @@
 use std::str::FromStr;
 
+use crate::serde_compat::parse_str_bool;
+
 pub trait Lookup {
     fn get(&self, name: &str) -> Option<String>;
 
@@ -9,7 +11,7 @@ pub trait Lookup {
 
     fn enabled(&self, name: &str) -> Option<bool> {
         self.get(name)
-            .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+            .is_some_and(|value| parse_str_bool(&value) == Some(true))
             .then_some(true)
     }
 

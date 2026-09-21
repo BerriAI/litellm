@@ -6,6 +6,7 @@ from typing import Final
 import httpx
 import pytest
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
@@ -17,14 +18,28 @@ from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagem
 CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/python-bridge/python_settings.json"
 
 
-def test_the_rust_contract_matches_the_returned_fields() -> None:
-    contract: Final = TypeAdapter(dict[str, list[str]]).validate_json(CONTRACT_PATH.read_text())
+class SettingSpec(TypedDict):
+    adapter: ReadOnly[str]
+    required: ReadOnly[bool]
+    precedence: ReadOnly[str]
+    sensitive: ReadOnly[bool]
+    shapes: ReadOnly[list[str]]
+    unsupported_live: ReadOnly[str | None]
 
-    assert contract == {
-        "http_settings": [field.name for field in dataclasses.fields(settings.http_settings())],
-        "url_policy": [field.name for field in dataclasses.fields(settings.url_policy())],
-        "provider_defaults": [field.name for field in dataclasses.fields(settings.provider_defaults())],
-        "secret_manager": [field.name for field in dataclasses.fields(settings.secret_manager())],
+
+class SettingsGroup(TypedDict):
+    version: ReadOnly[int]
+    fields: ReadOnly[dict[str, SettingSpec]]
+
+
+def test_the_rust_contract_matches_the_returned_fields() -> None:
+    contract: Final = TypeAdapter(dict[str, SettingsGroup]).validate_json(CONTRACT_PATH.read_text())
+
+    assert {name: tuple(group["fields"]) for name, group in contract.items()} == {
+        "http_settings": tuple(field.name for field in dataclasses.fields(settings.http_settings())),
+        "url_policy": tuple(field.name for field in dataclasses.fields(settings.url_policy())),
+        "provider_defaults": tuple(field.name for field in dataclasses.fields(settings.provider_defaults())),
+        "secret_manager": tuple(field.name for field in dataclasses.fields(settings.secret_manager())),
     }
 
 
