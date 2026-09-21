@@ -1348,7 +1348,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponse
 
-        buffered_chunks: list[ModelResponseStream | bytes] = []
+        buffered_chunks: Final[list[ModelResponseStream | bytes]] = []  # mutable-ok: stream chunks arrive incrementally
         passthrough_due_to_unknown_stream_shape = False
         try:
             async for chunk in response:
@@ -1384,8 +1384,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     "(e.g. /v1/responses events). Output PII masking was skipped for this response."
                 )
                 return
-            raw_chunks: Final = [chunk for chunk in buffered_chunks if isinstance(chunk, bytes)]
-            model_chunks: Final = [chunk for chunk in buffered_chunks if isinstance(chunk, ModelResponseStream)]
+            raw_chunks: Final = tuple(chunk for chunk in buffered_chunks if isinstance(chunk, bytes))
+            model_chunks: Final[list[ModelResponseStream]] = [  # mutable-ok: stream_chunk_builder requires a list
+                chunk for chunk in buffered_chunks if isinstance(chunk, ModelResponseStream)
+            ]
             if raw_chunks and model_chunks:
                 verbose_proxy_logger.warning(
                     "Presidio apply_to_output: mixed stream detected (ModelResponseStream + raw SSE bytes). "
