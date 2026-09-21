@@ -753,7 +753,6 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
 
 
 def _ocr_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
-    """An ``OCRResponse`` ``pages`` list folded into one chat-shaped assistant choice."""
     markdowns: Final = tuple(
         text for page in _dicts(response.get("pages")) if (text := as_str(page.get("markdown"))) is not None
     )
