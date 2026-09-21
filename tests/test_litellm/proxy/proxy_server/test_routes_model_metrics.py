@@ -186,20 +186,21 @@ def test_model_settings_method_not_allowed(client, auth_as):
 def test_alerting_settings_reports_sources(client, auth_as, monkeypatch):
     from litellm.proxy.config_resolvers import SettingsStore
 
+    db_alerting_args = {
+        "daily_report_frequency": 7,
+        "outage_alert_ttl": 99,
+        "region_outage_alert_ttl": [],
+    }
+
     pc = MagicMock()
     row = MagicMock()
-    row.param_value = {
-        "alerting_args": {
-            "daily_report_frequency": 7,
-            "report_check_interval": None,
-        }
-    }
+    row.param_value = {"alerting_args": db_alerting_args}
     pc.db.litellm_config.find_first = AsyncMock(return_value=row)
     monkeypatch.setattr(proxy_server, "prisma_client", pc)
 
     logging_obj = MagicMock()
     args_model = MagicMock()
-    args_model.model_dump = MagicMock(return_value={"daily_report_frequency": 7})
+    args_model.model_dump = MagicMock(return_value={"daily_report_frequency": 3})
     logging_obj.slack_alerting_instance.alerting_args = args_model
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging_obj)
 
@@ -207,21 +208,10 @@ def test_alerting_settings_reports_sources(client, auth_as, monkeypatch):
     store.load_yaml(
         {
             "alerting": ["slack"],
-            "alerting_args": {
-                "daily_report_frequency": 3,
-                "report_check_interval": 300,
-            },
+            "alerting_args": {"daily_report_frequency": 3, "report_check_interval": 300},
         }
     )
-    store.apply_db_row(
-        "general_settings",
-        {
-            "alerting_args": {
-                "daily_report_frequency": 7,
-                "report_check_interval": None,
-            }
-        },
-    )
+    store.apply_db_row("general_settings", {"alerting_args": db_alerting_args})
     monkeypatch.setattr(proxy_server.proxy_config, "settings", store)
     monkeypatch.setattr(proxy_server, "general_settings", store)
 
@@ -230,10 +220,46 @@ def test_alerting_settings_reports_sources(client, auth_as, monkeypatch):
 
     assert response.status_code == 200
     by_name = {entry["field_name"]: entry for entry in response.json()}
+
     assert by_name["slack_alerting"]["source"] == "config"
-    assert by_name["daily_report_frequency"]["source"] == "db"
+    assert by_name["daily_report_frequency"]["source"] == "config"
     assert by_name["report_check_interval"]["source"] == "config"
+    assert by_name["outage_alert_ttl"]["source"] == "db"
+    assert by_name["region_outage_alert_ttl"]["source"] == "default"
     assert by_name["budget_alert_ttl"]["source"] == "default"
+
+
+def test_alerting_settings_reports_config_source_when_db_disagrees(client, auth_as, monkeypatch):
+    from litellm.proxy.config_resolvers import SettingsStore
+
+    db_alerting_args = {"daily_report_frequency": 7}
+
+    pc = MagicMock()
+    row = MagicMock()
+    row.param_value = {"alerting_args": db_alerting_args}
+    pc.db.litellm_config.find_first = AsyncMock(return_value=row)
+    monkeypatch.setattr(proxy_server, "prisma_client", pc)
+
+    logging_obj = MagicMock()
+    args_model = MagicMock()
+    args_model.model_dump = MagicMock(return_value={"daily_report_frequency": 3})
+    logging_obj.slack_alerting_instance.alerting_args = args_model
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging_obj)
+
+    store = SettingsStore("general_settings")
+    store.load_yaml({"alerting_args": {"daily_report_frequency": 3}})
+    store.apply_db_row("general_settings", {"alerting_args": db_alerting_args})
+    monkeypatch.setattr(proxy_server.proxy_config, "settings", store)
+    monkeypatch.setattr(proxy_server, "general_settings", store)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.get("/alerting/settings")
+
+    assert response.status_code == 200
+    by_name = {entry["field_name"]: entry for entry in response.json()}
+    assert store.source("alerting_args") == "config"
+    assert by_name["daily_report_frequency"]["field_value"] == 3
+    assert by_name["daily_report_frequency"]["source"] == "config"
 
 
 @pytest.mark.parametrize("db_alerting_args", [None, []])
@@ -268,6 +294,7 @@ def test_alerting_settings_handles_empty_db_args(
     assert response.status_code == 200
     by_name = {entry["field_name"]: entry for entry in response.json()}
     assert by_name["report_check_interval"]["source"] == "config"
+    assert by_name["budget_alert_ttl"]["source"] == "default"
 
 
 def test_alerting_settings_no_db_error(client, auth_as, no_prisma):

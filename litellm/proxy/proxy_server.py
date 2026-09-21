@@ -15993,12 +15993,12 @@ def _nested_setting_source(
     field_name: str,
     field_default: JsonValue,
 ) -> FieldSource:
-    db_value: Final = db_values.get(field_name)
-    if db_value is not None and not (isinstance(db_value, list) and len(db_value) == 0):
-        return "db"
     parent_value: Final = settings.config_value(parent_key)
     if isinstance(parent_value, Mapping) and field_name in parent_value:
         return "config"
+    db_value: Final = db_values.get(field_name)
+    if db_value is not None and not (isinstance(db_value, list) and len(db_value) == 0):
+        return "db"
     return "default" if field_default is not None else "unset"
 
 
