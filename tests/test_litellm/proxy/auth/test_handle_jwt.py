@@ -3250,15 +3250,26 @@ async def test_auth_builder_single_team_db_fallback_when_jwt_has_no_team(
             mock_get_membership.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise():
-    """
-    get_team_object succeeds but get_team_membership raises — do not set team; no exception.
-    """
-    from fastapi import HTTPException
+class _UnreachableMembershipPrisma:
+    class db:
+        class litellm_teammembership:
+            @staticmethod
+            async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
+                raise httpx.ConnectError("All connection attempts failed")
 
-    user_id = "u_mem_fail"
-    team_id_val = "team_mem_fail"
+
+@pytest.mark.asyncio
+async def test_auth_builder_single_team_fallback_membership_outage_raises_instead_of_dropping_the_team():
+    """
+    get_team_object succeeds but the membership read hits a database outage: the
+    outage propagates (auth maps it to 503) instead of the team being dropped.
+    """
+    from litellm.proxy.auth.auth_exception_handler import _as_proxy_exception
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import ProxyLogging
+
+    user_id = "u_mem_outage"
+    team_id_val = "team_mem_outage"
     user_object = LiteLLM_UserTable(
         user_id=user_id,
         user_role=LitellmUserRoles.INTERNAL_USER,
@@ -3267,6 +3278,7 @@ async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise
     team_table = LiteLLM_TeamTable(team_id=team_id_val)
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    cache = UserApiKeyCache()
 
     with (
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
@@ -3316,34 +3328,26 @@ async def test_auth_builder_single_team_fallback_membership_error_skips_no_raise
             "litellm.proxy.auth.handle_jwt.get_team_object",
             new_callable=AsyncMock,
         ) as mock_get_team,
-        patch(
-            "litellm.proxy.auth.handle_jwt.get_team_membership",
-            new_callable=AsyncMock,
-        ) as mock_get_membership,
     ):
         mock_auth_jwt.return_value = {"sub": user_id, "scope": ""}
         mock_get_team.return_value = team_table
-        mock_get_membership.side_effect = HTTPException(
-            status_code=500, detail="membership lookup failed"
-        )
 
-        result = await JWTAuthManager.auth_builder(
-            api_key="test_jwt_token",
-            jwt_handler=jwt_handler,
-            request_data={"model": "gpt-4"},
-            general_settings={"enforce_rbac": False},
-            route="/chat/completions",
-            prisma_client=None,
-            user_api_key_cache=None,
-            parent_otel_span=None,
-            proxy_logging_obj=None,
-        )
+        with pytest.raises(httpx.ConnectError) as raised:
+            await JWTAuthManager.auth_builder(
+                api_key="test_jwt_token",
+                jwt_handler=jwt_handler,
+                request_data={"model": "gpt-4"},
+                general_settings={"enforce_rbac": False},
+                route="/chat/completions",
+                prisma_client=_UnreachableMembershipPrisma(),
+                user_api_key_cache=cache,
+                parent_otel_span=None,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+            )
 
-        assert result["team_id"] is None
-        assert result["team_object"] is None
-        assert result["team_membership"] is None
-        mock_get_team.assert_called()
-        mock_get_membership.assert_called_once()
+    mock_get_team.assert_called()
+    surfaced = _as_proxy_exception(raised.value)
+    assert (surfaced.code, surfaced.type) == ("503", ProxyErrorTypes.no_db_connection)
 
 
 # ---------------------------------------------------------------------------
