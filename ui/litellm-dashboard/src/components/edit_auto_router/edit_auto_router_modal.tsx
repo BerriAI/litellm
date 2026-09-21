@@ -158,6 +158,10 @@ export const hydrateComplexityRouterConfig = (
       typeof parsedConfig.heuristic_first_max_tier === "string" && parsedConfig.heuristic_first_max_tier.trim() !== ""
         ? parsedConfig.heuristic_first_max_tier
         : undefined,
+    heuristic_first_max_context_tokens:
+      typeof parsedConfig.heuristic_first_max_context_tokens === "number"
+        ? parsedConfig.heuristic_first_max_context_tokens
+        : undefined,
     hybrid_boundary_margin:
       typeof parsedConfig.hybrid_boundary_margin === "number" ? parsedConfig.hybrid_boundary_margin : undefined,
     classification_mode:
@@ -226,6 +230,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classification_prompt",
   "classification_examples",
   "heuristic_first_max_tier",
+  "heuristic_first_max_context_tokens",
   "hybrid_boundary_margin",
   "classification_mode",
   "session_affinity",
@@ -325,6 +330,7 @@ export const buildUpdatedComplexityRouterConfig = (
     classificationPrompt: value.classification_prompt,
     classificationExamples: value.classification_examples,
     heuristicFirstMaxTier: value.heuristic_first_max_tier,
+    heuristicFirstMaxContextTokens: value.heuristic_first_max_context_tokens,
     hybridBoundaryMargin: value.hybrid_boundary_margin,
     classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,

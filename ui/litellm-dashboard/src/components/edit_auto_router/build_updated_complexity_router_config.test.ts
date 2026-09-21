@@ -670,6 +670,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     tier_labels: { SIMPLE: "Cheap" },
     classifier_type: "heuristic_first",
     heuristic_first_max_tier: "SIMPLE",
+    heuristic_first_max_context_tokens: 8000,
     classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
     classifier_context_window_size: 5,
     classifier_context_budget_chars: 4000,

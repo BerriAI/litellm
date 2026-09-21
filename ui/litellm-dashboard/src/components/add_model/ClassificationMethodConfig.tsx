@@ -55,6 +55,7 @@ const CLASSIFIER_TIMEOUT_ID = "classifier-timeout-ms";
 const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
+const HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID = "heuristic-first-max-context-tokens";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -268,6 +269,18 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange({ ...value, heuristic_first_max_tier: tier });
   };
 
+  const handleHeuristicFirstMaxContextTokensChange = (raw: string) => {
+    setDraft({ id: HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID, raw });
+    if (raw.trim() === "") {
+      onChange({ ...value, heuristic_first_max_context_tokens: undefined });
+      return;
+    }
+    const parsed: number = Number(raw);
+    if (Number.isFinite(parsed)) {
+      onChange({ ...value, heuristic_first_max_context_tokens: Math.max(1, Math.round(parsed)) });
+    }
+  };
+
   const handleHybridBoundaryMarginChange = (raw: string) => {
     setDraft({ id: HYBRID_BOUNDARY_MARGIN_ID, raw });
     const parsed = Number(raw);
@@ -425,6 +438,21 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               ))}
             </SelectContent>
           </Select>
+          <Label htmlFor={HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}>Max conversation tokens before classifier</Label>
+          <Input
+            id={HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID}
+            type="text"
+            inputMode="numeric"
+            min={1}
+            value={
+              draft?.id === HEURISTIC_FIRST_MAX_CONTEXT_TOKENS_ID
+                ? draft.raw
+                : String(value.heuristic_first_max_context_tokens ?? "")
+            }
+            onChange={(event) => handleHeuristicFirstMaxContextTokensChange(event.target.value)}
+            onBlur={() => setDraft(null)}
+            className="w-full"
+          />
           <p className="text-sm text-muted-foreground">
             A request the scorer places at or below this tier routes there without a classifier call. Anything the
             scorer places higher, and anything it found no signal for at all, goes to the classifier instead

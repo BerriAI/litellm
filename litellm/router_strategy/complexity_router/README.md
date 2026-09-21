@@ -470,6 +470,7 @@ model_list:
       complexity_router_config:
         classifier_type: heuristic_first
         heuristic_first_max_tier: SIMPLE
+        heuristic_first_max_context_tokens: 8000
         classifier_llm_config:
           model: gpt-5-mini
           reasoning_effort: low
@@ -509,6 +510,11 @@ every turn or session handled by the router process.
 A request short-circuits, meaning it routes on the scorer's own tier with no classifier call, when
 two things hold: the scorer landed at or below `heuristic_first_max_tier`, and it produced at least
 one signal. Everything else goes to the classifier, which then decides as it normally would.
+
+Set `heuristic_first_max_context_tokens` to veto that shortcut when the estimated whole conversation
+exceeds the limit. The estimate counts all message text at approximately four characters per token,
+so a short newest nudge in a long agentic session still reaches the classifier. Leave it unset to
+keep the scorer's tier in control at any conversation size
 
 The signal requirement is what keeps this from quietly routing everything to your cheapest model.
 A prompt where no dimension fires scores exactly 0.0, which is below `simple_medium`, so the score
