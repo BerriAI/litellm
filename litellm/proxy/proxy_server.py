@@ -6818,15 +6818,19 @@ class ProxyConfig:
 
         - Create all up list of model id's (db + config)
         - Compare all up list to router model id's
-        - Remove any that are missing
+        - Remove any that are missing, except deployments that name an owner in
+          model_info.managed_by. Those were injected at runtime and live only in memory,
+          so they appear in neither list and would otherwise be evicted on the next tick.
 
         Return:
-        - frozenset[str] - the ids the db + config say should be served after this
-          reconcile, so a caller can tell an id this evicted on purpose from one that
-          went missing. None when no reconcile ran and that set is therefore unknown.
+        - frozenset[str] - the ids that should be served after this reconcile, so a
+          caller can tell an id this evicted on purpose from one that went missing.
+          Owned deployments are in it: this reconcile kept them, so a later drop is
+          damage rather than a deliberate eviction. None when no reconcile ran and that
+          set is therefore unknown.
         """
         global user_config_file_path, llm_router
-        combined_id_list: Final = []
+        combined_id_list: Final[list[str]] = []
 
         ## BASE CASES ##
         if llm_router is None:
@@ -6873,12 +6877,42 @@ class ProxyConfig:
                 combined_id_list.append(model_id)  # ADD CONFIG MODEL TO COMBINED LIST
 
         router_model_ids: Final = llm_router.get_model_ids()
-        # Check for model IDs in llm_router not present in combined_id_list and delete them
+        orphaned_ids: Final = tuple(model_id for model_id in router_model_ids if model_id not in combined_id_list)
+        externally_managed: Final = MappingProxyType(
+            {
+                model_id: owner
+                for model_id in orphaned_ids
+                if (owner := self._declared_deployment_owner(router=llm_router, model_id=model_id)) is not None
+            }
+        )
 
-        for model_id in router_model_ids:
-            if model_id not in combined_id_list:
+        for model_id in orphaned_ids:
+            if model_id not in externally_managed:
                 llm_router.delete_deployment(id=model_id)
-        return frozenset(combined_id_list)
+
+        if externally_managed:
+            verbose_proxy_logger.info(
+                "Config reconcile kept %d deployment(s) absent from db + config because they declare an owner: %s",
+                len(externally_managed),
+                dict(externally_managed),
+            )
+        return frozenset(combined_id_list) | frozenset(externally_managed)
+
+    @staticmethod
+    def _declared_deployment_owner(router: litellm.Router, model_id: str) -> str | None:
+        """model_info.managed_by for a live deployment, or None when it declares no owner.
+
+        A lookup that cannot produce one answers None, so a deployment we fail to read
+        is evicted exactly as it was before this owner check existed.
+        """
+        try:
+            deployment: Final = router.get_deployment(model_id=model_id)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Could not read deployment %s while reconciling; treating it as unowned: %s", model_id, str(e)
+            )
+            return None
+        return None if deployment is None else deployment.model_info.managed_by
 
     def _resolve_db_litellm_param(self, key: str, value: object) -> object:
         if not isinstance(value, str):

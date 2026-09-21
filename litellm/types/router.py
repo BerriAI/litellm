@@ -218,6 +218,12 @@ class ModelInfo(MirroredPricingParams):
     # in the spend log row's metadata. Set it on every deployment of the group.
     internal_router_model: bool | None = None
 
+    # names whatever injected this deployment at runtime (a plugin, a callback, a direct
+    # upsert_deployment call). The proxy's config reconcile evicts any live deployment it
+    # cannot find in the db or in config.yaml; a deployment that sets this is exempt,
+    # because its owner, not the reconcile, decides when it goes away.
+    managed_by: str | None = None
+
     def __init__(self, id: str | int | None = None, **params) -> None:
         if id is None:
             id = str(uuid.uuid4())  # Generate a UUID if id is None or not provided
