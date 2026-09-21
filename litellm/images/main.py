@@ -1005,7 +1005,7 @@ async def aimage_edit(
                 message=message,
                 model=model or "unknown",
                 llm_provider=custom_llm_provider or "openai",
-                body={
+                body={  # mutable-ok: BadRequestError requires an OpenAI-shaped error body dict
                     "message": message,
                     "type": "invalid_request_error",
                     "param": "image",

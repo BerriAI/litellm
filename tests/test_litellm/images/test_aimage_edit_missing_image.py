@@ -12,6 +12,34 @@ import pytest
 import litellm
 from litellm.images.main import aimage_edit
 
+_MISSING_IMAGE_MESSAGE = "Missing required parameter: 'image'."
+_MISSING_IMAGE_BODY = {
+    "message": _MISSING_IMAGE_MESSAGE,
+    "type": "invalid_request_error",
+    "param": "image",
+    "code": "missing_required_parameter",
+}
+
+
+def _assert_missing_image_400(
+    err: litellm.BadRequestError,
+    *,
+    model: str,
+    llm_provider: str,
+) -> None:
+    message = str(err)
+    assert err.status_code == 400
+    assert _MISSING_IMAGE_MESSAGE in message
+    assert "positional argument" not in message
+    assert "TypeError" not in message
+    assert err.model == model
+    assert err.llm_provider == llm_provider
+    assert err.param == "image"
+    body = err.body
+    assert isinstance(body, Mapping)
+    for key, value in _MISSING_IMAGE_BODY.items():
+        assert body[key] == value
+
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
@@ -27,15 +55,11 @@ async def test_aimage_edit_missing_image_raises_bad_request(kwargs: Mapping[str,
     with pytest.raises(litellm.BadRequestError) as exc_info:
         await litellm.aimage_edit(**kwargs)
 
-    err = exc_info.value
-    message = str(err)
-    assert err.status_code == 400
-    assert "Missing required parameter: 'image'" in message
-    assert "positional argument" not in message
-    assert "TypeError" not in message
-    assert getattr(err, "param", None) == "image"
-    assert err.model == "openai/gpt-image-1"
-    assert err.llm_provider == "openai"
+    _assert_missing_image_400(
+        exc_info.value,
+        model="openai/gpt-image-1",
+        llm_provider="openai",
+    )
 
 
 @pytest.mark.asyncio
@@ -43,10 +67,11 @@ async def test_aimage_edit_direct_import_missing_image_raises_bad_request() -> N
     with pytest.raises(litellm.BadRequestError) as exc_info:
         await aimage_edit(model="gpt-image-1", prompt="add a hat")
 
-    err = exc_info.value
-    assert err.status_code == 400
-    assert "Missing required parameter: 'image'" in str(err)
-    assert "positional argument" not in str(err)
+    _assert_missing_image_400(
+        exc_info.value,
+        model="gpt-image-1",
+        llm_provider="openai",
+    )
 
 
 @pytest.mark.asyncio
@@ -58,7 +83,20 @@ async def test_aimage_edit_missing_image_keeps_custom_llm_provider() -> None:
             custom_llm_provider="azure",
         )
 
-    err = exc_info.value
-    assert err.status_code == 400
-    assert err.llm_provider == "azure"
-    assert err.model == "gpt-image-1"
+    _assert_missing_image_400(
+        exc_info.value,
+        model="gpt-image-1",
+        llm_provider="azure",
+    )
+
+
+@pytest.mark.asyncio
+async def test_aimage_edit_missing_image_defaults_model_to_unknown() -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await aimage_edit(prompt="add a hat")
+
+    _assert_missing_image_400(
+        exc_info.value,
+        model="unknown",
+        llm_provider="openai",
+    )
