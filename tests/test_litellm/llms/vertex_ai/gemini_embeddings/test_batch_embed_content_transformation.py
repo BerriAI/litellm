@@ -10,6 +10,7 @@ Covers:
 
 import pytest
 
+import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     _build_part_for_input,
@@ -307,7 +308,7 @@ class TestProcessEmbedContentResponseUsage:
 
     MODEL = "gemini-embedding-2"
 
-    def test_multimodal_image_preserves_usage_metadata(self):
+    def test_multimodal_image_preserves_usage_metadata(self, local_model_cost_map):
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
             "usageMetadata": {
@@ -333,7 +334,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert prompt_cost > 0
 
-    def test_text_modality_detail_populated(self):
+    def test_text_modality_detail_populated(self, local_model_cost_map):
         response_json = {
             "embedding": {"values": [0.1, 0.2]},
             "usageMetadata": {
@@ -400,7 +401,7 @@ class TestProcessEmbedContentResponseUsage:
         )
         assert result.usage.prompt_tokens > 0
 
-    def test_file_reference_image_billed_per_image_not_text(self):
+    def test_file_reference_image_billed_per_image_not_text(self, local_model_cost_map):
         """files/... image refs must bill per-image, not at the text token rate."""
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
@@ -430,9 +431,10 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(0.00012)
+        image_rate = litellm.model_cost[self.MODEL]["input_cost_per_image"]
+        assert prompt_cost == pytest.approx(1 * image_rate)
 
-    def test_file_reference_non_image_not_counted_as_image(self):
+    def test_file_reference_non_image_not_counted_as_image(self, local_model_cost_map):
         """A files/... ref resolving to a non-image mime must not be image-counted."""
         response_json = {
             "embedding": {"values": [0.1, 0.2]},
@@ -465,9 +467,10 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        assert prompt_cost == pytest.approx(2.0 * 0.00016)
+        audio_per_second = litellm.model_cost[self.MODEL]["input_cost_per_audio_per_second"]
+        assert prompt_cost == pytest.approx(2.0 * audio_per_second)
 
-    def test_video_plus_audio_does_not_double_bill_text(self):
+    def test_video_plus_audio_does_not_double_bill_text(self, local_model_cost_map):
         """Video+audio responses must not get video tokens reassigned to text."""
         response_json = {
             "embedding": {"values": [0.1]},
@@ -499,5 +502,10 @@ class TestProcessEmbedContentResponseUsage:
             usage=result.usage,
             custom_llm_provider="vertex_ai",
         )
-        # 1 floor text token at 2e-7 + 2s of video at 7.9e-4 + 2s of audio at 1.6e-4
-        assert prompt_cost == pytest.approx(1 * 2e-7 + 2 * 0.00079 + 2 * 0.00016)
+        model_info = litellm.model_cost[self.MODEL]
+        text_rate = model_info["input_cost_per_token"]
+        video_per_second = model_info["input_cost_per_video_per_second"]
+        audio_per_second = model_info["input_cost_per_audio_per_second"]
+        assert prompt_cost == pytest.approx(
+            1 * text_rate + 2 * video_per_second + 2 * audio_per_second
+        )
