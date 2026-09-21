@@ -23,14 +23,14 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _COST_MAP: Final = TypeAdapter(dict[str, dict[str, object]])
 
 
-def _catalog_cost(key: str) -> float:
+def _catalog_cost(key: str, field: str = "output_cost_per_image") -> float:
     cost_map: Final = _COST_MAP.validate_json(_COST_MAP_PATH.read_bytes())
-    cost_value: Final = cost_map[key]["output_cost_per_image"]
+    cost_value: Final = cost_map[key][field]
     assert isinstance(cost_value, (int, float))
     return float(cost_value)
 
 
-def _image_response(urls: tuple[str, ...], prompt: str) -> bytes:
+def _image_response(images: tuple[tuple[str, int, int], ...], prompt: str) -> bytes:
     return json.dumps(
         {
             "images": [
@@ -39,10 +39,10 @@ def _image_response(urls: tuple[str, ...], prompt: str) -> bytes:
                     "content_type": "image/png",
                     "file_name": url.rsplit("/", 1)[-1],
                     "file_size": 123456,
-                    "width": 1024,
-                    "height": 768,
+                    "width": width,
+                    "height": height,
                 }
-                for url in urls
+                for url, width, height in images
             ],
             "timings": {"inference": 2.1},
             "seed": 1234567,
@@ -69,9 +69,9 @@ def test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_ro
         body: Final = _JSON_OBJECT.validate_json(request.body)
         if body.get("quality") == "high":
             assert body == {"prompt": _PROMPT, "quality": "high", "image_size": {"width": 1024, "height": 1536}}
-            return Reply(body=_image_response((f"{wire_url}/files/high.png",), _PROMPT))
+            return Reply(body=_image_response(((f"{wire_url}/files/high.png", 1024, 1536),), _PROMPT))
         assert body == {"prompt": _PROMPT, "quality": "low"}
-        return Reply(body=_image_response((f"{wire_url}/files/low.png",), _PROMPT))
+        return Reply(body=_image_response(((f"{wire_url}/files/low.png", 1024, 1536),), _PROMPT))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         wire_url: Final = wire.url
@@ -85,7 +85,14 @@ def test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_ro
         )
         assert high_response.status_code == 200, high_response.text
         high_payload: Final = _JSON_OBJECT.validate_json(high_response.content)
-        assert high_payload["data"] == [{"url": f"{wire.url}/files/high.png", "b64_json": None, "revised_prompt": None}]
+        assert high_payload["data"] == [
+            {
+                "url": f"{wire.url}/files/high.png",
+                "b64_json": None,
+                "revised_prompt": None,
+                "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+            }
+        ]
         high_cost: Final = _response_cost(high_response)
         assert high_cost == _approx(_catalog_cost("fal_ai/high/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"))
 
@@ -96,9 +103,16 @@ def test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_ro
         )
         assert low_response.status_code == 200, low_response.text
         low_payload: Final = _JSON_OBJECT.validate_json(low_response.content)
-        assert low_payload["data"] == [{"url": f"{wire.url}/files/low.png", "b64_json": None, "revised_prompt": None}]
+        assert low_payload["data"] == [
+            {
+                "url": f"{wire.url}/files/low.png",
+                "b64_json": None,
+                "revised_prompt": None,
+                "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+            }
+        ]
         low_cost: Final = _response_cost(low_response)
-        assert low_cost == _approx(_catalog_cost("fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/text-to-image"))
+        assert low_cost == _approx(_catalog_cost("fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"))
         assert high_cost != low_cost
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/openai/gpt-image-2.5/flare/text-to-image"),
@@ -119,7 +133,7 @@ def test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image(gate
         }
         return Reply(
             body=_image_response(
-                (f"{wire_url}/files/flux-1.png", f"{wire_url}/files/flux-2.png"),
+                ((f"{wire_url}/files/flux-1.png", 1024, 1024), (f"{wire_url}/files/flux-2.png", 1920, 1080)),
                 _PROMPT,
             )
         )
@@ -135,11 +149,21 @@ def test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image(gate
         assert response.status_code == 200, response.text
         payload: Final = _JSON_OBJECT.validate_json(response.content)
         assert payload["data"] == [
-            {"url": f"{wire.url}/files/flux-1.png", "b64_json": None, "revised_prompt": None},
-            {"url": f"{wire.url}/files/flux-2.png", "b64_json": None, "revised_prompt": None},
+            {
+                "url": f"{wire.url}/files/flux-1.png",
+                "b64_json": None,
+                "revised_prompt": None,
+                "provider_specific_fields": {"width": 1024, "height": 1024, "content_type": "image/png"},
+            },
+            {
+                "url": f"{wire.url}/files/flux-2.png",
+                "b64_json": None,
+                "revised_prompt": None,
+                "provider_specific_fields": {"width": 1920, "height": 1080, "content_type": "image/png"},
+            },
         ]
         cost: Final = _response_cost(response)
-        assert cost == _approx(2 * _catalog_cost("fal_ai/fal-ai/flux/dev"))
+        assert cost == _approx(3 * _catalog_cost("fal_ai/fal-ai/flux/dev", "output_cost_per_pixel") * 1_048_576)
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/fal-ai/flux/dev")]
 
 
@@ -155,7 +179,7 @@ def test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row(
             "image_urls": ["data:image/png;base64," + base64.b64encode(_PNG_BYTES).decode()],
             "quality": "low",
         }
-        return Reply(body=_image_response((f"{wire_url}/files/edit.png",), _PROMPT))
+        return Reply(body=_image_response(((f"{wire_url}/files/edit.png", 1024, 1536),), _PROMPT))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         wire_url: Final = wire.url
@@ -168,9 +192,16 @@ def test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row(
         )
         assert response.status_code == 200, response.text
         payload: Final = _JSON_OBJECT.validate_json(response.content)
-        assert payload["data"] == [{"url": f"{wire.url}/files/edit.png", "b64_json": None, "revised_prompt": None}]
+        assert payload["data"] == [
+            {
+                "url": f"{wire.url}/files/edit.png",
+                "b64_json": None,
+                "revised_prompt": None,
+                "provider_specific_fields": {"width": 1024, "height": 1536, "content_type": "image/png"},
+            }
+        ]
         cost: Final = _response_cost(response)
-        assert cost == _approx(_catalog_cost("fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/edit"))
+        assert cost == _approx(_catalog_cost("fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/edit"))
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/openai/gpt-image-2.5/flare/edit")
         ]

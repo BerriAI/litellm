@@ -402,6 +402,7 @@ MINIMUM_PROMPT_CACHE_TOKEN_COUNT: Final = (
     if MINIMUM_PROMPT_CACHE_TOKEN_COUNT_OVERRIDE is not None
     else DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
 )
+PROMPT_CACHE_LOOKBACK_POSITIONS: Final = 20
 DEFAULT_TRIM_RATIO: Final = float(
     os.getenv("DEFAULT_TRIM_RATIO", 0.75)
 )  # default ratio of tokens to trim from the end of a prompt
@@ -749,6 +750,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "inception",
     "vercel_ai_gateway",
     "wandb",
+    "edenai",
     "ovhcloud",
     "lemonade",
     "docker_model_runner",
@@ -924,6 +926,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
+    "https://api.edenai.run/v3",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
@@ -993,6 +996,7 @@ openai_compatible_providers: Final[list] = [
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
+    "edenai",
     "wandb",
     "cometapi",
     "clarifai",
