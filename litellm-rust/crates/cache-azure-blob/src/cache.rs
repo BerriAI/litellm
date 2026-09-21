@@ -19,7 +19,6 @@ use url::Url;
 
 use crate::credential::AzureBlobCredential;
 
-/// Synchronous methods block on `runtime` and therefore must run outside of it
 pub struct AzureBlobCache<C> {
     container: BlobContainerClient,
     codec: C,
@@ -54,14 +53,15 @@ impl<C: CacheCodec> AzureBlobCache<C> {
         codec: C,
         runtime: Handle,
     ) -> Result<Self, Error> {
-        let mut url = Url::parse(account_url).map_err(|_| Error::Unavailable)?;
-        let account_url = url.as_str().trim_end_matches('/').to_string();
-        url.path_segments_mut()
-            .map_err(|()| Error::Unavailable)?
-            .pop_if_empty()
-            .push(container);
+        let account_url = Url::parse(account_url)
+            .map_err(|_| Error::Unavailable)?
+            .as_str()
+            .trim_end_matches('/')
+            .to_string();
+        let container_url =
+            Url::parse(&format!("{account_url}/{container}")).map_err(|_| Error::Unavailable)?;
         let client = BlobContainerClient::new(
-            url,
+            container_url,
             credential,
             Some(BlobContainerClientOptions {
                 client_options,
@@ -108,7 +108,7 @@ impl<C: CacheCodec> AzureBlobCache<C> {
             .await
         {
             Ok(_) => Ok(()),
-            Err(error) if is_storage_error(&error, StorageErrorCode::BlobAlreadyExists) => Ok(()),
+            Err(error) if !overwrite && is_already_present(&error) => Ok(()),
             Err(_) => Err(Error::Unavailable),
         }
     }
@@ -151,6 +151,11 @@ impl<C: CacheCodec> AzureBlobCache<C> {
     fn block_on<T>(&self, future: impl Future<Output = T>) -> T {
         self.runtime.block_on(future)
     }
+}
+
+fn is_already_present(error: &azure_core::Error) -> bool {
+    is_storage_error(error, StorageErrorCode::BlobAlreadyExists)
+        || is_storage_error(error, StorageErrorCode::ConditionNotMet)
 }
 
 fn is_storage_error(error: &azure_core::Error, code: StorageErrorCode) -> bool {
