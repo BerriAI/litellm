@@ -75,73 +75,9 @@ veil = "0.3.0"
 
 [profile.release]
 opt-level = 3
-lto = "fat"
+lto = "thin"
 codegen-units = 1
 panic = "unwind"
 debug = false
 incremental = false
 strip = "symbols"
-
-[profile.release.package."aws-config"]
-opt-level = "s"
-
-[profile.release.package."aws-credential-types"]
-opt-level = "s"
-
-[profile.release.package."aws-runtime"]
-opt-level = "s"
-
-[profile.release.package."aws-sdk-kms"]
-opt-level = "s"
-
-[profile.release.package."aws-sdk-s3"]
-opt-level = "s"
-
-[profile.release.package."aws-sdk-secretsmanager"]
-opt-level = "s"
-
-[profile.release.package."aws-sdk-sts"]
-opt-level = "s"
-
-
-[profile.release.package."aws-smithy-async"]
-opt-level = "s"
-
-[profile.release.package."aws-smithy-checksums"]
-opt-level = "s"
-
-
-[profile.release.package."aws-smithy-http"]
-opt-level = "s"
-
-[profile.release.package."aws-smithy-http-client"]
-opt-level = "s"
-
-[profile.release.package."aws-smithy-json"]
-opt-level = "s"
-
-[profile.release.package."aws-smithy-observability"]
-opt-level = "s"
-
-[profile.release.package."aws-smithy-query"]
-opt-level = "s"
-
-[profile.release.package."aws-smithy-runtime"]
-opt-level = "s"
-
-
-[profile.release.package."aws-smithy-runtime-api-macros"]
-opt-level = "s"
-
-[profile.release.package."aws-smithy-schema"]
-opt-level = "s"
-
-
-[profile.release.package."aws-smithy-xml"]
-opt-level = "s"
-
-[profile.release.package."aws-types"]
-opt-level = "s"
-
-[profile.release.package."litellm-cache-s3"]
-opt-level = "s"
