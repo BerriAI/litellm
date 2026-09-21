@@ -20,6 +20,7 @@ import pytest
 
 import litellm
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
+from litellm.proxy._types import ProxyRuntimeConfig
 
 # Configure logging
 logging.basicConfig(
@@ -2912,7 +2913,7 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
     with patch.object(
-        proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
+        proxy_config, "get_config", new=AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(mock_config_data))
     ):
         response = client_no_auth.get("/get/config/callbacks")
 
@@ -2991,7 +2992,7 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
 
     with patch.object(
-        proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
+        proxy_config, "get_config", new=AsyncMock(return_value=ProxyRuntimeConfig.from_resolved(mock_config_data))
     ):
         response = client_no_auth.get("/get/config/callbacks")
 
