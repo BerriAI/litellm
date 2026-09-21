@@ -6750,6 +6750,65 @@ async def test_builder_returns_401_when_db_lookup_reports_missing_key():
     assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
 
 
+async def _run_builder_without_db(api_key: str):
+    """Drive the real auth builder with no database connected, using the
+    given bearer key. Returns the builder result."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    attrs = {**_proxy_attrs_for_db_lookup(), "prisma_client": None}
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+        with patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ):
+            return await _user_api_key_auth_builder(
+                request=request,
+                api_key=api_key,
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={},
+            )
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_builder_returns_401_auth_error_for_wrong_key_without_db():
+    """Regression test for https://github.com/BerriAI/litellm/issues/12273.
+
+    With a master key configured and no database connected, a request using
+    any other key must fail as an authentication error (401), not as
+    "No connected db." (400 no_db_connection). Without a DB the master key
+    is the only valid credential, so a non-matching key is a wrong key.
+    """
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_builder_without_db(api_key="Bearer <redacted>")
+
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+    assert exc_info.value.type == ProxyErrorTypes.auth_error
+    assert "No connected db" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_builder_accepts_master_key_without_db():
+    """Control: the master key itself still authenticates when no DB is
+    connected, proving the 401 above only fires for non-matching keys."""
+    result = await _run_builder_without_db(api_key="Bearer sk-test-master")
+
+    assert isinstance(result, UserAPIKeyAuth)
+
+
 @pytest.mark.asyncio
 async def test_builder_succeeds_when_db_lookup_returns_valid_token():
     """Regression guard: a valid key still authenticates. Proves the 503

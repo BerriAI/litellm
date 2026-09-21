@@ -2094,13 +2094,12 @@ async def _user_api_key_auth_builder(
 
         ## Check DB
 
-        if (
-            prisma_client is None
-        ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
+        if prisma_client is None:
             raise ProxyException(
-                message="No connected db.",
-                type=ProxyErrorTypes.no_db_connection,
-                code=400,
+                message="Authentication Error, Invalid proxy server token passed. "
+                "No database is connected, so only the master key is accepted.",
+                type=ProxyErrorTypes.auth_error,
+                code=401,
                 param=None,
             )
 
