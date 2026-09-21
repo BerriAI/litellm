@@ -105,8 +105,8 @@ async def create_mcp_list_tools_events(
                 "description": getattr(tool, "description", ""),
                 "annotations": {"read_only": False},
                 **dict.fromkeys(
-                    ("input_schema",) if hasattr(tool, "inputSchema") or hasattr(tool, "input_schema") else (),
-                    getattr(tool, "inputSchema", getattr(tool, "input_schema", None)),
+                    ("input_schema",) if hasattr(tool, "input_schema") else (),
+                    getattr(tool, "input_schema", None),
                 ),
             }
             for tool in filtered_mcp_tools

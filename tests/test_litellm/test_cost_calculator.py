@@ -22,7 +22,9 @@ from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
+    Choices,
     LiteLLMRealtimeStreamLoggingObject,
+    Message,
     ModelInfo,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -108,6 +110,28 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     )
 
     assert cost > 0, "Cost should be calculated using response model"
+
+
+def test_completion_cost_strips_dated_azure_snapshot_model(_local_model_cost_map: None) -> None:
+    dated_response = ModelResponse(
+        model="gpt-5.6-luna-2099-01-01",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    dated_response._hidden_params = {"custom_llm_provider": "azure"}
+
+    undated_response = ModelResponse(
+        model="gpt-5.6-luna",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    undated_response._hidden_params = {"custom_llm_provider": "azure"}
+
+    dated_cost = litellm.completion_cost(completion_response=dated_response)
+    undated_cost = litellm.completion_cost(completion_response=undated_response)
+
+    assert dated_cost == undated_cost
+    assert dated_cost > 0
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
@@ -4474,3 +4498,30 @@ def test_batch_cost_calculator_prices_modalities_and_cached_tokens_together_in_t
     )
 
     assert prompt_cost == pytest.approx(298_926 * 3e-6 + 64 * 5e-6 + 10 * 3e-6 + 1_000 * 3e-7)
+
+
+QWEN3_NEXT_REGIONS: Final = ("ap-northeast-1", "ap-south-1", "ap-southeast-2", "eu-west-1", "eu-west-2", "sa-east-1")
+
+
+@pytest.mark.parametrize("region", QWEN3_NEXT_REGIONS)
+def test_cost_per_token_bedrock_qwen3_next_uses_regional_entry_not_us_rate(
+    monkeypatch: pytest.MonkeyPatch, region: str
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    regional: Final = litellm.model_cost[f"bedrock/{region}/qwen.qwen3-next-80b-a3b"]
+    us: Final = litellm.model_cost["qwen.qwen3-next-80b-a3b"]
+    assert regional["input_cost_per_token"] != us["input_cost_per_token"]
+    assert regional["output_cost_per_token"] != us["output_cost_per_token"]
+
+    prompt_tokens, completion_tokens = 1000, 500
+    prompt_usd, completion_usd = cost_per_token(
+        model=f"bedrock/{region}/qwen.qwen3-next-80b-a3b",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider="bedrock",
+    )
+
+    assert prompt_usd == pytest.approx(prompt_tokens * regional["input_cost_per_token"])
+    assert completion_usd == pytest.approx(completion_tokens * regional["output_cost_per_token"])

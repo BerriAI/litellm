@@ -13,7 +13,7 @@ mod _native {
     #[pymodule_export]
     use crate::diagnostics::_panic_for_test;
     #[pymodule_export]
-    use crate::diagnostics::gil_stats;
+    use crate::diagnostics::{gil_stats, process_state_started, reserve_process_for_forking};
     #[pymodule_export]
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
@@ -30,6 +30,8 @@ mod _native {
     use crate::routes::responses::ResponsesWebSocketConnection;
     #[pymodule_export]
     use crate::token_counter::TokenCounter;
+    #[pymodule_export]
+    use litellm_host_python::{ForkedAfterNativeRuntimeStarted, ProcessReservedForForking};
 }
 
 use pyo3::prelude::*;
@@ -50,6 +52,8 @@ mod tests {
             let mut expected = vec![
                 "RustBridgeDeclined",
                 "RustUpstreamError",
+                "ForkedAfterNativeRuntimeStarted",
+                "ProcessReservedForForking",
                 "ocr",
                 "aocr",
                 "transcription",
@@ -62,6 +66,8 @@ mod tests {
                 "ResponsesWebSocketConnection",
                 "TokenCounter",
                 "gil_stats",
+                "process_state_started",
+                "reserve_process_for_forking",
             ];
             expected.sort_unstable();
 

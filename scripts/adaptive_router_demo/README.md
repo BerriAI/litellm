@@ -41,6 +41,8 @@ The repo ships with a working example config:
 
 ```bash
 export OPENAI_API_KEY=sk-...     # underlying models hit OpenAI
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"   # the example config reads its master key from here
+echo "$LITELLM_MASTER_KEY"       # copy it, the chat page and dashboard ask for it
 uv run litellm \
     --config litellm/proxy/example_config_yaml/adaptive_router_example.yaml \
     --port 4000
@@ -83,19 +85,19 @@ The dashboard is a single static HTML file. Either:
 In the connect bar, fill in:
 
 - **Proxy URL:** `http://localhost:4000`
-- **Master Key:** the `master_key` from your config (`sk-1234` in the example).
+- **Master Key:** the `LITELLM_MASTER_KEY` printed in step 1.
 
 Click **Connect**. The dashboard polls `GET /adaptive_router/state` every
 500ms (admin-only endpoint, returns one snapshot per configured router).
 
 ## 5. Drive synthetic traffic
 
-In a second terminal:
+In a second terminal, replacing `<your-master-key>` with the key printed in step 1:
 
 ```bash
 uv run python scripts/adaptive_router_demo/traffic.py \
     --proxy-url http://localhost:4000 \
-    --api-key   sk-1234 \
+    --api-key   <your-master-key> \
     --router    smart-cheap-router \
     --rounds    100 \
     --rate      0.5

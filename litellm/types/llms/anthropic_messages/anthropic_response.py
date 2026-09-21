@@ -97,3 +97,4 @@ class AnthropicMessagesResponse(TypedDict, total=False):
     type: Literal["message"] | None
     usage: AnthropicUsage | None
     context_management: NotRequired[ContextManagementResponse]
+    safeguard_results: NotRequired[ReadOnly[list[dict[str, object]]]]

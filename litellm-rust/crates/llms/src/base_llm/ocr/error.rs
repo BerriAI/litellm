@@ -76,6 +76,12 @@ pub enum Error {
     Unsupported(&'static str),
     #[error("invalid provider: {0}")]
     InvalidProvider(String),
+    #[error("invalid model: {provider} has no model {model:?} - use one of: {}", supported.join(", "))]
+    InvalidModel {
+        provider: &'static str,
+        model: String,
+        supported: &'static [&'static str],
+    },
     #[error("invalid request: {0}")]
     InvalidRequest(String),
     #[error("invalid response: {0}")]
@@ -95,11 +101,13 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
-    Transport(#[from] crate::custom_httpx::transport::Error),
+    Transport(#[from] litellm_http::transport::Error),
     #[error(transparent)]
     Params(#[from] litellm_core_utils::params::Error),
     #[error(transparent)]
-    Headers(#[from] crate::custom_httpx::http_handler::HeaderError),
+    Headers(#[from] litellm_http::request::HeaderError),
+    #[error(transparent)]
+    Http(#[from] litellm_http::Error),
 }
 
 impl From<litellm_host::machine::MachineFault> for Error {
@@ -125,9 +133,7 @@ impl Error {
     pub fn http_status_code(&self) -> Option<u16> {
         match self {
             Self::Provider { status, .. }
-            | Self::Transport(crate::custom_httpx::transport::Error::Http { status, .. }) => {
-                Some(*status)
-            }
+            | Self::Transport(litellm_http::transport::Error::Http { status, .. }) => Some(*status),
             error if error.is_request() => Some(400),
             _ => None,
         }
@@ -155,8 +161,10 @@ impl Error {
                 | Self::DotModel
                 | Self::InvalidRequest(_)
                 | Self::InvalidProvider(_)
+                | Self::InvalidModel { .. }
                 | Self::Params(_)
                 | Self::Headers(_)
+                | Self::Http(_)
         )
     }
 

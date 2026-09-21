@@ -183,6 +183,42 @@ def test_get_model_info_strips_openai_finetune_ids_without_a_custom_suffix(local
     assert info["key"] == "ft:gpt-4o-2024-08-06"
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_key"),
+    [
+        ("gpt-5.6-luna-2099-01-01", "openai", "gpt-5.6-luna"),
+        ("gpt-5.6-luna-2099-01-01", "azure", "azure/gpt-5.6-luna"),
+    ],
+)
+def test_get_model_info_falls_back_from_dated_snapshot_to_undated_entry(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    custom_llm_provider: str,
+    expected_key: str,
+) -> None:
+    monkeypatch.delitem(litellm.model_cost, model, raising=False)
+    monkeypatch.delitem(litellm.model_cost, f"{custom_llm_provider}/{model}", raising=False)
+    assert expected_key in litellm.model_cost
+    info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    assert info["key"] == expected_key
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_key"),
+    [
+        ("gpt-4o-2024-08-06", "openai", "gpt-4o-2024-08-06"),
+        ("gpt-5.6-luna-2026-07-09", "azure", "azure/gpt-5.6-luna-2026-07-09"),
+    ],
+)
+def test_get_model_info_prefers_exact_dated_key_over_stripped(
+    local_model_cost_map: None, model: str, custom_llm_provider: str, expected_key: str
+) -> None:
+    assert expected_key in litellm.model_cost
+    info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    assert info["key"] == expected_key
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.
@@ -616,6 +652,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "cache_creation_input_audio_token_cost",
         "cache_read_input_token_cost",
         "cache_read_input_audio_token_cost",
+        "cache_read_input_image_token_cost",
         "input_dbu_cost_per_token",
         "output_db_cost_per_token",
         "output_dbu_cost_per_token",
@@ -708,6 +745,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_token_cost_above_272k_tokens_batches": {"type": "number"},
                 "cache_creation_input_token_cost_above_1hr_above_200k_tokens": {"type": "number"},
                 "cache_read_input_audio_token_cost": {"type": "number"},
+                "cache_read_input_image_token_cost": {"type": "number"},
                 "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
@@ -839,6 +877,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_pdf_input": {"type": "boolean"},
                 "prompt_cache_min_tokens": {"type": "number"},
                 "supports_prompt_cache_breakpoint": {"type": "boolean"},
+                "supports_thinking_cache_preservation": {"type": "boolean"},
                 "supports_prompt_caching": {"type": "boolean"},
                 "supports_response_schema": {"type": "boolean"},
                 "supports_system_messages": {"type": "boolean"},
@@ -910,6 +949,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                             "/v1/audio/transcriptions",
                             "/v1/audio/speech",
                             "/v1/ocr",
+                            "/v1/videos",
                             "/vertex_ai/live",
                             "/v1/listen",
                             "/v1beta/interactions",
@@ -958,6 +998,38 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
+                "off_peak_pricing": {
+                    "type": "object",
+                    "properties": {
+                        "hours_utc": {
+                            "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                        },
+                        "windows": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "hours_utc": {
+                                        "oneOf": [{"type": "string"}, {"type": "array", "items": {"type": "string"}}],
+                                    },
+                                    "weekdays": {
+                                        "type": "array",
+                                        "items": {"oneOf": [{"type": "integer"}, {"type": "string"}]},
+                                    },
+                                },
+                                "required": ["hours_utc"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "weekday_timezone": {"type": "string"},
+                        "input_cost_per_token": {"type": "number"},
+                        "output_cost_per_token": {"type": "number"},
+                        "output_cost_per_reasoning_token": {"type": "number"},
+                        "cache_read_input_token_cost": {"type": "number"},
+                        "cache_creation_input_token_cost": {"type": "number"},
+                    },
+                    "additionalProperties": False,
+                },
                 "tiered_pricing": {
                     "type": "array",
                     "items": {
@@ -1007,6 +1079,9 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "fal_ai/bytedance/seedance-2.0/text-to-video",
+        "fal_ai/bytedance/seedance-2.0/image-to-video",
+        "fal_ai/bytedance/seedance-2.0/reference-to-video",
     ]
 
     is_valid, violations = validate_model_cost_values(actual_json, exceptions)
