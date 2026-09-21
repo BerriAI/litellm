@@ -133,11 +133,13 @@ class TestRegistration:
         assert supported is not None
         assert {"tools", "tool_choice", "response_format", "stream_options", "max_completion_tokens"} <= set(supported)
 
-    def test_reasoning_effort_is_supported_because_eden_forwards_it_to_reasoning_models(self):
-        supported = litellm.get_supported_openai_params(model="openai/gpt-5-mini", custom_llm_provider="edenai")
+    def test_reasoning_effort_is_supported_only_for_models_the_price_map_flags_as_reasoning(self):
+        reasoning = litellm.get_supported_openai_params(model="openai/gpt-5-mini", custom_llm_provider="edenai")
+        plain = litellm.get_supported_openai_params(model="openai/gpt-4.1-nano", custom_llm_provider="edenai")
 
-        assert supported is not None
-        assert "reasoning_effort" in supported
+        assert reasoning is not None and plain is not None
+        assert "reasoning_effort" in reasoning
+        assert "reasoning_effort" not in plain
 
     def test_validate_environment_names_the_eden_key(self, monkeypatch):
         monkeypatch.delenv("EDENAI_API_KEY", raising=False)
