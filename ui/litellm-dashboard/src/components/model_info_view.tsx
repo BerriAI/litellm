@@ -340,8 +340,10 @@ export default function ModelInfoView({
         }
       }
 
-      if (values.litellm_credential_name) {
-        updatedLitellmParams.litellm_credential_name = values.litellm_credential_name;
+      const storedCredentialName: string | null = localModelData?.litellm_params?.litellm_credential_name ?? null;
+      const selectedCredentialName: string | null = values.litellm_credential_name ?? null;
+      if (selectedCredentialName !== storedCredentialName) {
+        updatedLitellmParams.litellm_credential_name = selectedCredentialName;
       } else {
         delete updatedLitellmParams.litellm_credential_name;
       }
@@ -397,6 +399,7 @@ export default function ModelInfoView({
       // without this strip a masked value would be re-encrypted over the real secret.
       // Credential rotation has its own dedicated path (UpdateModelCredentialsModal).
       const safeLitellmParams = stripMaskedSecrets(updatedLitellmParams);
+      const { litellm_credential_name: _sentCredential, ...localLitellmParams } = safeLitellmParams;
 
       const updateData = {
         model_name: values.model_name,
@@ -410,7 +413,10 @@ export default function ModelInfoView({
         ...localModelData,
         model_name: values.model_name,
         litellm_model_name: values.litellm_model_name,
-        litellm_params: safeLitellmParams,
+        litellm_params:
+          selectedCredentialName === null
+            ? localLitellmParams
+            : { ...localLitellmParams, litellm_credential_name: selectedCredentialName },
         model_info: updatedModelInfo,
       };
 
