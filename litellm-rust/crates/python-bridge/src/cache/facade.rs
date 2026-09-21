@@ -120,7 +120,7 @@ impl ObjectGuard {
                 if !attributes.get_item(name)?.is(value.bind(py)) {
                     return Ok(false);
                 }
-                if instance.contains(name)? && value.bind(py).is_callable() {
+                if instance.contains(name)? && !self.config_names.contains(&name.as_str()) {
                     return Ok(false);
                 }
             }
