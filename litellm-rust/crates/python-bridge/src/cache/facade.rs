@@ -290,9 +290,9 @@ impl FacadeGuard {
                 "redis_flush_size",
             ][..],
             "qdrant_semantic" => &[
-            "qdrant_api_base",
-            "qdrant_api_key",
-            "collection_name",
+                "qdrant_api_base",
+                "qdrant_api_key",
+                "collection_name",
                 "similarity_threshold",
                 "embedding_model",
                 "vector_size",
