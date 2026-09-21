@@ -8,6 +8,10 @@ users can intentionally clear previously-set fields.
 """
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from fastapi import HTTPException
+from litellm import Router
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -30,6 +34,8 @@ from litellm.proxy.management_endpoints.common_utils import (
     _user_has_admin_view,
     admin_can_invite_user,
 )
+from litellm.proxy.management_endpoints.common_utils import _has_non_empty_value
+from litellm.types.utils import BudgetConfig
 
 
 class TestUpdateMetadataFieldsEmptyCollections:
@@ -628,6 +634,58 @@ class TestValidateFiniteSpendErrorDetail:
         }
 
 
+class TestValidateBudgetDuration:
+    """`validate_budget_duration` keeps durations that never advance out of the
+    database.
+
+    A duration of "0s" resolves to a reset time of now, so the row is due again
+    the instant it is written. The reset job re-reads such rows on every tick
+    and, once one tenant owns enough of them, they fill each batch and starve
+    every other tenant's reset.
+    """
+
+    def test_none_is_allowed(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_budget_duration,
+        )
+
+        assert validate_budget_duration(None) is None
+
+    @pytest.mark.parametrize("duration", ["30s", "5m", "1h", "1d", "7d", "30d", "1mo"])
+    def test_positive_durations_are_allowed(self, duration):
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_budget_duration,
+        )
+
+        assert validate_budget_duration(duration) is None
+
+    @pytest.mark.parametrize("duration", ["0s", "0m", "0h", "0d", "-5m", "abc", ""])
+    def test_non_advancing_durations_are_rejected(self, duration):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_budget_duration,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            validate_budget_duration(duration)
+        assert exc_info.value.status_code == 400
+
+    def test_rejection_detail_is_exact(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            validate_budget_duration,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            validate_budget_duration("0s")
+
+        assert exc_info.value.detail == {
+            "error": "Invalid budget_duration '0s'. Use a format like '1h', '24h', '7d', or '30d'."
+        }
+
+
 class TestRequireCallerUserIdErrorDetail:
     """The 403 for a service-account key must carry the exact error body."""
 
@@ -925,3 +983,234 @@ class TestUpdateMetadataFieldMove:
             _update_metadata_fields(updated_kv)
         assert "guardrails" not in updated_kv
         assert updated_kv["metadata"]["guardrails"] == ["g1"]
+
+
+class TestHasNonEmptyValue:
+    """Tests for the _has_non_empty_value helper."""
+
+    def test_none_is_empty(self):
+        assert _has_non_empty_value(None) is False
+
+    def test_empty_list_is_empty(self):
+        assert _has_non_empty_value([]) is False
+
+    def test_empty_string_is_empty(self):
+        assert _has_non_empty_value("") is False
+
+    def test_blank_string_is_empty(self):
+        assert _has_non_empty_value("   ") is False
+
+    def test_non_empty_list_has_value(self):
+        assert _has_non_empty_value(["policy-a"]) is True
+
+    def test_non_empty_string_has_value(self):
+        assert _has_non_empty_value("30d") is True
+
+    def test_dict_has_value(self):
+        assert _has_non_empty_value({"key": "val"}) is True
+
+    def test_empty_dict_has_value(self):
+        # empty dict is not None/list/str, so it counts as non-empty
+        assert _has_non_empty_value({}) is True
+
+
+class TestUpdateMetadataFieldsPremiumCheck:
+    """
+    Tests that _update_metadata_fields skips premium user checks for empty
+    values but still enforces them for real values.
+
+    Issue: The UI sends the full form on every team update, including premium
+    fields like `policies: []`. The backend was treating these empty values
+    as premium feature usage and returning 403.
+    """
+
+    @patch(
+        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        side_effect=Exception("Should not be called"),
+    )
+    def test_empty_policies_skips_premium_check(self, mock_check):
+        """policies: [] should NOT trigger premium user check."""
+        updated_kv = {
+            "team_id": "team-123",
+            "team_alias": "my-team",
+            "policies": [],
+        }
+        _update_metadata_fields(updated_kv)
+        mock_check.assert_not_called()
+
+    @patch(
+        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        side_effect=Exception("Should not be called"),
+    )
+    def test_empty_guardrails_skips_premium_check(self, mock_check):
+        """guardrails: [] should NOT trigger premium user check."""
+        updated_kv = {
+            "team_id": "team-123",
+            "guardrails": [],
+        }
+        _update_metadata_fields(updated_kv)
+        mock_check.assert_not_called()
+
+    @patch(
+        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        side_effect=Exception("Should not be called"),
+    )
+    def test_empty_string_team_member_key_duration_skips_premium_check(
+        self, mock_check
+    ):
+        """team_member_key_duration: '' should NOT trigger premium user check."""
+        updated_kv = {
+            "team_id": "team-123",
+            "team_member_key_duration": "",
+        }
+        _update_metadata_fields(updated_kv)
+        mock_check.assert_not_called()
+
+    @patch(
+        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+        side_effect=Exception("Should not be called"),
+    )
+    def test_full_ui_payload_with_empty_premium_fields_skips_premium_check(
+        self, mock_check
+    ):
+        """A realistic UI payload with all empty premium fields should not 403."""
+        updated_kv = {
+            "team_id": "team-123",
+            "team_alias": "renamed-team",
+            "models": ["gpt-4o"],
+            "max_budget": 200,
+            "policies": [],
+            "guardrails": [],
+            "logging": [],
+            "team_member_key_duration": "",
+            "prompts": [],
+        }
+        _update_metadata_fields(updated_kv)
+        mock_check.assert_not_called()
+
+    @patch(
+        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+    )
+    def test_non_empty_policies_triggers_premium_check(self, mock_check):
+        """policies: ['real-policy'] SHOULD trigger premium user check."""
+        updated_kv = {
+            "team_id": "team-123",
+            "policies": ["real-policy"],
+        }
+        _update_metadata_fields(updated_kv)
+        mock_check.assert_called()
+
+    @patch(
+        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+    )
+    def test_non_empty_guardrails_triggers_premium_check(self, mock_check):
+        """guardrails: ['my-guardrail'] SHOULD trigger premium user check."""
+        updated_kv = {
+            "team_id": "team-123",
+            "guardrails": ["my-guardrail"],
+        }
+        _update_metadata_fields(updated_kv)
+        mock_check.assert_called()
+
+    @patch(
+        "litellm.proxy.management_endpoints.common_utils._premium_user_check",
+    )
+    def test_non_empty_team_member_key_duration_triggers_premium_check(
+        self, mock_check
+    ):
+        """team_member_key_duration: '30d' SHOULD trigger premium user check."""
+        updated_kv = {
+            "team_id": "team-123",
+            "team_member_key_duration": "30d",
+        }
+        _update_metadata_fields(updated_kv)
+        mock_check.assert_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_model,stored_name,owner,public_name,error", [
+    (False, None, None, None, None),
+    (True, "group", None, None, None),
+    (True, None, None, None, "Unknown deployment ID in router weights: id"),
+    (False, "renamed", None, None, "Deployment id does not belong to model group group"),
+    (False, None, "other-team", None, "Unknown deployment ID in router weights: id"),
+    (True, "internal", "team", "group", None),
+    (True, "group", "team", "public", "Deployment id does not belong to model group group"),
+    (True, "group", None, "unrelated-public-name", None),
+])
+async def test_router_weights_validate_current_deployment_scope(
+    db_model: bool, stored_name: str | None, owner: str | None,
+    public_name: str | None, error: str | None,
+) -> None:
+    from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
+
+    info = {"team_id": owner, "team_public_model_name": public_name}
+    router = Router(model_list=[{
+        "model_name": "group",
+        "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "test"},
+        "model_info": {"id": "id", "db_model": db_model, **info},
+    }])
+    rows = [SimpleNamespace(model_id="id", model_name=stored_name, model_info=info)] if stored_name else []
+    table = SimpleNamespace(find_many=AsyncMock(return_value=rows))
+    db = SimpleNamespace(db=SimpleNamespace(litellm_proxymodeltable=table))
+    validation = validate_router_settings_weights(
+        {"weights": {"group": {"id": 1}}}, team_id="team", prisma_client=db, llm_router=router,
+    )
+    if error:
+        with pytest.raises(HTTPException, match=error) as exc:
+            await validation
+        assert exc.value.status_code == 400
+        assert exc.value.detail == error
+    else:
+        await validation
+
+
+@pytest.mark.parametrize(
+    "model_max_budget, error",
+    [
+        ({"gpt-4o": BudgetConfig(max_budget=-1.0, budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(max_budget=float("inf"), budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(max_budget=float("nan"), budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(budget_duration="1d")}, "non-negative finite"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0)}, "requires a budget_duration"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0, budget_duration="fortnight")}, "budget_duration"),
+        ({"  ": BudgetConfig(max_budget=5.0, budget_duration="1d")}, "non-empty model names"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0, budget_duration="1d", tpm_limit=1000)}, "not enforced on a team"),
+        ({"gpt-4o": BudgetConfig(max_budget=5.0, budget_duration="1d", rpm_limit=10)}, "not enforced on a team"),
+    ],
+    ids=["negative", "inf", "nan", "no_cap", "no_duration", "bad_duration", "blank_model", "tpm_limit", "rpm_limit"],
+)
+def test_validate_team_model_max_budget_rejects_unenforceable_entries(model_max_budget, error) -> None:
+    from litellm.proxy.management_endpoints.common_utils import validate_team_model_max_budget
+
+    with pytest.raises(HTTPException) as exc:
+        validate_team_model_max_budget(model_max_budget=model_max_budget, premium_user=True)
+    assert exc.value.status_code == 400
+    assert error in exc.value.detail["error"]
+
+
+def test_validate_team_model_max_budget_accepts_a_zero_cap_and_prefixed_models() -> None:
+    from litellm.proxy.management_endpoints.common_utils import validate_team_model_max_budget
+
+    assert (
+        validate_team_model_max_budget(
+            model_max_budget={
+                "gpt-4o": BudgetConfig(max_budget=0.0, budget_duration="1d"),
+                "openai/gpt-4o-mini": BudgetConfig(max_budget=2.5, budget_duration="30d"),
+            },
+            premium_user=True,
+        )
+        is None
+    )
+
+
+def test_validate_team_model_max_budget_is_license_gated_only_when_set() -> None:
+    from litellm.proxy.management_endpoints.common_utils import validate_team_model_max_budget
+
+    validate_team_model_max_budget(model_max_budget=None, premium_user=False)
+    validate_team_model_max_budget(model_max_budget={}, premium_user=False)
+    with pytest.raises(HTTPException) as exc:
+        validate_team_model_max_budget(
+            model_max_budget={"gpt-4o": BudgetConfig(max_budget=1.0, budget_duration="1d")}, premium_user=False
+        )
+    assert exc.value.status_code == 403

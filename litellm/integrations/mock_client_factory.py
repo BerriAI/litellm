@@ -6,12 +6,14 @@ API calls and return successful mock responses, allowing full code execution wit
 making actual network calls.
 """
 
-import httpx
-import json
 import asyncio
-from datetime import timedelta
-from typing import Dict, Optional, List, cast
+import json
+from collections.abc import AsyncIterable, Iterable
 from dataclasses import dataclass
+from datetime import timedelta
+from typing import Final, cast
+
+import httpx
 
 from litellm._logging import verbose_logger
 
@@ -24,8 +26,8 @@ class MockClientConfig:
     env_var: str  # e.g., "GCS_MOCK", "LANGFUSE_MOCK"
     default_latency_ms: int = 100  # Default mock latency in milliseconds
     default_status_code: int = 200  # Default HTTP status code
-    default_json_data: Optional[Dict] = None  # Default JSON response data
-    url_matchers: Optional[List[str]] = None  # List of strings to match in URLs (e.g., ["storage.googleapis.com"])
+    default_json_data: dict | None = None  # Default JSON response data
+    url_matchers: list[str] | None = None  # List of strings to match in URLs (e.g., ["storage.googleapis.com"])
     patch_async_handler: bool = True  # Whether to patch AsyncHTTPHandler.post
     patch_sync_client: bool = False  # Whether to patch httpx.Client.post
     patch_http_handler: bool = False  # Whether to patch HTTPHandler.post (for sync calls that use HTTPHandler)
@@ -42,8 +44,8 @@ class MockResponse:
     def __init__(
         self,
         status_code: int = 200,
-        json_data: Optional[Dict] = None,
-        url: Optional[str] = None,
+        json_data: dict | None = None,
+        url: str | None = None,
         elapsed_seconds: float = 0.0,
     ):
         self.status_code = status_code
@@ -67,7 +69,7 @@ class MockResponse:
         """Return response content."""
         return self._content
 
-    def json(self) -> Dict:
+    def json(self) -> dict:
         """Return JSON response data."""
         return self._json_data
 
@@ -81,12 +83,12 @@ class MockResponse:
             raise Exception(f"HTTP {self.status_code}")
 
 
-def _is_url_match(url, matchers: List[str]) -> bool:
+def _is_url_match(url, matchers: list[str]) -> bool:
     """Check if URL matches any of the provided matchers."""
     try:
-        parsed_url = httpx.URL(url) if isinstance(url, str) else url
-        url_str = str(parsed_url).lower()
-        hostname = parsed_url.host or ""
+        parsed_url: Final = httpx.URL(url) if isinstance(url, str) else url
+        url_str: Final = str(parsed_url).lower()
+        hostname: Final = parsed_url.host or ""
 
         for matcher in matchers:
             if matcher.lower() in url_str or matcher.lower() in hostname.lower():
@@ -119,13 +121,13 @@ def create_mock_client_factory(config: MockClientConfig):
     # Calculate mock latency
     import os
 
-    latency_env = f"{config.name.upper()}_MOCK_LATENCY_MS"
-    _MOCK_LATENCY_SECONDS = float(os.getenv(latency_env, str(config.default_latency_ms))) / 1000.0
+    latency_env: Final = f"{config.name.upper()}_MOCK_LATENCY_MS"
+    _MOCK_LATENCY_SECONDS: Final = float(os.getenv(latency_env, str(config.default_latency_ms))) / 1000.0
 
     # Create URL matcher function
     def _is_mock_url(url) -> bool:
         # url_matchers is guaranteed to be a list after __post_init__
-        return _is_url_match(url, cast(List[str], config.url_matchers))
+        return _is_url_match(url, cast(list[str], config.url_matchers))
 
     # Create async handler mock
     async def _mock_async_handler_post(
@@ -139,11 +141,11 @@ def create_mock_client_factory(config: MockClientConfig):
         stream=False,
         logging_obj=None,
         files=None,
-        content=None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
     ):
         """Monkey-patched AsyncHTTPHandler.post that intercepts API calls."""
         if isinstance(url, str) and _is_mock_url(url):
-            verbose_logger.info(f"[{config.name} MOCK] POST to {url}")
+            verbose_logger.info("[%s MOCK] POST to %s", config.name, url)
             await asyncio.sleep(_MOCK_LATENCY_SECONDS)
             return MockResponse(
                 status_code=config.default_status_code,
@@ -171,7 +173,7 @@ def create_mock_client_factory(config: MockClientConfig):
     def _mock_sync_client_post(self, url, **kwargs):
         """Monkey-patched httpx.Client.post that intercepts API calls."""
         if _is_mock_url(url):
-            verbose_logger.info(f"[{config.name} MOCK] POST to {url} (sync)")
+            verbose_logger.info("[%s MOCK] POST to %s (sync)", config.name, url)
             return MockResponse(
                 status_code=config.default_status_code,
                 json_data=config.default_json_data,
@@ -192,12 +194,12 @@ def create_mock_client_factory(config: MockClientConfig):
         timeout=None,
         stream=False,
         files=None,
-        content=None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
         logging_obj=None,
     ):
         """Monkey-patched HTTPHandler.post that intercepts API calls."""
         if isinstance(url, str) and _is_mock_url(url):
-            verbose_logger.info(f"[{config.name} MOCK] POST to {url}")
+            verbose_logger.info("[%s MOCK] POST to %s", config.name, url)
             import time
 
             time.sleep(_MOCK_LATENCY_SECONDS)
@@ -235,29 +237,29 @@ def create_mock_client_factory(config: MockClientConfig):
         if _mocks_initialized:
             return
 
-        verbose_logger.debug(f"[{config.name} MOCK] Initializing {config.name} mock client...")
+        verbose_logger.debug("[%s MOCK] Initializing %s mock client...", config.name, config.name)
 
         if config.patch_async_handler and _original_async_handler_post is None:
             from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
             _original_async_handler_post = AsyncHTTPHandler.post
-            AsyncHTTPHandler.post = _mock_async_handler_post  # type: ignore
-            verbose_logger.debug(f"[{config.name} MOCK] Patched AsyncHTTPHandler.post")
+            AsyncHTTPHandler.post = _mock_async_handler_post
+            verbose_logger.debug("[%s MOCK] Patched AsyncHTTPHandler.post", config.name)
 
         if config.patch_sync_client and _original_sync_client_post is None:
             _original_sync_client_post = httpx.Client.post
-            httpx.Client.post = _mock_sync_client_post  # type: ignore
-            verbose_logger.debug(f"[{config.name} MOCK] Patched httpx.Client.post")
+            httpx.Client.post = _mock_sync_client_post
+            verbose_logger.debug("[%s MOCK] Patched httpx.Client.post", config.name)
 
         if config.patch_http_handler and _original_http_handler_post is None:
             from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
             _original_http_handler_post = HTTPHandler.post
-            HTTPHandler.post = _mock_http_handler_post  # type: ignore
-            verbose_logger.debug(f"[{config.name} MOCK] Patched HTTPHandler.post")
+            HTTPHandler.post = _mock_http_handler_post
+            verbose_logger.debug("[%s MOCK] Patched HTTPHandler.post", config.name)
 
         verbose_logger.debug(f"[{config.name} MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS * 1000:.0f}ms")
-        verbose_logger.debug(f"[{config.name} MOCK] {config.name} mock client initialization complete")
+        verbose_logger.debug("[%s MOCK] %s mock client initialization complete", config.name, config.name)
 
         _mocks_initialized = True
 
@@ -265,14 +267,15 @@ def create_mock_client_factory(config: MockClientConfig):
     def should_use_mock() -> bool:
         """Determine if mock mode should be enabled."""
         import os
+
         from litellm.secret_managers.main import str_to_bool
 
-        mock_mode = os.getenv(config.env_var, "false")
+        mock_mode: Final = os.getenv(config.env_var, "false")
         result = str_to_bool(mock_mode)
         result = bool(result) if result is not None else False
 
         if result:
-            verbose_logger.info(f"{config.name} Mock Mode: ENABLED - API calls will be mocked")
+            verbose_logger.info("%s Mock Mode: ENABLED - API calls will be mocked", config.name)
 
         return result
 

@@ -6,6 +6,7 @@ import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { CellTooltip, IdentityCell, StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { PUBLIC_MODEL_HUB_SORTABLE_FIELDS } from "@/components/publicModelHub/publicModelHubFilters";
 
 export interface ModelGroupInfo {
   model_group: string;
@@ -163,154 +164,150 @@ interface PublicModelHubColumnsDeps {
   onModelClick: (model: ModelGroupInfo) => void;
 }
 
-export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumnsDeps): ColumnDef<ModelGroupInfo>[] => [
-  {
-    id: "model_group",
-    accessorKey: "model_group",
-    meta: { title: "Model Name" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Model Name" />,
-    size: 200,
-    enableSorting: true,
-    sortingFn: "alphanumeric",
-    cell: ({ row }) => (
-      <IdentityCell
-        title={row.original.model_group}
-        titleClassName="font-mono text-xs font-normal"
-        className="max-w-72"
-        onClick={() => onModelClick(row.original)}
-      />
-    ),
-  },
-  {
-    id: "providers",
-    accessorKey: "providers",
-    meta: { title: "Providers", skeleton: "chips" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Providers" />,
-    size: 150,
-    enableSorting: true,
-    sortingFn: (rowA, rowB) =>
-      (rowA.original.providers ?? []).join(", ").localeCompare((rowB.original.providers ?? []).join(", ")),
-    cell: ({ row }) => <ProviderChips providers={row.original.providers ?? []} />,
-  },
-  {
-    id: "mode",
-    accessorKey: "mode",
-    meta: { title: "Mode" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Mode" />,
-    size: 110,
-    enableSorting: true,
-    sortingFn: "alphanumeric",
-    cell: ({ row }) => (
-      <span className="flex items-center gap-2 text-sm">
-        <span>{getModeIcon(row.original.mode || "")}</span>
-        <span>{row.original.mode || "Chat"}</span>
-      </span>
-    ),
-  },
-  {
-    id: "max_input_tokens",
-    accessorKey: "max_input_tokens",
-    meta: { title: "Max Input", numeric: true },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Max Input" />,
-    size: 100,
-    enableSorting: true,
-    cell: ({ row }) => <span className="text-sm">{formatTokens(row.original.max_input_tokens)}</span>,
-  },
-  {
-    id: "max_output_tokens",
-    accessorKey: "max_output_tokens",
-    meta: { title: "Max Output", numeric: true },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Max Output" />,
-    size: 100,
-    enableSorting: true,
-    cell: ({ row }) => <span className="text-sm">{formatTokens(row.original.max_output_tokens)}</span>,
-  },
-  {
-    id: "input_cost_per_token",
-    accessorKey: "input_cost_per_token",
-    meta: { title: "Input $/1M", numeric: true },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Input $/1M" />,
-    size: 110,
-    enableSorting: true,
-    cell: ({ row }) => (
-      <span className="text-sm">
-        {row.original.input_cost_per_token ? formatCost(row.original.input_cost_per_token) : "Free"}
-      </span>
-    ),
-  },
-  {
-    id: "output_cost_per_token",
-    accessorKey: "output_cost_per_token",
-    meta: { title: "Output $/1M", numeric: true },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Output $/1M" />,
-    size: 110,
-    enableSorting: true,
-    cell: ({ row }) => (
-      <span className="text-sm">
-        {row.original.output_cost_per_token ? formatCost(row.original.output_cost_per_token) : "Free"}
-      </span>
-    ),
-  },
-  {
-    id: "features",
-    meta: { title: "Features", skeleton: "chips" },
-    header: "Features",
-    size: 140,
-    enableSorting: false,
-    cell: ({ row }) => {
-      const features = Object.entries(row.original)
-        .filter(([key, value]) => key.startsWith("supports_") && value === true)
-        .map(([key]) => formatCapabilityName(key));
-      return <OverflowChips items={features} />;
-    },
-  },
-  {
-    id: "health_status",
-    accessorKey: "health_status",
-    meta: { title: "Health Status", skeleton: "badge" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Health Status" />,
-    size: 130,
-    enableSorting: true,
-    cell: ({ row }) => {
-      const model = row.original;
-      const responseTimeLabel = model.health_response_time
-        ? `Response Time: ${Number(model.health_response_time).toFixed(2)}ms`
-        : "N/A";
-      const lastCheckedLabel = model.health_checked_at
-        ? `Last Checked: ${new Date(model.health_checked_at).toLocaleString()}`
-        : "N/A";
-      return (
-        <CellTooltip
-          content={
-            <>
-              <div>{responseTimeLabel}</div>
-              <div>{lastCheckedLabel}</div>
-            </>
-          }
-          trigger={
-            <span className="capitalize">
-              <StatusBadge
-                tone={HEALTH_TONES[model.health_status ?? ""] || "neutral"}
-                label={model.health_status ?? "Unknown"}
-              />
-            </span>
-          }
+export const getPublicModelHubColumns = ({ onModelClick }: PublicModelHubColumnsDeps): ColumnDef<ModelGroupInfo>[] => {
+  const columns: ColumnDef<ModelGroupInfo>[] = [
+    {
+      id: "model_group",
+      accessorKey: "model_group",
+      meta: { title: "Model Name" },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Model Name" />,
+      size: 200,
+      sortingFn: "alphanumeric",
+      cell: ({ row }) => (
+        <IdentityCell
+          title={row.original.model_group}
+          titleClassName="font-mono text-xs font-normal"
+          className="max-w-72"
+          onClick={() => onModelClick(row.original)}
         />
-      );
+      ),
     },
-  },
-  {
-    id: "rpm",
-    accessorKey: "rpm",
-    meta: { title: "Limits" },
-    header: ({ column }) => <DataTableSortHeader column={column} title="Limits" />,
-    size: 150,
-    enableSorting: true,
-    cell: ({ row }) => (
-      <span className="text-xs text-muted-foreground">{formatLimits(row.original.rpm, row.original.tpm)}</span>
-    ),
-  },
-];
+    {
+      id: "providers",
+      accessorKey: "providers",
+      meta: { title: "Providers", skeleton: "chips" },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Providers" />,
+      size: 150,
+      sortingFn: (rowA, rowB) =>
+        (rowA.original.providers ?? []).join(", ").localeCompare((rowB.original.providers ?? []).join(", ")),
+      cell: ({ row }) => <ProviderChips providers={row.original.providers ?? []} />,
+    },
+    {
+      id: "mode",
+      accessorKey: "mode",
+      meta: { title: "Mode" },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Mode" />,
+      size: 110,
+      sortingFn: "alphanumeric",
+      cell: ({ row }) => (
+        <span className="flex items-center gap-2 text-sm">
+          <span>{getModeIcon(row.original.mode || "")}</span>
+          <span>{row.original.mode || "Chat"}</span>
+        </span>
+      ),
+    },
+    {
+      id: "max_input_tokens",
+      accessorKey: "max_input_tokens",
+      meta: { title: "Max Input", numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Max Input" />,
+      size: 100,
+      cell: ({ row }) => <span className="text-sm">{formatTokens(row.original.max_input_tokens)}</span>,
+    },
+    {
+      id: "max_output_tokens",
+      accessorKey: "max_output_tokens",
+      meta: { title: "Max Output", numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Max Output" />,
+      size: 100,
+      cell: ({ row }) => <span className="text-sm">{formatTokens(row.original.max_output_tokens)}</span>,
+    },
+    {
+      id: "input_cost_per_token",
+      accessorKey: "input_cost_per_token",
+      meta: { title: "Input $/1M", numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Input $/1M" />,
+      size: 110,
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {row.original.input_cost_per_token ? formatCost(row.original.input_cost_per_token) : "Free"}
+        </span>
+      ),
+    },
+    {
+      id: "output_cost_per_token",
+      accessorKey: "output_cost_per_token",
+      meta: { title: "Output $/1M", numeric: true },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Output $/1M" />,
+      size: 110,
+      cell: ({ row }) => (
+        <span className="text-sm">
+          {row.original.output_cost_per_token ? formatCost(row.original.output_cost_per_token) : "Free"}
+        </span>
+      ),
+    },
+    {
+      id: "features",
+      meta: { title: "Features", skeleton: "chips" },
+      header: "Features",
+      size: 140,
+      cell: ({ row }) => {
+        const features = Object.entries(row.original)
+          .filter(([key, value]) => key.startsWith("supports_") && value === true)
+          .map(([key]) => formatCapabilityName(key));
+        return <OverflowChips items={features} />;
+      },
+    },
+    {
+      id: "health_status",
+      accessorKey: "health_status",
+      meta: { title: "Health Status", skeleton: "badge" },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Health Status" />,
+      size: 130,
+      cell: ({ row }) => {
+        const model = row.original;
+        const responseTimeLabel = model.health_response_time
+          ? `Response Time: ${Number(model.health_response_time).toFixed(2)}ms`
+          : "N/A";
+        const lastCheckedLabel = model.health_checked_at
+          ? `Last Checked: ${new Date(model.health_checked_at).toLocaleString()}`
+          : "N/A";
+        return (
+          <CellTooltip
+            content={
+              <>
+                <div>{responseTimeLabel}</div>
+                <div>{lastCheckedLabel}</div>
+              </>
+            }
+            trigger={
+              <span className="capitalize">
+                <StatusBadge
+                  tone={HEALTH_TONES[model.health_status ?? ""] || "neutral"}
+                  label={model.health_status ?? "Unknown"}
+                />
+              </span>
+            }
+          />
+        );
+      },
+    },
+    {
+      id: "rpm",
+      accessorKey: "rpm",
+      meta: { title: "Limits" },
+      header: ({ column }) => <DataTableSortHeader column={column} title="Limits" />,
+      size: 150,
+      cell: ({ row }) => (
+        <span className="text-xs text-muted-foreground">{formatLimits(row.original.rpm, row.original.tpm)}</span>
+      ),
+    },
+  ];
+  return columns.map((column) => ({
+    ...column,
+    enableSorting: PUBLIC_MODEL_HUB_SORTABLE_FIELDS.includes(String(column.id)),
+  }));
+};
 
 interface PublicAgentHubColumnsDeps {
   onAgentClick: (agent: AgentCard) => void;

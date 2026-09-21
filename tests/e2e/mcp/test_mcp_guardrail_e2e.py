@@ -108,7 +108,6 @@ class TestMcpToolCallGuardrail:
                 "from": DD_SEARCH_FROM,
                 "to": "now",
                 "max_tokens": 500,
-                "telemetry": {"intent": "e2e mcp guardrail check"},
             }
             return client.call_tool(key, server_id=server_id, name=tool_name, arguments=arguments)
 

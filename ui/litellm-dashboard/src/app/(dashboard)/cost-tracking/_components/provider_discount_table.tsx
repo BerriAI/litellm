@@ -1,6 +1,7 @@
 import React, { useState } from "react";
-import { TextInput, Icon, Text } from "@tremor/react";
-import { TrashIcon, PencilAltIcon, CheckIcon, XIcon } from "@heroicons/react/outline";
+import { Check, SquarePen, Trash2, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { SimpleTable } from "@/components/common_components/simple_table";
 import { DiscountConfig } from "./types";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
@@ -79,45 +80,57 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
         },
         {
           header: "Discount Percentage",
-          cell: (row) => (
-            <div className="flex items-center gap-2">
-              {editingProvider === row.provider ? (
-                <>
-                  <TextInput
-                    value={editValue}
-                    onValueChange={setEditValue}
-                    onKeyDown={(e) => handleKeyDown(e, row.provider)}
-                    placeholder="5"
-                    className="w-20"
-                    autoFocus
-                  />
-                  <span className="text-gray-600">%</span>
-                  <Icon
-                    icon={CheckIcon}
-                    size="sm"
-                    onClick={() => handleSaveEdit(row.provider)}
-                    className="cursor-pointer text-green-600 hover:text-green-700"
-                  />
-                  <Icon
-                    icon={XIcon}
-                    size="sm"
-                    onClick={handleCancelEdit}
-                    className="cursor-pointer text-gray-600 hover:text-gray-700"
-                  />
-                </>
-              ) : (
-                <>
-                  <Text className="font-medium">{(row.discount * 100).toFixed(1)}%</Text>
-                  <Icon
-                    icon={PencilAltIcon}
-                    size="sm"
-                    onClick={() => handleStartEdit(row.provider, row.discount)}
-                    className="cursor-pointer text-blue-600 hover:text-blue-700"
-                  />
-                </>
-              )}
-            </div>
-          ),
+          cell: (row) => {
+            const { displayName } = getProviderLogoAndName(row.provider);
+            return (
+              <div className="flex items-center gap-2">
+                {editingProvider === row.provider ? (
+                  <>
+                    <Input
+                      value={editValue}
+                      onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => handleKeyDown(e, row.provider)}
+                      placeholder="5"
+                      className="w-20"
+                      autoFocus
+                    />
+                    <span className="text-muted-foreground">%</span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Save discount for ${displayName}`}
+                      onClick={() => handleSaveEdit(row.provider)}
+                      className="cursor-pointer text-success hover:text-success/80"
+                    >
+                      <Check className="size-5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Cancel editing discount for ${displayName}`}
+                      onClick={handleCancelEdit}
+                      className="cursor-pointer text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="size-5" />
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-medium">{(row.discount * 100).toFixed(1)}%</p>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      aria-label={`Edit discount for ${displayName}`}
+                      onClick={() => handleStartEdit(row.provider, row.discount)}
+                      className="cursor-pointer text-info hover:text-info/80"
+                    >
+                      <SquarePen className="size-5" />
+                    </Button>
+                  </>
+                )}
+              </div>
+            );
+          },
           width: "250px",
         },
         {
@@ -125,12 +138,15 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
           cell: (row) => {
             const { displayName } = getProviderLogoAndName(row.provider);
             return (
-              <Icon
-                icon={TrashIcon}
-                size="sm"
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`Remove discount for ${displayName}`}
                 onClick={() => onRemoveProvider(row.provider, displayName)}
-                className="cursor-pointer hover:text-red-600"
-              />
+                className="cursor-pointer hover:text-destructive"
+              >
+                <Trash2 className="size-5" />
+              </Button>
             );
           },
           width: "80px",

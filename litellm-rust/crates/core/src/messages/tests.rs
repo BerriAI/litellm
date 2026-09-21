@@ -1,16 +1,19 @@
 use std::time::Duration;
 
 use serde_json::{Map, Value, json};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-
-use crate::error::CoreError;
-
-use super::common_utils::{
-    has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::{TcpListener, TcpStream},
 };
-use super::messages;
-use super::types::MessagesRequest;
+
+use super::{
+    Error,
+    common_utils::{
+        has_bearer_auth, has_header, messages_provider_config, string_headers, truncate_error_body,
+    },
+    messages,
+};
+use crate::messages::types::MessagesRequest;
 
 async fn read_http_request(socket: &mut TcpStream) -> String {
     let mut request = Vec::new();
@@ -77,7 +80,14 @@ fn truncate_error_body_caps_long_payloads() {
 fn string_headers_rejects_non_string_values() {
     let headers = json!({"x-count": 3}).as_object().unwrap().clone();
     let err = string_headers(Some(headers)).expect_err("non-string header rejected");
-    assert!(matches!(err, CoreError::InvalidRequest(_)));
+    assert_eq!(
+        err,
+        Error::Headers(litellm_http::request::HeaderError {
+            context: "messages",
+            name: "x-count".to_string(),
+            actual: "number",
+        })
+    );
 }
 
 #[test]
@@ -341,7 +351,7 @@ async fn messages_requires_auth_when_no_key_and_no_header() {
     .await
     .expect_err("missing auth errors");
 
-    assert!(matches!(err, CoreError::Auth(_)));
+    assert!(matches!(err, Error::Auth(_)));
 }
 
 #[tokio::test]
@@ -420,7 +430,10 @@ async fn messages_maps_provider_error_status_to_http_error() {
     .await
     .expect_err("provider error propagates");
 
-    assert!(matches!(err, CoreError::Http { status: 401, .. }));
+    assert!(matches!(
+        err,
+        Error::Transport(litellm_http::transport::Error::Http { status: 401, .. })
+    ));
 }
 
 #[tokio::test]
@@ -437,5 +450,5 @@ async fn messages_rejects_unsupported_provider() {
     .await
     .expect_err("unsupported provider errors");
 
-    assert!(matches!(err, CoreError::InvalidProvider(provider) if provider == "openai"));
+    assert!(matches!(err, Error::InvalidProvider(provider) if provider == "openai"));
 }

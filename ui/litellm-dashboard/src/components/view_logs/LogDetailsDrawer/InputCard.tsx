@@ -4,7 +4,7 @@
  */
 
 import { useState } from "react";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { ParsedMessage } from "./prettyMessagesTypes";
 import { SectionHeader } from "./SectionHeader";
 import { CollapsibleMessage } from "./CollapsibleMessage";
@@ -33,13 +33,13 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
   const handleCopy = () => {
     const content = lastMessage?.content || "";
     navigator.clipboard.writeText(content);
-    MessageManager.success("Input copied");
+    toast.success("Input copied");
   };
 
   return (
     <div
       style={{
-        border: "1px solid #f0f0f0",
+        border: "1px solid var(--color-border)",
         borderRadius: 6,
         marginBottom: 8,
         overflow: "hidden",

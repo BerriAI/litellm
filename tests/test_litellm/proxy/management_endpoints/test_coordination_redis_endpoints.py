@@ -4,14 +4,11 @@ Unit tests for coordination Redis settings management endpoints
 
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 import litellm
 from litellm.caching.caching import RedisCache
@@ -208,6 +205,27 @@ async def test_get_rejects_non_admin():
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed", user_role=LitellmUserRoles.INTERNAL_USER)
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_allows_proxy_admin_viewer():
+    """proxy_admin_viewer has READ parity with proxy_admin; credentials stay redacted."""
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            _prisma_with_general_settings({"coordination_redis": _SAVED_SETTINGS}),
+        ),
+        patch("litellm.proxy.proxy_server.proxy_config", _proxy_config()),
+    ):
+        response = await get_coordination_redis_settings(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="hashed", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
+            )
+        )
+
+    assert response.source == "coordination_redis"
+    assert response.values["host"] == "coord-redis.example.com"
+    assert response.values["password"] == _REDACTED_VALUE
 
 
 def test_fields_cover_every_coordination_redis_param():
@@ -437,6 +455,18 @@ async def test_update_rejects_non_admin():
     assert exc_info.value.status_code == 403
 
 
+@pytest.mark.asyncio
+async def test_update_rejects_proxy_admin_viewer():
+    """READ parity for proxy_admin_viewer must not leak into the save endpoint."""
+    with pytest.raises(HTTPException) as exc_info:
+        await update_coordination_redis_settings(
+            request=CoordinationRedisSettingsRequest(settings={"host": "coord-redis.example.com"}),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+            litellm_changed_by=None,
+        )
+    assert exc_info.value.status_code == 403
+
+
 # ── POST /coordination_redis/settings/test ────────────────────────────────────
 
 
@@ -575,3 +605,75 @@ async def test_connection_test_rejects_non_admin():
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed", user_role=LitellmUserRoles.INTERNAL_USER),
         )
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_connection_test_rejects_proxy_admin_viewer():
+    """Dialing a caller-supplied Redis is a write-shaped action; viewers stay out."""
+    with pytest.raises(HTTPException) as exc_info:
+        await check_coordination_redis_connection(
+            request=CoordinationRedisSettingsRequest(settings={"host": "coord-redis.example.com"}),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+        )
+    assert exc_info.value.status_code == 403
+
+
+def _real_proxy_config(file_general_settings: dict) -> "object":
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._load_yaml_settings_stores({"general_settings": file_general_settings})
+    proxy_config.get_config_state = MagicMock(
+        return_value={"general_settings": file_general_settings}
+    )
+    return proxy_config
+
+
+@pytest.mark.asyncio
+async def test_update_refuses_a_config_owned_coordination_redis_block(monkeypatch):
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    mock_prisma = _prisma_with_general_settings({"master_key": "sk-1234"})
+    from_file = {"coordination_redis": {"host": "yaml-redis.example.com", "port": 6379}}
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch("litellm.proxy.proxy_server.proxy_config", _real_proxy_config(from_file)),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+    ):
+        with pytest.raises(HTTPException) as refused:
+            await update_coordination_redis_settings(
+                request=CoordinationRedisSettingsRequest(settings={"host": "db-redis.example.com", "port": 6380}),
+                user_api_key_dict=_admin_auth(),
+                litellm_changed_by=None,
+            )
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail["keys"] == ["coordination_redis"]
+    mock_prisma.db.litellm_config.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_still_persists_when_the_config_file_declares_no_block(monkeypatch):
+    monkeypatch.setattr(litellm, "store_audit_logs", False)
+    mock_prisma = _prisma_with_general_settings({"master_key": "sk-1234"})
+
+    async def _capture_invalidate(param_name: str) -> None:
+        return None
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch("litellm.proxy.proxy_server.proxy_config", _real_proxy_config({"master_key": "sk-1234"})),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        patch(  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+            "litellm.proxy.management_endpoints.coordination_redis_endpoints.invalidate_config_param",
+            new=_capture_invalidate,
+        ),
+    ):
+        await update_coordination_redis_settings(
+            request=CoordinationRedisSettingsRequest(settings={"host": "db-redis.example.com", "port": 6380}),
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    persisted = json.loads(mock_prisma.db.litellm_config.upsert.call_args.kwargs["data"]["update"]["param_value"])
+    assert persisted["coordination_redis"] == {"host": "db-redis.example.com", "port": 6380}

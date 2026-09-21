@@ -1,5 +1,5 @@
 import React from "react";
-import { Radio } from "antd";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import type { ExportScope, EntityType } from "./types";
 
 interface ExportTypeSelectorProps {
@@ -9,36 +9,41 @@ interface ExportTypeSelectorProps {
 }
 
 const ExportTypeSelector: React.FC<ExportTypeSelectorProps> = ({ value, onChange, entityType }) => {
+  const scopes: { value: ExportScope; title: string; description: string }[] = [
+    {
+      value: "daily",
+      title: `Day-by-day breakdown by ${entityType}`,
+      description: `Daily metrics for each ${entityType}`,
+    },
+    {
+      value: "daily_with_keys",
+      title: `Day-by-day breakdown by ${entityType} and key`,
+      description: `Daily metrics for each ${entityType}, split by API key`,
+    },
+    {
+      value: "daily_with_models",
+      title: `Day-by-day by ${entityType} and model`,
+      description: "Daily metrics split by model",
+    },
+  ];
+
   return (
     <div>
-      <label className="text-sm font-medium text-gray-700 block mb-2">Export type</label>
-      <Radio.Group value={value} onChange={(e) => onChange(e.target.value)} className="w-full">
-        <div className="space-y-2">
-          <label className="flex items-start p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <Radio value="daily" className="mt-0.5" />
+      <label className="text-sm font-medium text-foreground block mb-2">Export type</label>
+      <RadioGroup value={value} onValueChange={(next) => onChange(next as ExportScope)} className="gap-2">
+        {scopes.map((scope) => (
+          <label
+            key={scope.value}
+            className="flex items-start p-3 border border-border rounded-lg hover:bg-accent cursor-pointer transition-colors"
+          >
+            <RadioGroupItem value={scope.value} className="mt-0.5" />
             <div className="ml-3 flex-1">
-              <div className="font-medium text-sm">Day-by-day breakdown by {entityType}</div>
-              <div className="text-xs text-gray-500 mt-0.5">Daily metrics for each {entityType}</div>
+              <div className="font-medium text-sm">{scope.title}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{scope.description}</div>
             </div>
           </label>
-
-          <label className="flex items-start p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <Radio value="daily_with_keys" className="mt-0.5" />
-            <div className="ml-3 flex-1">
-              <div className="font-medium text-sm">Day-by-day breakdown by {entityType} and key</div>
-              <div className="text-xs text-gray-500 mt-0.5">Daily metrics for each {entityType}, split by API key</div>
-            </div>
-          </label>
-
-          <label className="flex items-start p-3 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer transition-colors">
-            <Radio value="daily_with_models" className="mt-0.5" />
-            <div className="ml-3 flex-1">
-              <div className="font-medium text-sm">Day-by-day by {entityType} and model</div>
-              <div className="text-xs text-gray-500 mt-0.5">Daily metrics split by model</div>
-            </div>
-          </label>
-        </div>
-      </Radio.Group>
+        ))}
+      </RadioGroup>
     </div>
   );
 };

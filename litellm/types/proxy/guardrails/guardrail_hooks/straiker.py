@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -10,7 +10,7 @@ StraikerWebhookEventType = Literal["pre_call", "post_call"]
 StraikerWebhookStreamPhase = Literal["none", "assembled"]
 StraikerWebhookAction = Literal["NONE", "BLOCKED", "GUARDRAIL_INTERVENED"]
 
-STRAIKER_WEBHOOK_SCHEMA_VERSION = "1"
+STRAIKER_WEBHOOK_SCHEMA_VERSION: Final = "1"
 
 
 class StraikerWebhookStream(BaseModel):
