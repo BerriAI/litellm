@@ -113,7 +113,7 @@ class TestOutputConfigStrippedFromCompletionKwargs:
     def test_safeguards_is_stripped_for_non_anthropic_target(self):
         extra_kwargs = {
             "custom_llm_provider": "azure",
-            "safeguards": {"auto_mode": {"enabled": True, "version": "2026-09-01"}},
+            "safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}],
         }
 
         result = _call_prepare(extra_kwargs=extra_kwargs)
