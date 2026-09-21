@@ -2728,9 +2728,7 @@ describe("EntityUsageExport utils", () => {
 
     it("should roll multiple keys owned by one user in a team into a single row", () => {
       const rows = generateDailyWithUsersData(usersFixture, "Team");
-      const matches = rows.filter(
-        (r) => r.Date === "2025-03-01" && r["Team ID"] === "team-1" && r["User ID"] === "u1",
-      );
+      const matches = rows.filter((r) => r.Date === "2025-03-01" && r["Team ID"] === "team-1" && r["User ID"] === "u1");
 
       expect(matches).toHaveLength(1);
       const row = matches[0];
@@ -2749,7 +2747,9 @@ describe("EntityUsageExport utils", () => {
 
     it("should bucket keys with no owner into an Unassigned row without dropping spend", () => {
       const rows = generateDailyWithUsersData(usersFixture, "Team");
-      const row = rows.find((r) => r.Date === "2025-03-01" && r["Team ID"] === "team-1" && r["User ID"] === "Unassigned");
+      const row = rows.find(
+        (r) => r.Date === "2025-03-01" && r["Team ID"] === "team-1" && r["User ID"] === "Unassigned",
+      );
 
       expect(row).toBeDefined();
       expect(row?.["User Email"]).toBe("-");
@@ -2905,7 +2905,13 @@ describe("EntityUsageExport utils", () => {
                   },
                   api_key_breakdown: {
                     kA: {
-                      metrics: { spend: 1.1, api_requests: 11, successful_requests: 10, failed_requests: 1, total_tokens: 110 },
+                      metrics: {
+                        spend: 1.1,
+                        api_requests: 11,
+                        successful_requests: 10,
+                        failed_requests: 1,
+                        total_tokens: 110,
+                      },
                       metadata: { team_id: "team-1", user_id: "u1", user_email: "a@x" },
                     },
                   },
@@ -2916,7 +2922,13 @@ describe("EntityUsageExport utils", () => {
                   metrics: { spend: 1.1, api_requests: 11, total_tokens: 110 },
                   api_key_breakdown: {
                     kA: {
-                      metrics: { spend: 1.1, api_requests: 11, successful_requests: 10, failed_requests: 1, total_tokens: 110 },
+                      metrics: {
+                        spend: 1.1,
+                        api_requests: 11,
+                        successful_requests: 10,
+                        failed_requests: 1,
+                        total_tokens: 110,
+                      },
                       metadata: {},
                     },
                   },
