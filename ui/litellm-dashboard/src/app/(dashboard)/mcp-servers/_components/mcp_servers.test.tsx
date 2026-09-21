@@ -3,7 +3,7 @@ import { render, waitFor, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import MCPServers, { compareServers } from "./mcp_servers";
+import MCPServers, { compareServers, type SortKey } from "./mcp_servers";
 import type { MCPServer } from "@/components/mcp_tools/types";
 import * as networking from "@/components/networking";
 
@@ -33,8 +33,14 @@ const createQueryClient = () =>
   });
 
 describe("compareServers", () => {
-  const server = (server_id: string, name: string, created_at = ""): MCPServer =>
-    ({ server_id, server_name: name, created_at, updated_at: created_at }) as MCPServer;
+  const server = (server_id: string, name: string, created_at = ""): MCPServer => ({
+    server_id,
+    server_name: name,
+    created_at,
+    updated_at: created_at,
+    created_by: "user",
+    updated_by: "user",
+  });
 
   const shuffled = [server("c", "github"), server("a", "slack"), server("b", "Jira")];
 
@@ -54,6 +60,66 @@ describe("compareServers", () => {
     expect([oldest, newest].sort((a, b) => compareServers(a, b, "created_desc")).map((s) => s.server_id)).toEqual([
       "new",
       "old",
+    ]);
+  });
+
+  it.each<SortKey>(["created_desc", "updated_desc", "name_asc", "health"])(
+    "breaks equal timestamps and names by ID for %s regardless of input order",
+    (sort) => {
+      const servers = [
+        server("b", "GitHub", "2026-01-01T00:00:00Z"),
+        server("c", "Slack", "2026-01-01T00:00:00Z"),
+        server("a", "github", "2026-01-01T00:00:00Z"),
+      ];
+      for (const input of [servers, [...servers].reverse()]) {
+        expect([...input].sort((a, b) => compareServers(a, b, sort)).map((s) => s.server_id)).toEqual(["a", "b", "c"]);
+      }
+    },
+  );
+
+  it("uses the display name before alias, then falls back to alias and ID", () => {
+    const servers: MCPServer[] = [
+      { ...server("s-slack", "Slack"), alias: "aaa" },
+      { ...server("s-github", ""), server_name: null, alias: "GitHub" },
+      { ...server("confluence", ""), alias: "" },
+    ];
+    for (const input of [servers, [...servers].reverse()]) {
+      expect([...input].sort((a, b) => compareServers(a, b, "name_asc")).map((s) => s.server_id)).toEqual([
+        "confluence",
+        "s-github",
+        "s-slack",
+      ]);
+    }
+  });
+
+  it.each<SortKey>(["created_desc", "updated_desc", "health"])(
+    "keeps timestamped servers before missing timestamps for %s",
+    (sort) => {
+      const servers = [
+        server("config", "aaa"),
+        server("older", "bbb", "2026-01-01T00:00:00Z"),
+        server("newer", "zzz", "2026-02-01T00:00:00Z"),
+      ];
+      for (const input of [servers, [...servers].reverse()]) {
+        expect([...input].sort((a, b) => compareServers(a, b, sort)).map((s) => s.server_id)).toEqual([
+          "newer",
+          "older",
+          "config",
+        ]);
+      }
+    },
+  );
+
+  it("sorts health before recency and display name", () => {
+    const servers: MCPServer[] = [
+      { ...server("healthy", "aaa", "2026-03-01T00:00:00Z"), status: "healthy" },
+      { ...server("unknown", "bbb", "2026-02-01T00:00:00Z"), status: "unknown" },
+      { ...server("unhealthy", "zzz", "2026-01-01T00:00:00Z"), status: "unhealthy" },
+    ];
+    expect(servers.sort((a, b) => compareServers(a, b, "health")).map((s) => s.server_id)).toEqual([
+      "unhealthy",
+      "unknown",
+      "healthy",
     ]);
   });
 });
