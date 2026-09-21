@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import datetime
+import logging
 import os
 import sys
 from collections.abc import Callable
@@ -300,6 +301,212 @@ def test_response_cost_calculator_uses_router_model_id_from_litellm_metadata():
         assert cost == pytest.approx(expected_cost), f"Expected {expected_cost}, got {cost}"
     finally:
         litellm.model_cost.pop(custom_model_id, None)
+
+
+class TestZeroCostDiagnostic:
+    DEPLOYMENT_ID: Final = "lit7898-per-second-priced-deployment"
+    MODEL_GROUP: Final = "per-second-priced-chat"
+    PER_SECOND_PRICING: Final = {"input_cost_per_second": 0.00042, "output_cost_per_second": 0.00042}
+    FREE_PRICING: Final = {"input_cost_per_token": 0, "output_cost_per_token": 0}
+
+    @pytest.fixture(params=["per_second", "free"])
+    def deployment_pricing(self, request):
+        pricing: Final = self.PER_SECOND_PRICING if request.param == "per_second" else self.FREE_PRICING
+        litellm.register_model(model_cost={self.DEPLOYMENT_ID: pricing}, persist_across_reloads=False)
+        try:
+            yield pricing
+        finally:
+            litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
+
+    def _logging_obj(
+        self,
+        pricing: dict,
+        stream: bool = False,
+        model: str = "openai/gpt-5.4-nano",
+        call_type: str = "completion",
+        deployment_id: str = DEPLOYMENT_ID,
+    ) -> LitellmLogging:
+        logging_obj: Final = LitellmLogging(
+            model=model,
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=stream,
+            call_type=call_type,
+            start_time=time.time(),
+            litellm_call_id="lit7898",
+            function_id="fn",
+        )
+        self._route_to_deployment(logging_obj, pricing, model=model, deployment_id=deployment_id)
+        return logging_obj
+
+    def _route_to_deployment(
+        self, logging_obj: LitellmLogging, pricing: dict, model: str = "openai/gpt-5.4-nano", deployment_id: str = DEPLOYMENT_ID
+    ) -> None:
+        logging_obj.update_environment_variables(
+            model=model,
+            user="",
+            optional_params={},
+            litellm_params={"metadata": {"model_group": self.MODEL_GROUP, "model_info": {"id": deployment_id, **pricing}}},
+            custom_llm_provider="openai",
+        )
+
+    @staticmethod
+    def _response(
+        usage: litellm.Usage | None = None, model: str = "gpt-5.4-nano", **hidden_params: object
+    ) -> ModelResponse:
+        response: Final = ModelResponse(
+            model=model,
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="hello"))],
+            usage=usage,
+        )
+        response._hidden_params = {"custom_llm_provider": "openai", **hidden_params}
+        return response
+
+    @staticmethod
+    def _zero_cost_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+        return [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "LiteLLM" and record.levelno == logging.WARNING and "priced at $0" in record.getMessage()
+        ]
+
+    def _assert_flagged(self, logging_obj: LitellmLogging, caplog: pytest.LogCaptureFixture) -> None:
+        assert logging_obj.model_call_details["zero_cost_diagnostic"] == {
+            "reason": "missing_pricing_key",
+            "pricing_model": self.DEPLOYMENT_ID,
+            "missing_pricing_keys": ("input_cost_per_token", "output_cost_per_token"),
+        }
+        warnings: Final = self._zero_cost_warnings(caplog)
+        assert len(warnings) == 1
+        assert f"model_group={self.MODEL_GROUP}" in warnings[0]
+        assert f"pricing entry '{self.DEPLOYMENT_ID}' has no input_cost_per_token, output_cost_per_token" in warnings[0]
+
+    def test_zero_cost_with_a_missing_rate_warns_once_and_is_recorded(self, deployment_pricing, caplog):
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(deployment_pricing)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            first_cost: Final = logging_obj._response_cost_calculator(result=self._response(usage))
+            second_cost: Final = logging_obj._response_cost_calculator(result=self._response(usage))
+
+        assert first_cost == 0.0
+        assert second_cost == 0.0
+        if deployment_pricing is self.FREE_PRICING:
+            assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+            assert self._zero_cost_warnings(caplog) == []
+            return
+        self._assert_flagged(logging_obj, caplog)
+
+    def test_usage_less_stream_chunk_does_not_hide_the_final_response_diagnostic(self, deployment_pricing, caplog):
+        usage: Final = litellm.Usage(prompt_tokens=8, completion_tokens=2, total_tokens=10)
+        logging_obj: Final = self._logging_obj(deployment_pricing, stream=True)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            logging_obj._response_cost_calculator(result=self._response(usage=None))
+            logging_obj._response_cost_calculator(result=self._response(usage))
+
+        if deployment_pricing is self.FREE_PRICING:
+            assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+            assert self._zero_cost_warnings(caplog) == []
+            return
+        self._assert_flagged(logging_obj, caplog)
+
+    def test_precomputed_zero_hidden_cost_is_flagged_and_lands_in_the_payload(self, deployment_pricing, caplog):
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(deployment_pricing)
+        response: Final = self._response(usage, response_cost=0.0, model_id=self.DEPLOYMENT_ID)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            logging_obj._process_hidden_params_and_response_cost(
+                response, start_time=datetime.datetime.now(), end_time=datetime.datetime.now()
+            )
+
+        payload: Final = logging_obj.model_call_details["standard_logging_object"]
+        assert payload["response_cost"] == 0.0
+        if deployment_pricing is self.FREE_PRICING:
+            assert payload["zero_cost_diagnostic"] is None
+            assert self._zero_cost_warnings(caplog) == []
+            return
+        self._assert_flagged(logging_obj, caplog)
+        assert payload["zero_cost_diagnostic"] == logging_obj.model_call_details["zero_cost_diagnostic"]
+
+    def test_uncomputed_hidden_cost_is_not_a_zero_cost(self, deployment_pricing, caplog):
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(deployment_pricing)
+        response: Final = self._response(usage, response_cost=None, model_id=self.DEPLOYMENT_ID)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            logging_obj._process_hidden_params_and_response_cost(
+                response, start_time=datetime.datetime.now(), end_time=datetime.datetime.now()
+            )
+
+        assert logging_obj.model_call_details["standard_logging_object"]["zero_cost_diagnostic"] is None
+        assert self._zero_cost_warnings(caplog) == []
+
+    def test_unbilled_read_route_with_usage_stays_silent(self, deployment_pricing, caplog):
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(deployment_pricing, call_type="aget_responses")
+        response: Final = self._response(usage, response_cost=0.0, model_id=self.DEPLOYMENT_ID)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            logging_obj._process_hidden_params_and_response_cost(
+                response, start_time=datetime.datetime.now(), end_time=datetime.datetime.now()
+            )
+
+        assert logging_obj.model_call_details["standard_logging_object"]["zero_cost_diagnostic"] is None
+        assert self._zero_cost_warnings(caplog) == []
+
+    def test_unmapped_model_that_fails_cost_calculation_stays_silent(self, caplog):
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        logging_obj: Final = self._logging_obj(
+            {}, model="openai/lit7898-unmapped-model", deployment_id="lit7898-unmapped-deployment"
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            cost: Final = logging_obj._response_cost_calculator(result=self._response(usage, model="lit7898-unmapped-model"))
+
+        assert cost is None
+        assert logging_obj.model_call_details["response_cost_failure_debug_information"] is not None
+        assert logging_obj.model_call_details.get("zero_cost_diagnostic") is None
+        assert self._zero_cost_warnings(caplog) == []
+
+    def test_malformed_usage_never_raises_out_of_the_cost_calculator(self, deployment_pricing, caplog):
+        logging_obj: Final = self._logging_obj(deployment_pricing)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            cost: Final = logging_obj._response_cost_calculator(
+                result={"model": "gpt-5.4-nano", "usage": {"prompt_tokens": "n/a", "completion_tokens": 3}}
+            )
+
+        assert cost is None
+        assert logging_obj.model_call_details.get("zero_cost_diagnostic") is None
+        assert self._zero_cost_warnings(caplog) == []
+
+    def test_retry_that_prices_clears_the_diagnostic_and_a_later_zero_cost_warns_again(self, caplog):
+        priced_id: Final = "lit7898-priced-deployment"
+        priced_pricing: Final = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        litellm.register_model(
+            model_cost={self.DEPLOYMENT_ID: self.PER_SECOND_PRICING, priced_id: priced_pricing},
+            persist_across_reloads=False,
+        )
+        try:
+            logging_obj: Final = self._logging_obj(self.PER_SECOND_PRICING)
+            with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+                assert logging_obj._response_cost_calculator(result=self._response(usage)) == 0.0
+                self._assert_flagged(logging_obj, caplog)
+
+                self._route_to_deployment(logging_obj, priced_pricing, deployment_id=priced_id)
+                assert logging_obj._response_cost_calculator(result=self._response(usage)) == pytest.approx(5e-05)
+                assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+
+                self._route_to_deployment(logging_obj, self.PER_SECOND_PRICING)
+                assert logging_obj._response_cost_calculator(result=self._response(usage)) == 0.0
+
+            assert logging_obj.model_call_details["zero_cost_diagnostic"]["reason"] == "missing_pricing_key"
+            assert len(self._zero_cost_warnings(caplog)) == 2
+        finally:
+            litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
+            litellm.model_cost.pop(priced_id, None)
 
 
 class TestGetRouterModelId:
