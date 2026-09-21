@@ -1,4 +1,5 @@
 import datetime
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
@@ -18,6 +19,23 @@ LOGIN_RESPONSE: Final = {"auth": {"client_token": "hvs.login-token", "lease_dura
 SECRET_RESPONSE: Final = {"data": {"data": {"key": "sk-from-vault", "password": "pw-from-vault"}}}
 
 NAMESPACE_ENV_VARS: Final = ("HCP_VAULT_NAMESPACE", "HCP_VAULT_LOGIN_NAMESPACE", "HCP_VAULT_SECRET_NAMESPACE")
+PARITY_ENV_VARS: Final = (
+    "HCP_VAULT_ADDR",
+    "HCP_VAULT_TOKEN",
+    "HCP_VAULT_NAMESPACE",
+    "HCP_VAULT_LOGIN_NAMESPACE",
+    "HCP_VAULT_SECRET_NAMESPACE",
+    "HCP_VAULT_MOUNT_NAME",
+    "HCP_VAULT_PATH_PREFIX",
+    "HCP_VAULT_APPROLE_ROLE_ID",
+    "HCP_VAULT_APPROLE_SECRET_ID",
+    "HCP_VAULT_APPROLE_MOUNT_PATH",
+    "HCP_VAULT_CLIENT_CERT",
+    "HCP_VAULT_CLIENT_KEY",
+    "HCP_VAULT_CERT_ROLE",
+    "HCP_VAULT_REFRESH_INTERVAL",
+    "SECRET_MANAGER_REFRESH_INTERVAL",
+)
 
 
 def _build_manager(monkeypatch: pytest.MonkeyPatch, env: Mapping[str, str]) -> HashicorpSecretManager:
@@ -236,3 +254,35 @@ def test_tls_login_uses_login_namespace(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
     assert manager._auth_via_tls_cert() == "hvs.login-token"
     assert login_route.calls.last.request.headers["X-Vault-Namespace"] == "root"
+
+
+with Path(__file__).with_name("hashicorp_vault_parity.json").open() as parity_file:
+    PARITY_CASES: Final = json.load(parity_file)
+
+
+@pytest.mark.parametrize("case", PARITY_CASES, ids=lambda case: case["name"])
+def test_configuration_matches_native_parity_fixture(
+    monkeypatch: pytest.MonkeyPatch, case: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "premium_user", True)
+    for name in PARITY_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in case["env"].items():
+        monkeypatch.setenv(name, value)
+
+    manager: Final = HashicorpSecretManager()
+    env: Final = case["env"]
+    expected_login_url: Final = case["expected_login_url"]
+    if env.get("HCP_VAULT_APPROLE_ROLE_ID") and env.get("HCP_VAULT_APPROLE_SECRET_ID"):
+        login_url: str | None = (
+            f"{manager.vault_addr}/v1/auth/{manager.approle_mount_path}/login"
+        )
+    elif env.get("HCP_VAULT_CLIENT_CERT") and env.get("HCP_VAULT_CLIENT_KEY"):
+        login_url = f"{manager.vault_addr}/v1/auth/cert/login"
+    else:
+        login_url = None
+
+    assert manager.get_url(case["secret_name"]) == case["expected_secret_url"]
+    assert manager.vault_login_namespace == case["expected_login_namespace"]
+    assert manager.vault_secret_namespace == case["expected_secret_namespace"]
+    assert login_url == expected_login_url
