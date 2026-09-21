@@ -3,35 +3,38 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
-from collections import deque
-from collections.abc import AsyncIterator, Mapping
 import json
-from dataclasses import dataclass, field
 import os
-from pathlib import Path
-from queue import SimpleQueue
 import struct
-from typing import Final, cast
 import uuid
 import zlib
+from collections import deque
+from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from queue import SimpleQueue
+from typing import Final, cast
 
 import httpx
 import uvicorn
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
-from starlette.routing import Route
-
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
     EventStreamResponse,
     JsonResponse,
+    RealtimeResponse,
+    RoutedResponse,
     SseResponse,
     StoredResponse,
+    TextResponse,
 )
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.routing import Route, WebSocketRoute
+from starlette.websockets import WebSocket
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 CASES_FILE: Final = Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_tracking_cases.json"
@@ -211,7 +214,52 @@ class Provider:
         response: Final = self.scenario_store.get(scenario_id)
         if response is None:
             return JSONResponse({"error": "Unknown scenario"}, status_code=404)
+        if isinstance(response, RoutedResponse):
+            route_key: Final = f"{request.method} /{'/'.join(segments[1:])}"
+            route: Final = next(
+                (
+                    candidate
+                    for key, candidate in response.routes.items()
+                    if key.replace("$REQUEST_ID", scenario_id) == route_key
+                ),
+                None,
+            )
+            if route is None:
+                return JSONResponse({"error": "Unknown scripted route"}, status_code=404)
+            return self._response(route, scenario_id)
         return self._response(response, scenario_id)
+
+    async def realtime(self, websocket: WebSocket) -> None:
+        scenario_id: Final = websocket.headers.get("authorization", "").removeprefix("Bearer ")
+        response: Final = self.scenario_store.get(scenario_id)
+        if not isinstance(response, RealtimeResponse):
+            await websocket.close(code=4404)
+            return
+        await websocket.accept()
+        model: Final = websocket.query_params.get("model", "")
+        await websocket.send_json(
+            {
+                "type": "session.created",
+                "session": {
+                    "id": f"sess_{scenario_id}",
+                    "model": response.session_model if response.session_model is not None else model,
+                },
+            }
+        )
+        event_index: Final = iter(response.events)
+        async for message in websocket.iter_json():
+            payload: Final = JSON_OBJECT.validate_python(message)
+            if payload.get("type") != "response.create":
+                continue
+            event: Final = next(event_index, None)
+            if event is None:
+                continue
+            rendered: Final = JSON_OBJECT.validate_json(
+                json.dumps(event, separators=(",", ":"))
+                .replace("$REQUEST_ID", scenario_id)
+                .replace("$UNIQUE_ID", f"{scenario_id}-{uuid.uuid4().hex[:8]}")
+            )
+            await websocket.send_json(rendered)
 
     @staticmethod
     def _response(response: StoredResponse, scenario_id: str) -> Response:
@@ -231,6 +279,12 @@ class Provider:
                 return Response(
                     content=b"\x00" * response.length,
                     media_type=response.content_type,
+                )
+            case TextResponse():
+                return Response(
+                    content=response.body.replace("$REQUEST_ID", scenario_id).encode(),
+                    media_type=response.content_type,
+                    status_code=response.status,
                 )
             case SseResponse():
                 if response.frame_delay_ms > 0:
@@ -285,6 +339,8 @@ class Provider:
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["POST"]),
+                Route("/{path:path}", self.scripted, methods=["GET"]),
+                WebSocketRoute("/v1/realtime", self.realtime),
             ]
         )
 
