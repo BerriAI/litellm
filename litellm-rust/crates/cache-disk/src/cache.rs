@@ -18,22 +18,20 @@ pub struct DiskCache<S, D = DiskcacheSqliteStore, A = PythonDiskCacheAdapter> {
 }
 
 impl<S: CacheCodec> DiskCache<S> {
-    #[allow(clippy::default_constructed_unit_structs)]
     pub fn open(directory: impl AsRef<Path>, codec: S) -> Result<Self, Error> {
         Ok(Self {
             store: Arc::new(DiskcacheSqliteStore::open(directory)?),
-            adapter: Arc::new(PythonDiskCacheAdapter::default()),
+            adapter: Arc::new(PythonDiskCacheAdapter),
             codec,
         })
     }
 }
 
 impl<S: CacheCodec, D: DiskStore> DiskCache<S, D, PythonDiskCacheAdapter> {
-    #[allow(clippy::default_constructed_unit_structs)]
     pub fn with_store(store: D, codec: S) -> Self {
         Self {
             store: Arc::new(store),
-            adapter: Arc::new(PythonDiskCacheAdapter::default()),
+            adapter: Arc::new(PythonDiskCacheAdapter),
             codec,
         }
     }
