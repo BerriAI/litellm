@@ -1335,7 +1335,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
         return response
 
-    async def _stream_apply_output_masking(
+    async def _stream_apply_output_masking(  # noqa: C901, RUF100  # stream-shape dispatch preserves passthrough behavior
         self,
         response: AsyncIterable[object],
         request_data: dict,
