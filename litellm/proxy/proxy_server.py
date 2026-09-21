@@ -13476,6 +13476,48 @@ async def supported_openai_params(model: str):
         raise HTTPException(status_code=400, detail={"error": f"Could not map model={model}"})
 
 
+class _ModelInfoLookupResponse(TypedDict):
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str]
+    model_info: ReadOnly[Mapping[str, object]]
+
+
+@router.get(
+    "/utils/model_info",
+    tags=["llm utils"],  # mutable-ok: FastAPI tags kwarg is list-typed
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI dependencies kwarg is list-typed
+)
+async def model_info_lookup(model: str, custom_llm_provider: str | None = None):
+    """
+    Returns the model cost map entry (token limits, pricing, supports_* capabilities) for any model
+    in the cost map, whether or not it is registered on this proxy. `model_info` carries every
+    field of the raw cost map entry plus the typed fields `litellm.get_model_info` derives from it
+    (`key`, `supported_openai_params`).
+
+    Example curl:
+    ```
+    curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    detail: Final = {  # mutable-ok: FastAPI serializes detail as a plain dict
+        "error": f"model={model}, custom_llm_provider={custom_llm_provider} is not in the model cost map"
+    }
+    try:
+        typed_model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        raise HTTPException(status_code=404, detail=detail)
+    cost_map_entry: Final = litellm.model_cost.get(typed_model_info["key"])
+    if cost_map_entry is None:
+        raise HTTPException(status_code=404, detail=detail)
+    response: Final[_ModelInfoLookupResponse] = {
+        "model": model,
+        "custom_llm_provider": typed_model_info["litellm_provider"],
+        "model_info": {**typed_model_info, **cost_map_entry},
+    }
+    return response
+
+
 @router.post(
     "/utils/transform_request",
     tags=["llm utils"],
