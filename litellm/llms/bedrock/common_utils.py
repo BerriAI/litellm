@@ -331,6 +331,25 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
             tool["defer_loading"] = deferred
 
 
+_JSON_SCHEMA_TYPE_CARRYING_KEYWORDS: Final = frozenset(("enum", "const", "anyOf", "oneOf", "allOf", "not", "$ref"))
+
+
+def _infer_json_schema_type(node: Mapping[str, object]) -> str | None:
+    """
+    Type to backfill on a JSON Schema node that has no ``type``: ``object`` for
+    ``properties``, ``array`` for ``items``, ``object`` for an untyped free-form node
+    (e.g. a pydantic ``Any`` field, which emits only ``title``/``description``), and
+    ``None`` when a combinator, ``enum``, ``const`` or ``$ref`` already constrains it.
+    """
+    if isinstance(node.get("properties"), dict):
+        return "object"
+    if isinstance(node.get("items"), dict):
+        return "array"
+    if _JSON_SCHEMA_TYPE_CARRYING_KEYWORDS.isdisjoint(node):
+        return "object"
+    return None
+
+
 _TOOL_DICTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
@@ -344,10 +363,12 @@ def tools_without_eager_input_streaming(request_body: Mapping[str, object]) -> S
 
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
     """
-    In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk).
+    In-place: replace JSON Schema ``type: \"custom\"`` with ``\"object\"`` (iterative walk) and
+    backfill a missing ``type`` on nodes that carry ``properties`` (``object``) or ``items`` (``array``).
 
-    Anthropic / Claude Code use ``custom`` for tool schemas; Bedrock Invoke and
-    Bedrock Converse only accept standard JSON Schema type strings.
+    Anthropic / Claude Code use ``custom`` for tool schemas, and Anthropic accepts nested nodes
+    without ``type``; Bedrock Invoke and Bedrock Converse only accept standard JSON Schema type
+    strings and reject typeless nodes with ``Schema type is missing for schema``.
 
     Uses an explicit stack (not recursion) to satisfy recursive-function guards in CI.
     """
@@ -363,17 +384,22 @@ def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
         seen.add(node_id)
         if node.get("type") == "custom":
             node["type"] = "object"
+        elif "type" not in node:
+            inferred = _infer_json_schema_type(node)
+            if inferred is not None:
+                node["type"] = inferred
         items = node.get("items")
         if isinstance(items, dict):
             stack.append(items)
         addl = node.get("additionalProperties")
         if isinstance(addl, dict):
             stack.append(addl)
-        props = node.get("properties")
-        if isinstance(props, dict):
-            for sub in props.values():
-                if isinstance(sub, dict):
-                    stack.append(sub)
+        for mapping_key in ("properties", "$defs", "definitions"):
+            subs = node.get(mapping_key)
+            if isinstance(subs, dict):
+                for sub in subs.values():
+                    if isinstance(sub, dict):
+                        stack.append(sub)
         for combiner in ("allOf", "anyOf", "oneOf"):
             arr = node.get(combiner)
             if isinstance(arr, list):

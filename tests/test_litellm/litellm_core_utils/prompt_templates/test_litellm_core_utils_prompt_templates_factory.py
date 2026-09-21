@@ -1728,6 +1728,50 @@ def test_bedrock_tools_pt_keeps_anthropic_input_schema_tools():
     assert names == ["lookup"]
 
 
+def test_bedrock_tools_pt_backfills_type_on_nested_schema_nodes():
+    """
+    Bedrock Converse rejects any schema node without ``type`` ("Schema type is missing for
+    schema: {...}"), while Anthropic direct accepts them. Nested nodes must get a type too,
+    not only the schema root.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "send",
+                "parameters": {
+                    "type": "object",
+                    "$defs": {
+                        "Inner": {"properties": {"a": {"type": "string"}}, "title": "Inner"},
+                    },
+                    "properties": {
+                        "payload": {"title": "Payload", "description": "free-form"},
+                        "inner": {"$ref": "#/$defs/Inner"},
+                        "tags": {"items": {"type": "string"}},
+                        "nested_list": {"items": {"properties": {"b": {"type": "integer"}}}},
+                        "mode": {"enum": ["fast", "slow"]},
+                        "maybe": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    },
+                    "required": ["payload"],
+                },
+            },
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools=tools, model="bedrock/us.anthropic.claude-sonnet-4-6")
+    props = result[0]["toolSpec"]["inputSchema"]["json"]["properties"]
+
+    assert props["payload"]["type"] == "object"
+    assert props["inner"]["type"] == "object"
+    assert props["tags"]["type"] == "array"
+    assert props["nested_list"]["type"] == "array"
+    assert props["nested_list"]["items"]["type"] == "object"
+    assert "type" not in props["mode"]
+    assert "type" not in props["maybe"]
+
+
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
     Test that cache_control is properly applied to image content in tool results.
