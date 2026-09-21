@@ -1,10 +1,11 @@
-"""The same conversation contract on every (endpoint, provider, model, auth) cell.
+"""The same conversation contract on every (endpoint, deployment, auth) cell.
+A deployment is one provider model (openai/gpt-4o-mini, anthropic/claude-haiku-4-5, ...).
 
 /chat/completions, /v1/messages and /v1/responses each have their own
 translation code in the proxy, so a bug fixed on one surface tends to survive
 on the others. Every test here runs once per cell in `CELLS`
 (conversational_matrix.py), so a change to a shared helper is proven against all
-surfaces and providers at once, and a new provider is one row in `PROVIDERS`.
+surfaces and providers at once, and a new model or provider is one row in `DEPLOYMENTS`.
 
 Edge-wired: OpenAI and Anthropic traffic goes through the provider edge in
 record and replay, so the whole matrix replays with zero provider calls.
@@ -55,10 +56,12 @@ def surfaces(sdk: SdkClients) -> Mapping[SurfaceName, Surface]:
 
 def _weather_call(surface: Surface, key: str, model: str) -> ToolCall:
     first: Final = surface.reply(key, model, WEATHER_PROMPT, with_tool=True)
-    assert first.tool_calls, f"{surface.name} returned no tool call for {WEATHER_PROMPT!r}: text={first.text!r}"
-    names: Final = frozenset(call.name for call in first.tool_calls)
-    assert names == {WEATHER_TOOL_NAME}, f"{surface.name} called unexpected tools: {sorted(names)}"
+    assert len(first.tool_calls) == 1, (
+        f"{surface.name} forced tool_choice={WEATHER_TOOL_NAME} with parallel calls off, "
+        f"got {len(first.tool_calls)} tool call(s): {first.tool_calls} text={first.text!r}"
+    )
     call: Final = first.tool_calls[0]
+    assert call.name == WEATHER_TOOL_NAME, f"{surface.name} called {call.name!r}, not the forced {WEATHER_TOOL_NAME!r}"
     assert call.call_id, f"{surface.name} tool call has no id, so the caller cannot answer it: {call}"
     assert "paris" in call.parsed().location.lower(), f"{surface.name} tool arguments lost the location: {call}"
     return call
@@ -129,8 +132,8 @@ class TestConversationalMatrix:
         assert row.spend is not None and _approx_equal(row.spend, header_cost), (
             f"{cell.id}: logged spend {row.spend} disagrees with x-litellm-response-cost {header_cost}"
         )
-        assert row.model and cell.provider.backend.endswith(row.model), (
-            f"{cell.id}: spend row logged model {row.model!r}, not the deployment's {cell.provider.backend!r}"
+        assert row.model and cell.deployment.backend.endswith(row.model), (
+            f"{cell.id}: spend row logged model {row.model!r}, not the deployment's {cell.deployment.backend!r}"
         )
 
     @pytest.mark.parametrize("cell", cells_covering("tool_use", "nonstream", "works"))

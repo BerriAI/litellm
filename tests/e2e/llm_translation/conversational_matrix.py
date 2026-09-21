@@ -1,11 +1,12 @@
-"""The endpoint x provider x auth matrix behind test_conversational_matrix_e2e.py.
+"""The endpoint x deployment x auth matrix behind test_conversational_matrix_e2e.py.
 
 One conversation, three wire formats. Each `Surface` speaks its own API through
 the customer SDK (chat completions and Responses through the OpenAI SDK, Messages
 through the Anthropic SDK) and folds what came back into the surface-neutral
 `Reply` / `StreamedReply`, so a single behavior test asserts the same contract on
-every cell. A new provider or model is one `Provider` row in PROVIDERS; a new way
-of handing the proxy a provider credential is one `AuthMethod`.
+every cell. A new model, from an existing or a new provider, is one `Deployment` row
+in DEPLOYMENTS; a new way of handing the proxy a provider credential is one
+`AuthMethod`.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from anthropic.types import (
     MessageParam,
     RawMessageStreamEvent,
     TextBlock,
+    ToolChoiceToolParam,
     ToolParam,
     ToolResultBlockParam,
     ToolUseBlock,
@@ -39,6 +41,7 @@ from openai.types.chat import (
     ChatCompletionChunk,
     ChatCompletionMessageFunctionToolCallParam,
     ChatCompletionMessageParam,
+    ChatCompletionNamedToolChoiceParam,
     ChatCompletionToolMessageParam,
     ChatCompletionToolParam,
 )
@@ -49,6 +52,7 @@ from openai.types.responses import (
     ResponseFunctionToolCallParam,
     ResponseInputParam,
     ResponseStreamEvent,
+    ToolChoiceFunctionParam,
 )
 from openai.types.responses.response_input_param import FunctionCallOutput
 from proxy_client import ProxyClient
@@ -59,6 +63,7 @@ AuthMethod = Literal["env_ref", "stored_credential"]
 Capability = Literal["basic", "tool_use", "multi_turn"]
 Streaming = Literal["stream", "nonstream"]
 Assertion = Literal["works", "cost_logged"]
+ToolMode = Literal["none", "forced", "offered"]
 
 SURFACES: Final[tuple[SurfaceName, ...]] = ("chat_completions", "messages", "responses")
 AUTH_METHODS: Final[tuple[AuthMethod, ...]] = ("env_ref", "stored_credential")
@@ -80,7 +85,7 @@ WEATHER_TOOL_SCHEMA: Final[Mapping[str, object]] = MappingProxyType(
 
 
 @dataclass(frozen=True, slots=True)
-class Provider:
+class Deployment:
     """One deployment target: the litellm backend string plus how to wire it."""
 
     route: Literal["openai", "anthropic"]
@@ -100,8 +105,8 @@ class Provider:
         return key
 
 
-PROVIDERS: Final[tuple[Provider, ...]] = (
-    Provider(
+DEPLOYMENTS: Final[tuple[Deployment, ...]] = (
+    Deployment(
         route="openai",
         label="gpt-4o-mini",
         backend="openai/gpt-4o-mini",
@@ -109,7 +114,7 @@ PROVIDERS: Final[tuple[Provider, ...]] = (
         edge_mount="openai",
         edge_suffix="/v1",
     ),
-    Provider(
+    Deployment(
         route="openai",
         label="gpt-5.4-mini",
         backend="openai/gpt-5.4-mini",
@@ -117,7 +122,7 @@ PROVIDERS: Final[tuple[Provider, ...]] = (
         edge_mount="openai",
         edge_suffix="/v1",
     ),
-    Provider(
+    Deployment(
         route="anthropic",
         label="claude-haiku-4-5",
         backend="anthropic/claude-haiku-4-5",
@@ -131,21 +136,21 @@ PROVIDERS: Final[tuple[Provider, ...]] = (
 @dataclass(frozen=True, slots=True)
 class Cell:
     surface: SurfaceName
-    provider: Provider
+    deployment: Deployment
     auth: AuthMethod
 
     @property
     def id(self) -> str:
-        return f"{self.surface}-{self.provider.label}-{self.auth}"
+        return f"{self.surface}-{self.deployment.label}-{self.auth}"
 
     def registry_id(self, capability: Capability, streaming: Streaming, assertion: Assertion) -> str:
-        return f"llm.{self.surface}.{self.provider.route}.{capability}.{streaming}.{assertion}"
+        return f"llm.{self.surface}.{self.deployment.route}.{capability}.{streaming}.{assertion}"
 
 
 CELLS: Final[tuple[Cell, ...]] = tuple(
-    Cell(surface=surface, provider=provider, auth=auth)
+    Cell(surface=surface, deployment=deployment, auth=auth)
     for surface in SURFACES
-    for provider in PROVIDERS
+    for deployment in DEPLOYMENTS
     for auth in AUTH_METHODS
 )
 
@@ -163,36 +168,36 @@ DeploymentKey = tuple[str, AuthMethod]
 
 @dataclass(frozen=True, slots=True)
 class Deployments:
-    """Model aliases registered on the proxy, one per (provider, auth)."""
+    """Model aliases registered on the proxy, one per (deployment, auth)."""
 
     aliases: Mapping[DeploymentKey, str]
 
     def alias(self, cell: Cell) -> str:
-        return self.aliases[(cell.provider.label, cell.auth)]
+        return self.aliases[(cell.deployment.label, cell.auth)]
 
 
-def _litellm_params(provider: Provider, auth: AuthMethod, credential_name: str) -> LiteLLMParamsBody:
+def _litellm_params(deployment: Deployment, auth: AuthMethod, credential_name: str) -> LiteLLMParamsBody:
     match auth:
         case "env_ref":
             return LiteLLMParamsBody(
-                model=provider.backend, api_key=f"os.environ/{provider.api_key_env}", api_base=provider.api_base()
+                model=deployment.backend, api_key=f"os.environ/{deployment.api_key_env}", api_base=deployment.api_base()
             )
         case "stored_credential":
             return LiteLLMParamsBody(
-                model=provider.backend, litellm_credential_name=credential_name, api_base=provider.api_base()
+                model=deployment.backend, litellm_credential_name=credential_name, api_base=deployment.api_base()
             )
 
 
-def _register(proxy: ProxyClient, resources: ResourceManager, provider: Provider, auth: AuthMethod) -> str:
+def _register(proxy: ProxyClient, resources: ResourceManager, deployment: Deployment, auth: AuthMethod) -> str:
     marker: Final = unique_marker()
-    credential_name: Final = f"e2e-matrix-{provider.label}-{marker}"
+    credential_name: Final = f"e2e-matrix-{deployment.label}-{marker}"
     if auth == "stored_credential":
         proxy.create_credential(
-            CredentialCreateBody(credential_name=credential_name, credential_values={"api_key": provider.api_key()})
+            CredentialCreateBody(credential_name=credential_name, credential_values={"api_key": deployment.api_key()})
         )
         resources.defer(lambda: proxy.delete_credential(credential_name))
-    alias: Final = f"e2e-matrix-{provider.label}-{auth}-{marker}"
-    model_id: Final = proxy.create_model(alias, _litellm_params(provider, auth, credential_name))
+    alias: Final = f"e2e-matrix-{deployment.label}-{auth}-{marker}"
+    model_id: Final = proxy.create_model(alias, _litellm_params(deployment, auth, credential_name))
     resources.defer(lambda: proxy.delete_model(model_id))
     return alias
 
@@ -203,8 +208,8 @@ def register_deployments(proxy: ProxyClient) -> Iterator[Deployments]:
         yield Deployments(
             aliases=MappingProxyType(
                 {
-                    (provider.label, auth): _register(proxy, resources, provider, auth)
-                    for provider in PROVIDERS
+                    (deployment.label, auth): _register(proxy, resources, deployment, auth)
+                    for deployment in DEPLOYMENTS
                     for auth in AUTH_METHODS
                 }
             )
@@ -296,6 +301,18 @@ def _responses_tool() -> FunctionToolParam:
     }
 
 
+def _chat_tool_choice() -> ChatCompletionNamedToolChoiceParam:
+    return {"type": "function", "function": {"name": WEATHER_TOOL_NAME}}
+
+
+def _messages_tool_choice() -> ToolChoiceToolParam:
+    return {"type": "tool", "name": WEATHER_TOOL_NAME, "disable_parallel_tool_use": True}
+
+
+def _responses_tool_choice() -> ToolChoiceFunctionParam:
+    return {"type": "function", "name": WEATHER_TOOL_NAME}
+
+
 def _usage(input_tokens: int | None, output_tokens: int | None) -> Usage | None:
     if input_tokens is None or output_tokens is None:
         return None
@@ -307,12 +324,14 @@ class ChatCompletionsSurface:
     sdk: SdkClients
     name: SurfaceName = "chat_completions"
 
-    def _turn(self, key: str, model: str, messages: Sequence[ChatCompletionMessageParam], with_tool: bool) -> Reply:
+    def _turn(self, key: str, model: str, messages: Sequence[ChatCompletionMessageParam], tool: ToolMode) -> Reply:
         raw: Final = self.sdk.openai(key).chat.completions.with_raw_response.create(
             model=model,
             messages=list(messages),
             max_completion_tokens=MAX_OUTPUT_TOKENS,
-            tools=[_chat_tool()] if with_tool else openai.omit,
+            tools=openai.omit if tool == "none" else [_chat_tool()],
+            tool_choice=_chat_tool_choice() if tool == "forced" else openai.omit,
+            parallel_tool_calls=False if tool == "forced" else openai.omit,
             extra_body=NO_PROXY_CACHE,
         )
         completion: Final = raw.parse()
@@ -334,7 +353,7 @@ class ChatCompletionsSurface:
         )
 
     def reply(self, key: str, model: str, prompt: str, *, with_tool: bool = False) -> Reply:
-        return self._turn(key, model, _chat_history(prompt), with_tool)
+        return self._turn(key, model, _chat_history(prompt), "forced" if with_tool else "none")
 
     def stream(self, key: str, model: str, prompt: str) -> StreamedReply:
         chunks: Final[tuple[ChatCompletionChunk, ...]] = tuple(
@@ -366,7 +385,7 @@ class ChatCompletionsSurface:
             "tool_call_id": call.call_id,
             "content": result,
         }
-        return self._turn(key, model, (*_chat_history(prompt), assistant, tool_result), with_tool=True)
+        return self._turn(key, model, (*_chat_history(prompt), assistant, tool_result), "offered")
 
 
 def _chat_history(prompt: str) -> tuple[ChatCompletionMessageParam, ...]:
@@ -378,13 +397,14 @@ class MessagesSurface:
     sdk: SdkClients
     name: SurfaceName = "messages"
 
-    def _turn(self, key: str, model: str, messages: Sequence[MessageParam], with_tool: bool) -> Reply:
+    def _turn(self, key: str, model: str, messages: Sequence[MessageParam], tool: ToolMode) -> Reply:
         raw: Final = self.sdk.anthropic(key).messages.with_raw_response.create(
             model=model,
             max_tokens=MAX_OUTPUT_TOKENS,
             system=INSTRUCTIONS,
             messages=list(messages),
-            tools=[_messages_tool()] if with_tool else anthropic.omit,
+            tools=anthropic.omit if tool == "none" else [_messages_tool()],
+            tool_choice=_messages_tool_choice() if tool == "forced" else anthropic.omit,
             extra_body=NO_PROXY_CACHE,
         )
         message: Final = raw.parse()
@@ -402,7 +422,7 @@ class MessagesSurface:
         )
 
     def reply(self, key: str, model: str, prompt: str, *, with_tool: bool = False) -> Reply:
-        return self._turn(key, model, ({"role": "user", "content": prompt},), with_tool)
+        return self._turn(key, model, ({"role": "user", "content": prompt},), "forced" if with_tool else "none")
 
     def stream(self, key: str, model: str, prompt: str) -> StreamedReply:
         events: Final[tuple[RawMessageStreamEvent, ...]] = tuple(
@@ -443,7 +463,7 @@ class MessagesSurface:
             {"role": "assistant", "content": [tool_use]},
             {"role": "user", "content": [tool_result]},
         )
-        return self._turn(key, model, history, with_tool=True)
+        return self._turn(key, model, history, "offered")
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,13 +471,15 @@ class ResponsesSurface:
     sdk: SdkClients
     name: SurfaceName = "responses"
 
-    def _turn(self, key: str, model: str, history: ResponseInputParam, with_tool: bool) -> Reply:
+    def _turn(self, key: str, model: str, history: ResponseInputParam, tool: ToolMode) -> Reply:
         raw: Final = self.sdk.openai(key).responses.with_raw_response.create(
             model=model,
             input=history,
             instructions=INSTRUCTIONS,
             max_output_tokens=MAX_OUTPUT_TOKENS,
-            tools=[_responses_tool()] if with_tool else openai.omit,
+            tools=openai.omit if tool == "none" else [_responses_tool()],
+            tool_choice=_responses_tool_choice() if tool == "forced" else openai.omit,
+            parallel_tool_calls=False if tool == "forced" else openai.omit,
             extra_body=NO_PROXY_CACHE,
         )
         response: Final = raw.parse()
@@ -475,7 +497,7 @@ class ResponsesSurface:
         )
 
     def reply(self, key: str, model: str, prompt: str, *, with_tool: bool = False) -> Reply:
-        return self._turn(key, model, [{"role": "user", "content": prompt}], with_tool)
+        return self._turn(key, model, [{"role": "user", "content": prompt}], "forced" if with_tool else "none")
 
     def stream(self, key: str, model: str, prompt: str) -> StreamedReply:
         events: Final[tuple[ResponseStreamEvent, ...]] = tuple(
@@ -509,7 +531,7 @@ class ResponsesSurface:
             "call_id": call.call_id,
             "output": result,
         }
-        return self._turn(key, model, [{"role": "user", "content": prompt}, function_call, output], with_tool=True)
+        return self._turn(key, model, [{"role": "user", "content": prompt}, function_call, output], "offered")
 
 
 def build_surfaces(sdk: SdkClients) -> Mapping[SurfaceName, Surface]:
