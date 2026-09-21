@@ -1202,9 +1202,15 @@ if MCP_AVAILABLE:
         ```
         """
         user_mcp_management_mode: Final = _get_user_mcp_management_mode()
+        # A named server is the dashboard recheck. The page load omits ids and
+        # must reuse the cached probe.
+        force_probe: Final = bool(server_ids)
 
         if user_mcp_management_mode == "view_all":
-            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
+            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(
+                server_ids=server_ids,
+                force=force_probe,
+            )
             return [{"server_id": server.server_id, "status": server.status} for server in servers]
 
         auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
@@ -1214,6 +1220,7 @@ if MCP_AVAILABLE:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
                 server_ids=server_ids,
+                force=force_probe,
             )
             for server in servers:
                 if server.server_id not in server_status_map:

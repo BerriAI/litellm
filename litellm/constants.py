@@ -126,6 +126,10 @@ MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"
 MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+# Dashboard health reuses a result for this long instead of opening a new upstream session.
+MCP_HEALTH_CHECK_CACHE_TTL: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_CACHE_TTL", "60.0"))
+# Cap simultaneous upstream probes so one page load cannot open a session per server.
+MCP_HEALTH_CHECK_MAX_CONCURRENCY: Final = int(os.getenv("LITELLM_MCP_HEALTH_CHECK_MAX_CONCURRENCY", "8"))
 
 # Allowlist of commands permitted for MCP stdio transport.
 # Prevents arbitrary command execution via /mcp-rest/test/* endpoints or server creation.

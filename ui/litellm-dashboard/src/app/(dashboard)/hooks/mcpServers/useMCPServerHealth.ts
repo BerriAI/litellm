@@ -20,8 +20,10 @@ export const useMCPServerHealth = () => {
     queryKey: mcpServerHealthKeys.lists(),
     queryFn: async () => await fetchMCPServerHealth(accessToken!),
     enabled: !!accessToken,
-    // Refetch health status every 30 seconds to keep it up to date
-    refetchInterval: 30000,
+    // The proxy caches a probe for 60s. Polling faster than that re-opens
+    // upstream sessions on every dashboard tab and holds a worker until the
+    // slowest server answers. Recheck is the manual refresh.
+    staleTime: 60_000,
   });
 
   const recheckServerHealth = useCallback(

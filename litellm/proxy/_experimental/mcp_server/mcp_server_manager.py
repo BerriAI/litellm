@@ -39,6 +39,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
+    MCP_HEALTH_CHECK_CACHE_TTL,
+    MCP_HEALTH_CHECK_MAX_CONCURRENCY,
     MCP_HEALTH_CHECK_TIMEOUT,
     MCP_METADATA_TIMEOUT,
     MCP_NPM_CACHE_DIR,
@@ -1507,6 +1509,8 @@ class MCPServerManager:
         )
         self.registry: dict[str, MCPServer] = {}
         self.config_mcp_servers: dict[str, MCPServer] = {}
+        self._health_check_cache: dict[str, tuple[float, LiteLLM_MCPServerTable]] = {}
+        self._health_check_semaphore = asyncio.Semaphore(max(1, MCP_HEALTH_CHECK_MAX_CONCURRENCY))
         """
         eg.
         [
@@ -6262,17 +6266,49 @@ class MCPServerManager:
         # Take first 32 characters and format as UUID-like string
         return hash_hex[:32]
 
-    async def health_check_server(self, server_id: str, mcp_auth_header: str | None = None) -> LiteLLM_MCPServerTable:
+    def _cached_health(self, server_id: str) -> LiteLLM_MCPServerTable | None:
+        cached: Final = self._health_check_cache.get(server_id)
+        if cached is None:
+            return None
+        checked_at, result = cached
+        if time.monotonic() - checked_at >= MCP_HEALTH_CHECK_CACHE_TTL:
+            return None
+        return result
+
+    async def health_check_server(
+        self,
+        server_id: str,
+        mcp_auth_header: str | None = None,
+        *,
+        force: bool = False,
+    ) -> LiteLLM_MCPServerTable:
         """
         Perform a health check on a specific MCP server.
+
+        A recent result is reused so a dashboard refresh does not open a new
+        upstream session. ``force`` is the manual recheck and skips that cache.
+        The cache is per worker.
 
         Args:
             server_id: The ID of the server to health check
             mcp_auth_header: Optional authentication header for the MCP server
+            force: Probe even when a fresh cached result exists
 
         Returns:
             Dict containing health check results
         """
+        if not force:
+            cached: Final = self._cached_health(server_id)
+            if cached is not None:
+                return cached
+        result: Final = await self._probe_server_health(server_id, mcp_auth_header)
+        if result.health_check_error != "Server not found":
+            self._health_check_cache[server_id] = (time.monotonic(), result)
+        return result
+
+    async def _probe_server_health(
+        self, server_id: str, mcp_auth_header: str | None = None
+    ) -> LiteLLM_MCPServerTable:
         from datetime import datetime
 
         server: Final = self.get_mcp_server_by_id(server_id)
@@ -6324,8 +6360,10 @@ class MCPServerManager:
                 async def _noop(session):
                     return "ok"
 
-                # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
+                # Add timeout wrapper to prevent hanging. The semaphore caps how
+                # many of these sessions a single page load can hold open.
+                async with self._health_check_semaphore:
+                    await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
                 self._remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
@@ -6381,6 +6419,7 @@ class MCPServerManager:
         self,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         server_ids: list[str] | None = None,
+        force: bool = False,
     ) -> list[LiteLLM_MCPServerTable]:
         """
         Get all MCP servers that the user has access to, with health status and team information.
@@ -6405,7 +6444,7 @@ class MCPServerManager:
             # Check all accessible servers
             target_server_ids = allowed_server_ids
 
-        return await self._run_health_checks(target_server_ids)
+        return await self._run_health_checks(target_server_ids, force=force)
 
     async def get_all_allowed_mcp_servers(
         self,
@@ -6507,7 +6546,7 @@ class MCPServerManager:
         return servers
 
     async def get_all_mcp_servers_with_health_unfiltered(
-        self, server_ids: list[str] | None = None
+        self, server_ids: list[str] | None = None, force: bool = False
     ) -> list[LiteLLM_MCPServerTable]:
         """Return health info for all servers in registry regardless of user access."""
 
@@ -6523,13 +6562,17 @@ class MCPServerManager:
         if not target_server_ids:
             return []
 
-        return await self._run_health_checks(target_server_ids)
+        return await self._run_health_checks(target_server_ids, force=force)
 
-    async def _run_health_checks(self, target_server_ids: list[str]) -> list[LiteLLM_MCPServerTable]:
+    async def _run_health_checks(
+        self, target_server_ids: list[str], force: bool = False
+    ) -> list[LiteLLM_MCPServerTable]:
         if not target_server_ids:
             return []
 
-        tasks: Final = [self.health_check_server(server_id) for server_id in target_server_ids]
+        tasks: Final = [
+            self.health_check_server(server_id, force=force) for server_id in target_server_ids
+        ]
         results: Final = await asyncio.gather(*tasks)
         return [server for server in results if server is not None]
 
