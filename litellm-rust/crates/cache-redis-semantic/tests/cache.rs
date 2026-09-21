@@ -818,6 +818,154 @@ async fn async_paths_embed_then_run_blocking_redis_work() {
 }
 
 #[test]
+fn shared_base_index_across_dimensions_replaces_the_isolated_index() {
+    // Pins parity with Python's `_isolated` + overwrite=True flow.
+    let prompt = "shared prompt";
+    let tag = "key1";
+    let isolated = format!("{INDEX}_isolated");
+    let value = entry();
+    let context = || messages_context(vec![json!({"role": "user", "content": prompt})]);
+    let store_hash = |index: &str, vector: &[f32]| {
+        MockCmd::new(
+            redis::cmd("HSET")
+                .arg(format!("{index}:{}", entry_id(prompt, tag)))
+                .arg("entry_id")
+                .arg(entry_id(prompt, tag))
+                .arg("prompt")
+                .arg(prompt)
+                .arg("response")
+                .arg(encoded(&value))
+                .arg("prompt_vector")
+                .arg(vector_bytes(vector))
+                .arg("inserted_at")
+                .arg("1700000000.5")
+                .arg("updated_at")
+                .arg("1700000000.5")
+                .arg("litellm_cache_key")
+                .arg(tag),
+            Ok(7),
+        )
+    };
+
+    let vector_a = vec![0.1f32; 8];
+    let connection_a = MockRedisConnection::new([
+        MockCmd::new(
+            redis::cmd("FT.INFO").arg(INDEX),
+            Err::<redis::Value, _>(unknown_index_error()),
+        ),
+        MockCmd::new(create_index_command(INDEX, 8), Ok("OK")),
+        store_hash(INDEX, &vector_a),
+    ])
+    .assert_all_commands_consumed();
+    let (embedder_a, _) = FakeEmbedder::new(&[(prompt, &vector_a)]);
+    let worker_a = RedisSemanticCache::with_connection(connection_a, embedder_a, config())
+        .with_clock(|| 1700000000.5);
+    worker_a.set_cache(tag, value.clone(), &context()).unwrap();
+
+    let vector_b = vec![0.2f32; 4];
+    let connection_b = MockRedisConnection::new([
+        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(8))),
+        MockCmd::new(
+            redis::cmd("FT.INFO").arg(&isolated),
+            Err::<redis::Value, _>(unknown_index_error()),
+        ),
+        MockCmd::new(create_index_command(&isolated, 4), Ok("OK")),
+        store_hash(&isolated, &vector_b),
+        MockCmd::new(
+            search_command(&isolated, tag, &vector_b),
+            Ok(search_result(hit_fields(tag, "0.0", encoded(&value)))),
+        ),
+        MockCmd::new(
+            search_command(&isolated, tag, &vector_b),
+            Err::<redis::Value, _>(redis::RedisError::from((
+                redis::ErrorKind::Extension,
+                "Vector dimension mismatch",
+            ))),
+        ),
+    ])
+    .assert_all_commands_consumed();
+    let (embedder_b, _) = FakeEmbedder::new(&[(prompt, &vector_b)]);
+    let worker_b = RedisSemanticCache::with_connection(connection_b, embedder_b, config())
+        .with_clock(|| 1700000000.5);
+    worker_b.set_cache(tag, value.clone(), &context()).unwrap();
+    assert_eq!(
+        worker_b.get_cache(tag, &context()).unwrap(),
+        Some(value.clone())
+    );
+
+    let vector_c = vec![0.3f32; 16];
+    let connection_c = MockRedisConnection::new([
+        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(8))),
+        MockCmd::new(redis::cmd("FT.INFO").arg(&isolated), Ok(compatible_info(4))),
+        MockCmd::new(redis::cmd("FT.DROPINDEX").arg(&isolated), Ok("OK")),
+        MockCmd::new(create_index_command(&isolated, 16), Ok("OK")),
+        store_hash(&isolated, &vector_c),
+    ])
+    .assert_all_commands_consumed();
+    let (embedder_c, _) = FakeEmbedder::new(&[(prompt, &vector_c)]);
+    let worker_c = RedisSemanticCache::with_connection(connection_c, embedder_c, config())
+        .with_clock(|| 1700000000.5);
+    worker_c.set_cache(tag, value.clone(), &context()).unwrap();
+
+    assert_eq!(
+        worker_b.get_cache(tag, &context()).unwrap_err(),
+        Error::Unavailable
+    );
+}
+
+#[test]
+fn live_shared_index_is_replaced_across_dimensions() {
+    let Ok(url) = std::env::var("LITELLM_REDIS_STACK_URL") else {
+        return;
+    };
+    // Pins parity with Python's `_isolated` + overwrite=True flow.
+    let base = format!("rust_semantic_shared_{}", std::process::id());
+    let isolated = format!("{base}_isolated");
+    let prompt = "shared live prompt";
+    let tag = "key1";
+    let context = || messages_context(vec![json!({"role": "user", "content": prompt})]);
+    let value = entry();
+    let worker = |vector: Vec<f32>| {
+        let (embedder, _) = FakeEmbedder::new(&[(prompt, vector.as_slice())]);
+        RedisSemanticCache::new(
+            &url,
+            embedder,
+            RedisSemanticConfig {
+                index_name: base.clone(),
+                similarity_threshold: 0.9,
+            },
+        )
+        .unwrap()
+    };
+
+    let worker_a = worker(vec![0.1f32; 8]);
+    worker_a.set_cache(tag, value.clone(), &context()).unwrap();
+
+    let worker_b = worker(vec![0.2f32; 4]);
+    worker_b.set_cache(tag, value.clone(), &context()).unwrap();
+    assert_eq!(
+        worker_b.get_cache(tag, &context()).unwrap(),
+        Some(value.clone())
+    );
+
+    let worker_c = worker(vec![0.3f32; 16]);
+    worker_c.set_cache(tag, value.clone(), &context()).unwrap();
+
+    assert_eq!(
+        worker_b.get_cache(tag, &context()).unwrap_err(),
+        Error::Unavailable
+    );
+
+    let mut connection = redis::Client::open(url).unwrap().get_connection().unwrap();
+    for index in [&base, &isolated] {
+        let _: Result<(), _> = redis::cmd("FT.DROPINDEX")
+            .arg(index)
+            .arg("DD")
+            .query(&mut connection);
+    }
+}
+
+#[test]
 fn live_store_lookup_and_ttl_against_redis_stack() {
     let Ok(url) = std::env::var("LITELLM_REDIS_STACK_URL") else {
         return;
