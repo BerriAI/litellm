@@ -228,7 +228,6 @@ general_settings:
 
 litellm_settings:
   drop_params: true
-  telemetry: false
 """,
         encoding="utf-8",
     )

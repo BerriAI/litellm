@@ -6,10 +6,11 @@ import re
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone, tzinfo
-from typing import Any, Final, TypedDict, cast
+from typing import Any, Final, Protocol, cast
 
 import httpx
 from pydantic import BaseModel, Field
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -33,6 +34,34 @@ GALILEO_CLOUD_API_BASE_URL: Final = "https://api.galileo.ai"
 # Cap the in-memory buffer so persistent flush failures (e.g. Galileo
 # unavailable, invalid credentials) cannot leak memory unboundedly.
 GALILEO_MAX_IN_MEMORY_RECORDS: Final = 1000
+
+
+class _GalileoLoginBody(TypedDict):
+    """Decoded body of the Galileo login response."""
+
+    access_token: ReadOnly[str]
+
+
+class _GalileoLoginResponse(Protocol):
+    """The login call's HTTP response, read for the access token it carries."""
+
+    def json(self) -> _GalileoLoginBody: ...
+
+
+class _JsonResponse(Protocol):
+    """An HTTP response read only for whatever JSON body it decodes to."""
+
+    def json(self) -> object: ...
+
+
+def _login_access_token(response: _GalileoLoginResponse) -> str:
+    """Read the bearer token out of a Galileo login response body."""
+    return response.json()["access_token"]
+
+
+def _decoded_body(response: _JsonResponse) -> object:
+    """Decode a response body without asserting anything about its shape."""
+    return response.json()
 
 
 class GalileoStandardLoggingFields(TypedDict, total=False):
@@ -60,13 +89,13 @@ class LLMResponse(BaseModel):
         default=None,
         description="Total cost of the LLM call in USD as computed by LiteLLM.",
     )
-    output_logprobs: dict[str, Any] | None = Field(
+    output_logprobs: dict[str, object] | None = Field(
         default=None,
         description="Optional. When available, logprobs are used to compute Uncertainty.",
     )
     created_at: str = Field(..., description='timestamp constructed in "%Y-%m-%dT%H:%M:%S" format')
     tags: list[str] | None = None
-    user_metadata: dict[str, Any] | None = None
+    user_metadata: dict[str, object] | None = None
 
 
 class GalileoObserve(CustomLogger):
@@ -156,7 +185,7 @@ class GalileoObserve(CustomLogger):
             },
         )
         galileo_login_response.raise_for_status()
-        access_token: Final = galileo_login_response.json()["access_token"]
+        access_token: Final = _login_access_token(galileo_login_response)
         self.headers = {
             "accept": "application/json",
             "Content-Type": "application/json",
@@ -238,13 +267,13 @@ class GalileoObserve(CustomLogger):
         return created_at
 
     @staticmethod
-    def _token_metrics_from_record(record: Mapping[str, Any]) -> dict[str, Any]:
+    def _token_metrics_from_record(record: Mapping[str, Any]) -> dict[str, object]:
         num_input_tokens: Final = int(record.get("num_input_tokens") or 0)
         num_output_tokens: Final = int(record.get("num_output_tokens") or 0)
         num_total_tokens = int(record.get("num_total_tokens") or 0)
         if num_total_tokens == 0 and (num_input_tokens or num_output_tokens):
             num_total_tokens = num_input_tokens + num_output_tokens
-        metrics: Final[dict[str, Any]] = {
+        metrics: Final[dict[str, object]] = {
             "num_input_tokens": num_input_tokens,
             "num_output_tokens": num_output_tokens,
             "num_total_tokens": num_total_tokens,
@@ -260,10 +289,10 @@ class GalileoObserve(CustomLogger):
         *,
         trace_id: str,
         span_id: str,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         created_at: Final = GalileoObserve._normalize_created_at(record.get("created_at", ""))
 
-        span: Final[dict[str, Any]] = {
+        span: Final[dict[str, object]] = {
             "type": "llm",
             "id": span_id,
             "trace_id": trace_id,
@@ -287,7 +316,7 @@ class GalileoObserve(CustomLogger):
         return span
 
     @staticmethod
-    def _record_to_v2_trace(record: Mapping[str, Any]) -> dict[str, Any]:
+    def _record_to_v2_trace(record: Mapping[str, Any]) -> dict[str, object]:
         trace_id: Final = str(uuid.uuid4())
         span_id: Final = str(uuid.uuid4())
         created_at: Final = GalileoObserve._normalize_created_at(record.get("created_at", ""))
@@ -307,8 +336,8 @@ class GalileoObserve(CustomLogger):
             "spans": [GalileoObserve._record_to_v2_span(record, trace_id=trace_id, span_id=span_id)],
         }
 
-    def _build_traces_payload(self, records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-        payload: Final[dict[str, Any]] = {
+    def _build_traces_payload(self, records: Sequence[Mapping[str, object]]) -> dict[str, object]:
+        payload: Final[dict[str, object]] = {
             "traces": [self._record_to_v2_trace(record) for record in records],
             "logging_method": "api_direct",
             "reliable": False,
@@ -318,7 +347,7 @@ class GalileoObserve(CustomLogger):
             payload["log_stream_id"] = self.log_stream_id
         return payload
 
-    def _get_ingest_request(self) -> tuple[str, dict[str, Any]] | None:
+    def _get_ingest_request(self) -> tuple[str, dict[str, object]] | None:
         if not self.base_url or not self.project_id:
             return None
 
@@ -421,15 +450,15 @@ class GalileoObserve(CustomLogger):
         try:
             verbose_logger.debug(
                 "Galileo Logger HTTP error response json: %s",
-                response.json(),
+                _decoded_body(response),
             )
         except Exception:
             pass
 
     @staticmethod
-    def _build_prompt(kwargs: Mapping[str, Any]) -> dict[str, Any]:
+    def _build_prompt(kwargs: Mapping[str, Any]) -> dict[str, object]:
         optional_params: Final[Mapping[str, object]] = kwargs.get("optional_params", {}) or {}
-        prompt: Final[dict[str, Any]] = {"messages": kwargs.get("messages")}
+        prompt: Final[dict[str, object]] = {"messages": kwargs.get("messages")}
         if optional_params.get("functions") is not None:
             prompt["functions"] = optional_params["functions"]
         if optional_params.get("tools") is not None:
@@ -451,7 +480,7 @@ class GalileoObserve(CustomLogger):
         return json.dumps(value, default=_json_default)
 
     @staticmethod
-    def _prompt_to_input_text(prompt: Mapping[str, Any]) -> str:
+    def _prompt_to_input_text(prompt: Mapping[str, object]) -> str:
         messages: Final[object] = prompt.get("messages")
         if messages is not None:
             text: Final = GalileoObserve._input_text_from_messages(messages)
@@ -464,7 +493,7 @@ class GalileoObserve(CustomLogger):
         if response_obj.choices and len(response_obj.choices) > 0:
             message: Final = response_obj["choices"][0]["message"]
             if hasattr(message, "json"):
-                message_json: Final = message.json()
+                message_json: Final[object] = message.json()
                 if isinstance(message_json, str):
                     return json.loads(message_json)
                 return message_json
@@ -488,7 +517,7 @@ class GalileoObserve(CustomLogger):
         return None
 
     @staticmethod
-    def _langfuse_style_rerank_prompt(kwargs: Mapping[str, object]) -> dict[str, Any]:
+    def _langfuse_style_rerank_prompt(kwargs: Mapping[str, object]) -> dict[str, object]:
         """Match Langfuse rerank input: prompt = {"messages": kwargs.get("messages")}."""
         return {"messages": kwargs.get("messages")}
 

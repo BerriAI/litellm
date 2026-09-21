@@ -5,6 +5,8 @@ import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer, MCPToolset, type MCPEvent } from "@/components/mcp_tools/types";
 import { extractPromptCacheTokens } from "@/utils/promptCacheUsage";
+import { parseUsageCost } from "./usage_cost";
+import { buildPlaygroundHeaders, type CustomHeaders } from "./request_headers";
 
 const completionAsSingleChunk = (completion: ChatCompletion): ChatCompletionChunk =>
   ({
@@ -49,6 +51,7 @@ export async function makeOpenAIChatCompletionRequest(
   mockTestFallbacks?: boolean,
   mcpToolsets?: MCPToolset[],
   streamingEnabled: boolean = true,
+  customHeaders?: CustomHeaders,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -56,11 +59,7 @@ export async function makeOpenAIChatCompletionRequest(
     console.log = function () {};
   }
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
-  // Prepare headers with tags and trace ID
-  const headers: Record<string, string> = {};
-  if (tags && tags.length > 0) {
-    headers["x-litellm-tags"] = tags.join(",");
-  }
+  const headers = buildPlaygroundHeaders(tags, customHeaders);
 
   const client = new openai.OpenAI({
     apiKey: accessToken,
@@ -73,6 +72,7 @@ export async function makeOpenAIChatCompletionRequest(
     const startTime = Date.now();
     let firstTokenReceived = false;
     let timeToFirstToken: number | undefined = undefined;
+    let servedFromResponseCache = false;
 
     // Track MCP metadata cumulatively across chunks
     let mcpMetadata: {
@@ -143,7 +143,13 @@ export async function makeOpenAIChatCompletionRequest(
           { ...requestBody, stream: true, stream_options: { include_usage: true } },
           { signal },
         )
-      : [completionAsSingleChunk(await client.chat.completions.create({ ...requestBody, stream: false }, { signal }))];
+      : await (async () => {
+          const nonStreamingResponse = await client.chat.completions
+            .create({ ...requestBody, stream: false }, { signal })
+            .withResponse();
+          servedFromResponseCache = nonStreamingResponse.response.headers.get("x-litellm-cache-key") !== null;
+          return [completionAsSingleChunk(nonStreamingResponse.data)];
+        })();
 
     for await (const chunk of response) {
       // Process content and measure time to first token
@@ -228,6 +234,7 @@ export async function makeOpenAIChatCompletionRequest(
           promptTokens: chunkWithUsage.usage.prompt_tokens,
           totalTokens: chunkWithUsage.usage.total_tokens,
           ...extractPromptCacheTokens(chunkWithUsage.usage),
+          ...(servedFromResponseCache ? { servedFromResponseCache: true } : {}),
         };
 
         // Check for reasoning tokens
@@ -235,9 +242,9 @@ export async function makeOpenAIChatCompletionRequest(
           usageData.reasoningTokens = chunkWithUsage.usage.completion_tokens_details.reasoning_tokens;
         }
 
-        // Extract cost from usage object if available
-        if (chunkWithUsage.usage.cost !== undefined && chunkWithUsage.usage.cost !== null) {
-          usageData.cost = parseFloat(chunkWithUsage.usage.cost);
+        const parsedCost = parseUsageCost(chunkWithUsage.usage.cost);
+        if (parsedCost !== undefined) {
+          usageData.cost = parsedCost;
         }
 
         onUsageData(usageData);

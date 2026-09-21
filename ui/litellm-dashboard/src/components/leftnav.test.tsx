@@ -17,6 +17,12 @@ vi.mock("../utils/roles", async (importOriginal) => {
   };
 });
 
+const navState = vi.hoisted(() => ({ pathname: "/ui/api-keys" }));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => navState.pathname,
+}));
+
 const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
   const mockUseAuthorized = vi.fn(() => ({
     userId: "test-user-id",
@@ -62,8 +68,17 @@ vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
 
 // The redesigned sidebar reads the custom logo from ThemeContext; the test tree
 // has no ThemeProvider, so stub the hook.
+const unbrandedTheme = () => ({
+  logoUrl: null as string | null,
+  logoUrlDark: null as string | null,
+  faviconUrl: null as string | null,
+  setLogoUrl: vi.fn(),
+  setLogoUrlDark: vi.fn(),
+  setFaviconUrl: vi.fn(),
+});
+let mockUseThemeImpl = unbrandedTheme;
 vi.mock("@/contexts/ThemeContext", () => ({
-  useTheme: () => ({ logoUrl: null, faviconUrl: null, setLogoUrl: vi.fn(), setFaviconUrl: vi.fn() }),
+  useTheme: () => mockUseThemeImpl(),
 }));
 
 // Version tag + logout target come from network hooks; keep them inert in unit tests.
@@ -89,20 +104,75 @@ const placementsOf = (page: string): string[] =>
 
 describe("Sidebar (leftnav)", () => {
   const defaultProps = {
-    setPage: vi.fn(),
-    defaultSelectedKey: "api-keys",
     collapsed: false,
   };
 
   afterEach(() => {
     mockUseAuthorized.mockReset();
     mockUseOrganizations.mockReset();
+    mockUseThemeImpl = unbrandedTheme;
+    navState.pathname = "/ui/api-keys";
   });
 
   it("should link the logo to the UI home route rather than the proxy origin", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByRole("link", { name: /litellm home/i })).toHaveAttribute("href", "/ui");
+  });
+
+  it("pairs the logo with a dark-mode variant that swaps on the dark class", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+    const classesOf = (el: Element) => new Set(el.className.split(/\s+/));
+
+    const lightSrc = light.getAttribute("src") ?? "";
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image$/));
+    expect(dark).toHaveAttribute("src", `${lightSrc}?theme=dark`);
+    expect(classesOf(light).has("dark:hidden")).toBe(true);
+    expect(classesOf(light).has("hidden")).toBe(false);
+    expect(classesOf(dark).has("hidden")).toBe(true);
+    expect(classesOf(dark).has("dark:block")).toBe(true);
+  });
+
+  it("prefers a configured dark logo over the light one in dark mode", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/logo-dark.png",
+    });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo-dark.png");
+  });
+
+  it("reuses the light custom logo in dark mode when no dark one is configured", () => {
+    mockUseThemeImpl = () => ({ ...unbrandedTheme(), logoUrl: "https://cdn.example.com/logo.png" });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [light, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+  });
+
+  it("falls back to the light logo when a configured dark logo fails to load", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/gone.png",
+    });
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const [, dark] = Array.from(screen.getByRole("link", { name: /litellm home/i }).querySelectorAll("img"));
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/gone.png");
+
+    fireEvent.error(dark);
+
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo.png");
   });
 
   it("renders all top-level (non-nested) tabs for admin", () => {
@@ -148,6 +218,20 @@ describe("Sidebar (leftnav)", () => {
       expect(screen.getByText("Search Tools")).toBeInTheDocument();
     });
   });
+  it("reports whether a nested tab is expanded", async () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+
+    const toggle = screen.getByText("Tools").closest("button")!;
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+    await waitFor(() => {
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+    });
+  });
+
   it("keeps Router Settings as a single Settings child", () => {
     // Router Settings is admin-only, so getAvailablePages() filters it out entirely and the
     // page_utils duplicate-key guard cannot see it. Walk menuGroups directly, otherwise a
@@ -430,12 +514,52 @@ describe("Sidebar (leftnav)", () => {
     expect(screen.getByText("Organizations")).toBeInTheDocument();
   });
 
-  it("marks the selected page's nav item active", () => {
-    renderWithProviders(<Sidebar {...defaultProps} defaultSelectedKey="logs" />);
-    const logs = screen.getByText("Logs").closest("a");
-    expect(logs).toHaveAttribute("data-active", "true");
-    // A different item must not be active.
-    expect(screen.getByText("Virtual Keys").closest("a")).not.toHaveAttribute("data-active");
+  it("marks the nav item for the current route active", () => {
+    navState.pathname = "/ui/logs";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Logs" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).not.toHaveAttribute("data-active");
+  });
+
+  it("marks Virtual Keys active at the dashboard root", () => {
+    navState.pathname = "/ui/";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Virtual Keys" })).toHaveAttribute("data-active", "true");
+  });
+
+  it("expands the parent group of the current nested route and marks the child active", () => {
+    navState.pathname = "/ui/search-tools";
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    expect(screen.getByRole("link", { name: "Search Tools" })).toHaveAttribute("data-active", "true");
+    expect(screen.getByRole("button", { name: "Tools" })).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("links every leaf to its path route, including the ids that differ from their route", () => {
+    renderWithProviders(<Sidebar {...defaultProps} />);
+    act(() => {
+      fireEvent.click(screen.getByText("Experimental"));
+    });
+
+    const expectHref = (label: string, href: string) =>
+      expect(screen.getByRole("link", { name: label })).toHaveAttribute("href", href);
+    expectHref("Virtual Keys", "/ui/api-keys");
+    expectHref("Playground", "/ui/playground");
+    expectHref("Models + Endpoints", "/ui/models-and-endpoints");
+    expectHref("Usage", "/ui/usage");
+    expectHref("API Reference", "/ui/api-reference");
+    expectHref("Old Usage", "/ui/old-usage");
+  });
+
+  it("never links a leaf to the legacy ?page= switch", () => {
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+    for (const group of ["Agentic", "Tools", "Experimental", "Settings"]) {
+      act(() => {
+        fireEvent.click(screen.getByText(group));
+      });
+    }
+    const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href") ?? "");
+    expect(hrefs.filter((href) => href.includes("page="))).toHaveLength(0);
+    expect(hrefs.filter((href) => href.startsWith("/ui/")).length).toBeGreaterThan(30);
   });
 
   it("hides labels but keeps items reachable (icon + link) when collapsed to the rail", () => {
@@ -456,8 +580,8 @@ describe("Sidebar (leftnav)", () => {
 
     const costOptimization = container.querySelector('a[href*="cost-optimization"]');
     expect(costOptimization).not.toBeNull();
-    expect(costOptimization!.textContent).toContain("Cost Optimization");
-    expect(costOptimization!.textContent).toContain("Beta");
+    expect(costOptimization!).toHaveTextContent(/Cost Optimization/);
+    expect(costOptimization!).toHaveTextContent(/Beta/);
 
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
   });
@@ -471,20 +595,30 @@ describe("Sidebar (leftnav)", () => {
 });
 
 describe("getBreadcrumb", () => {
-  it("resolves a top-level page to its section + title", () => {
-    expect(getBreadcrumb("api-keys")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
-    expect(getBreadcrumb("logs")).toEqual({ section: "Observability", title: "Logs" });
+  it("resolves a top-level route to its section + title", () => {
+    expect(getBreadcrumb("/ui/api-keys")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
+    expect(getBreadcrumb("/ui/logs")).toEqual({ section: "Observability", title: "Logs" });
   });
 
-  it("resolves a nested child page to its parent section", () => {
-    expect(getBreadcrumb("search-tools")).toEqual({ section: "AI Gateway", title: "Search Tools" });
+  it("resolves routes whose segment differs from the sidebar page id", () => {
+    expect(getBreadcrumb("/ui/models-and-endpoints")).toEqual({ section: "AI Gateway", title: "Models + Endpoints" });
+    expect(getBreadcrumb("/ui/usage")).toEqual({ section: "Observability", title: "Usage" });
+    expect(getBreadcrumb("/ui/old-usage")).toEqual({ section: "Developer Tools", title: "Old Usage" });
+  });
+
+  it("titles the dashboard root as Virtual Keys", () => {
+    expect(getBreadcrumb("/ui/")).toEqual({ section: "AI Gateway", title: "Virtual Keys" });
+  });
+
+  it("resolves a nested child route to its parent section", () => {
+    expect(getBreadcrumb("/ui/search-tools/")).toEqual({ section: "AI Gateway", title: "Search Tools" });
   });
 
   it("resolves router-settings under the Settings section", () => {
-    expect(getBreadcrumb("router-settings")).toEqual({ section: "Settings", title: "Router Settings" });
+    expect(getBreadcrumb("/ui/router-settings")).toEqual({ section: "Settings", title: "Router Settings" });
   });
 
-  it("falls back to a prettified title with no section for unknown pages", () => {
-    expect(getBreadcrumb("some-unknown-page")).toEqual({ section: null, title: "Some Unknown Page" });
+  it("falls back to a prettified title with no section for unknown routes", () => {
+    expect(getBreadcrumb("/ui/some-unknown-page")).toEqual({ section: null, title: "Some Unknown Page" });
   });
 });

@@ -307,21 +307,21 @@ describe("VectorStoreSelector", () => {
       renderComponent({ value: ["store-1", "store-2"] });
       await waitForDataFetch();
 
-      expect(getSelectElement().getAttribute("data-value")).toBe(JSON.stringify(["store-1", "store-2"]));
+      expect(getSelectElement()).toHaveAttribute("data-value", JSON.stringify(["store-1", "store-2"]));
     });
 
     it("should handle empty value array", async () => {
       renderComponent({ value: [] });
       await waitForDataFetch();
 
-      expect(getSelectElement().getAttribute("data-value")).toBe(JSON.stringify([]));
+      expect(getSelectElement()).toHaveAttribute("data-value", JSON.stringify([]));
     });
 
     it("should handle undefined value", async () => {
       renderComponent({ value: undefined });
       await waitForDataFetch();
 
-      expect(getSelectElement().getAttribute("data-value")).toBeNull();
+      expect(getSelectElement()).not.toHaveAttribute("data-value");
     });
   });
 

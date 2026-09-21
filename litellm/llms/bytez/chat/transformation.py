@@ -23,6 +23,8 @@ from litellm.utils import CustomStreamWrapper, ModelResponse, Usage
 from ..common_utils import API_BASE, BytezError
 
 if TYPE_CHECKING:
+    import tiktoken
+
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -185,7 +187,7 @@ class BytezChatConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "tiktoken.Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -333,10 +335,10 @@ class BytezChatConfig(BaseConfig):
 
 
 class BytezCustomStreamWrapper(CustomStreamWrapper):
-    def chunk_creator(self, chunk: Any):
+    def chunk_creator(self, chunk: object):
         try:
             model_response: Final = self.model_response_creator()
-            response_obj: dict[str, Any] = {}
+            response_obj: dict[str, object] = {}
 
             response_obj = {
                 "text": chunk,
@@ -344,7 +346,7 @@ class BytezCustomStreamWrapper(CustomStreamWrapper):
                 "finish_reason": "",
             }
 
-            completion_obj: Final[dict[str, Any]] = {"content": chunk}
+            completion_obj: Final[dict[str, object]] = {"content": chunk}
 
             return self.return_processed_chunk_logic(
                 completion_obj=completion_obj,

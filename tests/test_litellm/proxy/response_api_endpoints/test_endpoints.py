@@ -3,13 +3,253 @@ Test for response_api_endpoints/endpoints.py
 """
 
 import unittest
+from typing import Any, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi.testclient import TestClient
+from httpx import Response
 
 import litellm
 from litellm.proxy.proxy_server import app
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,error_kind",
+    [
+        ("/v1/responses", "rate_limit"),
+        ("/v1/responses", "numeric_rate_limit"),
+        ("/v1/responses", "server_error"),
+        ("/v1/responses", "response_failed"),
+        ("/v1/responses", "cyber_policy"),
+        ("/cursor/chat/completions", "server_error"),
+        ("/v1/chat/completions", "server_error"),
+    ],
+)
+async def test_streaming_upstream_errors_keep_the_client_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    error_kind: Literal["rate_limit", "numeric_rate_limit", "server_error", "response_failed", "cyber_policy"],
+) -> None:
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    model: Final = "gpt-6-astra"
+    message: Final = "Upstream cannot complete this response"
+    code: Final = {
+        "rate_limit": "rate_limit_exceeded", "numeric_rate_limit": "429",
+        "server_error": "server_error", "response_failed": "server_error", "cyber_policy": "cyber_policy",
+    }[error_kind]
+    error: Final = {"message": message, "code": code, "type": None, "param": "input"}
+    response: Final = {"id": "resp_upstream", "object": "response", "created_at": 1,
+                      "status": "in_progress", "model": model, "output": [],
+                      "parallel_tool_calls": True, "tool_choice": "auto", "tools": []}
+    created: Final = {"type": "response.created", "sequence_number": 0, "response": response}
+    tool_added: Final = {"type": "response.output_item.added", "sequence_number": 1, "output_index": 0,
+                        "item": {"type": "function_call", "id": "fc_partial", "call_id": "call_partial",
+                                 "name": "read_file", "arguments": "", "status": "in_progress"}}
+    tool_delta: Final = {"type": "response.function_call_arguments.delta", "sequence_number": 2,
+                        "item_id": "fc_partial", "output_index": 0, "delta": '{"path":"partial'}
+    failed: Final = (
+        {"type": "response.failed", "sequence_number": 9,
+         "response": {**response, "status": "failed", "error": error}}
+        if error_kind in ("response_failed", "cyber_policy") else {"type": "error", "error": error}
+    )
+    chat: Final = {"id": "chatcmpl_partial", "object": "chat.completion.chunk", "created": 1,
+                  "model": model, "choices": [{"index": 0, "delta": {"content": "partial"},
+                                                "finish_reason": None}]}
+    is_chat: Final = path == "/v1/chat/completions"
+    partial: Final = path != "/v1/responses" or error_kind in ("numeric_rate_limit", "response_failed", "cyber_policy")
+    response_events: Final = (created, tool_added, tool_delta, failed) if partial else (failed,)
+    upstream_events: Final = (chat, {"error": error}) if is_chat else response_events
+    wire: Final = "".join("data: " + json.dumps(event) + "\n\n" for event in upstream_events)
+    upstream_url: Final = "https://streaming.example/v1"
+    router: Final = litellm.Router(
+        model_list=[{"model_name": model, "litellm_params": {
+            "model": "openai/" + model, "api_base": upstream_url, "api_key": "fixture-key"}}],
+        num_retries=0,
+    )
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, _auth_override)
+    with respx.mock as transport:
+        transport.post(upstream_url + ("/chat/completions" if is_chat else "/responses")).respond(
+            200, content=wire, headers={"Content-Type": "text/event-stream"}
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://testserver") as client:
+            result: Final = await client.post(
+                path, json={
+                    "model": model, "stream": True,
+                    **({"messages": [{"role": "user", "content": "hello"}]} if is_chat else {"input": "hello"}),
+                },
+            )
+    frames: Final = tuple(frame for frame in result.text.split("\n\n") if "data: " in frame)
+    events: Final = tuple(
+        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
+        for frame in frames if "data: [DONE]" not in frame
+    )
+
+    assert result.status_code == 200, result.text
+    assert message in result.text
+    if path == "/v1/responses":
+        assert frames[-1] == "data: [DONE]", result.text
+        assert frames[-2].startswith("event: response.failed\n"), result.text
+        if partial:
+            assert [event["type"] for event in events] == [
+                "response.created", "response.output_item.added",
+                "response.function_call_arguments.delta", "response.failed",
+            ]
+            assert events[2]["delta"] == tool_delta["delta"]
+            assert events[-1]["sequence_number"] == events[-2]["sequence_number"] + 1
+            assert events[-1]["response"]["id"] == events[0]["response"]["id"]
+        else:
+            assert [event["type"] for event in events] == ["response.failed"]
+            assert events[0]["sequence_number"] == 0
+            assert events[0]["response"]["id"].startswith("resp_")
+        assert events[-1]["response"]["status"] == "failed"
+        assert events[-1]["response"]["error"]["code"] == {
+            "rate_limit": "rate_limit_exceeded", "numeric_rate_limit": "rate_limit_exceeded",
+            "server_error": "server_error", "response_failed": "server_error", "cyber_policy": "cyber_policy",
+        }[error_kind]
+        assert events[-1]["response"]["error"]["message"] == message
+    else:
+        assert events[0]["object"] == "chat.completion.chunk", result.text
+        assert "response.failed" not in result.text
+        assert "error" in events[-1]
+
+
+@pytest.mark.asyncio
+async def test_responses_api_background_polling_rejects_missing_input():
+    from fastapi import Response as FastAPIResponse
+    from starlette.requests import Request
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import responses_api
+
+    processor = MagicMock()
+
+    async def return_exception(*, e: Exception, **kwargs: object) -> Exception:
+        return e
+
+    processor._handle_llm_api_exception = AsyncMock(side_effect=return_exception)
+    processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o"}, MagicMock()))
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b'{"model":"gpt-4o","background":true}',
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch(  # test-quality-ok: polling decision is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
+            return_value=True,
+        ),
+        patch(  # test-quality-ok: background task is imported inside the endpoint
+            "litellm.proxy.response_polling.background_streaming.background_streaming_task",
+            new_callable=AsyncMock,
+        ) as mock_background_streaming_task,
+        patch(  # test-quality-ok: polling handler is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.ResponsePollingHandler.create_initial_state",
+            new_callable=AsyncMock,
+        ) as mock_create_initial_state,
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await responses_api(
+                request=request,
+                fastapi_response=FastAPIResponse(),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "input"
+    processor.common_processing_pre_call_logic.assert_awaited_once()
+    mock_background_streaming_task.assert_not_called()
+    mock_create_initial_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_responses_api_background_polling_accepts_input_from_prompt_template():
+    from fastapi import Response as FastAPIResponse
+    from starlette.requests import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import responses_api
+
+    processor = MagicMock()
+    processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"model": "gpt-4o", "input": "hello from prompt"}, MagicMock())
+    )
+    initial_state = MagicMock()
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b'{"model":"gpt-4o","prompt_id":"greeting","background":true}',
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch(  # test-quality-ok: polling decision is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
+            return_value=True,
+        ),
+        patch(  # test-quality-ok: background task is imported inside the endpoint
+            "litellm.proxy.response_polling.background_streaming.background_streaming_task",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: avoid scheduling a background task in this unit test
+            "litellm.proxy.response_api_endpoints.endpoints.asyncio.create_task",
+        ),
+        patch(  # test-quality-ok: polling handler is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.ResponsePollingHandler.create_initial_state",
+            new_callable=AsyncMock,
+        ) as mock_create_initial_state,
+    ):
+        mock_create_initial_state.return_value = initial_state
+        result = await responses_api(
+            request=request,
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert result is initial_state
+    processor.common_processing_pre_call_logic.assert_awaited_once()
+    mock_create_initial_state.assert_awaited_once()
+    request_data = mock_create_initial_state.await_args.kwargs["request_data"]
+    assert request_data["input"] == "hello from prompt"
 
 
 class TestResponsesAPIEndpoints(unittest.TestCase):
@@ -82,11 +322,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 ResponseOutputMessage(
                     type="message",
                     role="assistant",
-                    content=[
-                        ResponseOutputText(
-                            type="output_text", text="Hello from Cursor!"
-                        )
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="Hello from Cursor!")],
                 )
             ],
         )
@@ -121,9 +357,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")
     @patch("litellm.proxy.proxy_server.user_api_key_auth")
-    async def test_responses_api_key_spend_header_includes_response_cost(
-        self, mock_auth, mock_router
-    ):
+    async def test_responses_api_key_spend_header_includes_response_cost(self, mock_auth, mock_router):
         """
         Test that x-litellm-key-spend header includes the current request's response_cost
         for /v1/responses endpoint.
@@ -159,9 +393,7 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
                 ResponseOutputMessage(
                     type="message",
                     role="assistant",
-                    content=[
-                        ResponseOutputText(type="output_text", text="Test response")
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="Test response")],
                 )
             ],
         )
@@ -356,6 +588,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "model": "gpt-4o", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
@@ -363,6 +596,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "response": {"model": "gpt-4o", "input": "hello"}}
         assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
@@ -370,6 +604,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {
             "type": "response.create",
             "model": "flat-model",
@@ -381,6 +616,7 @@ class TestWSModelExtraction:
         from litellm.proxy.response_api_endpoints.endpoints import (
             _extract_model_from_first_ws_event,
         )
+
         event = {"type": "response.create", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) is None
 
@@ -400,9 +636,7 @@ class TestResponsesWSFirstFrameValidation:
         )
 
         ws = MagicMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "session.update", "model": "gpt-4o"})
-        )
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "session.update", "model": "gpt-4o"}))
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
 
@@ -412,10 +646,7 @@ class TestResponsesWSFirstFrameValidation:
         ws.send_text.assert_awaited_once()
         ws.close.assert_awaited_once_with(code=1008, reason="Invalid first message")
         error_payload = json.loads(ws.send_text.await_args.args[0])
-        assert (
-            error_payload["error"]["message"]
-            == "First message must be a response.create JSON object."
-        )
+        assert error_payload["error"]["message"] == "First message must be a response.create JSON object."
 
     @pytest.mark.asyncio
     async def test_rejects_non_object_json_first_frame(self):
@@ -484,16 +715,12 @@ class TestResponsesWSFirstFrameModelAuth:
         ws.url = "ws://testserver/v1/responses"
         ws.accept = AsyncMock()
         ws.receive_text = AsyncMock(
-            return_value=json.dumps(
-                {"type": "response.create", "model": "gpt-4o-mini", "input": []}
-            )
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
         )
         ws.close = AsyncMock()
 
         processor = MagicMock()
-        processor.common_processing_pre_call_logic = AsyncMock(
-            return_value=({"model": "gpt-4o-mini"}, MagicMock())
-        )
+        processor.common_processing_pre_call_logic = AsyncMock(return_value=({"model": "gpt-4o-mini"}, MagicMock()))
 
         async def fake_llm_call():
             return None
@@ -522,6 +749,201 @@ class TestResponsesWSFirstFrameModelAuth:
         mock_model_auth.assert_awaited_once()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("nested", [False, True])
+    @pytest.mark.parametrize("query_model", [None, "gpt-4o-mini"])
+    async def test_endpoint_routes_on_first_frame_input_and_previous_response_id(
+        self, nested: bool, query_model: str | None
+    ):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        replayed_input = [{"type": "reasoning", "id": "encitem_abc", "encrypted_content": "litellm_enc:abc;blob"}]
+        payload = {"model": "gpt-4o-mini", "input": replayed_input, "previous_response_id": "resp_prev"}
+        first_frame = {"type": "response.create", "response": payload} if nested else {"type": "response.create", **payload}
+        raw_first_frame = json.dumps(first_frame)
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(return_value=raw_first_frame)
+        ws.close = AsyncMock()
+
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+
+        async def fake_llm_call():
+            return None
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests below
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; the payload it hands to routing is what is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam where the first frame's input and previous_response_id become observable
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=fake_llm_call(),
+            ) as mock_route_request,
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=query_model,
+                user_api_key_dict=MagicMock(),
+            )
+
+        ws.receive_text.assert_awaited_once()
+        routed = mock_route_request.await_args.kwargs["data"]
+        assert routed["model"] == "gpt-4o-mini"
+        assert routed["input"] == replayed_input
+        assert routed["previous_response_id"] == "resp_prev"
+        assert processor.common_processing_pre_call_logic.await_args.kwargs["model"] == "gpt-4o-mini"
+        assert mock_route_request.await_args.kwargs["route_type"] == "_aresponses_websocket"
+        ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("provider_rejected", [True, False])
+    async def test_endpoint_books_a_provider_rejected_connection_as_a_failed_request(self, provider_rejected: bool):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.close = AsyncMock()
+
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        failure = litellm.BadRequestError(
+            message="invalid_encrypted_content", model="gpt-4o-mini", llm_provider="openai"
+        )
+
+        async def fake_llm_call():
+            return failure if provider_rejected else None
+
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        user_api_key_dict = MagicMock()
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint does with the relay's outcome is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that hands back the relay's outcome
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=fake_llm_call(),
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=None,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        ws.close.assert_not_awaited()
+        if not provider_rejected:
+            proxy_logging_obj.post_call_failure_hook.assert_not_awaited()
+            return
+        proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
+        booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+        assert booked["original_exception"] is failure
+        assert booked["user_api_key_dict"] is user_api_key_dict
+        assert booked["request_data"]["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
+    async def test_endpoint_sends_an_error_frame_when_routing_rejects_the_connection(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini", "litellm_metadata": {}}, MagicMock())
+        )
+        rejection = litellm.RateLimitError(
+            message="origin deployment is cooling down", model="gpt-4o-mini", llm_provider="openai"
+        )
+        proxy_logging_obj = MagicMock()
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+        user_api_key_dict = MagicMock()
+
+        with (
+            patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ),
+            patch(  # test-quality-ok: the pre-call processor needs a live proxy; what the endpoint tells the client is under test
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(  # test-quality-ok: routing is the seam that raises the affinity rejection
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                side_effect=rejection,
+            ),
+            patch(  # test-quality-ok: the failure hook is the proxy's only path to a failed spend log row
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                proxy_logging_obj,
+            ),
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=None,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        frame = json.loads(ws.send_text.await_args.args[0])
+        assert frame["type"] == "error"
+        assert frame["status"] == 429
+        assert frame["error"]["type"] == "rate_limit_exceeded"
+        assert "cooling down" in frame["error"]["message"]
+        ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
+        booked = proxy_logging_obj.post_call_failure_hook.await_args.kwargs
+        assert booked["original_exception"] is rejection
+        assert booked["user_api_key_dict"] is user_api_key_dict
+        assert booked["request_data"]["model"] == "gpt-4o-mini"
+
+    @pytest.mark.asyncio
     async def test_reruns_model_auth_for_first_frame_model(self):
         from starlette.requests import Request
 
@@ -529,9 +951,7 @@ class TestResponsesWSFirstFrameModelAuth:
             _enforce_responses_ws_first_frame_model_auth,
         )
 
-        request = Request(
-            {"type": "http", "method": "POST", "path": "/v1/responses", "headers": []}
-        )
+        request = Request({"type": "http", "method": "POST", "path": "/v1/responses", "headers": []})
         user_api_key_dict = MagicMock()
         llm_router = MagicMock()
 
@@ -593,9 +1013,7 @@ class TestReadWSModelFromFirstFrameErrors:
 
         assert result is None
         ws.send_text.assert_not_awaited()
-        ws.close.assert_awaited_once_with(
-            code=1008, reason="Timed out waiting for first message"
-        )
+        ws.close.assert_awaited_once_with(code=1008, reason="Timed out waiting for first message")
 
     @pytest.mark.asyncio
     async def test_invalid_json_sends_error_and_closes(self):
@@ -613,9 +1031,7 @@ class TestReadWSModelFromFirstFrameErrors:
         assert result is None
         payload = json.loads(ws.send_text.await_args.args[0])
         assert payload["error"]["message"] == "First message is not valid JSON."
-        ws.close.assert_awaited_once_with(
-            code=1008, reason="Invalid JSON in first message"
-        )
+        ws.close.assert_awaited_once_with(code=1008, reason="Invalid JSON in first message")
 
     @pytest.mark.asyncio
     async def test_missing_model_sends_error_and_closes(self):
@@ -624,9 +1040,7 @@ class TestReadWSModelFromFirstFrameErrors:
         )
 
         ws = MagicMock()
-        ws.receive_text = AsyncMock(
-            return_value=json.dumps({"type": "response.create", "input": []})
-        )
+        ws.receive_text = AsyncMock(return_value=json.dumps({"type": "response.create", "input": []}))
         ws.send_text = AsyncMock()
         ws.close = AsyncMock()
 
@@ -655,6 +1069,41 @@ class TestReadWSModelFromFirstFrameErrors:
         ws.send_text.assert_not_awaited()
         ws.close.assert_not_awaited()
 
+    @pytest.mark.asyncio
+    async def test_query_model_wins_over_first_frame_model(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        raw = json.dumps({"type": "response.create", "model": "gpt-4o", "input": []})
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value=raw)
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws, query_model="reasoning-group")
+
+        assert result == ("reasoning-group", raw)
+        ws.close.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_query_model_satisfies_a_first_frame_without_model(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        raw = json.dumps({"type": "response.create", "input": []})
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value=raw)
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws, query_model="reasoning-group")
+
+        assert result == ("reasoning-group", raw)
+        ws.send_text.assert_not_awaited()
+        ws.close.assert_not_awaited()
+
 
 class TestManagedResponsesSameProvider:
     def _handler(self, model, custom_llm_provider=None):
@@ -679,10 +1128,7 @@ class TestManagedResponsesSameProvider:
         assert self._handler("gpt-4o")._same_provider("gpt-4o-mini") is True
 
     def test_different_provider_is_not_same(self):
-        assert (
-            self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash")
-            is False
-        )
+        assert self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash") is False
 
     def test_inject_credentials_keeps_provider_for_same_provider_model(self):
         handler = self._handler("gpt-4o", custom_llm_provider="openai")
@@ -697,18 +1143,14 @@ class TestManagedResponsesSameProvider:
         assert "custom_llm_provider" not in call_kwargs
 
     def test_unresolvable_connection_model_falls_back_to_custom_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         assert handler._same_provider("gpt-4o-mini") is True
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="gpt-4o-mini")
         assert call_kwargs["custom_llm_provider"] == "openai"
 
     def test_unresolvable_connection_model_still_drops_cross_provider(self):
-        handler = self._handler(
-            "my-custom-deployment", custom_llm_provider="openai"
-        )
+        handler = self._handler("my-custom-deployment", custom_llm_provider="openai")
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
         assert "custom_llm_provider" not in call_kwargs
@@ -840,9 +1282,7 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
                     type="message",
                     role="assistant",
                     status="completed",
-                    content=[
-                        ResponseOutputText(type="output_text", text="agent reply", annotations=[])
-                    ],
+                    content=[ResponseOutputText(type="output_text", text="agent reply", annotations=[])],
                 )
             ],
         )
@@ -851,9 +1291,12 @@ def test_cursor_chat_completions_input_body_uses_responses_pipeline_and_strips_s
 
     app.dependency_overrides[user_api_key_auth] = _auth_override
     try:
-        with patch.object(ps, "llm_router", mock_router), patch(
-            "litellm.proxy.response_api_endpoints.endpoints._read_request_body",
-            side_effect=capturing_read_request_body,
+        with (
+            patch.object(ps, "llm_router", mock_router),
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints._read_request_body",
+                side_effect=capturing_read_request_body,
+            ),
         ):
             client = TestClient(app)
             response = client.post(
@@ -1353,6 +1796,8 @@ class TestParseCursorModelVariant:
             ("claude-opus-5-fast", "claude-opus-5", None),
             ("gpt-5.6-sol", "gpt-5.6-sol", None),
             ("foo-thinking-ultra-fast", "foo-thinking-ultra", None),
+            ("gpt-5.6-thinking-max", "gpt-5.6", "max"),
+            ("foo-thinking-mega-fast", "foo-thinking-mega", None),
             ("-thinking-high", "-thinking-high", None),
         ],
     )
@@ -1486,8 +1931,8 @@ def _router_serving_only(base_model: str) -> MagicMock:
     mock_router.router_general_settings.pass_through_all_models = False
     mock_router.default_deployment = None
     mock_router.pattern_router.patterns = {base_model: ["anthropic/*"]}
-    mock_router.pattern_router.get_pattern.side_effect = (
-        lambda model: [{"model_name": "anthropic/*"}] if model == base_model else None
+    mock_router.pattern_router.get_pattern.side_effect = lambda model: (
+        [{"model_name": "anthropic/*"}] if model == base_model else None
     )
     return mock_router
 
@@ -1737,9 +2182,7 @@ class TestCursorGateRecognizesRoutingGroups:
         from litellm.proxy.response_api_endpoints.endpoints import _resolve_cursor_model_variant
 
         router = Router(
-            model_list=[
-                {"model_name": "member-fast", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}
-            ],
+            model_list=[{"model_name": "member-fast", "litellm_params": {"model": "openai/gpt-4o", "api_key": "fake"}}],
             routing_groups=[
                 {"group_name": "grouped-thinking-high", "models": ["member-fast"], "routing_strategy": "simple-shuffle"}
             ],
@@ -1834,3 +2277,153 @@ class TestGuardrailBlockedResponsesUsage:
         assert usage["input_tokens"] == 0
         assert usage["output_tokens"] == 0
         assert usage["total_tokens"] == 0
+
+
+class TestResponsesInputTokens:
+    """Regression tests for POST /v1/responses/input_tokens.
+
+    The docs promise OpenAI-format token counting on the proxy, but the route was
+    never registered, so the POST fell through to the GET/DELETE-only
+    /v1/responses/{response_id} route and returned 405."""
+
+    def _post_input_tokens(
+        self,
+        body: dict[str, Any],
+        path: str = "/v1/responses/input_tokens",
+        counter: AsyncMock | None = None,
+    ) -> tuple[Response, AsyncMock]:
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.response_api_endpoints.endpoints import _proxy_token_counter
+        from litellm.types.utils import TokenCountResponse
+
+        token_counter_mock = (
+            counter
+            if counter is not None
+            else AsyncMock(
+                return_value=TokenCountResponse(
+                    total_tokens=13,
+                    request_model=body.get("model", ""),
+                    model_used=body.get("model", ""),
+                    tokenizer_type="openai_api",
+                )
+            )
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(api_key="sk-test", request_route=path)
+        app.dependency_overrides[_proxy_token_counter] = lambda: token_counter_mock
+        try:
+            client = TestClient(app)
+            response = client.post(path, json=body, headers={"Authorization": "Bearer sk-1234"})
+            return response, token_counter_mock
+        finally:
+            app.dependency_overrides.pop(user_api_key_auth, None)
+            app.dependency_overrides.pop(_proxy_token_counter, None)
+
+    def test_string_input_returns_openai_input_tokens_shape(self):
+        response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "Hello, how are you?"})
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {"object": "response.input_tokens", "input_tokens": 13}
+        counter.assert_awaited_once()
+        assert counter.call_args.kwargs["call_endpoint"] is True
+        token_request = counter.call_args.kwargs["request"]
+        assert token_request.model == "gpt-4o"
+        assert token_request.messages == [{"role": "user", "content": "Hello, how are you?"}]
+
+    def test_every_route_alias_is_registered(self):
+        for path in ("/v1/responses/input_tokens", "/responses/input_tokens", "/openai/v1/responses/input_tokens"):
+            response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, path=path)
+            assert response.status_code == 200, f"{path}: {response.status_code} {response.text}"
+
+    def test_input_items_instructions_and_tools_are_forwarded(self):
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+            }
+        ]
+        response, counter = self._post_input_tokens(
+            {
+                "model": "gpt-4o",
+                "input": [{"role": "user", "content": "What is the weather in Paris?"}],
+                "instructions": "You are terse.",
+                "tools": tools,
+            }
+        )
+
+        assert response.status_code == 200, response.text
+        token_request = counter.call_args.kwargs["request"]
+        assert token_request.messages == [
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "What is the weather in Paris?"},
+        ]
+        assert token_request.tools == tools
+
+    def test_missing_model_returns_openai_400(self):
+        response, counter = self._post_input_tokens({"input": "Hello"})
+
+        assert response.status_code == 400, response.text
+        assert response.json() == {
+            "error": {
+                "message": "Missing required parameter: 'model'.",
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": "missing_required_parameter",
+            }
+        }
+        counter.assert_not_awaited()
+
+    def test_missing_input_returns_openai_400(self):
+        response, counter = self._post_input_tokens({"model": "gpt-4o"})
+
+        assert response.status_code == 400, response.text
+        assert response.json() == {
+            "error": {
+                "message": "Missing required parameter: 'input'.",
+                "type": "invalid_request_error",
+                "param": "input",
+                "code": "missing_required_parameter",
+            }
+        }
+        counter.assert_not_awaited()
+
+    @pytest.mark.parametrize("empty_input", ["", []])
+    def test_empty_input_returns_openai_400(self, empty_input):
+        response, counter = self._post_input_tokens({"model": "gpt-4o", "input": empty_input})
+
+        assert response.status_code == 400, response.text
+        assert response.json() == {
+            "error": {
+                "message": """One of "input" or "previous_response_id" or 'prompt' or 'conversation' must be provided.""",
+                "type": "invalid_request_error",
+                "param": None,
+                "code": "missing_required_parameter",
+            }
+        }
+        counter.assert_not_awaited()
+
+    def test_invalid_tools_returns_openai_400(self):
+        response, counter = self._post_input_tokens({"model": "gpt-4o", "input": "hi", "tools": "not-a-list"})
+
+        assert response.status_code == 400, response.text
+        error = response.json()["error"]
+        assert error["type"] == "invalid_request_error"
+        counter.assert_not_awaited()
+
+    def test_provider_error_maps_status_code(self):
+        from litellm.proxy._types import ProxyException
+
+        failing_counter = AsyncMock(
+            side_effect=ProxyException(
+                message="rate limited",
+                type="token_counting_error",
+                param="model",
+                code="429",
+            )
+        )
+        response, _ = self._post_input_tokens({"model": "gpt-4o", "input": "hi"}, counter=failing_counter)
+
+        assert response.status_code == 429, response.text
+        assert response.json()["error"]["message"] == "rate limited"

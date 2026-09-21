@@ -17,7 +17,7 @@ const GuardrailCard: React.FC<{ card: GuardrailCardInfo; onClick: () => void }> 
       <p className="line-clamp-3 m-0 flex-1 text-xs leading-relaxed text-muted-foreground">{card.description}</p>
 
       {card.eval && (
-        <div className="mt-2.5 flex items-center gap-1 text-emerald-600">
+        <div className="mt-2.5 flex items-center gap-1 text-success">
           <CircleCheck className="size-3" />
           <span className="text-[11px] font-medium">
             F1: {card.eval.f1}% &middot; {card.eval.testCases} test cases

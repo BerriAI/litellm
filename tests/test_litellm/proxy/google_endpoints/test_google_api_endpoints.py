@@ -3,15 +3,10 @@
 Test to verify the Google GenAI proxy API endpoints
 """
 
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 def _build_test_client():

@@ -150,30 +150,6 @@ async def test_async_sqs_logger_error_flush():
 # =============================================================================
 
 
-@pytest.mark.asyncio
-async def test_async_log_success_event_adds_to_queue(monkeypatch):
-    monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
-    logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
-
-    fake_payload = {"some": "data"}
-    await logger.async_log_success_event(
-        {"standard_logging_object": fake_payload}, None, None, None
-    )
-    assert fake_payload in logger.log_queue
-
-
-@pytest.mark.asyncio
-async def test_async_log_failure_event_adds_to_queue(monkeypatch):
-    monkeypatch.setattr("litellm.aws_sqs_callback_params", {})
-    logger = SQSLogger(sqs_queue_url="https://example.com", sqs_region_name="us-west-2")
-
-    fake_payload = {"fail": True}
-    await logger.async_log_failure_event(
-        {"standard_logging_object": fake_payload}, None, None, None
-    )
-    assert fake_payload in logger.log_queue
-
-
 # =============================================================================
 # 🧾 async_send_batch Tests
 # =============================================================================

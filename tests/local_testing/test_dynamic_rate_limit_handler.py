@@ -1,9 +1,7 @@
 # What is this?
 ## Unit tests for 'dynamic_rate_limiter.py`
 import asyncio
-import os
 import random
-import sys
 import time
 import traceback
 from litellm._uuid import uuid
@@ -13,11 +11,7 @@ from typing import Optional, Tuple
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import pytest
 
 import litellm
@@ -206,17 +200,15 @@ async def test_rate_limit_raised(dynamic_rate_limit_handler, user_api_key_auth, 
 
     ## CHECK if exception raised
 
-    try:
+    with pytest.raises(HTTPException) as exc_info:
         await dynamic_rate_limit_handler.async_pre_call_hook(
             user_api_key_dict=user_api_key_auth,
             cache=DualCache(),
             data={"model": model},
             call_type="completion",
         )
-        pytest.fail("Expected this to raise HTTPexception")
-    except HTTPException as e:
-        assert e.status_code == 429  # check if rate limit error raised
-        pass
+    e = exc_info.value
+    assert e.status_code == 429  # check if rate limit error raised
 
 
 @pytest.mark.asyncio

@@ -4,10 +4,6 @@ import userEvent from "@testing-library/user-event";
 import GuardrailCard from "./guardrail_garden_card";
 import type { GuardrailCardInfo } from "./guardrail_garden_data";
 
-vi.mock("@ant-design/icons", () => ({
-  CheckCircleFilled: ({ style, ...props }: any) => <span data-testid="check-icon" {...props} />,
-}));
-
 const baseCard: GuardrailCardInfo = {
   id: "test-guard",
   name: "Test Guardrail",
@@ -56,7 +52,7 @@ describe("GuardrailCard", () => {
   it("should render the logo through the shared Logo component with the card src", () => {
     render(<GuardrailCard card={baseCard} onClick={vi.fn()} />);
     const img = screen.getByAltText("Test Guardrail logo");
-    expect(img.getAttribute("src")).toContain("/logos/test.svg");
+    expect(img).toHaveAttribute("src", expect.stringContaining("/logos/test.svg"));
   });
 
   it("should pass a bundled static-import src through unchanged", () => {

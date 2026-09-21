@@ -1,3 +1,4 @@
+import { parseAsString, useQueryState } from "nuqs";
 import React, { useState, useEffect } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronDown, Code, Plus } from "lucide-react";
@@ -15,10 +16,10 @@ import GuardrailTable from "./guardrail_table";
 import { isAdminRole } from "@/utils/roles";
 import GuardrailInfoView from "./guardrail_info";
 import GuardrailTestPlayground from "./GuardrailTestPlayground";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 import { Guardrail } from "@/components/guardrails/types";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
-import { getGuardrailLogoAndName } from "./guardrail_info_helpers";
+import { formatGuardrailMode, getGuardrailLogoAndName } from "./guardrail_info_helpers";
 import { CustomCodeModal } from "./custom_code";
 import GuardrailGarden from "./guardrail_garden";
 import { TeamGuardrailsTab } from "./TeamGuardrailsTab";
@@ -40,7 +41,10 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   const [isDeleting, setIsDeleting] = useState(false);
   const [guardrailToDelete, setGuardrailToDelete] = useState<Guardrail | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [selectedGuardrailId, setSelectedGuardrailId] = useState<string | null>(null);
+  const [selectedGuardrailId, setSelectedGuardrailId] = useQueryState(
+    "guardrail",
+    parseAsString.withOptions({ history: "push" }),
+  );
   const isAdmin = userRole ? isAdminRole(userRole) : false;
 
   const fetchGuardrails = async () => {
@@ -63,16 +67,20 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     fetchGuardrails();
   }, [accessToken]);
 
+  const closeGuardrailDetail = () => {
+    void setSelectedGuardrailId(null, { history: "replace" });
+  };
+
   const handleAddGuardrail = () => {
     if (selectedGuardrailId) {
-      setSelectedGuardrailId(null);
+      closeGuardrailDetail();
     }
     setIsAddModalVisible(true);
   };
 
   const handleAddCustomCodeGuardrail = () => {
     if (selectedGuardrailId) {
-      setSelectedGuardrailId(null);
+      closeGuardrailDetail();
     }
     setIsCustomCodeModalVisible(true);
   };
@@ -101,11 +109,11 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
     setIsDeleting(true);
     try {
       await deleteGuardrailCall(accessToken, guardrailToDelete.guardrail_id);
-      NotificationsManager.success(`Guardrail "${guardrailToDelete.guardrail_name}" deleted successfully`);
+      toast.success(`Guardrail "${guardrailToDelete.guardrail_name}" deleted successfully`);
       await fetchGuardrails();
     } catch (error) {
       console.error("Error deleting guardrail:", error);
-      NotificationsManager.fromBackend("Failed to delete guardrail");
+      toast.fromError("Failed to delete guardrail");
     } finally {
       setIsDeleting(false);
       setIsDeleteModalOpen(false);
@@ -175,7 +183,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               {selectedGuardrailId ? (
                 <GuardrailInfoView
                   guardrailId={selectedGuardrailId}
-                  onClose={() => setSelectedGuardrailId(null)}
+                  onClose={closeGuardrailDetail}
                   accessToken={accessToken}
                   isAdmin={isAdmin}
                 />
@@ -184,7 +192,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                   guardrailsList={guardrailsList}
                   isLoading={isLoading}
                   onDeleteClick={handleDeleteClick}
-                  onGuardrailClick={(id) => setSelectedGuardrailId(id)}
+                  onGuardrailClick={(id) => void setSelectedGuardrailId(id)}
                 />
               )}
 
@@ -211,7 +219,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                   { label: "Name", value: guardrailToDelete?.guardrail_name },
                   { label: "ID", value: guardrailToDelete?.guardrail_id, code: true },
                   { label: "Provider", value: providerDisplayName },
-                  { label: "Mode", value: guardrailToDelete?.litellm_params.mode },
+                  { label: "Mode", value: formatGuardrailMode(guardrailToDelete?.litellm_params.mode) },
                   {
                     label: "Default On",
                     value: guardrailToDelete?.litellm_params.default_on ? "Yes" : "No",

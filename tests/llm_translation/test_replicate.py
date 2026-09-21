@@ -4,13 +4,10 @@ Unit tests for Replicate provider, particularly testing DeepSeek models
 
 import asyncio
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion

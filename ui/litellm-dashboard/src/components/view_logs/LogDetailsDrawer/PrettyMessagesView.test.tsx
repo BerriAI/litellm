@@ -1,17 +1,7 @@
 import React from "react";
 import { render, screen } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { PrettyMessagesView } from "./PrettyMessagesView";
-
-vi.mock("antd", async () => {
-  const actual = await vi.importActual<typeof import("antd")>("antd");
-  return {
-    ...actual,
-    message: {
-      success: vi.fn(),
-    },
-  };
-});
 
 describe("PrettyMessagesView", () => {
   it("should render the component for standard chat completions", () => {

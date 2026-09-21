@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from e2e_config import SLOW_PROVIDER_TIMEOUT_SECONDS
 from e2e_http import BinaryStream, Result, StreamingResponse
 from models import CacheControl, ChatMessage, LiteLLMParamsBody, RichMessage, TextBlock
 from proxy_client import ProxyClient
@@ -74,12 +75,15 @@ class ResponsesRequest(BaseModel):
     stream: bool = False
     tools: list[ResponsesFunctionTool] | None = None
     guardrails: list[str] | None = None
+    safety_identifier: str | None = None
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class MessagesRequest(BaseModel):
     model: str
     max_tokens: int
     messages: list[ChatMessage]
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RichMessagesRequest(BaseModel):
@@ -87,17 +91,20 @@ class RichMessagesRequest(BaseModel):
     max_tokens: int = 64
     system: list[TextBlock]
     messages: list[RichMessage]
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class CompletionsRequest(BaseModel):
     model: str
     prompt: str
     max_tokens: int = 32
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class EmbeddingsRequest(BaseModel):
     model: str
     input: str
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RerankRequest(BaseModel):
@@ -105,6 +112,7 @@ class RerankRequest(BaseModel):
     query: str
     documents: list[str]
     top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class SpeechRequest(BaseModel):
@@ -309,6 +317,7 @@ class EndpointsClient:
         *,
         stream: bool = False,
         guardrails: list[str] | None = None,
+        safety_identifier: str | None = None,
     ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
@@ -319,6 +328,7 @@ class EndpointsClient:
                 instructions="You are a helpful assistant",
                 stream=stream,
                 guardrails=guardrails,
+                safety_identifier=safety_identifier,
             ),
             stream=stream,
         )
@@ -445,6 +455,7 @@ class EndpointsClient:
             file_content_type="image/png",
             file_field="image",
             response_type=ImagesResult,
+            timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
         )
 
     def generate_content(

@@ -212,8 +212,9 @@ async def test_v1_key_generation_sends_email_when_send_invite_email_true():
     mock_proxy_logging_obj = MagicMock()
     mock_proxy_logging_obj.slack_alerting_instance = mock_slack_alerting
 
-    with patch.object(
-        KeyManagementEventHooks, "_send_key_created_email", mock_send_key_created_email
+    with (
+        patch("litellm.store_audit_logs", False),
+        patch.object(KeyManagementEventHooks, "_send_key_created_email", mock_send_key_created_email),
     ):
         with patch(
             "litellm.logging_callback_manager.get_custom_loggers_for_type",
@@ -257,8 +258,9 @@ async def test_v1_key_generation_no_email_when_send_invite_email_false():
     mock_proxy_logging_obj = MagicMock()
     mock_proxy_logging_obj.slack_alerting_instance = mock_slack_alerting
 
-    with patch.object(
-        KeyManagementEventHooks, "_send_key_created_email", mock_send_key_created_email
+    with (
+        patch("litellm.store_audit_logs", False),
+        patch.object(KeyManagementEventHooks, "_send_key_created_email", mock_send_key_created_email),
     ):
         with patch(
             "litellm.logging_callback_manager.get_custom_loggers_for_type",

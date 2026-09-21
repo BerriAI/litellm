@@ -6,6 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Select as ShadcnSelect, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
+const ROLE_ITEMS = [
+  { value: "user", label: "User" },
+  { value: "assistant", label: "Assistant" },
+  { value: "system", label: "System" },
+] as const;
+
 interface PromptMessagesCardProps {
   messages: Message[];
   onAddMessage: () => void;
@@ -70,6 +76,7 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
           >
             <div className="bg-muted px-2 py-1.5 border-b border-border flex items-center justify-between">
               <ShadcnSelect
+                items={ROLE_ITEMS}
                 value={message.role}
                 onValueChange={(value) => onUpdateMessage(index, "role", String(value))}
               >
@@ -81,9 +88,11 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="user">User</SelectItem>
-                  <SelectItem value="assistant">Assistant</SelectItem>
-                  <SelectItem value="system">System</SelectItem>
+                  {ROLE_ITEMS.map((item) => (
+                    <SelectItem key={item.value} value={item.value}>
+                      {item.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </ShadcnSelect>
               <div className="flex items-center gap-1">

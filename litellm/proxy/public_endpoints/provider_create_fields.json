@@ -210,6 +210,94 @@
     "default_model_placeholder": "claude-3-opus"
   },
   {
+    "provider": "AWS_Textract",
+    "provider_display_name": "Amazon Textract",
+    "litellm_provider": "aws_textract",
+    "credential_fields": [
+      {
+        "key": "aws_access_key_id",
+        "label": "AWS Access Key ID",
+        "placeholder": null,
+        "tooltip": "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_secret_access_key",
+        "label": "AWS Secret Access Key",
+        "placeholder": null,
+        "tooltip": "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_session_token",
+        "label": "AWS Session Token",
+        "placeholder": null,
+        "tooltip": "Temporary credentials session token. You can provide the raw token or the environment variable (e.g. `os.environ/MY_SESSION_TOKEN`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_region_name",
+        "label": "AWS Region Name",
+        "placeholder": "us-east-1",
+        "tooltip": "You can provide the raw key or the environment variable (e.g. `os.environ/MY_SECRET_KEY`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_session_name",
+        "label": "AWS Session Name",
+        "placeholder": "my-session",
+        "tooltip": "Name for the AWS session. You can provide the raw value or the environment variable (e.g. `os.environ/MY_SESSION_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_profile_name",
+        "label": "AWS Profile Name",
+        "placeholder": "default",
+        "tooltip": "AWS profile name to use for authentication. You can provide the raw value or the environment variable (e.g. `os.environ/MY_PROFILE_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_role_name",
+        "label": "AWS Role Name",
+        "placeholder": "MyRole",
+        "tooltip": "AWS IAM role name to assume. You can provide the raw value or the environment variable (e.g. `os.environ/MY_ROLE_NAME`).",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "aws_web_identity_token",
+        "label": "AWS Web Identity Token",
+        "placeholder": null,
+        "tooltip": "Web identity token for OIDC authentication. You can provide the raw token or the environment variable (e.g. `os.environ/MY_WEB_IDENTITY_TOKEN`).",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "detect-document-text"
+  },
+  {
     "provider": "BedrockMantle",
     "provider_display_name": "Amazon Bedrock Mantle",
     "litellm_provider": "bedrock_mantle",
@@ -587,6 +675,24 @@
     "default_model_placeholder": "azure_ai/command-r-plus"
   },
   {
+    "provider": "Azure_Speech",
+    "provider_display_name": "Azure AI Speech",
+    "litellm_provider": "azure_speech",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Azure AI Speech Subscription Key",
+        "placeholder": null,
+        "tooltip": "The Ocp-Apim-Subscription-Key for your Azure AI Speech resource. The proxy injects it on every /azure_speech/* pass-through request. Region and API base come from AZURE_SPEECH_REGION / AZURE_SPEECH_API_BASE",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "azure_speech/short-audio"
+  },
+  {
     "provider": "AZURE_TEXT",
     "provider_display_name": "Azure Text",
     "litellm_provider": "azure_text",
@@ -689,6 +795,13 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "CHATGPT",
+    "provider_display_name": "ChatGPT Subscription",
+    "litellm_provider": "chatgpt",
+    "credential_fields": [],
+    "default_model_placeholder": "chatgpt/gpt-5.4"
+  },
+  {
     "provider": "CLARIFAI",
     "provider_display_name": "Clarifai",
     "litellm_provider": "clarifai",
@@ -771,6 +884,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "Cognition",
+    "provider_display_name": "Cognition",
+    "litellm_provider": "cognition",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.cognition.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "cognition/swe-1.7"
   },
   {
     "provider": "Cohere",
@@ -954,6 +1095,62 @@
         "field_type": "text",
         "options": null,
         "default_value": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      }
+    ],
+    "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "QwenCloud",
+    "provider_display_name": "QwenCloud",
+    "litellm_provider": "qwencloud",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "QwenCloud API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        "tooltip": "The base URL for QwenCloud. Defaults to https://dashscope-intl.aliyuncs.com/compatible-mode/v1 if not specified.",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      }
+    ],
+    "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "Qwen_AI_Platform",
+    "provider_display_name": "Qwen AI Platform",
+    "litellm_provider": "qwen_ai_platform",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Qwen AI Platform API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "tooltip": "The base URL for Qwen AI Platform. Defaults to https://dashscope.aliyuncs.com/compatible-mode/v1 if not specified.",
+        "required": true,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://dashscope.aliyuncs.com/compatible-mode/v1"
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
@@ -1289,6 +1486,68 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "GIGACHAT",
+    "provider_display_name": "GigaChat",
+    "litellm_provider": "gigachat",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "gigachat_scope",
+        "label": "Scope",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "select",
+        "options": [
+          "GIGACHAT_API_PERS",
+          "GIGACHAT_API_B2B",
+          "GIGACHAT_API_CORP"
+        ],
+        "default_value": "GIGACHAT_API_PERS"
+      },
+      {
+        "key": "gigachat_auth_url",
+        "label": "Auth URL",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "gigachat_access_token",
+        "label": "Access token",
+        "placeholder": null,
+        "tooltip": "Disable OAuth, provide value to authorization.",
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "GigaChat-2"
   },
   {
     "provider": "GITHUB",
@@ -2697,6 +2956,34 @@
       }
     ],
     "default_model_placeholder": "sap/gpt-4"
+  },
+  {
+    "provider": "SCX_AI",
+    "provider_display_name": "SCX.ai",
+    "litellm_provider": "scx-ai",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.scx.ai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "scx-ai/GLM-5.2"
   },
   {
     "provider": "Snowflake",

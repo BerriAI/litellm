@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import EmailSettings from "./email_settings";
@@ -72,7 +72,7 @@ describe("EmailSettings", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
 
     await user.clear(inputNamed("SMTP_HOST"));
-    await user.type(inputNamed("SMTP_HOST"), "smtp.changed.com");
+    fireEvent.change(inputNamed("SMTP_HOST"), { target: { value: "smtp.changed.com" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     await waitFor(() => {
@@ -101,13 +101,13 @@ describe("EmailSettings", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser={false} alerts={alerts} />);
 
     expect(inputNamed("EMAIL_LOGO_URL")).toBeDisabled();
-    expect(inputNamed("SMTP_HOST")).not.toBeDisabled();
+    expect(inputNamed("SMTP_HOST")).toBeEnabled();
   });
 
   it("leaves the premium-only fields editable for premium users", () => {
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
 
-    expect(inputNamed("EMAIL_LOGO_URL")).not.toBeDisabled();
+    expect(inputNamed("EMAIL_LOGO_URL")).toBeEnabled();
   });
 
   it("triggers a live email health check", async () => {

@@ -1,14 +1,9 @@
 import logging
-import os
-import sys
 import traceback
 import pytest
 import json
 from unittest.mock import Mock, patch, AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.types.utils import ImageObject

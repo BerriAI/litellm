@@ -3,9 +3,9 @@ VerificationToken repository for database operations on LiteLLM_VerificationToke
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.models.verification_token import (
     LiteLLM_VerificationToken,
@@ -15,8 +15,12 @@ from litellm.repositories.base_repository import (
     DbRecord,
     record_to_dict,
 )
+from litellm.repositories.prisma_protocols import TableActions
 
 if TYPE_CHECKING:
+    from prisma.models import (
+        LiteLLM_DeletedVerificationToken as PrismaDeletedVerificationToken,
+    )
     from prisma.models import (
         LiteLLM_VerificationToken as PrismaVerificationToken,
     )
@@ -45,11 +49,11 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         return prisma_client
 
     @property
-    def table(self) -> Any:
+    def table(self) -> TableActions["PrismaVerificationToken"]:
         return self.prisma_client.db.litellm_verificationtoken
 
     @property
-    def deleted_table(self) -> Any:
+    def deleted_table(self) -> TableActions["PrismaDeletedVerificationToken"]:
         return self.prisma_client.db.litellm_deletedverificationtoken
 
     @property
@@ -79,29 +83,29 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
 
     async def find_by_alias(self, key_alias: str) -> LiteLLM_VerificationToken | None:
         """Find a token by key alias."""
-        records: Final[list[PrismaVerificationToken]] = await self.table.find_many(where={"key_alias": key_alias})
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"key_alias": key_alias})
         if records:
             return self._to_model(records[0])
         return None
 
     async def find_by_user_id(self, user_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a user."""
-        records: Final[list[PrismaVerificationToken]] = await self.table.find_many(where={"user_id": user_id})
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"user_id": user_id})
         return self._to_model_list(records)
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a team."""
-        records: Final[list[PrismaVerificationToken]] = await self.table.find_many(where={"team_id": team_id})
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"team_id": team_id})
         return self._to_model_list(records)
 
     async def find_by_project_id(self, project_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a project."""
-        records: Final[list[PrismaVerificationToken]] = await self.table.find_many(where={"project_id": project_id})
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"project_id": project_id})
         return self._to_model_list(records)
 
     async def find_active_tokens(self) -> list[LiteLLM_VerificationToken]:
         """Find all active (non-expired, non-blocked) tokens."""
-        records: Final[list[PrismaVerificationToken]] = await self.table.find_many(
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(
             where={
                 "blocked": {"not": True},
                 "OR": [{"expires": None}, {"expires": {"gt": datetime.utcnow()}}],

@@ -20,6 +20,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import litellm.proxy.proxy_server as proxy_server
+from litellm.constants import BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME
 from litellm.proxy.proxy_server import (
     _adaptive_router_flusher_loop,
     _get_endpoint_exception_status,
@@ -111,13 +112,11 @@ async def test_run_direct_health_check_with_instrumentation_returns_results(
         lambda _gs: {},
     )
 
-    healthy, unhealthy, exceptions = (
-        await _run_direct_health_check_with_instrumentation(
-            model_list=[{"model_name": "gpt-4"}],
-            details=False,
-            max_concurrency=1,
-            instrumentation_context={"source": "test"},
-        )
+    healthy, unhealthy, exceptions = await _run_direct_health_check_with_instrumentation(
+        model_list=[{"model_name": "gpt-4"}],
+        details=False,
+        max_concurrency=1,
+        instrumentation_context={"source": "test"},
     )
 
     assert normalize(
@@ -245,6 +244,137 @@ async def test_schedule_background_health_check_db_save_invalid_no_event_loop_ra
         )
 
 
+def _lock_manager(redis_cache, acquired):
+    manager = MagicMock()
+    manager.redis_cache = redis_cache
+    manager.acquire_lock = AsyncMock(return_value=acquired)
+    manager.release_lock = AsyncMock()
+    return manager
+
+
+def _capture_saves(monkeypatch, persisted=True):
+    saves = []
+
+    async def _fake_save(*_args, **kwargs):
+        saves.append(kwargs)
+        return persisted
+
+    import litellm.proxy.health_endpoints._health_endpoints as he
+
+    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+    return saves
+
+
+def _cancel_during_save(monkeypatch):
+    async def _fake_save(*_args, **_kwargs):
+        raise asyncio.CancelledError()
+
+    import litellm.proxy.health_endpoints._health_endpoints as he
+
+    monkeypatch.setattr(he, "_save_background_health_checks_to_db", _fake_save)
+
+
+def _schedule_with(lock_manager):
+    _schedule_background_health_check_db_save(
+        prisma_client=MagicMock(),
+        shared_health_manager=None,
+        model_list=[],
+        healthy_endpoints=[],
+        unhealthy_endpoints=[],
+        pod_lock_manager=lock_manager,
+        lock_ttl=300,
+    )
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_skips_a_window_another_pod_persisted(monkeypatch):
+    saves = _capture_saves(monkeypatch)
+    lock_manager = _lock_manager(redis_cache=MagicMock(), acquired=False)
+
+    _schedule_with(lock_manager)
+    await asyncio.sleep(0)
+
+    assert saves == []
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_holds_the_window_lock_for_the_whole_interval(monkeypatch):
+    """The lock is the "saved this window" marker: never reentrant, TTL = interval, and never released."""
+    saves = _capture_saves(monkeypatch)
+    lock_manager = _lock_manager(redis_cache=MagicMock(), acquired=True)
+
+    _schedule_with(lock_manager)
+    await asyncio.sleep(0)
+
+    assert normalize(
+        {
+            "saves": len(saves),
+            "lock_request": lock_manager.acquire_lock.await_args.kwargs,
+            "released": lock_manager.release_lock.await_count,
+        }
+    ) == {
+        "saves": 1,
+        "lock_request": {
+            "cronjob_id": BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME,
+            "ttl": 300,
+            "allow_reentrant": False,
+        },
+        "released": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_releases_the_window_lock_when_the_save_reports_failure(
+    monkeypatch,
+):
+    """A failed save must not burn the window: release the lock so another pod's cycle can retry."""
+    saves = _capture_saves(monkeypatch, persisted=False)
+    lock_manager = _lock_manager(redis_cache=MagicMock(), acquired=True)
+
+    _schedule_with(lock_manager)
+    await asyncio.sleep(0)
+
+    assert normalize(
+        {
+            "saves": len(saves),
+            "release_request": lock_manager.release_lock.await_args.kwargs,
+            "release_count": lock_manager.release_lock.await_count,
+        }
+    ) == {
+        "saves": 1,
+        "release_request": {"cronjob_id": BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME},
+        "release_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_releases_the_window_lock_when_the_save_is_cancelled(
+    monkeypatch,
+):
+    """A pod shutting down mid-save releases the lock instead of holding it until the TTL."""
+    _cancel_during_save(monkeypatch)
+    lock_manager = _lock_manager(redis_cache=MagicMock(), acquired=True)
+
+    _schedule_with(lock_manager)
+    await asyncio.sleep(0)
+
+    assert (
+        lock_manager.release_lock.await_args.kwargs,
+        lock_manager.release_lock.await_count,
+    ) == ({"cronjob_id": BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME}, 1)
+
+
+@pytest.mark.asyncio
+async def test_schedule_background_health_check_db_save_runs_ungated_without_redis(monkeypatch):
+    saves = _capture_saves(monkeypatch, persisted=False)
+    lock_manager = _lock_manager(redis_cache=None, acquired=True)
+
+    _schedule_with(lock_manager)
+    await asyncio.sleep(0)
+
+    assert (len(saves), lock_manager.acquire_lock.await_count, lock_manager.release_lock.await_count) == (1, 0, 0)
+
+
 # ---------------------------------------------------------------------------
 # _get_endpoint_exception_status
 # ---------------------------------------------------------------------------
@@ -319,13 +449,9 @@ def test_write_health_state_to_router_cache_sets_states(monkeypatch):
 
     _write_health_state_to_router_cache(healthy, unhealthy, exceptions)
 
-    fake_router.health_state_cache.set_deployment_health_states.assert_called_once_with(
-        fake_states
-    )
+    fake_router.health_state_cache.set_deployment_health_states.assert_called_once_with(fake_states)
 
-    call_args = fake_router.health_state_cache.set_deployment_health_states.call_args[
-        0
-    ][0]
+    call_args = fake_router.health_state_cache.set_deployment_health_states.call_args[0][0]
     assert normalize(
         {
             "states_keys": sorted(call_args.keys()),
@@ -344,14 +470,74 @@ def test_write_health_state_to_router_cache_noop_when_router_none(monkeypatch):
     _write_health_state_to_router_cache([], [], {})
 
 
+def test_write_health_state_to_router_cache_noop_when_nothing_opted_in(monkeypatch):
+    """Neither health-check routing nor the listing filter: write nothing."""
+    fake_router = MagicMock()
+    fake_router.enable_health_check_routing = False
+    fake_router.health_check_ignore_transient_errors = False
+
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    _write_health_state_to_router_cache([{"model_id": "m1"}], [{"model_id": "m2"}], {})
+
+    fake_router.health_state_cache.set_deployment_health_states.assert_not_called()
+
+
+def test_write_health_state_to_router_cache_populates_for_listing_filter(monkeypatch):
+    """`model_list_healthy_only` needs the health cache, but must not start
+    cooling deployments down: that stays behind enable_health_check_routing."""
+    fake_router = MagicMock()
+    fake_router.enable_health_check_routing = False
+    fake_router.health_check_ignore_transient_errors = False
+    fake_router.cooldown_time = 30
+
+    monkeypatch.setattr(proxy_server, "llm_router", fake_router)
+    monkeypatch.setattr(proxy_server, "general_settings", {"model_list_healthy_only": True})
+
+    fake_states = {"m1": {"is_healthy": True}, "m2": {"is_healthy": False}}
+
+    import litellm.proxy.health_check as hc
+
+    monkeypatch.setattr(hc, "build_deployment_health_states", lambda **_kw: fake_states)
+
+    cooldowns: list[str] = []
+
+    import litellm.router_utils.cooldown_handlers as cd
+
+    monkeypatch.setattr(
+        cd,
+        "_set_cooldown_deployments",
+        lambda **kw: cooldowns.append(kw.get("deployment")),
+    )
+
+    failures: list[str] = []
+
+    import litellm.router_utils.router_callbacks.track_deployment_metrics as tdm
+
+    monkeypatch.setattr(
+        tdm,
+        "increment_deployment_failures_for_current_minute",
+        lambda **kw: failures.append(kw.get("deployment_id")),
+    )
+
+    _write_health_state_to_router_cache(
+        [{"model_id": "m1"}],
+        [{"model_id": "m2"}],
+        {"m2": SimpleNamespace(status_code=500)},
+    )
+
+    fake_router.health_state_cache.set_deployment_health_states.assert_called_once_with(fake_states)
+    assert cooldowns == []
+    assert failures == []
+
+
 def test_write_health_state_to_router_cache_swallows_internal_failures(monkeypatch):
     """The function logs and swallows exceptions so a bad cache call never crashes the loop."""
     fake_router = MagicMock()
     fake_router.enable_health_check_routing = True
     fake_router.health_check_ignore_transient_errors = False
-    fake_router.health_state_cache.set_deployment_health_states.side_effect = (
-        RuntimeError("cache exploded")
-    )
+    fake_router.health_state_cache.set_deployment_health_states.side_effect = RuntimeError("cache exploded")
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
 
@@ -381,9 +567,7 @@ async def test_adaptive_router_flusher_loop_flushes_each_router(monkeypatch):
     from litellm.types.router import TaggedPreRoutingStrategy
 
     fake_router = MagicMock()
-    fake_router.adaptive_routers = {
-        "alpha": [TaggedPreRoutingStrategy(tags=(), strategy=fake_ar)]
-    }
+    fake_router.adaptive_routers = {"alpha": [TaggedPreRoutingStrategy(tags=(), strategy=fake_ar)]}
 
     monkeypatch.setattr(proxy_server, "llm_router", fake_router)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
@@ -481,12 +665,8 @@ async def test_run_background_health_check_runs_one_cycle_then_cancels(monkeypat
         "_run_direct_health_check_with_instrumentation",
         _fake_direct,
     )
-    monkeypatch.setattr(
-        proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None
-    )
-    monkeypatch.setattr(
-        proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None
-    )
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
     monkeypatch.setattr(
         proxy_server,
         "health_check_filter_kwargs_from_general_settings",
@@ -515,3 +695,69 @@ async def test_run_background_health_check_runs_one_cycle_then_cancels(monkeypat
         "unhealthy_count": 1,
         "sleep_invoked": True,
     }
+
+
+@pytest.mark.asyncio
+async def test_run_background_health_check_probes_only_listed_model_groups(monkeypatch):
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "health_check_concurrency", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", True)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        SimpleNamespace(background_health_check_model_groups=frozenset({"prod-openai"})),
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_model_list",
+        [
+            {"model_name": "prod-openai", "model_info": {"id": "listed-1"}},
+            {"model_name": "prod-openai", "model_info": {"id": "listed-2"}},
+            {"model_name": "internal-claude", "model_info": {"id": "unlisted-1"}},
+            {
+                "model_name": "prod-openai",
+                "model_info": {
+                    "id": "listed-disabled",
+                    "disable_background_health_check": True,
+                },
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        proxy_server,
+        "health_check_results",
+        {"healthy_endpoints": [], "unhealthy_endpoints": []},
+    )
+
+    probed = {}
+
+    async def _fake_direct(model_list, *_a, **_kw):
+        probed["ids"] = [m["model_info"]["id"] for m in model_list]
+        return ([], [], {})
+
+    monkeypatch.setattr(
+        proxy_server,
+        "_run_direct_health_check_with_instrumentation",
+        _fake_direct,
+    )
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", lambda *a, **kw: None)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        proxy_server,
+        "health_check_filter_kwargs_from_general_settings",
+        lambda _gs: {},
+    )
+
+    async def _stop_sleep(_seconds):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    assert probed["ids"] == ["listed-1", "listed-2"]

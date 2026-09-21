@@ -84,6 +84,7 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
         "litellm.integrations.prometheus.PrometheusLogger.__init__", return_value=None
     ):
         logger = PrometheusLogger()
+        logger._emit_input_sequence_length_label = False
         logger.litellm_proxy_total_requests_metric = MagicMock()
         logger.get_labels_for_metric = MagicMock(
             return_value=["client_ip", "user_agent"]
@@ -93,6 +94,7 @@ async def test_async_post_call_success_hook_includes_client_ip_user_agent():
         logger._increment_token_metrics = MagicMock()
         logger._increment_remaining_budget_metrics = AsyncMock()
         logger._set_virtual_key_rate_limit_metrics = MagicMock()
+        logger._set_key_and_team_rate_limit_metrics = MagicMock()
         logger._set_latency_metrics = MagicMock()
         logger.set_llm_deployment_success_metrics = MagicMock()
         logger._increment_cache_metrics = MagicMock()

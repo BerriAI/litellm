@@ -10,9 +10,20 @@ by policy_attachments (see AttachmentRegistry).
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Literal,
+    Optional,
+    Protocol,
+    TypedDict,
+    Union,
+    cast,  # noqa: TID251  # prisma types the condition/pipeline Json columns as str, but reads return decoded values
+)
 
 from litellm._logging import verbose_proxy_logger
+from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import PolicyRepository
 from litellm.types.proxy.policy_engine import (
     GuardrailPipeline,
@@ -65,15 +76,32 @@ class _PolicyRow(Protocol):
 
 
 class _PolicyVersionSourceRow(Protocol):
-    policy_id: str
-    policy_name: str
-    version_number: int
-    inherit: str | None
-    description: str | None
-    guardrails_add: Sequence[str] | None
-    guardrails_remove: Sequence[str] | None
-    condition: Mapping[str, object] | str | None
-    pipeline: Mapping[str, object] | str | None
+    @property
+    def policy_id(self) -> str: ...
+
+    @property
+    def policy_name(self) -> str: ...
+
+    @property
+    def version_number(self) -> int: ...
+
+    @property
+    def inherit(self) -> str | None: ...
+
+    @property
+    def description(self) -> str | None: ...
+
+    @property
+    def guardrails_add(self) -> Sequence[str] | None: ...
+
+    @property
+    def guardrails_remove(self) -> Sequence[str] | None: ...
+
+    @property
+    def condition(self) -> Mapping[str, object] | str | None: ...
+
+    @property
+    def pipeline(self) -> Mapping[str, object] | str | None: ...
 
 
 class _PolicyTableClient(Protocol):
@@ -96,23 +124,15 @@ class _PolicyTableClient(Protocol):
     async def delete_many(self, where: Mapping[str, object]) -> int: ...
 
 
-class _PolicyVersionSourceTableClient(Protocol):
-    async def find_unique(self, where: Mapping[str, object]) -> _PolicyVersionSourceRow | None: ...
-
-    async def find_first(
-        self,
-        where: Mapping[str, object],
-        order: Mapping[str, str] | None = None,
-    ) -> _PolicyVersionSourceRow | None: ...
-
-
 def _policy_table(prisma_client: "PrismaClient") -> _PolicyTableClient:
-    table: Final[_PolicyTableClient] = PolicyRepository(prisma_client).table
-    return table
+    table: Final = PolicyRepository(prisma_client).table
+    return cast(  # cast-ok: prisma types Json columns as str; the client hands back the decoded condition/pipeline
+        "_PolicyTableClient", table
+    )
 
 
-def _policy_version_source_table(prisma_client: "PrismaClient") -> _PolicyVersionSourceTableClient:
-    table: Final[_PolicyVersionSourceTableClient] = PolicyRepository(prisma_client).table
+def _policy_version_source_table(prisma_client: "PrismaClient") -> "TableActions[_PolicyVersionSourceRow]":
+    table: Final[TableActions[_PolicyVersionSourceRow]] = PolicyRepository(prisma_client).table
     return table
 
 

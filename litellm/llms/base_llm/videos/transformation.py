@@ -1,9 +1,10 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
-from httpx._types import RequestFiles
+from httpx._types import FileContent, RequestFiles
 
 from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
@@ -90,6 +91,14 @@ class BaseVideoConfig(ABC):
         if api_base is None:
             raise ValueError("api_base is required")
         return api_base
+
+    def use_multipart_form_data(self) -> bool:
+        """
+        Whether video create requests without files must still be sent as
+        multipart/form-data (the encoding the OpenAI SDK always uses for
+        /videos), instead of falling back to JSON.
+        """
+        return False
 
     @abstractmethod
     def transform_video_create_request(
@@ -332,14 +341,18 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
+        video_file: FileContent | None = None,
         extra_body: dict[str, Any] | None = None,
         prefetched_source_data: dict[str, Any] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         """
-        Transform the video edit request into a URL and JSON data.
+        Transform the video edit request into a URL plus either JSON data or
+        multipart form fields and files.
 
         Returns:
-            Tuple[str, Dict]: (url, data) for the POST request
+            tuple[str, Mapping[str, object], RequestFiles | None]: (url, data,
+            files). When files is None the handler sends data as JSON; otherwise
+            data holds the form fields and files holds the uploaded source video.
         """
         raise NotImplementedError("video edit is not supported for this provider")
 

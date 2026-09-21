@@ -12,23 +12,21 @@ export async function createMcpServer(page: PwPage, url: string): Promise<string
   await expect(discovery).toBeVisible({ timeout: 5_000 });
   await discovery.getByRole("button", { name: /Custom Server/i }).click();
 
-  const formModal = page.locator(".ant-modal:visible").filter({ hasText: "MCP Server Name" });
+  const formModal = page.getByRole("dialog").filter({ hasText: "MCP Server Name" });
   await expect(formModal).toBeVisible({ timeout: 5_000 });
 
   // validateMCPServerName rejects spaces and hyphens; the worker index avoids a same-millisecond collision.
   const name = `e2e_mcp_${process.env.TEST_WORKER_INDEX ?? "0"}_${Date.now()}`;
-  await formModal.locator('input[id="server_name"]').fill(name);
+  await formModal.getByLabel("MCP Server Name").fill(name);
 
-  const transportField = formModal.locator(".ant-form-item", { hasText: "Transport Type" });
-  await transportField.locator(".ant-select").click();
-  await page.locator(".ant-select-dropdown:visible").getByText("Streamable HTTP").click();
+  // Select popups are portaled to the body, so the option lookup is page-scoped, not modal-scoped.
+  await formModal.getByRole("combobox", { name: "Transport Type" }).click();
+  await page.getByRole("option", { name: "Streamable HTTP" }).click();
 
-  await formModal.locator('input[id="url"]').fill(url);
+  await formModal.getByLabel("MCP Server URL").fill(url);
 
-  // The auth_type Form.Item has no label prop, so anchor on the enclosing Collapse panel.
-  const authSection = formModal.locator(".ant-collapse-item", { hasText: /^Authentication/ });
-  await authSection.locator(".ant-form-item").first().locator(".ant-select").click();
-  await page.locator(".ant-select-dropdown:visible").getByText("None", { exact: true }).click();
+  await formModal.getByRole("combobox", { name: "Authentication", exact: true }).click();
+  await page.getByRole("option", { name: "None", exact: true }).click();
 
   await formModal.getByRole("button", { name: /^Add MCP Server$/ }).click();
   await expect(page.getByText("MCP Server created successfully").first()).toBeVisible({ timeout: 15_000 });

@@ -6,12 +6,9 @@ for Vertex AI streamRawPredict endpoints when include_cost_in_streaming_usage is
 """
 
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import httpx
 import pytest

@@ -6,8 +6,9 @@ replicaCount: 1
 # numWorkers: 2
 
 image:
-  # Use "ghcr.io/berriai/litellm-database" for optimized image with database
-  repository: ghcr.io/berriai/litellm-database
+  # Bundles the prisma CLI and engines, which is what lets the migrations job
+  # and the proxy's own schema check run without network access.
+  repository: ghcr.io/berriai/litellm
   pullPolicy: Always
   # Overrides the image tag whose default is the chart appVersion.
   # tag: "latest"
@@ -179,6 +180,58 @@ proxy_config:
   general_settings:
     master_key: os.environ/PROXY_MASTER_KEY
 
+# Serve Prometheus /metrics from a separate process (PROMETHEUS_METRICS_PORT)
+# so a scrape never runs on an inference worker. Adds a `metrics` port to the
+# container and a dedicated ClusterIP `<release>-metrics` Service, and the
+# ServiceMonitor scrapes it instead of the proxy port. The separate port has
+# no virtual-key auth: keep it off public ingress. Needs the proxy image
+# v1.101.0 or newer.
+metricsServer:
+  enabled: false
+  port: 4001
+
+# Opt-in sidecar that runs the post-response spend pipeline (cost calculation,
+# spend logs, spend counters, budget reservation reconciliation) so the proxy's
+# uvicorn workers only serialise a compact typed event and go back to serving
+# inference. Same image and tag as the proxy, second container in the same pod,
+# fed over loopback (a unix socket on a shared emptyDir, or 127.0.0.1 TCP). It
+# reuses the pod's in-container pgbouncer (db.connectionPool) and the same Redis
+# spend transaction buffer, so the per-pod DB connection budget is unchanged.
+# Delivery is at-most-once inside the pod: events already handed to the sidecar
+# are lost if it crashes before writing them; events the workers could not hand
+# over follow onUnavailable. Both containers drain on SIGTERM within
+# terminationGracePeriodSeconds
+collector:
+  enabled: false
+  # unix:///<dir>/<file>.sock (the <dir> becomes a shared emptyDir) or tcp://127.0.0.1:<port>
+  address: unix:///var/run/litellm/collector.sock
+  # Events each uvicorn worker holds in memory while the sidecar is slow or restarting
+  bufferSize: 1000
+  # fallback: run the pipeline in the worker when the sidecar is unreachable or the
+  # buffer is full (spend stays exact, that request costs proxy CPU again)
+  # drop: count and discard the event instead (spend under-reports)
+  onUnavailable: fallback
+  # How long the workers keep pushing buffered events on shutdown, and how long the
+  # sidecar keeps serving its open connections after SIGTERM
+  drainTimeoutSeconds: 10
+  command:
+    - python
+    - -m
+    - litellm.proxy.collector
+  # Sized independently of the proxy container; the pipeline is CPU bound
+  resources: {}
+  # requests:
+  #   cpu: 500m
+  #   memory: 1Gi
+  # limits:
+  #   cpu: "1"
+  #   memory: 2Gi
+  # When autoscaling.enabled, swap the pod-wide cpu Resource metric for an
+  # autoscaling/v2 ContainerResource metric on the proxy container only, so the
+  # sidecar's CPU never scales inference replicas. Needs Kubernetes 1.30+ (or the
+  # HPAContainerMetrics feature gate on 1.27 to 1.29)
+  scaleOnProxyContainerCpu: false
+
 resources:
   {}
   # Unset by default so the chart installs on small clusters such as Minikube, and so an
@@ -199,9 +252,37 @@ autoscaling:
   enabled: false
   minReplicas: 1
   maxReplicas: 100
-  targetCPUUtilizationPercentage: 80
+  # 60 is the documented recommendation. See "Recommended Machine Specifications"
+  # in https://docs.litellm.ai/docs/proxy/prod. A new replica clears the startupProbe
+  # above only after up to failureThreshold x periodSeconds = 300 seconds, so a target
+  # high enough to trip near saturation adds capacity minutes after it was needed.
+  targetCPUUtilizationPercentage: 60
+  # Deliberately left unset rather than given a value. The prisma query engine's
+  # resident memory is a high-water mark that ratchets to the pod's worst-ever write
+  # and is never returned, so a memory target reads the largest write a pod ever did
+  # rather than what it is doing now, and replicas ratchet up without scaling back in.
+  # Memory is a floor to provision under 'resources', not a signal to scale on.
   # targetMemoryUtilizationPercentage: 80
   # behavior: {}
+  # Opt-in per-pod workload targets, rendered as autoscaling/v2 `Pods` metrics
+  # named `litellm_requests_per_second` and `litellm_tokens_per_second` with an
+  # AverageValue target, alongside whichever resource targets are set (the HPA
+  # follows the metric asking for the most replicas). A Prometheus Adapter must
+  # serve those two names on custom.metrics.k8s.io from the proxy's counters,
+  # grouped by the scrape target's `pod` label (enable serviceMonitor below so
+  # every pod is scraped on its own):
+  #   litellm_requests_per_second:
+  #     sum(rate(litellm_proxy_total_requests_metric_total{<<.LabelMatchers>>}[1m])) by (<<.GroupBy>>)
+  #   litellm_tokens_per_second:
+  #     sum(rate(litellm_total_tokens_metric_total{<<.LabelMatchers>>}[1m])) by (<<.GroupBy>>)
+  # rate() over [1m] is already per second, so no `* 60`. How fast the HPA
+  # reacts is set by that window, the scrape interval and the HPA sync period
+  # (15s by default), not by the unit: keep serviceMonitor.interval at 15s or
+  # faster so a 1m window holds at least 4 samples. averageValue takes SI
+  # suffixes, so "6M" is six million tokens per second per pod. Tokens are
+  # counted when a response completes, so TPS trails long streams.
+  targetRequestsPerSecond: ""
+  targetTokensPerSecond: ""
 
 # Autoscaling with keda is mutually exclusive with hpa
 keda:
@@ -223,6 +304,23 @@ keda:
   #     metricName: http_requests_total
   #     threshold: '100'
   #     query: sum(rate(http_requests_total{deployment="my-deployment"}[2m]))
+  # First-class Prometheus triggers on the proxy's own request and token
+  # counters, appended to `triggers`. Each target is the per-second load one
+  # replica should carry: KEDA divides the release-wide
+  # `sum(rate(<counter>[1m]))` by it to pick the replica count. Thresholds
+  # are plain numbers (KEDA parses them as floats, no SI suffixes). The
+  # queries select samples by the release namespace and the `job` label the
+  # chart's ServiceMonitor produces (the metrics Service name), so enable
+  # serviceMonitor below together with metricsServer: the http port serves
+  # /metrics/ behind virtual-key auth and answers an unauthenticated scrape
+  # with 401. Reaction time comes from the [1m] window, the scrape interval
+  # and pollingInterval above, so keep both at 15s or faster. Tokens are
+  # counted at completion, so TPS trails long streams. serverAddress is
+  # required once either target is set.
+  prometheus:
+    serverAddress: ""
+    requestsPerSecond: ""
+    tokensPerSecond: ""
   behavior: {}
   # scaleDown:
   #   stabilizationWindowSeconds: 300
@@ -276,6 +374,14 @@ db:
     # written to db.readReplicaUrl ends up visible in the rendered pod spec
     # and the Helm release secret.
     readReplicaUrlKey: ""
+    # Optional: when set, a DATABASE_READER_HOST env var is sourced from this
+    # secret key, so db.readReplicaUrl can compose the reader URL from
+    # individual secret components, e.g.
+    # postgresql://$(DATABASE_USERNAME):$(DATABASE_PASSWORD)@$(DATABASE_READER_HOST):5432/$(DATABASE_NAME)
+    # Use this when your secret store holds the bare reader hostname rather
+    # than a full connection URL. Only takes effect when readReplicaUrl is
+    # set; ignored when readReplicaUrlKey is set.
+    readReplicaEndpointKey: ""
 
   # Optional read-replica routing. When set, the proxy sends read-only
   # queries (find_*, count, group_by, query_raw/_first) to this URL while
@@ -290,6 +396,20 @@ db:
   # Helm release secret. This field is intended for credential-less URLs
   # only (e.g. when IAM_TOKEN_DB_AUTH supplies the token at runtime).
   readReplicaUrl: ""
+
+  # In-container connection pool (PgBouncer, transaction mode) shared by every
+  # worker in the pod. Without it each --num_workers worker opens its own
+  # connection_limit connections to Postgres, so a pod's footprint against the
+  # database's connection ceiling is workers x connection_limit and grows with
+  # every replica. With it, the pod holds at most maxDbConnections upstream
+  # connections no matter how many workers run; the workers connect to the pool
+  # over loopback, with no extra network hop. Migrations still go straight to
+  # Postgres. Starting profile for numWorkers: 4 is maxDbConnections: 20, so
+  # a database with a 5000-connection ceiling fits roughly 200 replicas.
+  connectionPool:
+    enabled: false
+    maxDbConnections: 20
+    maxClientConn: 1000
 
   # Use the Stackgres Helm chart to deploy an instance of a Stackgres cluster.
   #  The Stackgres Operator must already be installed within the target
@@ -427,6 +547,13 @@ migrationJob:
   enabled: true # Enable or disable the schema migration Job
   retries: 3 # Number of retries for the Job in case of failure
   backoffLimit: 4 # Backoff limit for Job restarts
+  # Wall-clock budget for the whole Job, shared across every `backoffLimit`
+  # retry rather than granted per attempt. Without it a migration that blocks
+  # on the database never fails, and when the Helm hook is enabled the release
+  # waits on it forever: `helm upgrade` and any GitOps controller driving it
+  # stop reconciling the whole chart until someone deletes the Job by hand.
+  # Set to null to opt out and restore the unbounded behaviour.
+  activeDeadlineSeconds: 1800
   disableSchemaUpdate: false # Skip schema migrations for specific environments. When True, the job will exit with code 0.
   # Optional service account for the migration job.
   # Only used when migrationJob.hooks.helm.enabled=true and serviceAccount.create=true.

@@ -7,16 +7,11 @@ Verifies that the hook:
 3. Actually yields chunks from async generators
 """
 
-import os
-import sys
 from typing import AsyncGenerator, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
