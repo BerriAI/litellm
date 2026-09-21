@@ -1867,7 +1867,7 @@ class JWTAuthManager:
 
     @staticmethod
     def get_team_id_from_header(
-        request_headers: dict | None,
+        request_headers: Mapping[str, str] | None,
         allowed_team_ids: set[str],
         fallback_to_db_teams: bool = False,
     ) -> str | None:
@@ -2037,7 +2037,7 @@ class JWTAuthManager:
     async def _attach_team_from_header_for_admin(
         admin_result: JWTAuthBuilderResult,
         route: str,
-        request_headers: dict | None,
+        request_headers: Mapping[str, str] | None,
         jwt_handler: JWTHandler,
         prisma_client: PrismaClient | None,
         user_api_key_cache: UserApiKeyCache,
@@ -2293,7 +2293,7 @@ class JWTAuthManager:
         user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
-        request_headers: dict | None = None,
+        request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
     ) -> JWTAuthBuilderResult:
         return await JWTAuthManager.authorize_jwt(
@@ -2390,7 +2390,7 @@ class JWTAuthManager:
         user_api_key_cache: UserApiKeyCache,
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
-        request_headers: dict[str, str] | None = None,
+        request_headers: Mapping[str, str] | None = None,
         request_method: str | None = None,
         provisioning: _JWTProvisioning | None = None,
     ) -> JWTAuthBuilderResult:
@@ -2468,7 +2468,22 @@ class JWTAuthManager:
                     jwt_valid_token, handler, prisma_client, user_api_key_cache, parent_otel_span, proxy_logging_obj
                 )
                 return {**admin_result, "user_object": identity.user_object}
-            return admin_result
+            if prisma_client is None:
+                return admin_result
+            try:
+                admin_user: Final = await get_user_object(
+                    user_id=user_id,
+                    user_email=user_email,
+                    sso_user_id=user_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    user_id_upsert=False,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except UserNotFoundError:
+                return admin_result
+            return {**admin_result, "user_object": admin_user}
 
         # Get team with model access
         ## Check if team_id is specified via x-litellm-team-id header

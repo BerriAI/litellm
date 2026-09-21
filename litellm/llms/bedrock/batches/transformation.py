@@ -1,7 +1,8 @@
 import os
 import re
 import time
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
@@ -26,7 +27,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateBatchRequest,
 )
-from litellm.types.utils import LiteLLMBatch, LlmProviders
+from litellm.types.utils import LiteLLMBatch, LlmProviders, Usage
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
@@ -58,6 +59,20 @@ def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
             "Invalid 'bedrock_tags' value. Expected a list of {'key': <str>, 'value': <str>} dicts, "
             f"e.g. [{{'key': 'team', 'value': 'genai'}}]. Got: {raw_tags!r}"
         ) from e
+
+
+def titan_embedding_usage_from_batch_output(model_output: Mapping[str, object]) -> Usage | None:
+    """Titan embedding batch lines report usage as a top-level inputTextTokenCount, not a usage block."""
+    if "embedding" not in model_output and "embeddingsByType" not in model_output:
+        return None
+    input_text_token_count: Final = model_output.get("inputTextTokenCount")
+    if isinstance(input_text_token_count, bool) or not isinstance(input_text_token_count, int):
+        return None
+    return Usage(
+        prompt_tokens=input_text_token_count,
+        completion_tokens=0,
+        total_tokens=input_text_token_count,
+    )
 
 
 class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
@@ -155,7 +170,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         create_batch_data: CreateBatchRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Transform the batch creation request to Bedrock format.
 
@@ -339,7 +354,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         )
 
     @staticmethod
-    def _get_openai_compatible_batch_metadata(metadata: Any) -> dict[str, str]:
+    def _get_openai_compatible_batch_metadata(metadata: object) -> dict[str, str]:
         """
         OpenAI Batch metadata only accepts string values.
         """
@@ -364,7 +379,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         batch_id: str,
         optional_params: dict,
         litellm_params: dict,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Transform batch retrieval request for Bedrock.
 
@@ -508,7 +523,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             )
 
         # Enrich metadata with useful Bedrock fields
-        enriched_metadata_raw: Final[dict[str, Any]] = {
+        enriched_metadata_raw: Final[dict[str, object]] = {
             "jobName": response_data.get("jobName"),
             "clientRequestToken": response_data.get("clientRequestToken"),
             "modelId": response_data.get("modelId"),

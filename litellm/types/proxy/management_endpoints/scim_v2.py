@@ -61,7 +61,9 @@ class SCIMUserGroup(BaseModel):
 
 
 class SCIMMultiValuedAttribute(BaseModel):
-    value: str
+    model_config = ConfigDict(extra="allow")
+
+    value: str | None = None
     display: str | None = None
     type: str | None = None
     primary: bool | None = None
