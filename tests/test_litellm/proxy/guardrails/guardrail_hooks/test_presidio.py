@@ -2448,6 +2448,52 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_for
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_are_replayed_when_presidio_is_unreachable():
+    """
+    The raw SSE stream is fully drained before masking, so a Presidio outage
+    must replay the buffered frames instead of ending the response empty,
+    matching the ModelResponseStream fallback.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        presidio_analyzer_api_base="http://127.0.0.1:9",
+        presidio_anonymizer_api_base="http://127.0.0.1:9",
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello world"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected == byte_chunks
+
+
+@pytest.mark.asyncio
 async def test_output_parse_pii_streaming_responses_events_passthrough(
     mock_user_api_key,
 ):

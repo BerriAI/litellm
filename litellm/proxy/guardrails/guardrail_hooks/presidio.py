@@ -1424,7 +1424,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
             return chunks
         original_text: Final = model_response_text(assembled)
-        await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
+        try:
+            await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
+        except Exception as e:
+            verbose_proxy_logger.error("Error masking streaming PII output: %s", e)
+            return chunks
         if model_response_text(assembled) == original_text:
             return chunks
         return anthropic_sse_chunks_from_response(assembled)
