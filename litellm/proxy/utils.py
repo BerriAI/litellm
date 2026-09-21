@@ -70,7 +70,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.model_listing import ModelInfoResponse
+from litellm.types.proxy.model_listing import ModelInfoResponse, ModelPricing
 from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
@@ -130,6 +130,7 @@ from litellm.integrations.SlackAlerting.utils import _add_langfuse_trace_id_to_a
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
+    coerce_token_price,
     get_or_create_metadata_bucket,
     independent_snapshot,
     is_expected_client_error,
@@ -253,6 +254,7 @@ if TYPE_CHECKING:
     from litellm.proxy.db.spend_log_tool_index import ToolUsageTransaction
     from litellm.repositories.prisma_protocols import TableActions
     from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline
+    from litellm.types.router import DeploymentModelListingInfo
 
     Span = _Span | object
 else:
@@ -8385,6 +8387,89 @@ def _group_token_limit(candidate_sets: tuple[tuple[ModelInfo, ...], ...], field:
     return max(limits) if limits else None
 
 
+def _declared_price(info: ModelInfo, field: str, cost_map: Mapping[str, object]) -> float | None:
+    """The price ``field`` carries, but only when the cost map actually declares it.
+
+    A resolved ``ModelInfo`` cannot be trusted on its own here. Once the router registers
+    a sparse cost-map entry for a deployment the catalog has never priced, the lookup
+    stops raising and defaults the missing costs to 0, so an unpriced model would be
+    served as free. The raw entry is the authority on whether a price exists at all,
+    which is the same test ``_is_cost_explicitly_configured`` makes for budget checks.
+
+    A model the catalog deliberately prices at 0.0 still reports 0.0; one it never priced
+    reports None.
+    """
+    key: Final = info.get("key")
+    raw: Final = cost_map.get(key) if isinstance(key, str) else None
+    if not isinstance(raw, Mapping) or field not in raw:
+        return None
+    return coerce_token_price(info.get(field, raw[field]))
+
+
+def _first_price(candidates: tuple[ModelInfo, ...], field: str, cost_map: Mapping[str, object]) -> float | None:
+    """The price ``field`` takes from the best cost-map entry describing one deployment.
+
+    ``candidates`` is best-source-first (the exact entry for the deployment's underlying
+    model before a generalized family fallback), so these are not competing prices to
+    compare: it is one price described with varying reliability, and the first usable
+    answer wins.
+    """
+    return next(
+        (price for price in (_declared_price(info, field, cost_map) for info in candidates) if price is not None),
+        None,
+    )
+
+
+def _group_price(
+    candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str, cost_map: Mapping[str, object]
+) -> float | None:
+    """The highest price any deployment behind the listed name declares for ``field``.
+
+    Mirrors ``_group_token_limit``: one model behind interchangeable deployments has a
+    single price and the choice of aggregate does not arise. When a group mixes models,
+    the highest is reported because it is what ``/model_group/info`` already shows, and
+    because a caller budgeting against the cheapest member under-funds the request that
+    lands on the dearest one.
+    """
+    prices: Final = tuple(
+        price
+        for price in (_first_price(candidates, field, cost_map) for candidates in candidate_sets)
+        if price is not None
+    )
+    return max(prices) if prices else None
+
+
+def _listing_pricing(
+    candidate_sets: tuple[tuple[ModelInfo, ...], ...],
+    listing_info: "DeploymentModelListingInfo | None",
+    cost_map: Mapping[str, object],
+) -> ModelPricing:
+    """Effective per-token prices for a listed model, in USD.
+
+    Custom pricing configured on a deployment outranks the cost map, exactly as configured
+    token limits do, and is the only source for it: the router strips custom pricing from
+    the shared backend cost-map key so one deployment's override cannot become another's.
+
+    A price the proxy does not know is reported as None rather than 0, so a caller doing
+    cost accounting cannot read an unmapped model as free.
+    """
+    configured_input: Final = listing_info.input_cost_per_token if listing_info is not None else None
+    configured_output: Final = listing_info.output_cost_per_token if listing_info is not None else None
+    pricing: Final[ModelPricing] = {
+        "input_cost_per_token": (
+            configured_input
+            if configured_input is not None
+            else _group_price(candidate_sets, "input_cost_per_token", cost_map)
+        ),
+        "output_cost_per_token": (
+            configured_output
+            if configured_output is not None
+            else _group_price(candidate_sets, "output_cost_per_token", cost_map)
+        ),
+    }
+    return pricing
+
+
 def create_model_info_response(
     model_id: str,
     provider: str,
@@ -8392,6 +8477,8 @@ def create_model_info_response(
     fallback_type: str | None = None,
     llm_router: Optional["Router"] = None,
     get_model_info: Callable[[str], ModelInfo] = litellm.get_model_info,
+    include_pricing: bool = False,
+    cost_map: Mapping[str, object] | None = None,
 ) -> ModelInfoResponse:
     """
     Create a standardized OpenAI-compatible model object.
@@ -8399,6 +8486,11 @@ def create_model_info_response(
     When include_metadata is true, attaches the model's configured fallbacks
     (resolved via the router under fallback_type, defaulting to "general").
     Raises HTTPException(400) for an unknown fallback_type.
+
+    When include_pricing is true, attaches the model's effective per-token prices in USD,
+    resolved from the same deployment-then-cost-map sources as the token limits above.
+    cost_map defaults to litellm.model_cost, resolved per call because a price reload
+    rebuilds it.
     """
     from litellm.proxy.auth.model_checks import get_all_fallbacks
 
@@ -8464,6 +8556,13 @@ def create_model_info_response(
         base["max_input_tokens"] = max_input_tokens
     if max_output_tokens is not None:
         base["max_output_tokens"] = max_output_tokens
+
+    if include_pricing:
+        base["pricing"] = _listing_pricing(
+            candidate_sets,
+            listing_info,
+            cost_map if cost_map is not None else litellm.model_cost,
+        )
 
     if not include_metadata:
         return base

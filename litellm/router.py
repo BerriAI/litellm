@@ -73,6 +73,7 @@ from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     coerce_token_limit,
+    coerce_token_price,
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -10263,6 +10264,8 @@ class Router:
             cost_map_keys=cost_map_keys,
             max_input_tokens=self._widest_configured_limit(model_infos, "max_input_tokens"),
             max_output_tokens=self._widest_configured_limit(model_infos, "max_output_tokens"),
+            input_cost_per_token=self._highest_configured_price(model_infos, params, "input_cost_per_token"),
+            output_cost_per_token=self._highest_configured_price(model_infos, params, "output_cost_per_token"),
         )
 
     @staticmethod
@@ -10274,6 +10277,31 @@ class Router:
             if limit is not None
         )
         return max(limits) if limits else None
+
+    @staticmethod
+    def _highest_configured_price(
+        model_infos: Sequence[Mapping[str, Any]],
+        params: Sequence[Mapping[str, Any]],
+        field: str,
+    ) -> float | None:
+        """The highest custom price for ``field`` across a group's deployments.
+
+        Both sources are read because custom pricing is accepted in ``model_info`` and in
+        ``litellm_params``; the router itself copies the latter onto the former when it
+        builds a deployment's cost-map entry.
+
+        The highest is the deliberate pick, matching what ``get_model_group_info`` reports
+        for a group whose deployments disagree: a caller pricing a request against the
+        cheapest member would under-budget for the request that lands on the dearest one.
+        """
+        prices: Final = tuple(
+            price
+            for price in (
+                coerce_token_price(source.get(field)) for sources in (model_infos, params) for source in sources
+            )
+            if price is not None
+        )
+        return max(prices) if prices else None
 
     def get_configured_token_limits(self, model_name: str) -> "tuple[int | None, int | None]":
         """

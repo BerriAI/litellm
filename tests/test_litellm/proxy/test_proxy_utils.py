@@ -1129,6 +1129,270 @@ def test_create_model_info_response_reports_widest_window_in_a_mixed_group():
         assert response["max_output_tokens"] == 128000, keys
 
 
+def test_create_model_info_response_omits_pricing_unless_asked():
+    """The default listing shape is unchanged, so existing clients see no new field."""
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        llm_router=None,
+        get_model_info=lambda _model: _fake_model_info(
+            input_cost_per_token=2.5e-06, output_cost_per_token=1e-05
+        ),
+    )
+
+    assert "pricing" not in response
+
+
+def test_create_model_info_response_includes_cost_map_pricing():
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        llm_router=None,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o", input_cost_per_token=2.5e-06, output_cost_per_token=1e-05
+        ),
+        cost_map={"gpt-4o": {"input_cost_per_token": 2.5e-06, "output_cost_per_token": 1e-05}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+    }
+
+
+def test_create_model_info_response_reports_unpriced_model_as_null_not_zero():
+    """A model the catalog never priced must report null even though the lookup says 0.
+
+    Once the router registers a sparse cost-map entry for an unmapped deployment, the
+    lookup stops raising and defaults the missing costs to 0. Trusting that value served
+    an unpriced model as free, which is exactly what #35312 asks the listing not to do.
+    """
+    response = create_model_info_response(
+        model_id="unknown-model",
+        provider="openai",
+        llm_router=None,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="openai/some-model-that-does-not-exist",
+            input_cost_per_token=0,
+            output_cost_per_token=0,
+        ),
+        cost_map={"openai/some-model-that-does-not-exist": {"id": "deployment-hash"}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": None,
+        "output_cost_per_token": None,
+    }
+
+
+def test_create_model_info_response_reports_declared_zero_price_as_zero():
+    """A model the catalog deliberately prices at 0 is free, and must not report null.
+
+    This is the counterpart to the unpriced case: both resolve to 0, only the raw cost-map
+    entry distinguishes "free" from "nobody ever priced this".
+    """
+    response = create_model_info_response(
+        model_id="free-model",
+        provider="openai",
+        llm_router=None,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="free-model", input_cost_per_token=0.0, output_cost_per_token=0.0
+        ),
+        cost_map={"free-model": {"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    }
+
+
+def test_create_model_info_response_configured_pricing_overrides_cost_map():
+    """Custom pricing is the price the request is billed at, so it outranks the cost map.
+
+    The cost map cannot carry it: the router strips custom pricing from the shared backend
+    key so one deployment's override never becomes another's price.
+    """
+    router = MagicMock()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("gpt-4o",),
+        max_input_tokens=None,
+        max_output_tokens=None,
+        input_cost_per_token=3e-07,
+        output_cost_per_token=1.2e-06,
+    )
+
+    response = create_model_info_response(
+        model_id="house-gpt",
+        provider="openai",
+        llm_router=router,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o", input_cost_per_token=2.5e-06, output_cost_per_token=1e-05
+        ),
+        cost_map={"gpt-4o": {"input_cost_per_token": 2.5e-06, "output_cost_per_token": 1e-05}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+    }
+
+
+def test_create_model_info_response_reports_highest_price_in_a_mixed_group():
+    """A group mixing models quotes the dearest member, matching /model_group/info.
+
+    Quoting the cheapest would under-budget every request that lands on the dearest
+    deployment, and the listing cannot know which one a later request will reach.
+    """
+    prices = {
+        "cheap-model": _fake_model_info(
+            key="cheap-model", input_cost_per_token=1e-07, output_cost_per_token=4e-07
+        ),
+        "dear-model": _fake_model_info(
+            key="dear-model", input_cost_per_token=5e-06, output_cost_per_token=3e-05
+        ),
+    }
+    cost_map = {
+        "cheap-model": {"input_cost_per_token": 1e-07, "output_cost_per_token": 4e-07},
+        "dear-model": {"input_cost_per_token": 5e-06, "output_cost_per_token": 3e-05},
+    }
+
+    for keys in (("cheap-model", "dear-model"), ("dear-model", "cheap-model")):
+        router = MagicMock()
+        router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+            cost_map_keys=keys, max_input_tokens=None, max_output_tokens=None
+        )
+
+        response = create_model_info_response(
+            model_id="house-model",
+            provider="openai",
+            llm_router=router,
+            include_pricing=True,
+            get_model_info=lambda model: prices[model],
+            cost_map=cost_map,
+        )
+
+        assert response["pricing"] == {
+            "input_cost_per_token": 5e-06,
+            "output_cost_per_token": 3e-05,
+        }, keys
+
+
+def test_create_model_info_response_reports_unknown_price_as_null():
+    """An unmapped model must not read as free to a caller doing cost accounting."""
+    response = create_model_info_response(
+        model_id="my-custom-deployment",
+        provider="openai",
+        llm_router=None,
+        include_pricing=True,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": None,
+        "output_cost_per_token": None,
+    }
+
+
+def test_create_model_info_response_ignores_malformed_price():
+    """A malformed or negative price is dropped rather than served or blowing up the listing.
+
+    model_info is registered into the cost map verbatim, so a config typo reaches here
+    uncoerced; a negative rate would read as a discount and NaN is not valid JSON.
+    """
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        llm_router=None,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o", input_cost_per_token="", output_cost_per_token=-1e-06
+        ),
+        cost_map={"gpt-4o": {"input_cost_per_token": "", "output_cost_per_token": -1e-06}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": None,
+        "output_cost_per_token": None,
+    }
+
+
+def test_create_model_info_response_accepts_string_price():
+    """A price configured as a string still reaches the listing as a number."""
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        llm_router=None,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o", input_cost_per_token="0.0000025", output_cost_per_token="0.00001"
+        ),
+        cost_map={"gpt-4o": {"input_cost_per_token": "0.0000025", "output_cost_per_token": "0.00001"}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 1e-05,
+    }
+
+
+def test_create_model_info_response_pricing_does_not_call_router_group_info():
+    """Pricing must not pull /v1/models onto the expensive group-info path (#33721)."""
+    router = MagicMock()
+    router.get_model_listing_info.return_value = None
+
+    response = create_model_info_response(
+        model_id="gpt-4o",
+        provider="openai",
+        llm_router=router,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(key="gpt-4o", input_cost_per_token=2.5e-06),
+        cost_map={"gpt-4o": {"input_cost_per_token": 2.5e-06}},
+    )
+
+    router.get_model_group_info.assert_not_called()
+    assert response["pricing"]["input_cost_per_token"] == 2.5e-06
+
+
+def test_get_model_listing_info_carries_custom_deployment_pricing():
+    """Custom pricing set in litellm_params reaches the listing through the router index."""
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "house-gpt",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 3e-07,
+                    "output_cost_per_token": 1.2e-06,
+                },
+            },
+        ]
+    )
+
+    listing_info = router.get_model_listing_info("house-gpt")
+
+    assert listing_info is not None
+    assert listing_info.input_cost_per_token == 3e-07
+    assert listing_info.output_cost_per_token == 1.2e-06
+
+    response = create_model_info_response(
+        model_id="house-gpt",
+        provider="openai",
+        llm_router=router,
+        include_pricing=True,
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 3e-07,
+        "output_cost_per_token": 1.2e-06,
+    }
+
+
 def test_create_model_info_response_resolves_alias_once_per_listing():
     """The alias is the same for every deployment in the group, so it is looked up once."""
     seen: list[str] = []
