@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import io
 import json
-from hashlib import sha256
 import struct
-from typing import Final, cast
 import wave
 import zlib
+from hashlib import sha256
+from typing import Final, cast
 
 import httpx
 import pytest
-
 from integration._support.client import JSON_OBJECT, Gateway
+from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.conftest import (
     CostBreakdown,
     approx_equal,
@@ -23,14 +23,15 @@ from integration.cost_calculation.conftest import (
     register_scenario_deployment,
 )
 from integration.cost_calculation.cost_tracking_case import (
-    BinaryResponse,
     CASES,
+    BinaryResponse,
     CostTrackingTestCase,
     ExactExpected,
     FailureExpected,
     RecountExpected,
     data_errors,
 )
+from pydantic import JsonValue
 
 if _data_errors := data_errors():
     raise ValueError("\n".join(_data_errors))
@@ -96,6 +97,16 @@ def _assert_stream_has_no_error(response_text: str) -> None:
         ), f"stream carried an error event: {parsed}"
 
 
+def _replace_model(value: JsonValue, model_name: str) -> JsonValue:
+    if isinstance(value, str):
+        return value.replace("$MODEL", model_name)
+    if isinstance(value, list):
+        return [_replace_model(item, model_name) for item in value]
+    if isinstance(value, dict):
+        return {key: _replace_model(item, model_name) for key, item in value.items()}
+    return value
+
+
 def _assert_breakdown(
     case: CostTrackingTestCase,
     expected: ExactExpected,
@@ -139,12 +150,12 @@ def _assert_breakdown(
         assert actual_component is not None and approx_equal(actual_component, expected_component), (
             f"{case.name}: {field} {actual_component} != expected {expected_component}"
         )
-        if case.response.content_type == "application/json":
+        if expected.cost_header and case.response.content_type == "application/json":
             header: Final = response.headers.get(header_name)
             assert header is not None and approx_equal(float(header), expected_component), (
                 f"{case.name}: {header_name} {header} != expected {expected_component}"
             )
-    if case.response.content_type == "application/json" and any(
+    if expected.cost_header and case.response.content_type == "application/json" and any(
         component is not None
         for component in (
             expected.cache_read_cost,
@@ -171,11 +182,51 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
     marker: Final = sha256(case.name.encode()).hexdigest()[:12]
     with gateway.scenario() as scenario:
         key: Final = scenario.key()
-        model_name: Final = register_scenario_deployment(scenario, case, marker, key)
+        passthrough_provider: Final = case.passthrough_provider
+        scenario_id: Final = f"sc-{marker}-{sha256(key.encode()).hexdigest()[:12]}"
+        scenario_handle: Final = (
+            register_scenario(scenario_id, case.response)
+            if passthrough_provider in {"gemini", "anthropic"}
+            else None
+        )
+        if scenario_handle is not None:
+            scenario.cleanups.callback(delete_scenario, scenario_handle)
+        model_name: Final = (
+            case.model
+            if passthrough_provider in {"gemini", "anthropic"}
+            else register_scenario_deployment(scenario, case, marker, key)
+        )
+        request_model: Final = (
+            case.model.rsplit("/", 1)[-1]
+            if passthrough_provider in {"gemini", "anthropic"}
+            else model_name
+        )
+        request_body: Final = JSON_OBJECT.validate_python(
+            _replace_model(case.request, request_model)
+            if passthrough_provider is not None
+            else {**case.request, "model": model_name}
+        )
+        request_headers: Final = (
+            {
+                "x-pass-x-scripted-scenario": scenario_id,
+                **(
+                    {"x-goog-api-key": key}
+                    if passthrough_provider == "gemini"
+                    else {}
+                ),
+            }
+            if passthrough_provider is not None
+            else {}
+        )
+        request_path: Final = (
+            case.endpoint.replace("$MODEL", request_model)
+            if passthrough_provider is not None
+            else case.endpoint
+        )
         response: Final = (
             _multipart_request(gateway, case, model_name, key)
             if case.upload is not None
-            else gateway.request("POST", case.endpoint, {**case.request, "model": model_name}, key=key)
+            else gateway.request("POST", request_path, request_body, key=key, headers=request_headers)
         )
         if isinstance(case.expected, FailureExpected):
             assert response.status_code == case.expected.failure.status, (
@@ -220,13 +271,14 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                 )
         elif case.response.content_type == "application/json":
             header: Final = cast(str | None, response.headers.get("x-litellm-response-cost"))
-            assert (
-                (header is None or approx_equal(float(header), 0.0))
-                if expected.spend == 0
-                else (header is not None and approx_equal(float(header), expected.spend))
-            ), (
-                f"{case.name}: x-litellm-response-cost {header} != expected {expected.spend}"
-            )
+            if expected.cost_header and expected.spend != 0:
+                assert header is not None and approx_equal(float(header), expected.spend), (
+                    f"{case.name}: x-litellm-response-cost {header} != expected {expected.spend}"
+                )
+            elif header is not None:
+                assert approx_equal(float(header), expected.spend), (
+                    f"{case.name}: x-litellm-response-cost {header} != expected {expected.spend}"
+                )
         assert row.spend is not None and approx_equal(row.spend, expected.spend), (
             f"{case.name}: spend {row.spend} != expected {expected.spend} "
             f"(breakdown {row.breakdown.model_dump() if row.breakdown is not None else None})"
