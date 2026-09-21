@@ -5,7 +5,10 @@ use std::{
 };
 
 use litellm_cache::{BaseCache, CacheCodec, CacheConnectionResult, Error, SemanticCacheContext};
-use litellm_cache_redis::connection::{ConnectionRef, Connections};
+use litellm_cache_redis::{
+    RedisTopology,
+    connection::{ConnectionRef, Connections},
+};
 use litellm_cache_response::CacheEntry;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -37,9 +40,6 @@ struct IndexState {
     similarity_threshold: f64,
 }
 
-const REDIS_TIMEOUT: Duration = Duration::from_secs(5);
-const REDIS_POOL_SIZE: u32 = 16;
-
 pub struct ValkeySemanticCache<
     E: Embedder,
     S: CacheCodec<Value = CacheEntry>,
@@ -64,7 +64,7 @@ where
         config: ValkeySemanticConfig,
     ) -> Result<Self, Error> {
         Ok(Self {
-            connections: Arc::new(Connections::pooled(url, REDIS_TIMEOUT, REDIS_POOL_SIZE)?),
+            connections: Arc::new(Connections::open(url, &RedisTopology::Standalone)?),
             embedder,
             codec,
             config,
