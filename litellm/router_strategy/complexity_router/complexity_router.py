@@ -1841,11 +1841,13 @@ class ComplexityRouter(CustomLogger):
                 decision["tier_litellm_params"] = masked_tier_litellm_params
         if previous_decision is None:
             return decision
-        forecast_fields: Final = {
-            field: value
-            for field, value in previous_decision.items()
-            if field.startswith("classifier_") or field == "heuristic_v2_forecast"
-        }
+        forecast_fields: Final = MappingProxyType(
+            {
+                field: value
+                for field, value in previous_decision.items()
+                if field.startswith("classifier_") or field == "heuristic_v2_forecast"
+            }
+        )
         return cast(  # cast-ok: retaining optional keys from a typed decision preserves their declared values
             StandardLoggingRoutingDecision, {**forecast_fields, **decision}
         )
