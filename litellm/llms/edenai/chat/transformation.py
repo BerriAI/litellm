@@ -57,7 +57,12 @@ class EdenAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler)
 
 class EdenAIChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
-        return [*super().get_supported_openai_params(model), "reasoning_effort"]  # mutable-ok: inherited contract
+        reasoning: Final[tuple[str, ...]] = (
+            ("reasoning_effort",)
+            if litellm.supports_reasoning(model=model, custom_llm_provider=litellm.LlmProviders.EDENAI.value)
+            else ()
+        )
+        return [*super().get_supported_openai_params(model), *reasoning]  # mutable-ok: inherited contract
 
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
