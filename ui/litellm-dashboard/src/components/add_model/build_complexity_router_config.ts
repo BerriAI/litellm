@@ -752,9 +752,7 @@ export const buildComplexityRouterConfig = ({
     plan_mode_patterns: cleanList(planModePatterns),
     housekeeping_patterns: cleanList(housekeepingPatterns),
   };
-  const cleanedLists = Object.fromEntries(
-    Object.entries(cleanedListValues).filter(([, list]) => list !== undefined),
-  );
+  const cleanedLists = Object.fromEntries(Object.entries(cleanedListValues).filter(([, list]) => list !== undefined));
   const hasValidCustomClassifierTimeout =
     classifierType === "custom" &&
     classifierPluginTimeoutMs !== undefined &&

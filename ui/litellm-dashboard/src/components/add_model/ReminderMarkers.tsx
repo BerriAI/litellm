@@ -14,7 +14,9 @@ const ReminderMarkers: React.FC<{
   const update = (index: number, patch: Partial<ReminderMarkerPair>) =>
     onChange({
       ...value,
-      reminder_markers: markers.map((marker, markerIndex) => (markerIndex === index ? { ...marker, ...patch } : marker)),
+      reminder_markers: markers.map((marker, markerIndex) =>
+        markerIndex === index ? { ...marker, ...patch } : marker,
+      ),
     });
   const remove = (index: number) => {
     const next = markers.filter((_, markerIndex) => markerIndex !== index);
@@ -24,9 +26,9 @@ const ReminderMarkers: React.FC<{
   return (
     <div>
       <p className="mb-4 text-sm text-muted-foreground">
-        Delimiter pairs that wrap harness-injected reminder blocks, which are stripped before classification. Setting any
-        pair replaces the built-in pairs, so list every pair your harness emits. Matching is case-insensitive and values
-        are saved lowercased.
+        Delimiter pairs that wrap harness-injected reminder blocks, which are stripped before classification. Setting
+        any pair replaces the built-in pairs, so list every pair your harness emits. Matching is case-insensitive and
+        values are saved lowercased.
       </p>
       <div className="space-y-3">
         {markers.map((marker, index) => (
@@ -53,7 +55,12 @@ const ReminderMarkers: React.FC<{
                 onChange={(event) => update(index, { close: event.target.value })}
               />
             </div>
-            <Button variant="ghost" size="icon" aria-label={`Remove reminder marker pair ${index + 1}`} onClick={() => remove(index)}>
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label={`Remove reminder marker pair ${index + 1}`}
+              onClick={() => remove(index)}
+            >
               <Trash2 />
             </Button>
           </div>

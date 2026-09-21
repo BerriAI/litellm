@@ -106,7 +106,6 @@ describe("ComplexityRouterConfig", () => {
     const capabilityValue = { ...defaultValue, classifier_type: "capability" as const };
     rerender(<ComplexityRouterConfig {...baseProps} value={capabilityValue} />);
     expect(screen.queryByText("Advanced: Heuristic Keyword Overrides")).not.toBeInTheDocument();
-
   });
 
   it.each([
@@ -127,11 +126,7 @@ describe("ComplexityRouterConfig", () => {
   it.each([true, false])("shows reminder marker validation only when requested: %s", (showValidationErrors) => {
     const value = { ...defaultValue, reminder_markers: [{ open: "", close: "x" }] };
     renderWithProviders(
-      <ComplexityRouterConfig
-        {...baseProps}
-        value={value}
-        showValidationErrors={showValidationErrors}
-      />,
+      <ComplexityRouterConfig {...baseProps} value={value} showValidationErrors={showValidationErrors} />,
     );
     fireEvent.click(screen.getByText("Advanced: Reminder Markers"));
     const validation = screen.queryByText(/needs both/i);
@@ -144,10 +139,7 @@ describe("ComplexityRouterConfig", () => {
 
   it("disables housekeeping sentinels when cheapest-tier routing is off", () => {
     renderWithProviders(
-      <ComplexityRouterConfig
-        {...baseProps}
-        value={{ ...defaultValue, route_housekeeping_to_cheapest_tier: false }}
-      />,
+      <ComplexityRouterConfig {...baseProps} value={{ ...defaultValue, route_housekeeping_to_cheapest_tier: false }} />,
     );
     fireEvent.click(screen.getByText("Advanced: Housekeeping Routing"));
     const sentinelInput = screen.getByRole("combobox", { name: "e.g., conversation title" });

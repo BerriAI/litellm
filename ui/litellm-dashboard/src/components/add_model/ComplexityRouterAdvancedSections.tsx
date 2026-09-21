@@ -130,7 +130,9 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
     {
       key: "plan-mode",
       label: <strong className="text-foreground font-semibold">Advanced: Plan-Mode Override</strong>,
-      children: <PlanModeOverrideControls value={value} onChange={onChange} planModeTierOptions={planModeTierOptions} />,
+      children: (
+        <PlanModeOverrideControls value={value} onChange={onChange} planModeTierOptions={planModeTierOptions} />
+      ),
     },
     {
       key: "housekeeping",
@@ -195,9 +197,7 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
                     rules={keywordTierRules}
                     onChange={onKeywordTierRulesChange}
                     tierLabels={value.tier_labels}
-                    tierNames={
-                      customTierSet || forecast ? tierRows.map(activeTierName).filter(Boolean) : undefined
-                    }
+                    tierNames={customTierSet || forecast ? tierRows.map(activeTierName).filter(Boolean) : undefined}
                   />
                 )}
                 {onKeywordTierRulesChange && onSemanticMatchingEnabledChange && <Separator className="my-4" />}

@@ -1,10 +1,7 @@
 import AutoRouterClassifierTabs from "../add_model/AutoRouterClassifierTabs";
 import { usesClassifierContext } from "../add_model/classifier_types";
 export type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
-import {
-  getForecastConfigError,
-  isForecastClassifier,
-} from "../add_model/forecast_classifier_config";
+import { getForecastConfigError, isForecastClassifier } from "../add_model/forecast_classifier_config";
 import React, { useEffect, useMemo, useState } from "react";
 import {
   complexityRouterSchema,
@@ -457,7 +454,13 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       // Dual write: complexity_router_config.default_model (the pin marker hydratePinnedDefaultModel
       // reads back) and complexity_router_default_model (what the backend routes on) must always be
       // written together from the same value. Same pairing in add_auto_router_tab.tsx.
-      const keywordMatching = { keywordTierRules, escalationKeywords, semanticMatchingEnabled, embeddingModel, matchThreshold };
+      const keywordMatching = {
+        keywordTierRules,
+        escalationKeywords,
+        semanticMatchingEnabled,
+        embeddingModel,
+        matchThreshold,
+      };
       const updatedConfig = buildUpdatedComplexityRouterConfig(
         modelData.litellm_params?.complexity_router_config,
         complexityRouterConfig,
