@@ -150,7 +150,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if isinstance(system_param, str):
             return strip_claude_code_identity(system_param)
         elif isinstance(system_param, list):
-            filtered_list: Final = []
+            filtered_list: Final = []  # mutable-ok: API message payload
             for content_block in system_param:
                 if isinstance(content_block, dict):
                     text = content_block.get("text", "")
@@ -165,7 +165,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     if stripped_text == text:
                         filtered_list.append(content_block)
                     else:
-                        filtered_list.append({**content_block, "text": stripped_text})
+                        filtered_list.append({**content_block, "text": stripped_text})  # mutable-ok: API message payload
                 else:
                     # Keep non-dict items as-is
                     filtered_list.append(content_block)
