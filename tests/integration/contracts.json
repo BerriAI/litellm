@@ -397,6 +397,15 @@
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-gpt-5.6-stream_full_usage]": [
       "quota_management.spend_tracking.scripted_wire.logs_cost"
     ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_native_json]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_500_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_429_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-input_text]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
@@ -1326,6 +1335,69 @@
     ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream_full_usage]": [
       "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_reasoning]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_stream_cache_read]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_incomplete]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_previous_response_id]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_web_search_medium]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.3-codex-responses_file_search]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_service_tier_flex]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_service_tier_priority]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_cache_write_5m]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_cache_write_1h]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_web_search]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_stream]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_stream_cache_read]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_tiered_input_above_200k]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-haiku-4-5-messages_input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-messages_input_text]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-messages_cache_read]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_health_intersects_route_restricted_key_grants_in_both_management_modes": [
       "other.mcp.health.restricted_keys_intersect_grants_in_both_modes"
