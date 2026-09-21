@@ -391,7 +391,7 @@ class TestPresidioCreditCardOutputMasking:
         prompt: Final = _credit_card_prompt(unique_marker())
 
         def fetch() -> str | None:
-            result: Final = client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=64)
+            result: Final = client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=_POST_CALL_MAX_TOKENS)
             match result:
                 case Success(data=data):
                     return _first_content(data)
@@ -424,7 +424,7 @@ class TestPresidioCreditCardOutputMasking:
                 MODEL,
                 prompt,
                 guardrails=[name],
-                max_tokens=64,
+                max_tokens=_POST_CALL_MAX_TOKENS,
             )
             if not result.ok or result.stream_error:
                 return None
@@ -456,7 +456,7 @@ class TestPresidioCreditCardOutputMasking:
                 MODEL,
                 prompt,
                 guardrails=[name],
-                max_tokens=64,
+                max_tokens=_POST_CALL_MAX_TOKENS,
             )
             if not result.ok or result.stream_error:
                 return None
