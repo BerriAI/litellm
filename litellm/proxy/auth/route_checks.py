@@ -686,23 +686,25 @@ class RouteChecks:
     @staticmethod
     def jwt_team_routes_grant_pass_through(route: str, team_allowed_routes: Collection[str]) -> bool:
         """
-        Explicit paths and trailing-wildcard prefixes grant auth=true pass-through. Entries are only ever compared
-        as paths, so a named route group like ``openai_routes`` never grants.
+        Explicit paths and trailing-wildcard prefixes grant auth=true pass-through. Blanket grants never do:
+        a named route group like ``openai_routes`` is only ever compared as a path, and an entry that names
+        no path segment (``*``, ``/*``) is skipped.
         """
         return any(
             RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
             for allowed_route in team_allowed_routes
+            if allowed_route.rstrip("*").strip("/")
         )
 
     @staticmethod
     def _jwt_team_allowed_routes(valid_token: UserAPIKeyAuth) -> Collection[str]:
-        """``team_allowed_routes`` for tokens built by JWT auth; JWT-mapped virtual keys stay key-scoped."""
-        if valid_token.jwt_claims is None or valid_token.token is not None:
+        """``team_allowed_routes`` for team tokens built by JWT auth; JWT-mapped virtual keys stay key-scoped."""
+        if valid_token.jwt_claims is None or valid_token.token is not None or valid_token.team_id is None:
             return ()
 
         from litellm.proxy.proxy_server import jwt_handler
 
-        return jwt_handler.litellm_jwtauth.team_allowed_routes or ()
+        return jwt_handler.litellm_jwtauth.team_allowed_routes
 
     @staticmethod
     def _require_auth_pass_through_access(

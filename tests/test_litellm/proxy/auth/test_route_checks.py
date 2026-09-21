@@ -1272,6 +1272,8 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
         ("/model-host/v1/extractor/predict", ["/model-host/v1/extractor"], False),
         ("/other/v1/extractor", ["/model-host/*"], False),
         ("/model-host/v1/extractor", ["openai_routes", "llm_api_routes", "mapped_pass_through_routes"], False),
+        ("/model-host/v1/extractor", ["*"], False),
+        ("/model-host/v1/extractor", ["/*"], False),
         ("/model-host/v1/extractor", [], False),
     ],
 )
@@ -1350,20 +1352,28 @@ def test_non_proxy_admin_denies_auth_pass_through_for_jwt_when_only_route_groups
 
 
 @pytest.mark.parametrize(
-    "jwt_claims",
-    [None, {"sub": "test_user"}],
-    ids=["plain_virtual_key", "jwt_mapped_virtual_key"],
+    "api_key, team_id, jwt_claims",
+    [
+        ("sk-test-key", "team-a", None),
+        ("sk-test-key", "team-a", {"sub": "test_user"}),
+        (None, "team-a", None),
+        (None, None, {"sub": "test_user"}),
+    ],
+    ids=["plain_virtual_key", "jwt_mapped_virtual_key", "keyless_non_jwt_caller", "jwt_without_team"],
 )
-def test_non_proxy_admin_jwt_team_allowed_routes_never_grant_pass_through_to_virtual_keys(jwt_claims):
-    virtual_key: Final = UserAPIKeyAuth(
-        api_key="sk-test-key",
+def test_non_proxy_admin_jwt_team_allowed_routes_grant_pass_through_only_to_jwt_team_callers(
+    api_key, team_id, jwt_claims
+):
+    caller: Final = UserAPIKeyAuth(
+        api_key=api_key,
         user_id="test_user",
         user_role=LitellmUserRoles.INTERNAL_USER.value,
+        team_id=team_id,
         jwt_claims=jwt_claims,
     )
 
     with pytest.raises(HTTPException) as exc_info:
-        _check_model_host_route_as(virtual_key, team_allowed_routes=["openai_routes", "/model-host/*"])
+        _check_model_host_route_as(caller, team_allowed_routes=["openai_routes", "/model-host/*"])
 
     assert exc_info.value.status_code == 403, exc_info.value.detail
     assert "allowed_passthrough_routes" in exc_info.value.detail

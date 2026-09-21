@@ -1693,7 +1693,7 @@ class JWTAuthManager:
                             team_object=team_object,
                             route=route,
                             request_method=request_method,
-                            team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes or (),
+                            team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
                         ):
                             is_allowed = False
                             denied_auth_enforced_pass_through_route = True
@@ -2589,7 +2589,7 @@ class JWTAuthManager:
             team_object=team_object,
             route=route,
             request_method=request_method,
-            team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes or (),
+            team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
         ):
             JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
@@ -2659,7 +2659,7 @@ class JWTAuthManager:
                 team_object=team_object,
                 route=route,
                 request_method=request_method,
-                team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes or (),
+                team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
             ):
                 JWTAuthManager._raise_team_passthrough_route_denial(route=route)
         elif team_id is None:
