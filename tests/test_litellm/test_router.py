@@ -3447,6 +3447,114 @@ def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_neste
     assert result._hidden_params["model_id"] == "served-deployment"
 
 
+@pytest.mark.asyncio
+async def test_acompletion_mid_stream_fallback_walks_every_entry_of_the_configured_list():
+    """LIT-7400: fallbacks=[{primary: [fb1, fb2]}] must reach fb2 when fb1 dies before its first chunk.
+
+    run_async_fallback returns as soon as fb1's stream wrapper exists, so fb1's failure surfaces
+    inside the streaming iterator, where the lookup is keyed by fb1. That key has no chain of its
+    own, so the iterator has to resume the chain of the group the request was originally for.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    class FailingStream(CustomStreamWrapper):
+        def __init__(self, model: str):
+            super().__init__(
+                completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock()
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise MidStreamFallbackError(
+                message=f"provider 500 from {self.model}",
+                model=self.model,
+                llm_provider="openai",
+                generated_content="",
+                is_pre_first_chunk=True,
+                original_exception=litellm.InternalServerError(
+                    message=f"provider 500 from {self.model}", model=self.model, llm_provider="openai"
+                ),
+            )
+
+    class OkStream(FailingStream):
+        def __init__(self, model: str):
+            super().__init__(model)
+            self._chunks = iter(
+                [litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": f"ok-from-{model}"}}])]
+            )
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    async def fake_acompletion(**kwargs):
+        if "fb2" in kwargs["model"]:
+            return OkStream(kwargs["model"])
+        return FailingStream(kwargs["model"])
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "fake-key"}},
+            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+        num_retries=0,
+    )
+
+    with patch("litellm.acompletion", side_effect=fake_acompletion) as mock_acompletion:
+        response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
+        content: Final = "".join(
+            [chunk.choices[0].delta.content or "" async for chunk in response if chunk is not None]
+        )
+
+    assert content == "ok-from-openai/fb2-model"
+    assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == [
+        "primary",
+        "fb1",
+        "fb2",
+    ]
+
+
+def test_refusal_on_the_last_fallback_hop_is_returned_instead_of_raised():
+    """LIT-7400 follow-up: a refusal on the final hop of an exhausted list passes through."""
+    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "fake-key"}},
+            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+        num_retries=0,
+    )
+
+    attempted: Final = AttemptedFallbackTargets()
+    attempted.record("primary")
+    attempted.record("fb1")
+    attempted.record("fb2")
+    kwargs: Final = {
+        "attempted_targets": attempted,
+        "metadata": {"model_group": "fb2", "original_model_group": "primary"},
+    }
+
+    assert router._refusal_fallback_available("fb2", kwargs) is False
+    assert (
+        router._refusal_fallback_available(
+            "fb1", {"metadata": {"model_group": "fb1", "original_model_group": "primary"}}
+        )
+        is True
+    )
+
+
 def test_completion_streaming_iterator_adopts_fallback_response_headers():
     """LIT-6767, sync counterpart of the fallback-adoption test."""
     from unittest.mock import MagicMock, patch
@@ -4126,7 +4234,7 @@ async def test_aresponses_streaming_iterator_fallback():
     call_kwargs = mock_fallback_utils.call_args.kwargs
     fbk = call_kwargs["kwargs"]
     # Bound methods compare equal when they share the same instance + __func__.
-    assert fbk["original_function"] == router._ageneric_api_call_with_fallbacks_helper
+    assert fbk["original_function"] == router._ageneric_api_call_with_fallbacks_responses_attempt
     assert fbk["original_generic_function"] is litellm.aresponses
     assert call_kwargs["model_group"] == "anthropic/claude-sonnet-4-6"
     assert call_kwargs["disable_fallbacks"] is False
@@ -6294,6 +6402,7 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
                     "s3_bucket_name": "my-batch-bucket",
                     "s3_region_name": "us-east-1",
                     "s3_encryption_key_id": "arn:aws:kms:us-west-2:123:key/abc",
+                    "s3_bucket_owner": "111111111111",
                     "aws_batch_role_arn": "arn:aws:iam::123:role/batch-role",
                 },
             }
@@ -6311,6 +6420,7 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
     assert credentials["s3_bucket_name"] == "my-batch-bucket"
     assert credentials["s3_region_name"] == "us-east-1"
     assert credentials["s3_encryption_key_id"] == "arn:aws:kms:us-west-2:123:key/abc"
+    assert credentials["s3_bucket_owner"] == "111111111111"
     assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123:role/batch-role"
 
 
@@ -13711,7 +13821,7 @@ async def test_aanthropic_messages_with_streaming_fallbacks_non_streaming_passth
 
     with patch.object(
         router,
-        "_ageneric_api_call_with_fallbacks",
+        "_ageneric_api_call_with_fallbacks_helper",
         new=AsyncMock(return_value=plain_response),
     ):
         out = await router._aanthropic_messages_with_streaming_fallbacks(
@@ -13735,7 +13845,7 @@ async def test_aanthropic_messages_with_streaming_fallbacks_wraps_streaming_iter
     with (
         patch.object(
             router,
-            "_ageneric_api_call_with_fallbacks",
+            "_ageneric_api_call_with_fallbacks_helper",
             new=AsyncMock(return_value=streaming_iter),
         ),
         patch.object(
@@ -14020,7 +14130,7 @@ async def test_aanthropic_messages_with_streaming_fallbacks_deep_copies_nested_m
     ):
         with patch.object(
             router,
-            "_ageneric_api_call_with_fallbacks",
+            "_ageneric_api_call_with_fallbacks_helper",
             new=AsyncMock(side_effect=fake_original),
         ):
             await router._aanthropic_messages_with_streaming_fallbacks(
@@ -14054,7 +14164,7 @@ async def test_aanthropic_messages_with_streaming_fallbacks_deep_copies_metadata
     ):
         with patch.object(
             router,
-            "_ageneric_api_call_with_fallbacks",
+            "_ageneric_api_call_with_fallbacks_helper",
             new=AsyncMock(side_effect=fake_original),
         ):
             await router._aanthropic_messages_with_streaming_fallbacks(
@@ -14067,6 +14177,95 @@ async def test_aanthropic_messages_with_streaming_fallbacks_deep_copies_metadata
     fallback_kwargs = streaming_iter_kwargs["initial_kwargs"]
     assert fallback_kwargs["metadata"] is not primary_metadata
     assert "deployment" not in fallback_kwargs["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_hop_stream_failure_reaches_second_fallback_entry():
+    """Regression: fallbacks=[{"primary": ["fb1", "fb2"]}]. The primary fails before
+    streaming, fb1 is reached through the regular fallback chain and then sends an
+    error frame mid-stream. Only the primary's stream used to be wrapped, so the outer
+    wrapper re-tried fb1 with a fresh attempted set and forwarded fb1's error frame to
+    the client on an HTTP 200; fb2 was unreachable."""
+    router = Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "anthropic/primary-model", "api_key": "sk-test"}},
+            {"model_name": "fb1", "litellm_params": {"model": "anthropic/fb1-model", "api_key": "sk-test"}},
+            {"model_name": "fb2", "litellm_params": {"model": "anthropic/fb2-model", "api_key": "sk-test"}},
+        ],
+        num_retries=0,
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+    )
+    calls: list = []
+
+    async def fake_original(**kwargs):
+        model = kwargs["model"]
+        calls.append(model)
+        if model == "anthropic/primary-model":
+            raise litellm.InternalServerError(message="primary down", llm_provider="anthropic", model=model)
+        if model == "anthropic/fb1-model":
+            return _AnthropicMessagesFakeByteStream(
+                [_anthropic_messages_message_start_chunk(), _anthropic_messages_overloaded_error_chunk()]
+            )
+        return _AnthropicMessagesFakeByteStream(
+            [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb2")]
+        )
+
+    stream = await router._aanthropic_messages_with_streaming_fallbacks(
+        original_function=fake_original,
+        model="primary",
+        stream=True,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+    )
+    body = b"".join([chunk async for chunk in stream])
+
+    assert calls == ["anthropic/primary-model", "anthropic/fb1-model", "anthropic/fb2-model"]
+    assert b"from fb2" in body
+    assert b"overloaded_error" not in body
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_attempt_strips_the_controls_carrier_and_wraps_every_hop_stream():
+    """Each attempt of the chain, not only the primary's, comes back wrapped for mid-stream
+    failover, and the per-request controls carrier never reaches the provider call."""
+    from types import MappingProxyType
+
+    from litellm.router_utils.fallback_event_handlers import (
+        MID_STREAM_FALLBACK_CONTROLS_KEY,
+        MidStreamFallbackControls,
+    )
+
+    router = Router(
+        model_list=[
+            {"model_name": "fb1", "litellm_params": {"model": "anthropic/fb1-model", "api_key": "sk-test"}},
+        ],
+        num_retries=0,
+    )
+    hop_stream = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb1")]
+    )
+    seen: dict = {}
+
+    async def fake_original(**kwargs):
+        seen.update(kwargs)
+        return hop_stream
+
+    controls = MidStreamFallbackControls(MappingProxyType({"fallbacks": [{"primary": ["fb1", "fb2"]}]}))
+    stream = await router._ageneric_api_call_with_fallbacks_anthropic_messages_attempt(
+        model="fb1",
+        original_generic_function=fake_original,
+        stream=True,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        **{MID_STREAM_FALLBACK_CONTROLS_KEY: controls},
+    )
+    body = b"".join([chunk async for chunk in stream])
+
+    assert seen["model"] == "anthropic/fb1-model"
+    assert MID_STREAM_FALLBACK_CONTROLS_KEY not in seen
+    assert "fallbacks" not in seen
+    assert stream is not hop_stream
+    assert b"from fb1" in body
 
 
 @pytest.mark.asyncio

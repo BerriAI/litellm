@@ -7,12 +7,13 @@ import base64
 import hashlib
 import json
 import os
-from collections.abc import Awaitable, Callable, Generator
+from collections.abc import Awaitable, Callable, Generator, Sequence
 from contextlib import AbstractAsyncContextManager
 from functools import partial
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypeVar
 
+import anyio
 import httpx2
 from httpx2._client import UseClientDefault
 from httpx2._types import AuthTypes
@@ -38,6 +39,8 @@ from mcp.types import (
     ListPromptsResult,
     ListResourcesResult,
     ListResourceTemplatesResult,
+    PaginatedRequestParams,
+    PaginatedResult,
     Prompt,
     ResourceTemplate,
     ServerNotification,
@@ -49,7 +52,12 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_NPM_CACHE_DIR, MCP_TOOL_LISTING_TIMEOUT
+from litellm.constants import (
+    MCP_CLIENT_TIMEOUT,
+    MCP_NPM_CACHE_DIR,
+    MCP_TOOL_LISTING_MAX_PAGES,
+    MCP_TOOL_LISTING_TIMEOUT,
+)
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
@@ -147,6 +155,8 @@ def as_mcp_read_timeout(exc: BaseException) -> TimeoutError | None:
 
 
 TSessionResult = TypeVar("TSessionResult")
+_ListPage = TypeVar("_ListPage", bound=PaginatedResult)
+_ListItem = TypeVar("_ListItem")
 
 
 class _MCPHTTPClient(httpx2.AsyncClient):
@@ -793,6 +803,33 @@ class MCPClient:
             # Return a default error result instead of raising
             return self.error_tool_result(e)
 
+    async def _list_optional_pages(
+        self,
+        fetch_page: Callable[[PaginatedRequestParams | None], Awaitable[_ListPage]],
+        items_of: Callable[[_ListPage], Sequence[_ListItem]],
+    ) -> list[_ListItem]:  # mutable-ok: existing list discovery API
+        items: Final[list[_ListItem]] = []  # mutable-ok: bounded iterative page accumulation
+        cursors: Final[set[str]] = set()  # mutable-ok: constant-time detection of cursor cycles
+        cursor: str | None = None  # rebind-ok: iterative traversal avoids recursion at the existing page cap
+        with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
+            for page_index in range(MCP_TOOL_LISTING_MAX_PAGES):
+                try:
+                    page = await fetch_page(  # rebind-ok: each SDK page replaces the previous one
+                        None if cursor is None else PaginatedRequestParams(cursor=cursor)
+                    )
+                except MCPError as error:
+                    if page_index > 0 and error.error.code == METHOD_NOT_FOUND:
+                        raise RuntimeError("MCP list operation became unavailable during pagination") from error
+                    raise
+                items.extend(items_of(page))
+                if not page.next_cursor:
+                    return items
+                if page.next_cursor in cursors:
+                    raise RuntimeError("MCP list pagination repeated a cursor")
+                cursors.add(page.next_cursor)
+                cursor = page.next_cursor
+        raise RuntimeError(f"MCP list pagination exceeded {MCP_TOOL_LISTING_MAX_PAGES} pages")
+
     async def list_prompts(self, *, raise_on_error: bool = False) -> list[Prompt]:
         """List available prompts from the server."""
         verbose_logger.debug("MCP client listing tools from %s", self.server_url or "stdio")
@@ -802,7 +839,11 @@ class MCPClient:
             if capabilities is not None and capabilities.prompts is None:
                 return ListPromptsResult(prompts=[])
             try:
-                return await session.list_prompts()
+                return ListPromptsResult(
+                    prompts=await self._list_optional_pages(
+                        lambda params: session.list_prompts(params=params), lambda page: page.prompts
+                    )
+                )
             except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
                     raise
@@ -892,7 +933,11 @@ class MCPClient:
             if capabilities is not None and capabilities.resources is None:
                 return ListResourcesResult(resources=[])
             try:
-                return await session.list_resources()
+                return ListResourcesResult(
+                    resources=await self._list_optional_pages(
+                        lambda params: session.list_resources(params=params), lambda page: page.resources
+                    )
+                )
             except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
                     raise
@@ -941,7 +986,12 @@ class MCPClient:
             if capabilities is not None and capabilities.resources is None:
                 return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
             try:
-                return await session.list_resource_templates()
+                return ListResourceTemplatesResult(
+                    resource_templates=await self._list_optional_pages(
+                        lambda params: session.list_resource_templates(params=params),
+                        lambda page: page.resource_templates,
+                    )
+                )
             except MCPError as error:
                 if error.error.code != METHOD_NOT_FOUND:
                     raise

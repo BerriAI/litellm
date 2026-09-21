@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+from collections.abc import Mapping
 from io import BufferedRandom, BufferedReader, BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -47,11 +48,11 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         filtered_params = {key: value for key, value in image_edit_optional_params.items() if key in supported_params}
 
-        mapped_params: Final[dict[str, Any]] = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         # Map OpenAI parameters to Imagen format
         if "n" in filtered_params:
@@ -148,10 +149,10 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         model: str,
         prompt: str | None,
         image: FileTypes | None,
-        image_edit_optional_request_params: dict[str, Any],
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict[str, Any], RequestFiles | None]:
+    ) -> tuple[dict[str, object], RequestFiles | None]:
         # Prepare reference images in the correct Imagen format
         if image is None:
             raise ValueError("Vertex AI Imagen image edit requires at least one reference image.")
@@ -182,14 +183,14 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         parameters["guidanceScale"] = 7.5  # Default guidance scale
         parameters["seed"] = None  # Let Vertex AI choose random seed
 
-        request_body: Final[dict[str, Any]] = {
+        request_body: Final[dict[str, object]] = {
             "instances": instances,
             "parameters": parameters,
         }
 
-        payload: Final[Any] = json.dumps(request_body)
+        payload: Final = json.dumps(request_body)
         empty_files: Final = cast(RequestFiles, [])
-        return cast(tuple[dict[str, Any], RequestFiles | None], (payload, empty_files))
+        return cast(tuple[dict[str, object], RequestFiles | None], (payload, empty_files))
 
     def transform_image_edit_response(
         self,
@@ -237,8 +238,8 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     def _prepare_reference_images(
         self,
         image: FileTypes | list[FileTypes],
-        image_edit_optional_request_params: dict[str, Any],
-    ) -> list[dict[str, Any]]:
+        image_edit_optional_request_params: Mapping[str, object],
+    ) -> list[dict[str, object]]:
         """
         Prepare reference images in the correct Imagen API format
         """
@@ -248,7 +249,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         else:
             images = [image]
 
-        reference_images: Final[list[dict[str, Any]]] = []
+        reference_images: Final[list[dict[str, object]]] = []
 
         for idx, img in enumerate(images):
             if img is None:
@@ -258,7 +259,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             base64_data = base64.b64encode(image_bytes).decode("utf-8")
 
             # Create reference image structure
-            reference_image = {
+            reference_image: dict[str, object] = {
                 "referenceType": "REFERENCE_TYPE_RAW",
                 "referenceId": idx + 1,
                 "referenceImage": {"bytesBase64Encoded": base64_data},
@@ -272,7 +273,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
             mask_bytes: Final = self._read_all_bytes(mask_image)
             mask_base64: Final = base64.b64encode(mask_bytes).decode("utf-8")
 
-            mask_reference: Final = {
+            mask_reference: Final[dict[str, object]] = {
                 "referenceType": "REFERENCE_TYPE_MASK",
                 "referenceId": len(reference_images) + 1,
                 "referenceImage": {"bytesBase64Encoded": mask_base64},

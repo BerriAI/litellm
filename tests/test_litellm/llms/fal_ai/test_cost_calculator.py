@@ -19,6 +19,18 @@ def _image_response(num_images: int = 1) -> ImageResponse:
     return ImageResponse(data=[ImageObject(url="https://example.com/img.png") for _ in range(num_images)])
 
 
+def _image_response_with_dimensions(dimensions: tuple[tuple[int, int], ...]) -> ImageResponse:
+    return ImageResponse(
+        data=[
+            ImageObject(
+                url=f"https://example.com/img-{index}.png",
+                provider_specific_fields={"width": width, "height": height},
+            )
+            for index, (width, height) in enumerate(dimensions)
+        ]
+    )
+
+
 GPT_IMAGE_25_MODELS = (
     "openai/gpt-image-2.5/flare/text-to-image",
     "openai/gpt-image-2.5/flare/edit",
@@ -55,6 +67,28 @@ def test_gpt_image_25_edit_auto_size_still_honors_quality():
     assert 0 < low < high
 
 
+def test_gpt_image_response_dimensions_override_request_size():
+    model = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
+    cost = cost_calculator(
+        model=model,
+        image_response=_image_response_with_dimensions(((1024, 1536),)),
+        optional_params={"quality": "low", "image_size": {"width": 1024, "height": 768}},
+    )
+    expected = litellm.model_cost[f"fal_ai/low/1024-x-1536/{model.removeprefix('fal_ai/')}"]["output_cost_per_image"]
+    assert cost == expected
+
+
+def test_gpt_image_response_dimensions_fall_back_to_request_size_when_unpriced():
+    model = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
+    cost = cost_calculator(
+        model=model,
+        image_response=_image_response_with_dimensions(((777, 888),)),
+        optional_params={"quality": "low", "image_size": {"width": 1024, "height": 1536}},
+    )
+    expected = litellm.model_cost[f"fal_ai/low/1024-x-1536/{model.removeprefix('fal_ai/')}"]["output_cost_per_image"]
+    assert cost == expected
+
+
 def test_gpt_image_25_quality_tiers_are_monotonic():
     costs = tuple(
         cost_calculator(
@@ -76,6 +110,44 @@ def test_flux_dev_cost_is_nonzero_and_distinct_from_schnell():
     )
     assert dev > schnell > 0
     assert dev == 3 * litellm.model_cost["fal_ai/fal-ai/flux/dev"]["output_cost_per_image"]
+
+
+def test_flux_dev_cost_uses_response_megapixels_per_image():
+    model = "fal_ai/fal-ai/flux/dev"
+    cost = cost_calculator(
+        model=model,
+        image_response=_image_response_with_dimensions(((1024, 1024), (1920, 1080), (512, 512))),
+        optional_params={},
+    )
+    output_cost_per_pixel = litellm.model_cost[model]["output_cost_per_pixel"]
+    assert cost == pytest.approx(output_cost_per_pixel * 1_048_576 * (1 + 2 + 1))
+
+
+@pytest.mark.parametrize(
+    "dimensions",
+    (
+        ((True, 1024),),
+        ((1024, 0),),
+        ((-1, 1024),),
+    ),
+)
+def test_flux_dev_invalid_response_dimensions_use_flat_price(dimensions):
+    model = "fal_ai/fal-ai/flux/dev"
+    cost = cost_calculator(
+        model=model,
+        image_response=_image_response_with_dimensions(dimensions),
+        optional_params={},
+    )
+    assert cost == litellm.model_cost[model]["output_cost_per_image"] * len(dimensions)
+
+
+def test_unknown_fal_model_raises_when_flat_pricing_is_needed():
+    with pytest.raises(Exception, match="isn't mapped yet"):
+        cost_calculator(
+            model="fal_ai/fal-ai/unknown-model",
+            image_response=_image_response(),
+            optional_params={},
+        )
 
 
 def test_image_edit_call_type_routes_to_fal_keyed_pricing():
