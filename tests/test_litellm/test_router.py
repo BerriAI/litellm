@@ -6294,6 +6294,7 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
                     "s3_bucket_name": "my-batch-bucket",
                     "s3_region_name": "us-east-1",
                     "s3_encryption_key_id": "arn:aws:kms:us-west-2:123:key/abc",
+                    "s3_bucket_owner": "111111111111",
                     "aws_batch_role_arn": "arn:aws:iam::123:role/batch-role",
                 },
             }
@@ -6311,6 +6312,7 @@ def test_get_deployment_credentials_with_provider_bedrock_batch_fields():
     assert credentials["s3_bucket_name"] == "my-batch-bucket"
     assert credentials["s3_region_name"] == "us-east-1"
     assert credentials["s3_encryption_key_id"] == "arn:aws:kms:us-west-2:123:key/abc"
+    assert credentials["s3_bucket_owner"] == "111111111111"
     assert credentials["aws_batch_role_arn"] == "arn:aws:iam::123:role/batch-role"
 
 

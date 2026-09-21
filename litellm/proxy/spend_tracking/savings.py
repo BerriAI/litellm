@@ -578,6 +578,56 @@ def autorouter_savings_for_logging_payload(
     )
 
 
+def _request_savings_pricing(
+    model: str | None,
+    custom_llm_provider: str | None,
+    model_id: str | None,
+    llm_router: "Callable[[], Router | None] | None",
+) -> tuple[str | None, ModelInfo | None]:
+    router_instance: Final = llm_router() if llm_router else None
+    identity: Final = _resolve_model(model, custom_llm_provider)
+    pricing: Final = _effective_model_info(router_instance, model_id, model or "") or (
+        _model_info(identity) if identity else None
+    )
+    return identity.provider if identity else custom_llm_provider, pricing
+
+
+def _prompt_caching_savings(
+    pricing: ModelInfo | None,
+    provider: str | None,
+    usage_object: Mapping[str, object] | None,
+    cost_breakdown: Mapping[str, object] | None,
+    billed_at: datetime | str | None,
+) -> float | None:
+    usage: Final = _usage_from_spend_log(usage_object)
+    if pricing is None or usage is None:
+        return None
+    basis: Final = _pricing_basis(cost_breakdown)
+    result: Final = calculate_prompt_caching_savings(
+        model_info=pricing,
+        usage=usage,
+        custom_llm_provider=provider,
+        service_tier=basis.service_tier,
+        data_residency=basis.data_residency,
+        vertex_location=basis.vertex_location,
+        billed_at=_coerce_billed_at(billed_at),
+    )
+    return result if isfinite(result) else None
+
+
+def prompt_caching_savings_for_request(
+    model: str | None,
+    custom_llm_provider: str | None,
+    usage_object: Mapping[str, object] | None,
+    model_id: str | None = None,
+    llm_router: "Callable[[], Router | None] | None" = None,
+    cost_breakdown: Mapping[str, object] | None = None,
+    billed_at: datetime | str | None = None,
+) -> float | None:
+    request_pricing: Final = _request_savings_pricing(model, custom_llm_provider, model_id, llm_router)
+    return _prompt_caching_savings(request_pricing[1], request_pricing[0], usage_object, cost_breakdown, billed_at)
+
+
 def compute_savings_spend(
     model: str | None,
     custom_llm_provider: str | None,
@@ -639,29 +689,12 @@ def compute_savings_spend(
     # Deployment rates when the request came through one, public rates otherwise --
     # `_effective_model_info` merges a deployment's configured prices over the built-in
     # map, so a negotiated price is not silently replaced by the list rate.
-    router_instance: Router | None = llm_router() if llm_router else None
-    identity: Final = _resolve_model(model, custom_llm_provider)
-    pricing: Final = _effective_model_info(router_instance, model_id, model or "") or (
-        _model_info(identity) if identity else None
-    )
+    request_pricing: Final = _request_savings_pricing(model, custom_llm_provider, model_id, llm_router)
+    provider: Final = request_pricing[0]
+    pricing: Final = request_pricing[1]
     input_cost: Final = (_get_cost_per_unit(pricing, "input_cost_per_token") or 0.0) if pricing else 0.0
     compression: Final = max(compression_saved_tokens, 0) * input_cost
-    usage: Final = _usage_from_spend_log(usage_object)
-    basis: Final = _pricing_basis(cost_breakdown)
-    billed_at_datetime: Final = _coerce_billed_at(billed_at)
-    prompt_caching: Final = (
-        calculate_prompt_caching_savings(
-            model_info=pricing,
-            usage=usage,
-            custom_llm_provider=identity.provider if identity else custom_llm_provider,
-            service_tier=basis.service_tier,
-            data_residency=basis.data_residency,
-            vertex_location=basis.vertex_location,
-            billed_at=billed_at_datetime,
-        )
-        if pricing is not None and usage is not None
-        else 0.0
-    )
+    prompt_caching: Final = _prompt_caching_savings(pricing, provider, usage_object, cost_breakdown, billed_at) or 0.0
     gateway_injected_caching: Final = prompt_caching if gateway_injected_cache else 0.0
 
     # The figure the logging path recorded wins, before the usage gate on purpose: a row
