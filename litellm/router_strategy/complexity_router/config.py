@@ -1041,6 +1041,18 @@ class ComplexityRouterConfig(BaseModel):
             "UltraFeedback artifact is selected by default; an inline trained artifact may replace it"
         ),
     )
+    heuristic_v2_success_threshold: float | None = Field(
+        default=None,
+        strict=True,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum predicted success probability for classifier_type 'heuristic_v2' to select a tier. "
+            "The first tier meeting this threshold is selected, or REASONING if none meets it. "
+            "When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). "
+            "Other classifier types ignore this setting"
+        ),
+    )
     classifier_llm_config: ClassifierLLMConfig | None = Field(
         default=None,
         description=(

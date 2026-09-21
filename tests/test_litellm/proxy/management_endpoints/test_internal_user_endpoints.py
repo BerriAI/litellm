@@ -2229,6 +2229,51 @@ async def test_user_model_budget_update_by_email_refreshes_cached_user(mocker: M
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("by_email", [False, True])
+@pytest.mark.parametrize("active", [False, True, None])
+async def test_user_status_update_refreshes_cached_user(
+    mocker: MockerFixture, by_email: bool, active: bool | None
+) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper
+
+    saved_user: Final = LiteLLM_UserTable(
+        user_id="user-spruce",
+        user_email="spruce@example.test",
+        metadata={"scim_active": False if active is None else not active, "department": "engineering"},
+    )
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
+    prisma_client.get_data = mocker.AsyncMock(return_value=[saved_user])
+    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: exercise a real isolated cache
+    broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+
+    await _update_single_user_helper(
+        user_request=UpdateUserRequest(
+            user_id=None if by_email else saved_user.user_id,
+            user_email=saved_user.user_email if by_email else None,
+            metadata={"department": "engineering"} if active is None else {"scim_active": active},
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert prisma_client.update_data.call_args.kwargs["user_id"] == saved_user.user_id
+    assert prisma_client.update_data.call_args.kwargs["data"]["metadata"] == (
+        {"department": "engineering"} if active is None else {"scim_active": active}
+    )
+    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
+    broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
+
+
+@pytest.mark.asyncio
 async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocker: MockerFixture) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
