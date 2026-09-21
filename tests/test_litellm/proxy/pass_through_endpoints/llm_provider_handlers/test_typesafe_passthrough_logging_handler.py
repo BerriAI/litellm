@@ -132,3 +132,50 @@ def test_success_handler_dispatches_to_typesafe_handler():
 
     assert normalized["kwargs"]["custom_llm_provider"] == "typesafe"
     assert normalized["kwargs"]["model"] == "typesafe/jev-1.13.0"
+
+
+def test_model_that_already_carries_the_namespace_is_not_prefixed_twice():
+    """https://github.com/BerriAI/litellm/issues/42200 - a second typesafe/ matched no registry key, so spend was 0."""
+    model_cost = litellm.model_cost["typesafe/jev-1.13.0"]
+    result = _handler_result(
+        {"model": "typesafe/jev-1.13.0", "usage": {"input_tokens": 100, "output_tokens": 20}},
+        {"model": "typesafe/jev-1.13.0"},
+    )
+
+    expected_cost = 100 * model_cost["input_cost_per_token"] + 20 * model_cost["output_cost_per_token"]
+    assert result["kwargs"]["model"] == "typesafe/jev-1.13.0"
+    assert result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_upstream_reported_cost_is_used_when_the_registry_has_no_pricing():
+    result = _handler_result(
+        {"model": "jev-99.0-unreleased", "usage": {"input_tokens": 6, "output_tokens": 10, "cost": 4.14e-07}},
+        {"model": "jev-99.0-unreleased"},
+    )
+
+    assert result["kwargs"]["response_cost"] == pytest.approx(4.14e-07)
+
+
+def test_registry_pricing_wins_over_an_upstream_reported_cost():
+    model_cost = litellm.model_cost["typesafe/jev-1.13.0"]
+    result = _handler_result(
+        {"model": "jev-1.13.0", "usage": {"input_tokens": 100, "output_tokens": 20, "cost": 999.0}},
+        {"model": "jev-1.13.0"},
+    )
+
+    expected_cost = 100 * model_cost["input_cost_per_token"] + 20 * model_cost["output_cost_per_token"]
+    assert result["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_openai_shaped_token_fields_are_counted():
+    """An OpenAI-compatible upstream names these prompt_tokens/completion_tokens, which logged as 0 tokens."""
+    result = _handler_result(
+        {"model": "jev-1.13.0", "usage": {"prompt_tokens": 6, "completion_tokens": 10}},
+        {"model": "jev-1.13.0"},
+    )
+
+    usage = result["kwargs"]["combined_usage_object"]
+    assert usage.prompt_tokens == 6
+    assert usage.completion_tokens == 10
+    assert usage.total_tokens == 16
+    assert result["kwargs"]["response_cost"] > 0
