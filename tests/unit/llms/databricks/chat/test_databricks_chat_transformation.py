@@ -653,6 +653,28 @@ def test_gpt_oss_passes_reasoning_effort_through(_use_local_model_cost_map):
     assert "thinking" not in params
 
 
+def test_non_claude_unpacks_dict_reasoning_effort_to_string():
+    """Responses bridge keeps {"effort","summary"}; Databricks chat needs a string (#42347)."""
+    params = DatabricksConfig().map_openai_params(
+        non_default_params={"reasoning_effort": {"effort": "medium", "summary": "auto"}},
+        optional_params={},
+        model="system.ai.kimi-k3",
+        drop_params=False,
+    )
+    assert params.get("reasoning_effort") == "medium"
+    assert "thinking" not in params
+
+
+def test_non_claude_string_reasoning_effort_unchanged():
+    params = DatabricksConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "high"},
+        optional_params={},
+        model="system.ai.kimi-k3",
+        drop_params=False,
+    )
+    assert params.get("reasoning_effort") == "high"
+
+
 def _streaming_chunk(usage=None, choices=None):
     base = {
         "id": "chatcmpl-test",

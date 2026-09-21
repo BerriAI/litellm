@@ -411,12 +411,27 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                         )
                     optional_params["output_config"] = {"effort": mapped_effort}
             optional_params.pop("reasoning_effort", None)
+        else:
+            # Responses/Chat bridges keep {"effort", "summary"} when summary is set.
+            # Databricks chat completions require reasoning_effort to be a bare string
+            # for non-Anthropic models (same unwrap as MoonshotChatConfig).
+            self._coerce_dict_reasoning_effort_to_string(mapped_params)
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(
             non_default_params=non_default_params, optional_params=mapped_params
         )
 
         return mapped_params
+
+    @staticmethod
+    def _coerce_dict_reasoning_effort_to_string(optional_params: dict) -> None:
+        """Unwrap Responses-style dict reasoning_effort to the effort string Databricks accepts."""
+        reasoning_effort_value: Final = optional_params.get("reasoning_effort")
+        if not isinstance(reasoning_effort_value, Mapping):
+            return
+        effort: Final = reasoning_effort_value.get("effort")
+        if isinstance(effort, str):
+            optional_params["reasoning_effort"] = effort
 
     def _should_fake_stream(self, optional_params: dict) -> bool:
         """
