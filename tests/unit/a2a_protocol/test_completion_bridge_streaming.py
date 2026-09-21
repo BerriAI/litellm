@@ -344,11 +344,7 @@ async def test_handle_streaming_keeps_agent_card_path_out_of_the_completion_call
         chunk.choices[0].delta.content = "Hello"
         yield chunk
 
-    with (
-        patch(  # test-quality-ok: the bridge calls litellm.acompletion directly; the sibling tests capture its kwargs through the same seam
-            "litellm.acompletion", new_callable=AsyncMock
-        ) as mock_acompletion
-    ):
+    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
         mock_acompletion.return_value = mock_streaming_response()
 
         events = [

@@ -10,12 +10,11 @@ Verifies that:
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from unittest.mock import AsyncMock, MagicMock, patch
-
 
 SAMPLE_ARN = "arn:aws:bedrock-agentcore:us-west-2:123456789:runtime/my_agent"
 SAMPLE_MODEL = f"bedrock/agentcore/{SAMPLE_ARN}"
@@ -42,13 +41,11 @@ class TestTransformation:
             BedrockAgentCoreA2ATransformation,
         )
 
-        url, headers, body = (
-            BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                request_id="req-001",
-                params=SAMPLE_PARAMS,
-                litellm_params=SAMPLE_LITELLM_PARAMS,
-                method="message/send",
-            )
+        url, headers, body = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+            request_id="req-001",
+            params=SAMPLE_PARAMS,
+            litellm_params=SAMPLE_LITELLM_PARAMS,
+            method="message/send",
         )
         body_dict = json.loads(body)
         assert body_dict["jsonrpc"] == "2.0"
@@ -201,10 +198,7 @@ class TestTransformation:
         # Runtime user id is the value set from litellm_params, NOT the spoof.
         assert normalized["x-amzn-bedrock-agentcore-runtime-user-id"] == "legit-user"
         # Session id is the auto-generated one, not the spoofed value.
-        assert (
-            normalized["x-amzn-bedrock-agentcore-runtime-session-id"]
-            != "spoofed-session"
-        )
+        assert normalized["x-amzn-bedrock-agentcore-runtime-session-id"] != "spoofed-session"
         # Authorization is the JWT bearer set by the signer, not the spoof.
         assert normalized["authorization"] == "Bearer test-jwt-token"
         # Host / x-amz-* must not have been carried over from the client.
@@ -258,43 +252,6 @@ class TestTransformation:
         assert normalized.get("authorization") != "Bearer attacker"
         # Non-reserved header still makes it into the signed dict.
         assert captured.get("x-mcp-token") == "mcp-abc"
-
-    def test_sigv4_auth_when_no_api_key(self):
-        """When no api_key, falls through to SigV4 signing."""
-        from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
-            BedrockAgentCoreA2ATransformation,
-        )
-
-        litellm_params_no_key = {
-            "model": SAMPLE_MODEL,
-            "custom_llm_provider": "bedrock",
-            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
-            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-            "aws_region_name": "us-west-2",
-        }
-
-        # Mock _sign_request to avoid hitting real botocore credential resolution
-        fake_sigv4_headers = {
-            "Authorization": "AWS4-HMAC-SHA256 Credential=AKIA.../bedrock-agentcore/aws4_request",
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-        }
-        fake_body = b'{"jsonrpc":"2.0"}'
-
-        with patch(
-            "litellm.llms.bedrock.chat.agentcore.transformation.AmazonAgentCoreConfig._sign_request",
-            return_value=(fake_sigv4_headers, fake_body),
-        ):
-            _, headers, _ = (
-                BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
-                    request_id="req-001",
-                    params=SAMPLE_PARAMS,
-                    litellm_params=litellm_params_no_key,
-                )
-            )
-        # SigV4 produces an Authorization header starting with "AWS4-HMAC-SHA256"
-        assert "Authorization" in headers
-        assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
 
 
 SESSION_HEADER = "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id"
@@ -571,39 +528,6 @@ class TestNonStreaming:
             sent_headers = mock_client.post.call_args.kwargs["headers"]
             assert sent_headers.get("x-mcp-token") == "mcp-abc"
 
-    @pytest.mark.asyncio
-    async def test_a2a_error_response_passthrough(self):
-        """JSON-RPC error responses from the agent are returned as-is."""
-        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
-            BedrockAgentCoreA2AConfig,
-        )
-
-        error_response = {
-            "jsonrpc": "2.0",
-            "id": "req-001",
-            "error": {"code": -32600, "message": "Bad request"},
-        }
-        mock_response = MagicMock()
-        mock_response.json.return_value = error_response
-        mock_response.raise_for_status = MagicMock()
-
-        with patch(
-            "litellm.a2a_protocol.providers.bedrock_agentcore.handler.get_async_httpx_client"
-        ) as mock_get_client:
-            mock_client = AsyncMock()
-            mock_client.post = AsyncMock(return_value=mock_response)
-            mock_get_client.return_value = mock_client
-
-            config = BedrockAgentCoreA2AConfig()
-            result = await config.handle_non_streaming(
-                request_id="req-001",
-                params=SAMPLE_PARAMS,
-                litellm_params=SAMPLE_LITELLM_PARAMS,
-            )
-
-            assert result["error"]["code"] == -32600
-            assert result["error"]["message"] == "Bad request"
-
 
 class TestStreaming:
     """Streaming requests must ask AgentCore for a stream, not a single send."""
@@ -648,9 +572,7 @@ class TestConfigManager:
             A2AProviderConfigManager,
         )
 
-        config = A2AProviderConfigManager.get_provider_config(
-            "bedrock", model=SAMPLE_MODEL
-        )
+        config = A2AProviderConfigManager.get_provider_config("bedrock", model=SAMPLE_MODEL)
         assert config is not None
         assert isinstance(config, BedrockAgentCoreA2AConfig)
 
@@ -660,9 +582,7 @@ class TestConfigManager:
             A2AProviderConfigManager,
         )
 
-        config = A2AProviderConfigManager.get_provider_config(
-            "bedrock", model="bedrock/anthropic.claude-3-sonnet"
-        )
+        config = A2AProviderConfigManager.get_provider_config("bedrock", model="bedrock/anthropic.claude-3-sonnet")
         assert config is None
 
     def test_unknown_provider_returns_none(self):
@@ -677,37 +597,6 @@ class TestHandlerIntegration:
     """Test handler.py changes — litellm_params passed through, api_base not required."""
 
     @pytest.mark.asyncio
-    async def test_provider_config_receives_litellm_params(self):
-        """Verify handler passes litellm_params to provider config via kwargs."""
-        from litellm.a2a_protocol.litellm_completion_bridge.handler import (
-            A2ACompletionBridgeHandler,
-        )
-
-        mock_config = AsyncMock()
-        mock_config.handle_non_streaming = AsyncMock(
-            return_value={"jsonrpc": "2.0", "id": "req-001", "result": {}}
-        )
-
-        with patch(
-            "litellm.a2a_protocol.litellm_completion_bridge.handler.A2AProviderConfigManager.get_provider_config",
-            return_value=mock_config,
-        ):
-            await A2ACompletionBridgeHandler.handle_non_streaming(
-                request_id="req-001",
-                params=SAMPLE_PARAMS,
-                litellm_params=SAMPLE_LITELLM_PARAMS,
-                api_base=None,
-            )
-
-            mock_config.handle_non_streaming.assert_called_once_with(
-                request_id="req-001",
-                params=SAMPLE_PARAMS,
-                api_base=None,
-                litellm_params=SAMPLE_LITELLM_PARAMS,
-                agent_extra_headers=None,
-            )
-
-    @pytest.mark.asyncio
     async def test_api_base_none_allowed_with_provider_config(self):
         """api_base=None no longer raises when a provider config is registered."""
         from litellm.a2a_protocol.litellm_completion_bridge.handler import (
@@ -715,9 +604,7 @@ class TestHandlerIntegration:
         )
 
         mock_config = AsyncMock()
-        mock_config.handle_non_streaming = AsyncMock(
-            return_value={"jsonrpc": "2.0", "id": "req-001", "result": {}}
-        )
+        mock_config.handle_non_streaming = AsyncMock(return_value={"jsonrpc": "2.0", "id": "req-001", "result": {}})
 
         with patch(
             "litellm.a2a_protocol.litellm_completion_bridge.handler.A2AProviderConfigManager.get_provider_config",

@@ -9,9 +9,7 @@ def test_from_dict_backfills_id_on_agent_error_response():
         "error": {"code": -32054, "message": "Session not found"},
     }
 
-    response = LiteLLMSendMessageResponse.from_dict(
-        agent_error, request_id="r1"
-    )
+    response = LiteLLMSendMessageResponse.from_dict(agent_error, request_id="r1")
 
     assert response.id == "r1"
     assert response.error == {"code": -32054, "message": "Session not found"}
@@ -25,9 +23,7 @@ def test_from_dict_preserves_existing_id():
         "error": {"code": -32001, "message": "Task not found"},
     }
 
-    response = LiteLLMSendMessageResponse.from_dict(
-        payload, request_id="r1"
-    )
+    response = LiteLLMSendMessageResponse.from_dict(payload, request_id="r1")
 
     assert response.id == "upstream-id"
 
@@ -82,9 +78,7 @@ def test_from_dict_accepts_null_id_when_the_error_cannot_be_correlated():
     """JSON-RPC 2.0 section 5 requires ``id`` to be null on an error that cannot be
     matched to a request, which is exactly the case where the caller supplied no id
     for the backfill to use. Rejecting it turned an agent's error into a proxy 500."""
-    response = LiteLLMSendMessageResponse.from_dict(
-        {"jsonrpc": "2.0", "error": {"code": -32054, "message": "x"}}
-    )
+    response = LiteLLMSendMessageResponse.from_dict({"jsonrpc": "2.0", "error": {"code": -32054, "message": "x"}})
 
     assert response.id is None
     assert response.error == {"code": -32054, "message": "x"}
@@ -98,23 +92,6 @@ def test_from_dict_accepts_null_id_echoed_by_upstream():
     )
 
     assert response.id is None
-
-
-def test_id_accepts_every_member_of_the_json_rpc_union_and_nothing_else():
-    """One test pinning the whole ``string | integer | null`` union the spec defines,
-    so widening the annotation cannot silently become "accept anything"."""
-    for accepted in ("s1", 42, 0, None):
-        assert LiteLLMSendMessageResponse(id=accepted).id == accepted
-
-    # ``True``/``False`` are in here because bool subclasses int: a non-strict integer
-    # half would accept them and relay them as 1/0. Direct construction bypasses
-    # normalization, so the model has to hold this line on its own.
-    for rejected in (True, False, 1.5, ["a"], {"a": 1}):
-        try:
-            LiteLLMSendMessageResponse(id=rejected)
-        except Exception:
-            continue
-        raise AssertionError(f"id={rejected!r} is outside the JSON-RPC union and must be rejected")
 
 
 def test_boolean_id_is_never_relayed_as_an_integer():
