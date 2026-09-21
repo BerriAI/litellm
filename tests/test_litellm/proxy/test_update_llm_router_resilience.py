@@ -8,10 +8,12 @@ router, because the exception propagated up and was caught by the
 catch-all handler in _update_llm_router.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from litellm.proxy.proxy_server import ProxyConfig
+from litellm.types.router import Deployment, LiteLLM_Params
 
 
 def _make_db_model(model_name: str, model_id: str):
@@ -155,6 +157,11 @@ class TestDeleteDeploymentResilience:
         mock_router.get_model_ids.return_value = ["db-id-1", "stale-id"]
         mock_router.delete_deployment.return_value = True
         mock_router.generate_model_id = MagicMock(return_value="config-id-1")
+        mock_router.get_deployment.return_value = Deployment(
+            model_name="stale",
+            litellm_params=LiteLLM_Params(model="gpt-4"),
+            model_info={"id": "stale-id"},
+        )
 
         with (
             patch.object(

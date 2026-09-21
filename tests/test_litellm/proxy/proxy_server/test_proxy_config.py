@@ -2774,6 +2774,88 @@ async def test_ProxyConfig__delete_deployment_invalid_models_raises(monkeypatch)
         await pc._delete_deployment(db_models=[{"not_a_model": True}])
 
 
+def _router_with_injected_deployment(tmp_path, monkeypatch, injected_model_info: dict):
+    """A live router serving one config-backed model plus one injected at runtime.
+
+    Mirrors a proxy with store_model_in_db on: config.yaml on disk, an empty db, and a
+    deployment that only ever existed in memory.
+    """
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(
+        "model_list:\n"
+        "  - model_name: config-model\n"
+        "    litellm_params:\n"
+        "      model: openai/gpt-4o\n"
+        "      api_key: sk-config\n"
+        "    model_info:\n"
+        "      id: config-model-id\n"
+    )
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "config-model",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-config"},
+                "model_info": {"id": "config-model-id"},
+            }
+        ]
+    )
+    router.upsert_deployment(
+        Deployment(
+            model_name="injected-model",
+            litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini", api_key="sk-injected"),
+            model_info={"id": "injected-model-id", **injected_model_info},
+        )
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", str(config_file))
+    return router
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__delete_deployment_keeps_runtime_injected_deployment_naming_an_owner(tmp_path, monkeypatch):
+    """https://github.com/BerriAI/litellm/issues/42211
+
+    A deployment injected at runtime is in neither the db nor config.yaml, so the
+    reconcile evicted it on the next tick and the injector's model stopped being served.
+    """
+    router: Final = _router_with_injected_deployment(tmp_path, monkeypatch, {"managed_by": "my-plugin"})
+
+    still_desired: Final = await ProxyConfig()._delete_deployment(db_models=[])
+
+    assert "injected-model-id" in router.get_model_ids()
+    # in the keep-set too, or a later drop reads as a deliberate eviction rather than damage
+    assert still_desired is not None and "injected-model-id" in still_desired
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__delete_deployment_still_evicts_a_deployment_naming_no_owner(tmp_path, monkeypatch):
+    """The eviction itself has to survive the fix, otherwise a model deleted from the db
+    on another pod would go on being served here forever."""
+    router: Final = _router_with_injected_deployment(tmp_path, monkeypatch, {})
+
+    still_desired: Final = await ProxyConfig()._delete_deployment(db_models=[])
+
+    assert "injected-model-id" not in router.get_model_ids()
+    assert "config-model-id" in router.get_model_ids()
+    assert still_desired is not None and "injected-model-id" not in still_desired
+
+
+def test_ProxyConfig__declared_deployment_owner_treats_an_unreadable_deployment_as_unowned():
+    """An owner we cannot read must not become a licence to keep the deployment alive."""
+
+    class ExplodingRouter:
+        def get_deployment(self, model_id: str):
+            raise ValueError(f"Model invalid format - {model_id}")
+
+    owner: Final = ProxyConfig._declared_deployment_owner(router=ExplodingRouter(), model_id="whatever")
+
+    assert owner is None
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._add_deployment
 # ---------------------------------------------------------------------------
