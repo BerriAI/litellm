@@ -322,6 +322,28 @@ fn connect_accepts_account_urls_with_trailing_slash() {
 }
 
 #[test]
+fn connect_keeps_account_url_query_parameters_on_the_container_path() {
+    let runtime = Runtime::new().unwrap();
+    let service = FakeBlobService::default();
+    runtime
+        .block_on(AzureBlobCache::connect_with_options(
+            "https://example.blob.core.windows.net/?sv=2024-01-01&sig=abc",
+            CONTAINER,
+            None,
+            ClientOptions {
+                transport: Some(Transport::new(Arc::new(service.clone()))),
+                ..ClientOptions::default()
+            },
+            ResponseCacheCodec,
+            runtime.handle().clone(),
+        ))
+        .unwrap();
+    let create = &service.requests()[0];
+    assert_eq!(create.path, format!("/{CONTAINER}"));
+    assert!(create.query.contains("sig=abc"));
+}
+
+#[test]
 fn connect_surfaces_service_failures() {
     let runtime = Runtime::new().unwrap();
     let service = FakeBlobService::default();
