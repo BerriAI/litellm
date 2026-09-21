@@ -8340,6 +8340,7 @@ class ProviderConfigManager:
                 False,
             ),
             LlmProviders.EDENAI: (litellm.EdenAIChatConfig, False),
+            LlmProviders.FAL_AI: (lambda: litellm.FalAIChatConfig(), False),
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
             LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),
@@ -9569,9 +9570,9 @@ class ProviderConfigManager:
 
             return BlackForestLabsImageEditConfig()
         elif LlmProviders.FAL_AI == provider:
-            from litellm.llms.fal_ai.image_edit import FalAIImageEditConfig
+            from litellm.llms.fal_ai.image_edit import get_fal_ai_image_edit_config
 
-            return FalAIImageEditConfig()
+            return get_fal_ai_image_edit_config(model)
         elif LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.image_edit import get_azure_ai_image_edit_config
 

@@ -205,3 +205,44 @@ def test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row(
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/openai/gpt-image-2.5/flare/edit")
         ]
+
+
+@pytest.mark.covers("other.provider_wire.fal_ai.flux_lora_depth_edit_single_image_url_and_flat_pricing")
+def test_fal_flux_lora_depth_edit_sends_single_image_url_and_charges_flat_row(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.headers["authorization"] == "Key synthetic-fal-key"
+        assert request.target == "/fal-ai/flux-lora-depth"
+        assert request.headers["content-type"] == "application/json"
+        assert _JSON_OBJECT.validate_json(request.body) == {
+            "prompt": _PROMPT,
+            "image_url": "data:image/png;base64," + base64.b64encode(_PNG_BYTES).decode(),
+        }
+        return Reply(body=_image_response(((f"{wire_url}/files/depth.png", 1024, 1024),), _PROMPT))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        wire_url: Final = wire.url
+        model: Final = scenario.model(
+            model="fal_ai/fal-ai/flux-lora-depth", api_base=wire.url, api_key="synthetic-fal-key"
+        )
+        response: Final = gateway.client.post(
+            "/v1/images/edits",
+            data={"model": model, "prompt": _PROMPT},
+            files={"image": ("red_circle.png", _PNG_BYTES, "image/png")},
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        )
+        assert response.status_code == 200, response.text
+        payload: Final = _JSON_OBJECT.validate_json(response.content)
+        assert payload["data"] == [
+            {
+                "url": f"{wire.url}/files/depth.png",
+                "b64_json": None,
+                "revised_prompt": None,
+                "provider_specific_fields": {"width": 1024, "height": 1024, "content_type": "image/png"},
+            }
+        ]
+        cost: Final = _response_cost(response)
+        assert cost == _approx(_catalog_cost("fal_ai/fal-ai/flux-lora-depth"))
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", "/fal-ai/flux-lora-depth")
+        ]
