@@ -1,0 +1,40 @@
+# LiteLLM quickstart stack: the gateway plus a Postgres database that stores
+# models, virtual keys, and spend logs. Used by
+# https://docs.litellm.ai/docs/proxy/docker_quick_start
+#
+#   curl -sSLO https://github.com/BerriAI/litellm/raw/main/docker/docker-compose.quickstart.yml
+#   docker compose -f docker-compose.quickstart.yml up -d
+#
+# The credentials below are placeholders for local evaluation. Before any real
+# use, set LITELLM_MASTER_KEY and LITELLM_SALT_KEY to long random values and
+# pin the image to a specific release tag.
+services:
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:main-stable
+    ports:
+      - "4000:4000"
+    environment:
+      LITELLM_MASTER_KEY: sk-1234
+      LITELLM_SALT_KEY: sk-XXXXXXXXXXXXXXXX
+      DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+      POSTGRES_DB: litellm
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
