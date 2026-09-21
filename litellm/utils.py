@@ -5665,6 +5665,11 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
     region_free_split_model: Final = (
         _strip_mantle_region_prefix(split_model) if custom_llm_provider == "bedrock_mantle" else split_model
     )
+    region_free_combined_stripped_model_name: Final = (
+        f"bedrock_mantle/{_strip_model_name(model=region_free_split_model, custom_llm_provider=custom_llm_provider)}"
+        if custom_llm_provider == "bedrock_mantle"
+        else combined_stripped_model_name
+    )
     provider_model_info: Final = (
         ProviderConfigManager.get_provider_model_info(
             model=region_free_split_model, provider=LlmProviders(custom_llm_provider)
@@ -5680,7 +5685,7 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
         split_model=region_free_split_model,
         combined_model_name=combined_model_name,
         stripped_model_name=stripped_model_name,
-        combined_stripped_model_name=combined_stripped_model_name,
+        combined_stripped_model_name=region_free_combined_stripped_model_name,
         provider_prefixed_model_name=provider_cost_key or provider_prefixed_model_name,
         custom_llm_provider=cast(str, custom_llm_provider),
     )

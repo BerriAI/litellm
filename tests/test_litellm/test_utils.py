@@ -1163,6 +1163,21 @@ def test_get_model_info_bedrock_regional_inference_profile_pricing(local_model_c
     assert control["key"] == "au.anthropic.claude-opus-4-8"
 
 
+def test_get_model_info_bedrock_mantle_region_prefix_falls_back_to_the_mantle_row(local_model_cost_map):
+    """A Mantle deployment name may carry the region as a prefix (bedrock_mantle/us-east-2/<model>).
+    That name has no cost row of its own, so pricing must fall through to the region-free
+    bedrock_mantle/<model> row instead of raising, while a region that has its own row keeps it."""
+    for model, expected_key in (
+        ("bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5", "bedrock_mantle/anthropic.claude-haiku-4-5"),
+        ("bedrock_mantle/us-east-2/openai.gpt-5.6-sol", "bedrock_mantle/openai.gpt-5.6-sol"),
+        ("bedrock_mantle/us-gov-west-1/openai.gpt-5.4", "bedrock_mantle/us-gov-west-1/openai.gpt-5.4"),
+    ):
+        info = litellm.get_model_info(model=model, custom_llm_provider="bedrock_mantle")
+        assert info["key"] == expected_key, model
+        assert info["input_cost_per_token"] == litellm.model_cost[expected_key]["input_cost_per_token"], model
+        assert info["input_cost_per_token"] > 0, model
+
+
 def test_openai_models_in_model_info(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
