@@ -65,7 +65,7 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         # private_key with PEM-aware value capture
         r"""private_key['\"]?\s*[:=]\s*['\"]?(?:-----BEGIN[A-Z \-]*PRIVATE KEY-----[\s\S]*?-----END[A-Z \-]*PRIVATE KEY-----|[^\s,'\"})\]{}>]+)""",
         r"(?:master_key|xai_key|database_url|db_url|connection_string|"
-        r"aws_secret_access_key|aws_session_token|aws_access_key_id|"
+        r"aws_secret_access_key|aws_session_token|aws_access_key_id|s3_secret_access_key|s3_access_key_id|"
         r"signing_key|encryption_key|"
         r"auth_token|access_token|refresh_token|"
         r"slack_webhook_url|webhook_url|"

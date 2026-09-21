@@ -79,6 +79,11 @@ pub(super) struct RedisCacheConfig {
     pub(super) connection: RedisConnectionConfig,
 }
 
+pub(super) struct AzureBlobCacheConfig {
+    pub(super) account_url: String,
+    pub(super) container: String,
+}
+
 struct RedisClientProjection<'py> {
     topology: RedisTopology,
     host: String,
@@ -94,6 +99,7 @@ pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
     Disk(DiskCacheConfig),
+    AzureBlob(AzureBlobCacheConfig),
 }
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
@@ -169,12 +175,17 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::AzureBlob) => project_azure_blob(&backend).map(|backend| {
+                CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::AzureBlob(backend),
+                }))
+            }),
             Some(
                 CacheType::RedisSemantic
                 | CacheType::ValkeySemantic
                 | CacheType::S3
                 | CacheType::QdrantSemantic
-                | CacheType::AzureBlob
                 | CacheType::Gcs,
             )
             | None => Ok(CacheConfigProjection::Unsupported(
@@ -188,6 +199,7 @@ impl NativeCacheConfig {
             CacheBackendConfig::Memory(config) => Some(config.default_ttl),
             CacheBackendConfig::Redis(config) => Some(config.default_ttl),
             CacheBackendConfig::Disk(_) => None,
+            CacheBackendConfig::AzureBlob(_) => None,
         };
         if service.default_ttl() != default_ttl {
             return Some("facade and native backend default TTLs must match");
@@ -225,8 +237,32 @@ impl NativeCacheConfig {
                 let facade = std::fs::canonicalize(&config.directory).ok();
                 (native != facade).then_some("facade and native backend directories must match")
             }
+            CacheBackendConfig::AzureBlob(config) => match service.azure_blob_identity() {
+                None => Some("facade and native backend types must match"),
+                Some((account_url, container))
+                    if account_url != config.account_url || container != config.container =>
+                {
+                    Some("facade and native backend containers must match")
+                }
+                Some(_) => None,
+            },
         }
     }
+}
+
+#[inline(never)]
+fn project_azure_blob(backend: &Bound<'_, PyAny>) -> PyResult<AzureBlobCacheConfig> {
+    let client = backend.getattr("container_client")?;
+    let container = client.getattr("container_name")?.extract::<String>()?;
+    let url = client.getattr("url")?.extract::<String>()?;
+    let account_url = url
+        .strip_suffix(container.as_str())
+        .and_then(|url| url.strip_suffix('/'))
+        .ok_or_else(|| PyValueError::new_err("Azure Blob container URL is malformed"))?;
+    Ok(AzureBlobCacheConfig {
+        account_url: account_url.to_string(),
+        container,
+    })
 }
 
 #[inline(never)]
