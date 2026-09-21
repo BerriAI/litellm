@@ -2317,6 +2317,49 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
     broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("all_users", [False, True], ids=["single-user", "bulk-all-users"])
+async def test_user_max_budget_update_evicts_cached_user_on_every_worker(mocker: MockerFixture, all_users: bool) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_single_user_helper, bulk_user_update
+    from litellm.types.proxy.management_endpoints.internal_user_endpoints import BulkUpdateUserRequest
+
+    saved_user: Final = LiteLLM_UserTable(user_id="user-spruce", max_budget=500.0)
+    prisma_client: Final = mocker.MagicMock()
+    prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
+    prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
+    prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    prisma_client.get_data = mocker.AsyncMock(return_value=[saved_user])
+    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma_client)  # test-quality-ok: substitute the database dependency
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=saved_user.user_id, value=saved_user, model_type=LiteLLM_UserTable)
+    mocker.patch("litellm.proxy.proxy_server.user_api_key_cache", cache)  # test-quality-ok: exercise a real isolated cache
+    broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        new_callable=mocker.AsyncMock,
+    )
+    admin: Final = UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    if all_users:
+        await bulk_user_update(
+            data=BulkUpdateUserRequest(all_users=True, user_updates={"max_budget": 50.0}),
+            user_api_key_dict=admin,
+            litellm_changed_by=None,
+        )
+        prisma_client.db.litellm_usertable.update_many.assert_awaited_once_with(where={}, data={"max_budget": 50.0})
+    else:
+        await _update_single_user_helper(
+            user_request=UpdateUserRequest(user_id=saved_user.user_id, max_budget=50.0),
+            user_api_key_dict=admin,
+        )
+        assert prisma_client.update_data.call_args.kwargs["data"]["max_budget"] == 50.0
+
+    assert await cache.async_get_cache(key=saved_user.user_id, model_type=LiteLLM_UserTable) is None
+    broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
+
+
 def test_generate_request_base_validator():
     """
     Test that GenerateRequestBase validator converts empty string to None for max_budget
