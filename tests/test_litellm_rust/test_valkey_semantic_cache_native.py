@@ -332,11 +332,31 @@ async def test_async_store_batch_and_lookup(
         index_name,
         {"prompt A": [1.0, 0.0], "prompt B": [0.0, 1.0]},
     )
+    sync_calls: Final = []
+    async_tasks: Final = []
+
+    def sync_embedding(prompt: str, metadata: Mapping[str, object] | None = None) -> list[float]:
+        sync_calls.append(prompt)
+        return {"prompt A": [1.0, 0.0], "prompt B": [0.0, 1.0]}[prompt]
+
+    async def async_embedding(
+        prompt: str,
+        metadata: dict[str, object] | None = None,
+    ) -> list[float]:
+        async_tasks.append(asyncio.current_task())
+        return {"prompt A": [1.0, 0.0], "prompt B": [0.0, 1.0]}[prompt]
+
+    backend._get_embedding = sync_embedding
+    backend._get_async_embedding = async_embedding
     handle: Final = _native._CacheTestHandle.valkey_semantic(valkey_url, 0.8, index_name, backend)
     binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
     requests: Final = [_request("prompt A"), _request("prompt B")]
     responses: Final = [{"answer": "A"}, {"answer": "B"}]
+    caller_task: Final = asyncio.current_task()
     await binding.async_store_batch(requests, responses)
+    assert sync_calls == []
+    assert async_tasks
+    assert all(task is caller_task for task in async_tasks)
     assert await binding.async_lookup(requests[0]) == responses[0]
     assert await binding.async_lookup(requests[1]) == responses[1]
 

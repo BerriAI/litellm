@@ -424,9 +424,52 @@ impl NativeResponseCache {
                 cache.async_store_batch(entries, now).await
             }
             Self::ValkeySemantic { cache, scope, .. } => {
-                entries.into_iter().try_for_each(|(request, value)| {
-                    cache.store(&Self::semantic(&request, scope), value, now)
-                })
+                let entries = entries
+                    .into_iter()
+                    .map(|(request, value)| (Self::semantic(&request, scope), value))
+                    .collect();
+                cache.async_store_batch(entries, now).await
+            }
+        }
+    }
+
+    pub(super) fn async_store_batch_py<'py>(
+        &self,
+        py: Python<'py>,
+        entries: Vec<(NativeRequest, Value)>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        match self {
+            Self::Memory(_) | Self::Redis { .. } => {
+                let service = self.clone();
+                litellm_host_python::run_async(
+                    py,
+                    async move {
+                        service
+                            .async_store_batch(entries, super::request::now())
+                            .await
+                    },
+                    super::cache_error,
+                )
+            }
+            Self::ValkeySemantic {
+                cache,
+                embedder,
+                scope,
+            } => {
+                let (requests, responses): (Vec<_>, Vec<_>) = entries
+                    .into_iter()
+                    .map(|(request, response)| (Self::semantic(&request, scope), response))
+                    .unzip();
+                drive_semantic(
+                    py,
+                    SemanticEmbedExecution::store_batch(
+                        Arc::clone(cache.backend_arc()),
+                        embedder.clone(),
+                        requests,
+                        responses,
+                        super::request::now(),
+                    ),
+                )
             }
         }
     }
