@@ -29,9 +29,10 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
-from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
     ImageResponse,
@@ -738,7 +739,18 @@ class LangFuseLogger:
             if response_obj is not None:
                 if hasattr(response_obj, "id") and response_obj.get("id", None) is not None:
                     generation_id = _logging_id(start_time, response_obj)
-                _usage_obj: Final[_UsageObject | None] = getattr(response_obj, "usage", None)
+                _raw_usage_obj: Final = getattr(response_obj, "usage", None)
+                _usage_obj: Final[_UsageObject | None] = (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(  # pyright: ignore[reportPrivateUsage]  # same shared transform litellm_logging uses
+                        _raw_usage_obj
+                    )
+                    if isinstance(_raw_usage_obj, ResponseAPIUsage)
+                    or (
+                        isinstance(_raw_usage_obj, dict)
+                        and ResponseAPILoggingUtils._is_response_api_usage(_raw_usage_obj)  # pyright: ignore[reportPrivateUsage]  # no public wrapper
+                    )
+                    else _raw_usage_obj
+                )
 
                 if _usage_obj:
                     # Safely get usage values, defaulting None to 0 for Langfuse compatibility.

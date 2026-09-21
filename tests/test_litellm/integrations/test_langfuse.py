@@ -11,6 +11,7 @@ import pytest
 import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
+from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
 
 
 # Import LangfuseUsageDetails directly from the module where it's defined
@@ -357,6 +358,92 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             self.assertEqual(usage_details_arg["cache_read_input_tokens"], 0)
 
             mock_add_prompt_params.assert_called_once()
+
+    def test_log_langfuse_v2_responses_api_usage(self):
+        """
+        Regression test: a /v1/responses response carries ResponseAPIUsage
+        (input_tokens/output_tokens), which must be normalized to a chat Usage
+        before Langfuse usage_details are read, or generations log 0 tokens.
+        """
+        self.mock_langfuse_client.reset_mock(side_effect=True)
+        self.mock_langfuse_trace.reset_mock(side_effect=True)
+        self.mock_langfuse_generation.reset_mock(side_effect=True)
+
+        self.mock_langfuse_generation.trace_id = "test-trace-id"
+        mock_span = MagicMock()
+        mock_span.end = MagicMock()
+        self.mock_langfuse_trace.span.return_value = mock_span
+        self.mock_langfuse_trace.generation.return_value = self.mock_langfuse_generation
+        self.mock_langfuse_client.trace.return_value = self.mock_langfuse_trace
+        self.logger.Langfuse = self.mock_langfuse_client
+
+        with (
+            patch(
+                "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+                side_effect=lambda generation_params, **kwargs: generation_params,
+                create=True,
+            ),
+            patch.object(self.logger, "_supports_prompt", return_value=True),
+        ):
+            response_obj = ResponsesAPIResponse(
+                id="resp_123",
+                created_at=0,
+                output=[],
+                usage=ResponseAPIUsage(
+                    input_tokens=16,
+                    output_tokens=21,
+                    total_tokens=37,
+                    input_tokens_details=InputTokensDetails(cached_tokens=4),
+                ),
+            )
+
+            kwargs = {
+                "model": "gpt-5.5",
+                "messages": [{"role": "user", "content": "Test"}],
+                "litellm_params": {"metadata": {}},
+                "optional_params": {},
+                "litellm_call_id": "test-call-id-responses-api-usage",
+                "standard_logging_object": self._build_standard_logging_payload(),
+                "response_cost": 0.0,
+            }
+
+            fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+
+            try:
+                self.logger._log_langfuse_v2(
+                    user_id="test-user",
+                    metadata={},
+                    litellm_params=kwargs["litellm_params"],
+                    output={"role": "assistant", "content": "Response"},
+                    start_time=fixed_time,
+                    end_time=fixed_time + datetime.timedelta(seconds=1),
+                    kwargs=kwargs,
+                    optional_params=kwargs["optional_params"],
+                    input={"messages": kwargs["messages"]},
+                    response_obj=response_obj,
+                    level="DEFAULT",
+                    litellm_call_id=kwargs["litellm_call_id"],
+                )
+            except Exception as e:
+                self.fail(f"_log_langfuse_v2 raised an exception: {e}")
+
+            self.mock_langfuse_trace.generation.assert_called_once()
+            call_args, call_kwargs = self.mock_langfuse_trace.generation.call_args
+
+            usage_arg = call_kwargs.get("usage")
+            usage_details_arg = call_kwargs.get("usage_details")
+
+            self.assertIsNotNone(usage_arg)
+            self.assertIsNotNone(usage_details_arg)
+
+            self.assertEqual(usage_arg["prompt_tokens"], 16)
+            self.assertEqual(usage_arg["completion_tokens"], 21)
+
+            # input is reduced by cache_read_input_tokens per Langfuse docs
+            self.assertEqual(usage_details_arg["input"], 12)
+            self.assertEqual(usage_details_arg["output"], 21)
+            self.assertEqual(usage_details_arg["total"], 37)
+            self.assertEqual(usage_details_arg["cache_read_input_tokens"], 4)
 
     def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
         payload = {
