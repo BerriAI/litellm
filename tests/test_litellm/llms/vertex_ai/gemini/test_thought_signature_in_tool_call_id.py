@@ -300,6 +300,14 @@ def test_get_valid_base64_thought_signature_helper():
     # Strips whitespace
     assert _get_valid_base64_thought_signature(f"  {valid_sig}  \n") == valid_sig
 
+    # URL-safe Base64 (- and _ instead of + and /)
+    urlsafe_sig = base64.urlsafe_b64encode(b"valid_thought_signature_content").decode("utf-8")
+    assert _get_valid_base64_thought_signature(urlsafe_sig) == urlsafe_sig
+
+    # Unpadded Base64 (restores missing padding =)
+    unpadded_sig = valid_sig.rstrip("=")
+    assert _get_valid_base64_thought_signature(unpadded_sig) == valid_sig
+
     # Invalid signatures return None
     assert _get_valid_base64_thought_signature(None) is None
     assert _get_valid_base64_thought_signature("") is None
@@ -317,6 +325,11 @@ def test_gemini_transformation_omits_malformed_thought_signature_in_replayed_his
         _gemini_convert_messages_with_history,
     )
 
+    def _get_part_val(part: object, key: str) -> object:
+        if isinstance(part, dict):
+            return part.get(key)
+        return getattr(part, key, None)
+
     valid_sig = base64.b64encode(b"gemini_replayed_thought_sig").decode("utf-8")
     malformed_sig = "malformed_base64_thought_sig_!@#"
 
@@ -333,8 +346,8 @@ def test_gemini_transformation_omits_malformed_thought_signature_in_replayed_his
     contents = _gemini_convert_messages_with_history(messages=messages_malformed)
     model_parts = [part for content in contents if content["role"] == "model" for part in content["parts"]]
     assert len(model_parts) >= 1
-    assert getattr(model_parts[0], "text", None) == "Analysis complete."
-    assert getattr(model_parts[0], "thoughtSignature", None) is None
+    assert _get_part_val(model_parts[0], "text") == "Analysis complete."
+    assert _get_part_val(model_parts[0], "thoughtSignature") is None
 
     # 2. Valid signature in provider_specific_fields["thought_signatures"]
     messages_valid = [
@@ -349,7 +362,7 @@ def test_gemini_transformation_omits_malformed_thought_signature_in_replayed_his
     contents_valid = _gemini_convert_messages_with_history(messages=messages_valid)
     model_parts_valid = [part for content in contents_valid if content["role"] == "model" for part in content["parts"]]
     assert len(model_parts_valid) >= 1
-    assert getattr(model_parts_valid[0], "thoughtSignature", None) == valid_sig
+    assert _get_part_val(model_parts_valid[0], "thoughtSignature") == valid_sig
 
     # 3. Malformed signature in thinking_blocks
     messages_thinking_malformed = [
@@ -370,7 +383,7 @@ def test_gemini_transformation_omits_malformed_thought_signature_in_replayed_his
     contents_thinking = _gemini_convert_messages_with_history(messages=messages_thinking_malformed)
     thinking_parts = [part for content in contents_thinking if content["role"] == "model" for part in content["parts"]]
     assert len(thinking_parts) >= 1
-    assert getattr(thinking_parts[0], "thoughtSignature", None) is None
+    assert _get_part_val(thinking_parts[0], "thoughtSignature") is None
 
     # 4. Valid signature in thinking_blocks
     messages_thinking_valid = [
@@ -391,5 +404,6 @@ def test_gemini_transformation_omits_malformed_thought_signature_in_replayed_his
     contents_thinking_valid = _gemini_convert_messages_with_history(messages=messages_thinking_valid)
     thinking_parts_valid = [part for content in contents_thinking_valid if content["role"] == "model" for part in content["parts"]]
     assert len(thinking_parts_valid) >= 1
-    assert getattr(thinking_parts_valid[0], "thoughtSignature", None) == valid_sig
+    assert _get_part_val(thinking_parts_valid[0], "thoughtSignature") == valid_sig
+
 
