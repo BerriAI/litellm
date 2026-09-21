@@ -66774,9 +66774,9 @@
         "supports_web_search": false
     },
     "openrouter/moonshotai/kimi-k3": {
-        "input_cost_per_token": 1.7e-06,
-        "output_cost_per_token": 8.5e-06,
-        "cache_read_input_token_cost": 1.7e-07,
+        "input_cost_per_token": 1.675e-06,
+        "output_cost_per_token": 9.38e-06,
+        "cache_read_input_token_cost": 1.943e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
@@ -71407,14 +71407,14 @@
         "supports_web_search": true
     },
     "openrouter/~moonshotai/kimi-latest": {
-        "cache_read_input_token_cost": 1.7e-07,
-        "input_cost_per_token": 1.7e-06,
+        "cache_read_input_token_cost": 1.943e-07,
+        "input_cost_per_token": 1.675e-06,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 8.5e-06,
+        "output_cost_per_token": 9.38e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
