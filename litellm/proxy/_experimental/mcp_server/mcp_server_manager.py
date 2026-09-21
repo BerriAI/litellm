@@ -111,6 +111,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import 
     to_server_spec,
     to_subject,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import ConnectionCredential
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import (
     InvalidatableOAuthTokenStore,
 )
@@ -4108,6 +4109,7 @@ class MCPServerManager:
         cred_provider: UpstreamCredentialProvider | None = None,
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -4133,13 +4135,17 @@ class MCPServerManager:
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
         transport: Final = resolved_server.transport or MCPTransport.sse
         spec = None if transport == MCPTransport.stdio else _to_server_spec_fail_closed(resolved_server)
-        from litellm.proxy._experimental.mcp_server.mcp_context import get_connection_credential
         from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
         from litellm.proxy._experimental.mcp_server.outbound_credentials.presented_token_store import (
             PresentedOAuthTokenStore,
         )
 
-        connection: Final = get_connection_credential(resolved_server.server_id)
+        connection: Final = (
+            connection_credential
+            if connection_credential is not None
+            and connection_credential.binding.server_id == resolved_server.server_id
+            else None
+        )
         if connection is not None and connection.exp <= int(datetime.datetime.now(datetime.timezone.utc).timestamp()):
             raise HTTPException(status_code=401, detail="MCP connection credential expired; reconnect")
         provider: Final = (
@@ -4173,7 +4179,9 @@ class MCPServerManager:
         sampling_cb = (
             _create_sampling_callback(
                 operation_context=OperationContext(
-                    _caller=user_api_key_auth, raw_headers=raw_headers, client_ip=client_ip
+                    _caller=user_api_key_auth,
+                    raw_headers=raw_headers,
+                    client_ip=client_ip,
                 )
             )
             if resolved_server.allow_sampling
@@ -4323,6 +4331,7 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None = None,
         oauth2_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> list[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -4414,6 +4423,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                connection_credential=connection_credential,
             )
 
             ## HANDLE OPENAPI TOOLS
@@ -4525,6 +4535,7 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> list[Prompt]:
         try:
             headers: Final = (
@@ -4547,6 +4558,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                connection_credential=connection_credential,
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
@@ -4571,6 +4583,7 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> list[Resource]:
         try:
             headers: Final = (
@@ -4593,6 +4606,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                connection_credential=connection_credential,
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
@@ -4617,6 +4631,7 @@ class MCPServerManager:
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> list[ResourceTemplate]:
         try:
             headers: Final = (
@@ -4639,6 +4654,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                connection_credential=connection_credential,
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
@@ -4663,6 +4679,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> ReadResourceResult:
         """Read resource contents from a specific MCP server."""
 
@@ -4686,6 +4703,7 @@ class MCPServerManager:
             raw_headers=raw_headers,
             client_ip=client_ip,
             user_api_key_auth=user_api_key_auth,
+            connection_credential=connection_credential,
         )
 
         return await client.read_resource(url)
@@ -4700,6 +4718,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> GetPromptResult:
         """Fetch a specific prompt definition from a single MCP server."""
 
@@ -4723,6 +4742,7 @@ class MCPServerManager:
             raw_headers=raw_headers,
             client_ip=client_ip,
             user_api_key_auth=user_api_key_auth,
+            connection_credential=connection_credential,
         )
 
         get_prompt_request_params: Final = GetPromptRequestParams(
@@ -5805,6 +5825,7 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None,
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> CallToolResult:
         """Call a token_exchange (OBO) tool; on an upstream 401/403 re-mint the token once and retry.
 
@@ -5832,6 +5853,7 @@ class MCPServerManager:
                 user_api_key_auth=user_api_key_auth,
                 raw_headers=raw_headers,
                 client_ip=client_ip,
+                connection_credential=connection_credential,
             )
             return await retry_client.call_tool(call_tool_params, host_progress_callback=host_progress_callback)
 
@@ -5850,6 +5872,7 @@ class MCPServerManager:
         hook_extra_headers: dict[str, str] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -5996,6 +6019,7 @@ class MCPServerManager:
             user_api_key_auth=user_api_key_auth,
             raw_headers=raw_headers,
             client_ip=client_ip,
+            connection_credential=connection_credential,
         )
 
         call_tool_params: Final = MCPCallToolRequestParams(
@@ -6021,6 +6045,7 @@ class MCPServerManager:
                         user_api_key_auth=user_api_key_auth,
                         raw_headers=raw_headers,
                         client_ip=client_ip,
+                        connection_credential=connection_credential,
                     )
 
             tool_call_coro = _obo_call_tool_limited()
@@ -6303,6 +6328,7 @@ class MCPServerManager:
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
         client_ip: str | None = None,
+        connection_credential: ConnectionCredential | None = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -6434,6 +6460,7 @@ class MCPServerManager:
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
                 user_api_key_auth=user_api_key_auth,
+                connection_credential=connection_credential,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)

@@ -4070,6 +4070,7 @@ class TestMCPServerManager:
             user_api_key_auth=None,
             raw_headers=None,
             client_ip=None,
+            connection_credential=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
         assert result == expected_templates
@@ -14513,7 +14514,7 @@ async def test_connection_grants_follow_current_message_and_never_leak_to_anothe
         )
         reset = active_mcp_request_ctx_var.set(SimpleNamespace(request=request))
         try:
-            client = await manager._create_mcp_client(server)
+            client = await manager._create_mcp_client(server, connection_credential=credential)
             sent = await client.prepare_request_auth()
             assert sent.headers["authorization"] == f"Bearer {token}"
             store.fetch.assert_not_awaited()
@@ -14522,10 +14523,14 @@ async def test_connection_grants_follow_current_message_and_never_leak_to_anothe
 
     reset = active_mcp_request_ctx_var.set(SimpleNamespace(request=request))
     try:
-        other_client = await manager._create_mcp_client(other)
+        other_client = await manager._create_mcp_client(other, connection_credential=credential)
         other_sent = await other_client.prepare_request_auth()
         assert other_sent.headers["authorization"] == "Bearer saved-vault-token"
         assert store.fetch.call_args.args[1] == "other-target"
+        explicit_client = await manager._create_mcp_client(
+            server, user_api_key_auth=UserAPIKeyAuth(user_id="independent-caller")
+        )
+        assert (await explicit_client.prepare_request_auth()).headers["authorization"] == "Bearer saved-vault-token"
     finally:
         active_mcp_request_ctx_var.reset(reset)
     saved_client = await manager._create_mcp_client(server)
@@ -14570,7 +14575,7 @@ async def test_connection_expiry_between_admission_and_egress_never_uses_vault()
     reset = active_mcp_request_ctx_var.set(SimpleNamespace(request=request))
     try:
         with pytest.raises(HTTPException) as exc:
-            await manager._create_mcp_client(server)
+            await manager._create_mcp_client(server, connection_credential=credential)
         assert exc.value.status_code == 401
         assert "expired" in exc.value.detail
         store.fetch.assert_not_awaited()
@@ -14609,3 +14614,96 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
         assert captured["client_ip"] is None
     finally:
         auth_context_var.reset(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", [
+    "tools/list", "tools/call", "prompts/list", "prompts/get", "resources/list",
+    "resources/templates/list", "resources/read", "virtual/search", "virtual/call",
+    "proxy/search", "proxy/schema", "proxy/call",
+])
+async def test_native_operations_send_only_current_connection_credential(method):
+    from types import SimpleNamespace
+    from datetime import timezone
+    from mcp import types
+    from mcp.server.context import ServerRequestContext
+    from pydantic import SecretStr
+    from starlette.requests import Request
+    from litellm.proxy._experimental.mcp_server import operations, server as ingress
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import CONNECTION_SCOPE_KEY
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import UpstreamCredentialProvider
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import ConnectionBinding, ConnectionCredential
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+
+    store = SimpleNamespace(fetch=AsyncMock(return_value=OAuthToken(access_token="saved-vault-token")))
+    manager = MCPServerManager(cred_provider=UpstreamCredentialProvider(oauth_token_store=store))
+    target = MCPServer(
+        server_id="catalog", name="catalog", server_name="catalog", url="https://catalog.example/mcp",
+        transport="http", auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+    )
+    manager.registry = {target.server_id: target}
+    upstream = _DiscoveryUpstream()
+    tool = {"name": "example", "description": "Example tool", "inputSchema": {"type": "object", "properties": {}}}
+
+    async def respond(request):
+        payload = _JSONRPC_ADAPTER.validate_json(request.content) if request.method == "POST" else None
+        if isinstance(payload, types.JSONRPCRequest) and payload.method in ("tools/list", "tools/call", "prompts/get", "resources/read"):
+            upstream.requests = (*upstream.requests, (payload.method, request.headers.get("authorization", "")))
+            results = {
+                "tools/list": {"tools": [tool]},
+                "tools/call": {"content": [{"type": "text", "text": "executed"}], "isError": False},
+                "prompts/get": {"messages": []},
+                "resources/read": {"contents": [{"uri": "test://example", "text": "resource body"}]},
+            }
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": results[payload.method]})
+        return await upstream.respond(request)
+
+    requests = {
+        "tools/list": types.ListToolsRequest(),
+        "tools/call": types.CallToolRequest(params=types.CallToolRequestParams(name="catalog-example", arguments={})),
+        "prompts/list": types.ListPromptsRequest(),
+        "prompts/get": types.GetPromptRequest(params=types.GetPromptRequestParams(name="catalog-example")),
+        "resources/list": types.ListResourcesRequest(),
+        "resources/templates/list": types.ListResourceTemplatesRequest(),
+        "resources/read": types.ReadResourceRequest(params=types.ReadResourceRequestParams(uri="test://example")),
+        "virtual/search": types.CallToolRequest(params=types.CallToolRequestParams(name="mcp_tool_search", arguments={"query": "example"})),
+        "virtual/call": types.CallToolRequest(params=types.CallToolRequestParams(name="mcp_tool_call", arguments={"tool_name": "catalog-example", "arguments": {}})),
+        "proxy/search": types.CallToolRequest(params=types.CallToolRequestParams(name="search_tools", arguments={"query": "example"})),
+        "proxy/schema": types.CallToolRequest(params=types.CallToolRequestParams(name="get_tool_schema", arguments={"tool_id": "28a7a373ebe572627a98e19b5347b405"})),
+        "proxy/call": types.CallToolRequest(params=types.CallToolRequestParams(name="call_tool", arguments={"tool_id": "28a7a373ebe572627a98e19b5347b405", "arguments": {}})),
+    }
+    caller = UserAPIKeyAuth(object_permission={"object_permission_id": "test", "mcp_tool_search_enabled": method.startswith("virtual/")})
+    auth = (caller, None, ["catalog"], None, None, {}, None)
+    proxy_reset = ingress._mcp_proxy_mode.set(method.startswith("proxy/"))
+    try:
+        with (
+            _mcp_upstream(respond),
+            patch.object(operations, "global_mcp_server_manager", manager),
+            patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[target])),
+            patch.object(manager, "get_allowed_mcp_servers", AsyncMock(return_value=["catalog"])),
+            patch.object(ingress, "get_or_extract_auth_context", AsyncMock(return_value=auth)),
+        ):
+            for value in ("first", "second", "unvalidated"):
+                credential = ConnectionCredential(
+                    kind="connection_access", binding=ConnectionBinding(key_hash="key", server_id="catalog", resource="https://gateway.example/mcp"),
+                    client_id="client", token=SecretStr(value or "unused"), jti=value or "unused",
+                    exp=int(datetime.now(timezone.utc).timestamp()) + 300,
+                ) if value in ("first", "second") else value
+                request = Request({"type": "http", "method": "POST", "path": "/mcp", "headers": [], CONNECTION_SCOPE_KEY: credential})
+                ctx = ServerRequestContext(session=SimpleNamespace(), lifespan_context={}, protocol_version="2025-06-18", method=requests[method].method, request=request)
+                start = len(upstream.requests)
+                async with ingress._legacy_operation_context(ctx, trace=False) as context:
+                    result = await operations.GatewayOperations().execute(requests[method], context)
+                sent = upstream.requests[start:]
+                assert sent, result
+                expected = f"Bearer {value}" if value in ("first", "second") else "Bearer saved-vault-token"
+                assert {authorization for _, authorization in sent} == {expected}
+                expected_method = "tools/call" if method in ("virtual/call", "proxy/call") else "tools/list" if method.startswith(("virtual/", "proxy/")) else method
+                assert expected_method in {name for name, _ in sent}
+                if isinstance(result, types.CallToolResult):
+                    assert result.is_error is False, result
+                    assert result.content
+                if value in ("first", "second"):
+                    store.fetch.assert_not_awaited()
+    finally:
+        ingress._mcp_proxy_mode.reset(proxy_reset)

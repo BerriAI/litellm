@@ -1080,6 +1080,7 @@ async def test_mcp_get_prompt_success():
         extra_headers={"X-Test": "1"},
         raw_headers=None,
         client_ip=None,
+        connection_credential=None,
     )
     assert result is prompt_result
 
@@ -1143,6 +1144,7 @@ async def test_mcp_read_resource_success():
         extra_headers={"X-Test": "1"},
         raw_headers=None,
         client_ip=None,
+        connection_credential=None,
     )
     assert result is read_result
 
@@ -8986,6 +8988,7 @@ async def test_fire_mcp_tool_call_logging_strips_credentials_from_failure_hook()
         "mcp_auth_header": "upstream-secret",
         "mcp_server_auth_headers": {"srv": {"authorization": "Bearer srv-secret"}},
         "oauth2_headers": {"authorization": "Bearer oauth-secret"},
+        "connection_credential": "connection-secret",
         "user_api_key_auth": user_auth,
     }
 

@@ -67,7 +67,7 @@ async def test_legacy_adapter_cleans_context_after_cancelled_operation():
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object())
+    request = SimpleNamespace(session=object(), request=None)
     auth = (None, None, None, None, None, None, None)
 
     async def cancelled_operation():
@@ -93,7 +93,7 @@ async def test_legacy_adapter_cleans_context_when_trace_setup_fails():
 
     previous_session = server.active_mcp_session_var.get()
     previous_request = active_mcp_request_ctx_var.get()
-    request = SimpleNamespace(session=object())
+    request = SimpleNamespace(session=object(), request=None)
 
     async def enter_operation():
         async with server._legacy_operation_context(request, trace=True):

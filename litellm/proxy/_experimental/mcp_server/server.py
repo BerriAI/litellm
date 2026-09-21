@@ -828,8 +828,19 @@ if MCP_AVAILABLE:
                 headers,
                 client_ip,
             ) = await get_or_extract_auth_context()
+            credential: Final = (
+                ctx.request.scope.get(CONNECTION_SCOPE_KEY) if isinstance(ctx.request, StarletteRequest) else None
+            )
             yield operations.prepare_context(
-                auth, token, servers, server_headers, oauth_headers, headers, client_ip, _mcp_proxy_mode.get()
+                auth,
+                token,
+                servers,
+                server_headers,
+                oauth_headers,
+                headers,
+                client_ip,
+                _mcp_proxy_mode.get(),
+                connection_credential=credential if isinstance(credential, ConnectionCredential) else None,
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:

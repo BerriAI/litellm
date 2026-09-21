@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from mcp.types import CallToolResult, Tool
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import ConnectionCredential
     from litellm.proxy._types import UserAPIKeyAuth
 
 MCP_TOOL_SEARCH_SETTINGS_KEY: Final[str] = "mcp_tool_search"
@@ -462,6 +463,7 @@ async def handle_mcp_tool_search(
     mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
     oauth2_headers: dict[str, str] | None = None,
     raw_headers: dict[str, str] | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.operations import (
         _list_mcp_tools,
@@ -488,6 +490,7 @@ async def handle_mcp_tool_search(
         else None
     )
     mcp_listing: Final = await _list_mcp_tools(
+        connection_credential=connection_credential,
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -513,6 +516,7 @@ async def handle_mcp_proxy_tool(
     oauth2_headers: dict[str, str] | None = None,  # mutable-ok: preserve forwarded headers
     raw_headers: dict[str, str] | None = None,  # mutable-ok: preserve request headers
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> CallToolResult:
     from fastapi import HTTPException
     from jsonschema import ValidationError as JsonSchemaValidationError
@@ -524,6 +528,7 @@ async def handle_mcp_proxy_tool(
     )
 
     listing: Final = await _list_mcp_tools(
+        connection_credential=connection_credential,
         user_api_key_auth=user_api_key_dict,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
@@ -579,6 +584,7 @@ async def handle_mcp_proxy_tool(
         return _text_tool_result(f"Invalid arguments: {exc.message}", is_error=True)
 
     return await handle_mcp_tool_call(
+        connection_credential=connection_credential,
         tool_name=_mcp_proxy_identity(tool)["tool_name"],
         arguments=tool_arguments,
         user_api_key_dict=user_api_key_dict,
@@ -606,6 +612,7 @@ async def handle_mcp_tool_call(
     litellm_logging_obj: LiteLLMLoggingObj | None = None,
     requested_server_id: str | None = None,
     guardrail_context: Mapping[str, object] | None = None,
+    connection_credential: ConnectionCredential | None = None,
 ) -> CallToolResult:
     from litellm.proxy._experimental.mcp_server.operations import (
         _get_allowed_mcp_servers,
@@ -634,6 +641,7 @@ async def handle_mcp_tool_call(
         raise HTTPException(status_code=403, detail="User not allowed to call this tool.")
 
     return await execute_mcp_tool(
+        connection_credential=connection_credential,
         name=tool_name,
         arguments=arguments,
         allowed_mcp_servers=allowed_mcp_servers,

@@ -35,6 +35,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
     ConnectionBinding,
+    ConnectionCredential,
     EnvelopeIdentity,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
@@ -552,49 +553,15 @@ class MCPRequestHandler:
         scope.pop(CONNECTION_SCOPE_KEY, None)
         connection_header: Final = headers.get("authorization")
         if is_connection_credential(connection_header):
-            if not has_explicit_litellm_key or request_route != "/mcp":
-                raise HTTPException(status_code=401, detail="A connection credential requires the original MCP key")
-            targets: Final = MCPRequestHandler._resolve_target_server_names(request_route, mcp_servers)
-            from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
-
-            target: Final = (
-                global_mcp_server_manager.get_mcp_server_by_name(
-                    targets[0], client_ip=IPAddressUtils.get_mcp_client_ip(request)
-                )
-                if len(targets) == 1
-                else None
+            scope[CONNECTION_SCOPE_KEY] = await MCPRequestHandler._admit_connection_credential(
+                request=request,
+                request_route=request_route,
+                connection_header=connection_header or "",
+                litellm_api_key=litellm_api_key,
+                mcp_servers=mcp_servers,
+                validated_user_api_key_auth=validated_user_api_key_auth,
+                has_explicit_litellm_key=has_explicit_litellm_key,
             )
-            allowed: Final = await MCPRequestHandler.get_allowed_mcp_servers(validated_user_api_key_auth)
-            if (
-                target is None
-                or target.server_id not in allowed
-                or not target.is_gateway_managed_oauth2
-                or not target.needs_user_oauth_token
-                or target.oauth_identity_binding is not None
-            ):
-                raise HTTPException(status_code=403, detail="Connection credential does not authorize this MCP server")
-            expected_binding: Final = ConnectionBinding(
-                key_hash=hash_token(_get_bearer_token_or_received_api_key(litellm_api_key)),
-                server_id=target.server_id,
-                resource=f"{get_request_base_url(request)}/mcp",
-            )
-            connection: Final = open_connection_credential(connection_header or "")
-            if connection is None:
-                raise HTTPException(
-                    status_code=401,
-                    detail="Invalid or expired MCP connection credential",
-                    headers=MappingProxyType(
-                        {
-                            "www-authenticate": connection_challenge(request, expected_binding),
-                            "Cache-Control": "no-store",
-                        }
-                    ),
-                )
-            if connection.binding != expected_binding:
-                raise HTTPException(
-                    status_code=401, detail="Connection credential belongs to a different key or resource"
-                )
-            scope[CONNECTION_SCOPE_KEY] = connection
 
         # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
         # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no
@@ -622,6 +589,58 @@ class MCPRequestHandler:
             oauth2_headers,
             raw_headers,
         )
+
+    @staticmethod
+    async def _admit_connection_credential(
+        request: Request,
+        request_route: str,
+        connection_header: str,
+        litellm_api_key: str,
+        mcp_servers: list[str] | None,
+        validated_user_api_key_auth: UserAPIKeyAuth,
+        has_explicit_litellm_key: bool,
+    ) -> ConnectionCredential:
+        if not has_explicit_litellm_key or request_route != "/mcp":
+            raise HTTPException(status_code=401, detail="A connection credential requires the original MCP key")
+        targets: Final = MCPRequestHandler._resolve_target_server_names(request_route, mcp_servers)
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+        target: Final = (
+            global_mcp_server_manager.get_mcp_server_by_name(
+                targets[0], client_ip=IPAddressUtils.get_mcp_client_ip(request)
+            )
+            if len(targets) == 1
+            else None
+        )
+        allowed: Final = await MCPRequestHandler.get_allowed_mcp_servers(validated_user_api_key_auth)
+        if (
+            target is None
+            or target.server_id not in allowed
+            or not target.is_gateway_managed_oauth2
+            or not target.needs_user_oauth_token
+            or target.oauth_identity_binding is not None
+        ):
+            raise HTTPException(status_code=403, detail="Connection credential does not authorize this MCP server")
+        expected_binding: Final = ConnectionBinding(
+            key_hash=hash_token(_get_bearer_token_or_received_api_key(litellm_api_key)),
+            server_id=target.server_id,
+            resource=f"{get_request_base_url(request)}/mcp",
+        )
+        connection: Final = open_connection_credential(connection_header)
+        if connection is None:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired MCP connection credential",
+                headers=MappingProxyType(
+                    {
+                        "www-authenticate": connection_challenge(request, expected_binding),
+                        "Cache-Control": "no-store",
+                    }
+                ),
+            )
+        if connection.binding != expected_binding:
+            raise HTTPException(status_code=401, detail="Connection credential belongs to a different key or resource")
+        return connection
 
     @staticmethod
     def _is_gateway_admission_credential(value: str | None) -> bool:
