@@ -3,7 +3,7 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -61,6 +61,10 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+    _assembled_model_came_from_a_later_chunk,
+    _assembled_model_is_the_name_the_client_asked_for,
+)
 from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
@@ -324,46 +328,6 @@ def _deferred_stream_logging_is_armed(request_data: dict) -> bool:
         getattr(logging_obj, "_on_deferred_stream_complete", None) is not None
         and getattr(logging_obj, "_deferred_stream_complete_args", None) is not None
     )
-
-
-def _assembled_model_came_from_a_later_chunk(chunks: Sequence[object], assembled_model: object) -> bool:
-    """Report whether stream_chunk_builder picked a model the first chunk did not carry.
-
-    Azure Model Router puts the routed model on the chunks after the first one, and the
-    proxy deliberately leaves those chunks unrestamped so the builder can recover it.
-
-    A stored chunk that carries usage is a pre-restamp copy of the one the proxy saw, so
-    an alias-restamped stream reaches the builder with the same shape: a first chunk that
-    disagrees with the rest. Those two are only told apart by what the client asked for.
-    """
-    first_chunk: Final = chunks[0]
-    first_chunk_model: Final = (
-        first_chunk.get("model") if isinstance(first_chunk, dict) else getattr(first_chunk, "model", None)
-    )
-    return (
-        isinstance(first_chunk_model, str)
-        and isinstance(assembled_model, str)
-        and bool(assembled_model)
-        and assembled_model != first_chunk_model
-    )
-
-
-def _assembled_model_is_the_name_the_client_asked_for(
-    request_data: Mapping[str, object],
-    assembled_model: object,
-) -> bool:
-    """Report whether the assembled model is the public name the proxy stamps onto chunks.
-
-    That stamp is what leaves an unpriced alias on the partial response, so the deployment's
-    own model has to go back on before the row is costed. Pre-call processing rewrites
-    `request_data["model"]` for aliasing and routing, so the client's own name wins when it
-    is there, in the same order the proxy picks the name it stamps.
-    """
-    client_requested_model: Final = request_data.get("_litellm_client_requested_model")
-    stamped_model: Final = (
-        client_requested_model if isinstance(client_requested_model, str) else request_data.get("model")
-    )
-    return isinstance(stamped_model, str) and assembled_model == stamped_model
 
 
 async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, response: object) -> bool:
@@ -2460,6 +2424,8 @@ class ProxyBaseLLMRequestProcessing:
         """
         client_model: Final = get_client_requested_model(request) or self.data.get("model")
         requested_model_from_client: Final[str | None] = client_model if isinstance(client_model, str) else None
+        if requested_model_from_client:
+            self.data["_litellm_client_requested_model"] = requested_model_from_client
         self._debug_log_request_payload()
 
         if skip_pre_call_logic:
@@ -2604,13 +2570,6 @@ class ProxyBaseLLMRequestProcessing:
                         version=version,
                         callback_headers=stream_callback_headers or MappingProxyType({}),
                     )
-
-                # Preserve the original client-requested model (pre-alias mapping) for downstream
-                # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
-                # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
-                # what the client sent.
-                if requested_model_from_client:
-                    self.data["_litellm_client_requested_model"] = requested_model_from_client
 
                 if _post_call_guardrails_active:
                     self._arm_deferred_stream_dispatch(
@@ -3501,7 +3460,7 @@ class ProxyBaseLLMRequestProcessing:
                         getattr(cb, "guardrail_name", type(cb).__name__),
                         e,
                     )
-                    if isinstance(e, HTTPException) and hasattr(captured_logging_obj, "model_call_details"):
+                    if isinstance(e, HTTPException) and hasattr(captured_logging_obj, "`model_call_details`"):
                         captured_logging_obj.model_call_details.setdefault("metadata", {})["guardrail_blocked"] = True
         except Exception as e:
             verbose_proxy_logger.exception(

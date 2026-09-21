@@ -1216,6 +1216,7 @@ def function_setup(
             optional_params={},
             litellm_params=litellm_params,
             stream_options=kwargs.get("stream_options", None),
+            _litellm_client_requested_model=kwargs.get("_litellm_client_requested_model"),
         )
         return logging_obj, kwargs
     except Exception as e:
