@@ -3050,28 +3050,29 @@ jobs:
       - run:
           name: Run Docker container with bad DATABASE_URL
           command: |
+            set +e
             docker run --name my-app \
               -p 4000:4000 \
               -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DEFAULT_NUM_WORKERS_LITELLM_PROXY=1 \
               -e DATABASE_URL="postgresql://wrong:wrong@wrong:5432/wrong" \
               myapp:latest \
-              --port 4000 > docker_output.log 2>&1 || true
+              --port 4000 > docker_output.log 2>&1
+            echo "$?" > docker_exit_code
+            set -e
       - run:
           name: Display Docker logs
           command: cat docker_output.log
       - run:
-          name: Check for expected error
+          name: Proxy must refuse to serve on an unreachable database
           command: |
-            if grep -q "Error: P1001: Can't reach database server at" docker_output.log && \
-               (grep -q "Database setup failed after multiple retries" docker_output.log || \
-                grep -q "ERROR:    Application startup failed. Exiting." docker_output.log); then
-              echo "Expected error found. Test passed."
-            else
-              echo "Expected error not found. Test failed."
-              cat docker_output.log
-              exit 1
-            fi
+            fail() { echo "FAILED: $1"; cat docker_output.log; exit 1; }
+            exit_code="$(cat docker_exit_code)"
+            [ "$exit_code" -ne 0 ] || fail "proxy exited 0 with an unreachable database"
+            grep -q "P1001" docker_output.log || fail "log does not name the unreachable database server"
+            ! grep -q "Application startup complete" docker_output.log || fail "proxy reached serving state"
+            ! docker exec my-app true 2>/dev/null || fail "container is still running"
+            echo "Proxy refused to serve (exit $exit_code) and never reached startup. Test passed."
 
   provider_replay_harness:
     docker:
