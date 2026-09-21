@@ -7,7 +7,7 @@ import DeleteResourceModal from "@/components/common_components/DeleteResourceMo
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import { ModelData } from "@/components/model_dashboard/types";
 import { toast } from "@/lib/toast";
-import { migratedHref } from "@/utils/migratedPages";
+import { uiHref } from "@/utils/uiHref";
 import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDebouncedCallback } from "@tanstack/react-pacer/debouncer";
@@ -48,7 +48,7 @@ const AllModelsTab = ({
   setSelectedTeamId,
 }: AllModelsTabProps) => {
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
-  const { accessToken, userId, userRole } = useAuthorized();
+  const { accessToken, userId, userRole, isViewOnly } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
   const queryClient = useQueryClient();
 
@@ -281,6 +281,7 @@ const AllModelsTab = ({
           availableModelAccessGroups={availableModelAccessGroups}
           userRole={userRole}
           userID={userId}
+          isViewOnly={isViewOnly}
           onModelIdClick={setSelectedModelId}
           onTeamIdClick={setSelectedTeamId}
           onDeleteClick={handleDeleteClick}
@@ -294,7 +295,7 @@ const AllModelsTab = ({
             {selectedTeamValue === PERSONAL_TEAM_VALUE ? (
               <span>
                 To access these models, create a Virtual Key without selecting a team on the{" "}
-                <a href={migratedHref("api-keys")} className="font-medium text-info hover:underline">
+                <a href={uiHref("api-keys")} className="font-medium text-info hover:underline">
                   Virtual Keys page
                 </a>
                 .
@@ -302,7 +303,7 @@ const AllModelsTab = ({
             ) : (
               <span>
                 To access these models, create a Virtual Key and select Team as &quot;{teamAccessLabel}&quot; on the{" "}
-                <a href={migratedHref("api-keys")} className="font-medium text-info hover:underline">
+                <a href={uiHref("api-keys")} className="font-medium text-info hover:underline">
                   Virtual Keys page
                 </a>
                 .

@@ -26,10 +26,11 @@ union (see `result.py`), not `expression.Result`.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Annotated, Final, Literal
 
+import httpx
 from expression import case, tag, tagged_union
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 from typing_extensions import assert_never
@@ -44,6 +45,29 @@ from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     normalize_upstream_header_name,
 )
+
+
+class AuthResolution(str, Enum):
+    no_auth = "no-auth"
+    stored_user_token = "stored-user-token"
+    static_token = "static-token"
+    per_request_header = "per-request-header"
+    oauth2_passthrough = "oauth2-passthrough"
+    client_credentials = "m2m-client-credentials"
+    token_exchange = "token-exchange"
+    id_jag = "id-jag"
+    aws_sigv4 = "aws-sigv4"
+    extra_headers = "extra-headers"
+    not_applicable = "not-applicable"
+    unresolved = "unresolved"
+    failed = "resolution-failed"
+    multiple = "multiple"
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedCredential:
+    auth: httpx.Auth = field(repr=False)
+    source: AuthResolution
 
 
 class AuthSpecKind(str, Enum):

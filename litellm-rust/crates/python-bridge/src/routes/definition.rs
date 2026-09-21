@@ -225,7 +225,7 @@ mod tests {
                 (
                     "ocr",
                     "aocr",
-                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, timeout_seconds=None)",
+                    "(model, document, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, optional_params=None, input_sources=None, timeout_seconds=None)",
                 ),
                 (
                     "transcription",
@@ -390,6 +390,82 @@ mod tests {
     }
 
     #[test]
+    fn missing_and_explicit_none_optional_params_share_the_next_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "routes").expect("module should be created");
+            crate::routes::register(&module).expect("routes should register");
+            let messages = PyList::empty(py);
+            let headers = PyList::empty(py);
+            let omitted = PyDict::new(py);
+            omitted
+                .set_item("extra_headers", &headers)
+                .expect("kwargs should accept extra_headers");
+            let explicit = PyDict::new(py);
+            explicit
+                .set_item("optional_params", py.None())
+                .expect("kwargs should accept optional_params");
+            explicit
+                .set_item("extra_headers", &headers)
+                .expect("kwargs should accept extra_headers");
+
+            let omitted_error = module
+                .getattr("chat_completions")
+                .and_then(|function| function.call(("model", &messages), Some(&omitted)))
+                .expect_err("omitted optional_params should reach header validation");
+            let explicit_error = module
+                .getattr("chat_completions")
+                .and_then(|function| function.call(("model", &messages), Some(&explicit)))
+                .expect_err("None optional_params should reach header validation");
+            assert_eq!(
+                omitted_error.to_string(),
+                "ValueError: extra_headers must be a dict"
+            );
+            assert_eq!(explicit_error.to_string(), omitted_error.to_string());
+        });
+    }
+
+    #[test]
+    fn chat_completions_decline_keeps_existing_reasons() {
+        Python::initialize();
+        Python::attach(|py| {
+            let module = PyModule::new(py, "routes").expect("module should be created");
+            crate::routes::register(&module).expect("routes should register");
+            let decline = module
+                .getattr("chat_completions_decline")
+                .expect("decline helper should be registered");
+            let empty = PyList::empty(py);
+            let unreadable = py
+                .eval(c"'nope'", None, None)
+                .expect("string messages should convert");
+
+            let unknown: Option<String> = decline
+                .call1(("unknown-model", &empty))
+                .and_then(|value| value.extract())
+                .expect("unknown providers should decline");
+            assert_eq!(
+                unknown.as_deref(),
+                Some("provider is not on the rust chat completions path")
+            );
+
+            let empty_reason: Option<String> = decline
+                .call1(("anthropic/claude-sonnet-4-5", &empty))
+                .and_then(|value| value.extract())
+                .expect("empty lists should decline");
+            assert_eq!(empty_reason.as_deref(), Some("empty message list"));
+
+            let unreadable_reason: Option<String> = decline
+                .call1(("anthropic/claude-sonnet-4-5", unreadable))
+                .and_then(|value| value.extract())
+                .expect("non-list messages should decline");
+            assert_eq!(
+                unreadable_reason.as_deref(),
+                Some("unreadable message list")
+            );
+        });
+    }
+
+    #[test]
     fn generated_routes_execute_sync_and_async_contracts() {
         Python::initialize();
         Python::attach(|py| {
@@ -486,10 +562,11 @@ asyncio.run(exercise())
             let code = CString::new(
                 r#"
 result = routes.echo("traced")
-assert result == {
-    "response": "traced",
-    "trace": [{"function": "execute_echo", "depth": 0}],
-}
+assert result["response"] == "traced", result
+assert [event["function"] for event in result["trace"]] == ["execute_echo"], result
+failure = routes.echo("error")
+assert failure["error"] == "invalid request: synthetic error", failure
+assert [event["function"] for event in failure["trace"]] == ["execute_echo"], failure
 "#,
             )
             .expect("Python source should not contain null bytes");

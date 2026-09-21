@@ -208,6 +208,11 @@ database:
       name: litellm-writer-secret
       usernameKey: username
       passwordKey: password
+    # libpq sslmode / sslrootcert applied to the writer and reader URLs (Prisma and the
+    # in-container PgBouncer); e.g. verify-full with /etc/ssl/certs/ca-certificates.crt for AWS RDS.
+    # sslRootCert on its own implies sslMode verify-full
+    sslMode: ""
+    sslRootCert: ""
 
   # Optional read-replica routing. When `reader.host` is set, the proxy routes
   # reads (find_*, count, group_by, query_raw/_first) to this endpoint while
@@ -224,6 +229,26 @@ database:
       name: litellm-reader-secret
       usernameKey: username
       passwordKey: password
+
+  # In-container connection pool (PgBouncer, transaction mode) shared by every
+  # gateway worker in the pod. Without it each of the `gateway.numWorkers`
+  # workers opens its own Prisma pool straight to Postgres, so a pod's
+  # footprint against the database's connection ceiling is
+  # numWorkers x connection_limit and grows with every replica. With it, the
+  # pod holds at most maxDbConnections upstream connections no matter how many
+  # workers run; the workers connect to the pool over loopback, with no extra
+  # network hop. The chart emits LITELLM_PGBOUNCER_ENABLED /
+  # LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS / LITELLM_PGBOUNCER_MAX_CLIENT_CONN on
+  # the gateway container and its collector sidecar only: the backend runs a
+  # single worker and the migrations Job must keep a direct connection. With
+  # `database.writer.useIAMAuth` or `useAzureEntraAuth` the pool mints and
+  # renews the database token itself, so the workers never see it. Starting profile for
+  # `gateway.numWorkers: 4` is maxDbConnections: 20, so a database with a
+  # 5000-connection ceiling fits roughly 200 gateway replicas.
+  connectionPool:
+    enabled: false
+    maxDbConnections: 20
+    maxClientConn: 1000
 
 # Optional Redis. Leave host empty to disable.
 #
@@ -268,6 +293,68 @@ gateway:
   config:
     create: true
     proxy_config: {}
+  # Serve Prometheus /metrics from a `metrics` sidecar container (same image,
+  # `python -m litellm.proxy.prometheus_metrics_server`) that aggregates the
+  # workers' PROMETHEUS_MULTIPROC_DIR samples over a shared emptyDir, so a
+  # scrape never runs on an inference worker. Adds a `metrics` port to the pod
+  # and a dedicated ClusterIP `<gateway>-metrics` Service; point your scrape
+  # config at it. The port has no virtual-key auth: keep it off public ingress.
+  # Needs the gateway image v1.101.0 or newer.
+  metricsServer:
+    enabled: false
+    port: 4001
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+  # Prometheus Operator ServiceMonitor for the gateway pods. Scrapes the
+  # `<gateway>-metrics` Service, so it requires metricsServer above (the http
+  # port serves /metrics/ behind virtual-key auth). Every pod is its own scrape
+  # target, so the samples carry the `pod` label the per-pod autoscaling
+  # queries below group by.
+  serviceMonitor:
+    enabled: false
+    labels: {}
+    interval: 15s
+    scrapeTimeout: 10s
+  # Opt-in `collector` sidecar (same image, `python -m litellm.proxy.collector`)
+  # that runs the post-response spend pipeline (cost calculation, spend logs,
+  # spend counters, budget reservation reconciliation) so the uvicorn workers
+  # only serialise a compact event over loopback and go back to serving
+  # requests. It shares the pod's env, proxy config, in-container pgbouncer and
+  # Redis spend buffer, so the per-pod DB connection budget is unchanged.
+  # Delivery is at-most-once inside the pod: events already handed over are
+  # lost if the sidecar dies before writing them; events the workers cannot
+  # hand over follow `onUnavailable`.
+  collector:
+    enabled: false
+    # unix:///<dir>/<file>.sock (the <dir> becomes a shared emptyDir) or
+    # tcp://127.0.0.1:<port>
+    address: unix:///var/run/litellm/collector.sock
+    # Events each uvicorn worker holds in memory while the sidecar is slow or
+    # restarting.
+    bufferSize: 1000
+    # fallback: run the pipeline in the worker when the sidecar is unreachable
+    # or the buffer is full (spend stays exact, that request costs gateway CPU
+    # again). drop: count and discard the event instead (spend under-reports).
+    onUnavailable: fallback
+    # How long the workers keep pushing buffered events on shutdown, and how
+    # long the sidecar keeps serving open connections after SIGTERM.
+    drainTimeoutSeconds: 10
+    # Sized independently of the gateway container; the pipeline is CPU bound.
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+    # With hpa.targetCPUUtilizationPercentage set, scale on an autoscaling/v2
+    # ContainerResource metric of the `gateway` container only, so the
+    # sidecar's CPU never drives inference replicas. Needs Kubernetes 1.30+.
+    scaleOnGatewayContainerCpu: true
   image:
     repository: ghcr.io/berriai/litellm-gateway
     tag: ""              # defaults to .Chart.AppVersion
@@ -324,6 +411,25 @@ gateway:
     #     policies:
     #       - { type: Percent, value: 100, periodSeconds: 30 }
     behavior: {}
+    # Opt-in per-pod workload targets, rendered as autoscaling/v2 `Pods` metrics
+    # named `litellm_requests_per_second` and `litellm_tokens_per_second` with an
+    # AverageValue target. They coexist with the CPU/memory targets above: the
+    # HPA scales on whichever metric asks for the most replicas. Kubernetes has
+    # no idea what a token is, so a Prometheus Adapter must serve those two
+    # names on custom.metrics.k8s.io from the proxy's counters, grouped by the
+    # scrape target's `pod` label (enable serviceMonitor above):
+    #   litellm_requests_per_second:
+    #     sum(rate(litellm_proxy_total_requests_metric_total{<<.LabelMatchers>>}[1m])) by (<<.GroupBy>>)
+    #   litellm_tokens_per_second:
+    #     sum(rate(litellm_total_tokens_metric_total{<<.LabelMatchers>>}[1m])) by (<<.GroupBy>>)
+    # rate() over [1m] is already per second, so no `* 60`. How fast the HPA
+    # reacts is set by that window, the scrape interval and the HPA sync period
+    # (15s by default), not by the unit: keep serviceMonitor.interval at 15s or
+    # faster so a 1m window holds at least 4 samples. averageValue takes SI
+    # suffixes, so "6M" is six million tokens per second per pod. Tokens are
+    # counted when a response completes, so TPS trails long streams.
+    targetRequestsPerSecond: ""
+    targetTokensPerSecond: ""
   # PodDisruptionBudget for the gateway pods. Set exactly one of
   # `minAvailable` / `maxUnavailable` (minAvailable wins if both are set;
   # enabling without either falls back to `maxUnavailable: 1`). Disabled by

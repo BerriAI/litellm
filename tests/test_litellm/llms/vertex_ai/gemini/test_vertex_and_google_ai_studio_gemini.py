@@ -5769,3 +5769,70 @@ def test_calculate_web_search_requests_counts_unique_queries():
 
     assert VertexGeminiConfig._calculate_web_search_requests([]) is None
     assert VertexGeminiConfig._calculate_web_search_requests([{"webSearchQueries": ["", ""]}]) is None
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-2.5-flash", "gemini-3-pro-preview"],
+    ids=["thinking_budget_mapper", "thinking_level_mapper"],
+)
+@pytest.mark.parametrize("reasoning_effort", ["banana", "xhigh"])
+def test_invalid_reasoning_effort_is_a_400_not_a_500(custom_llm_provider, model, reasoning_effort):
+    """Regression for #40474.
+
+    Both reasoning_effort mappers used to end their if/elif chain in a bare `ValueError`, which
+    `exception_type()` has no branch for, so it fell through to `APIConnectionError` and the proxy
+    answered a malformed client request with a retryable HTTP 500. `xhigh` is covered alongside the
+    nonsense value because it is a member of litellm's own `REASONING_EFFORT` literal, so callers
+    bridging from OpenAI-shaped code reach it without typing anything wrong.
+    """
+    from litellm.utils import get_optional_params
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort=reasoning_effort,
+            drop_params=True,
+        )
+
+    assert exc_info.value.status_code == 400
+    message: Final = str(exc_info.value)
+    assert reasoning_effort in message
+    for supported in ("minimal", "low", "medium", "high", "none", "disable"):
+        assert supported in message
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_invalid_reasoning_effort_surfaces_as_400_through_completion(custom_llm_provider):
+    """The same request through `completion()` must not come back as a retryable 500.
+
+    Needs no provider credentials: param mapping runs before any network call.
+    """
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        completion(
+            model=f"{custom_llm_provider}/gemini-3-pro-preview",
+            messages=[{"role": "user", "content": "hi"}],
+            reasoning_effort="banana",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert not isinstance(exc_info.value, litellm.APIConnectionError)
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "gemini-3-pro-preview"])
+def test_supported_reasoning_efforts_still_map(model):
+    """Guards the fix against over-rejecting: every advertised value must still produce a config."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        SUPPORTED_REASONING_EFFORTS,
+    )
+
+    for effort in SUPPORTED_REASONING_EFFORTS:
+        result: Final = VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": effort},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        assert "thinkingConfig" in result

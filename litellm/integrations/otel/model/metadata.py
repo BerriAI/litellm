@@ -48,6 +48,8 @@ from litellm.integrations.otel.model.utils import as_str, to_seconds
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
 
+LANGFUSE_TRACE_NAME_HEADER: Final = "langfuse_trace_name"
+
 
 @dataclass(frozen=True)
 class RequestIdentity:
@@ -215,6 +217,7 @@ class LLMCallEvent:
     # needs to be reasonable for a span that never gets closed (a leak).
     provisional_span_name: str
     time_to_first_chunk_seconds: float | None
+    trace_name: str | None
 
     @classmethod
     def from_dict(cls, kwargs: Mapping[str, Any]) -> LLMCallEvent:
@@ -231,7 +234,28 @@ class LLMCallEvent:
             upstream_started=kwargs.get("api_call_start_time") is not None,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
+            trace_name=caller_trace_name(kwargs),
         )
+
+
+def caller_trace_name(kwargs: Mapping[str, object]) -> str | None:
+    request: Final = _as_str_mapping(kwargs.get("litellm_params"))
+    if request is None:
+        return None
+    proxy_request: Final = _as_str_mapping(request.get("proxy_server_request"))
+    headers: Final = _as_str_mapping(proxy_request.get("headers")) if proxy_request is not None else None
+    from_header: Final = as_str(headers.get(LANGFUSE_TRACE_NAME_HEADER)) if headers is not None else None
+    if from_header:
+        return from_header
+    return next(
+        (
+            name
+            for key in ("metadata", "litellm_metadata")
+            if (metadata := _as_str_mapping(request.get(key))) is not None
+            and (name := as_str(metadata.get("trace_name")))
+        ),
+        None,
+    )
 
 
 def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:

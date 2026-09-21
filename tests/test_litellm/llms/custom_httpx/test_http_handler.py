@@ -1547,3 +1547,131 @@ def test_sync_force_ipv4_https_proxy_mount_uses_handler_ca_bundle(
         handler.close()
 
     assert response.text == "ok-tls"
+
+
+@pytest.mark.asyncio
+async def test_put_can_refuse_to_follow_a_redirect():
+    """The client follows redirects by default; a caller uploading to a URL it did not choose must be able to opt out."""
+    hops: list[str] = []  # mutable-ok: the fake transport records the paths it was asked for
+
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        hops.append(request.url.path)
+        if request.url.path == "/first":
+            return httpx.Response(302, request=request, headers={"location": "/second"})
+        return httpx.Response(200, request=request)
+
+    handler = AsyncHTTPHandler()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler), follow_redirects=True)
+    try:
+        followed = await handler.put("https://uploads.example/first", data=b"x")
+        assert followed.status_code == 200
+        assert hops == ["/first", "/second"]
+
+        hops.clear()
+        with pytest.raises(MaskedHTTPStatusError) as refused:
+            await handler.put("https://uploads.example/first", data=b"x", follow_redirects=False)
+        assert refused.value.status_code == 302
+        assert hops == ["/first"]
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+async def test_a_retried_put_stays_a_put_and_still_refuses_redirects():
+    """
+    The connection-error retry used to resend as POST through a client that follows redirects.
+
+    Storage answers a POST to a presigned PUT url with 403 or 405, so the batch looked
+    permanently rejected, and the redirect refusal the caller asked for was silently lost.
+    """
+    attempts: list[tuple[str, str]] = []  # mutable-ok: the fake transports record what they were asked for
+
+    async def refusing_transport(request: httpx.Request) -> httpx.Response:
+        attempts.append((request.method, request.url.path))
+        raise httpx.ConnectError("connection reset", request=request)
+
+    async def retry_transport(request: httpx.Request) -> httpx.Response:
+        attempts.append((request.method, request.url.path))
+        if request.url.path == "/first":
+            return httpx.Response(302, request=request, headers={"location": "/second"})
+        return httpx.Response(200, request=request)
+
+    class HandlerWithFakeRetryClient(AsyncHTTPHandler):
+        def create_client(self, *args, **kwargs) -> httpx.AsyncClient:
+            return httpx.AsyncClient(transport=httpx.MockTransport(retry_transport), follow_redirects=True)
+
+    handler = HandlerWithFakeRetryClient()
+    await handler.client.aclose()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(refusing_transport))
+    try:
+        with pytest.raises(MaskedHTTPStatusError) as refused:
+            await handler.put("https://uploads.example/first", data=b"x", follow_redirects=False)
+
+        assert refused.value.status_code == 302
+        assert attempts == [("PUT", "/first"), ("PUT", "/first")]
+    finally:
+        await handler.client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("target", ["https://example.com/final.json?next=1", "https://other.example/final.json?next=1"])
+async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_mock, monkeypatch, target):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    respx_mock.get("https://example.com/spec.json?original=1").respond(302, headers={"location": target})
+    destination = respx_mock.get(target).respond(200, json={"paths": {}})
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get(
+            "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
+            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
+        )
+    finally:
+        await handler.close()
+    assert response.json() == {"paths": {}}
+    request = destination.calls[0].request
+    assert request.headers.get("authorization") == (None if "other.example" in target else "Bearer sentinel")
+    assert request.headers["accept-encoding"] == "identity"
+    assert str(request.url) == target
+    assert request.extensions["timeout"]["read"] == 2.0
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_stops_redirect_loops(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route = respx_mock.get("https://example.com/spec.json").respond(302, headers={"location": "/spec.json"})
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(ValueError, match="Too many redirects"):
+            await handler.get("https://example.com/spec.json", max_response_bytes=100, follow_redirects=True)
+    finally:
+        await handler.close()
+    assert route.call_count == 11
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_closes_stream_on_cancellation(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    started = asyncio.Event()
+    closed = asyncio.Event()
+
+    class SlowStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"x"
+            started.set()
+            await asyncio.Event().wait()
+
+        async def aclose(self):
+            closed.set()
+
+    respx_mock.get("https://example.com/slow.json").respond(200, stream=SlowStream())
+    handler = AsyncHTTPHandler()
+    try:
+        task = asyncio.create_task(handler.get("https://example.com/slow.json", max_response_bytes=100))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        await handler.close()
+    assert closed.is_set()

@@ -2,6 +2,7 @@
 Auto-Routing Strategy that works with a Semantic Router Config
 """
 
+import asyncio
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional
 
@@ -75,6 +76,8 @@ class AutoRouter(CustomLogger):
         self.auto_sync_value = self.DEFAULT_AUTO_SYNC_VALUE
         self.loaded_routes: list[Route] = self._load_semantic_routing_routes()
         self.routelayer: SemanticRouter | None = None
+        self._routelayer_lock = asyncio.Lock()
+        self._routelayer_build_task: asyncio.Task[SemanticRouter] | None = None
         self.default_model = default_model
         self.embedding_model: str = embedding_model
         self.max_input_chars: int = max_input_chars
@@ -115,6 +118,45 @@ class AutoRouter(CustomLogger):
             )
         return auto_router_routes
 
+    def _build_routelayer(self) -> "SemanticRouter":
+        """Synchronous (embeds every route's utterances); run only via `_ensure_routelayer`."""
+        if self.routelayer is not None:
+            return self.routelayer
+
+        from semantic_router.routers import SemanticRouter
+
+        routelayer: Final = SemanticRouter(
+            routes=self.loaded_routes,
+            encoder=self.encoder,
+            auto_sync=self.auto_sync_value,
+        )
+        self.routelayer = routelayer
+        return routelayer
+
+    def _clear_build_task_on_failure(self, build_task: "asyncio.Task[SemanticRouter]") -> None:
+        """Runs even with no caller left awaiting, so a failure never stays cached forever."""
+        if build_task is self._routelayer_build_task and not build_task.cancelled() and build_task.exception():
+            self._routelayer_build_task = None
+
+    async def _ensure_routelayer(self) -> "SemanticRouter":
+        """Build the route layer once, off the event loop, shared across concurrent callers.
+
+        A shared task (not a bare `asyncio.to_thread` awaited under the lock) survives one
+        caller's cancellation, so `cancel_on_disconnect` can't free a second caller into
+        starting a duplicate build.
+        """
+        if self.routelayer is not None:
+            return self.routelayer
+        async with self._routelayer_lock:
+            if self.routelayer is not None:
+                return self.routelayer
+            build_task = self._routelayer_build_task
+            if build_task is None:
+                build_task = asyncio.ensure_future(asyncio.to_thread(self._build_routelayer))
+                build_task.add_done_callback(self._clear_build_task_on_failure)
+                self._routelayer_build_task = build_task
+        return await asyncio.shield(build_task)
+
     @staticmethod
     def _extract_text_from_messages(messages: list[dict[str, Any]]) -> str:
         """
@@ -151,8 +193,6 @@ class AutoRouter(CustomLogger):
 
         Used for the litellm auto-router to modify the request before the routing decision is made.
         """
-        from semantic_router.routers import SemanticRouter
-
         from litellm.litellm_core_utils.prompt_templates.factory import resolve_structured_messages
         from litellm.types.router import PreRoutingHookResponse
 
@@ -164,17 +204,7 @@ class AutoRouter(CustomLogger):
         if resolved_messages is None:
             return None
 
-        routelayer = self.routelayer
-        if routelayer is None:
-            #######################
-            # Create the route layer
-            #######################
-            routelayer = SemanticRouter(
-                routes=self.loaded_routes,
-                encoder=self.encoder,
-                auto_sync=self.auto_sync_value,
-            )
-            self.routelayer = routelayer
+        routelayer = await self._ensure_routelayer()
 
         message_content: Final = self._extract_text_from_messages(resolved_messages)
         route_name: Final = await self._matched_route_name(routelayer, message_content, request_kwargs)

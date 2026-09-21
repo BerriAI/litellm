@@ -7,7 +7,10 @@ from litellm.integrations.otel.model.config import (
     ExporterSpec,
     OpenTelemetryV2Config,
 )
-from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.integrations.otel.presets.utils import (
+    credential_gated_exporters,
+    ensure_mappers,
+)
 from litellm.integrations.weave.weave_otel import (
     _get_weave_authorization_header,
     get_weave_otel_config,
@@ -18,9 +21,21 @@ from litellm.types.utils import StandardCallbackDynamicParams
 def weave_preset(
     *,
     config_overrides: OpenTelemetryV2Config | None = None,
+    allow_missing_credentials: bool = False,
 ) -> OpenTelemetryV2Config:
-    weave_cfg: Final = get_weave_otel_config()
     base: Final = config_overrides or OpenTelemetryV2Config()
+    mappers: Final = ensure_mappers(base.mapper_names, "openinference", "weave")
+    try:
+        weave_cfg: Final = get_weave_otel_config()
+    except Exception:
+        if not allow_missing_credentials:
+            raise
+        return base.model_copy(
+            update={  # mutable-ok: pydantic model_copy takes a plain update mapping
+                "exporters": credential_gated_exporters(base.exporters, ExporterOwner.WEAVE_OTEL),
+                "mapper_names": mappers,
+            }
+        )
     return base.model_copy(
         update={
             "exporters": [
@@ -33,7 +48,7 @@ def weave_preset(
                 ),
             ],
             # Weave consumes OpenInference + a small Weave-specific overlay.
-            "mapper_names": ensure_mappers(base.mapper_names, "openinference", "weave"),
+            "mapper_names": mappers,
         }
     )
 

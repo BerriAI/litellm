@@ -11,6 +11,7 @@ spend tracking stores, so a follow-up previous_response_id still finds the conve
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -20,6 +21,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
+from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     Delta,
     ModelResponse,
@@ -137,6 +139,214 @@ def test_tool_call_delta_is_emitted_as_responses_events():
     assert evt2.output_index == 1
     # The delta will be a chunk of the arguments, not the full arguments
     assert len(evt2.delta) <= 10  # Chunks are max 10 characters
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "tool_type,result_kind,expected_sources",
+    [
+        (
+            "web_search",
+            "valid",
+            {"srvtoolu_01Search": ["https://example.com/one"], "srvtoolu_02Search": ["https://example.com/two"]},
+        ),
+        (
+            "web_search_preview",
+            "valid",
+            {"srvtoolu_01Search": ["https://example.com/one"], "srvtoolu_02Search": ["https://example.com/two"]},
+        ),
+        ("function", "valid", {}),
+        ("web_search", "unpaired", {"srvtoolu_01Search": ["https://example.com/one"]}),
+        ("web_search", "web_fetch", {"srvtoolu_02Search": ["https://example.com/two"]}),
+        ("web_search", "error", {"srvtoolu_01Search": [], "srvtoolu_02Search": ["https://example.com/two"]}),
+    ],
+)
+async def test_web_search_stream_preserves_hosted_and_client_calls(sync_mode, tool_type, result_kind, expected_sources):
+    call_ids: Final = ("srvtoolu_01Search", "srvtoolu_02Search")
+    valid_results: Final = (
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": call_ids[0],
+            "content": [{"type": "web_search_result", "url": "https://example.com/one"}],
+        },
+        {
+            "type": "web_search_tool_result",
+            "tool_use_id": call_ids[1],
+            "content": [{"type": "web_search_result", "url": "https://example.com/two"}],
+        },
+    )
+    first_result: Final = (
+        {**valid_results[0], "type": "web_fetch_tool_result"}
+        if result_kind == "web_fetch"
+        else {**valid_results[0], "content": {"type": "web_search_tool_result_error", "error_code": "unavailable"}}
+        if result_kind == "error"
+        else valid_results[0]
+    )
+    results: Final = [first_result] if result_kind == "unpaired" else [first_result, valid_results[1]]
+    deltas: Final = (
+        Delta(
+            role="assistant",
+            content=None,
+            tool_calls=[
+                {"index": 0, "id": call_ids[0], "type": "function", "function": {"name": "web_search", "arguments": ""}}
+            ],
+            provider_specific_fields={
+                "web_search_calls": [
+                    build_web_search_call(
+                        call_ids[0],
+                        {},
+                        {"content": []},
+                        status="in_progress",
+                    )
+                ]
+                if tool_type != "function" and result_kind != "web_fetch"
+                else [],
+            },
+        ),
+        Delta(
+            content=None,
+            tool_calls=[
+                {
+                    "index": 1,
+                    "id": "toolu_regular",
+                    "type": "function",
+                    "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+                }
+            ],
+        ),
+        Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": '{"query":'}}]),
+        Delta(content=None, tool_calls=[{"index": 0, "function": {"arguments": '"one"}'}}]),
+        Delta(
+            content=None,
+            provider_specific_fields={
+                "web_search_results": [first_result],
+                "web_search_calls": [
+                    build_web_search_call(call_ids[0], {"query": "one"}, first_result)
+                ]
+                if tool_type != "function" and first_result["type"] == "web_search_tool_result"
+                else [],
+            },
+        ),
+        Delta(
+            content=None,
+            provider_specific_fields={
+                "web_search_results": results,
+                "web_search_calls": [
+                    build_web_search_call(
+                        result["tool_use_id"],
+                        {"query": "one" if result["tool_use_id"].endswith("01Search") else "two"},
+                        result,
+                    )
+                    for result in results
+                    if tool_type != "function" and result["type"] == "web_search_tool_result"
+                ],
+            },
+        ),
+        Delta(
+            content="answer",
+            tool_calls=[
+                {
+                    "index": 2,
+                    "id": call_ids[1],
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": '{"query":"two"}'},
+                }
+            ],
+        ),
+    )
+    chunks: Final = tuple(
+        ModelResponseStream(
+            id=CHAT_COMPLETION_ID,
+            created=1748575031,
+            model="claude-fable-5-1",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(index=0, delta=delta, finish_reason="stop" if index == len(deltas) - 1 else None)
+            ],
+        )
+        for index, delta in enumerate(deltas)
+    )
+    request_tools: Final = (
+        [{"type": "function", "name": "web_search", "parameters": {"type": "object"}}]
+        if tool_type == "function"
+        else [{"type": tool_type}]
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-fable-5-1",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
+        request_input="search",
+        responses_api_request={"tools": request_tools},
+        custom_llm_provider="anthropic",
+    )
+    events: Final = (
+        [event.model_dump(exclude_none=True) for event in iterator]
+        if sync_mode
+        else [event.model_dump(exclude_none=True) async for event in iterator]
+    )
+    completed: Final = events[-1]
+    search_items: Final = {
+        item["id"].removeprefix("ws_"): item
+        for item in completed["response"]["output"]
+        if item["type"] == "web_search_call"
+    }
+    function_items: Final = {
+        item["call_id"]: item for item in completed["response"]["output"] if item["type"] == "function_call"
+    }
+    function_events: Final = [event for event in events if "function_call_arguments" in event["type"]]
+    expected_functions: Final = set(call_ids).difference(expected_sources) | {"toolu_regular"}
+    search_indexes: Final = {
+        event["output_index"] for event in events if event["type"] == "response.web_search_call.completed"
+    }
+    completed_indexes: Final = {item["id"]: index for index, item in enumerate(completed["response"]["output"])}
+
+    assert completed["type"] == "response.completed"
+    assert [item["content"][0]["text"] for item in completed["response"]["output"] if item["type"] == "message"] == [
+        "answer"
+    ]
+    assert set(search_items) == set(expected_sources)
+    assert set(function_items) == expected_functions
+    assert {event["item_id"] for event in function_events} == {item["id"] for item in function_items.values()}
+    assert len(search_indexes) == len(expected_sources)
+    for call_id, item in search_items.items():
+        search_events = [
+            event for event in events if event.get("item_id", event.get("item", {}).get("id")) == item["id"]
+        ]
+        assert [event["type"] for event in search_events] == [
+            "response.output_item.added",
+            "response.web_search_call.in_progress",
+            "response.web_search_call.searching",
+            "response.web_search_call.completed",
+            "response.output_item.done",
+        ]
+        assert {event["output_index"] for event in search_events} == {completed_indexes[item["id"]]}
+        assert search_events[0]["item"]["status"] == "in_progress"
+        assert search_events[-1]["item"] == item
+        assert item["status"] == (
+            "failed" if result_kind == "error" and call_id.endswith("01Search") else "completed"
+        )
+        assert item["action"]["type"] == "search"
+        assert item["action"]["query"] == ("one" if call_id.endswith("01Search") else "two")
+        assert item["action"]["queries"] == [item["action"]["query"]]
+        assert [source["url"] for source in item["action"]["sources"]] == expected_sources[call_id]
+    for call_id, item in function_items.items():
+        argument_deltas = [
+            event["delta"]
+            for event in function_events
+            if event["item_id"] == item["id"] and event["type"].endswith(".delta")
+        ]
+        assert json.loads("".join(argument_deltas)) == json.loads(item["arguments"])
+        assert json.loads(item["arguments"]) == (
+            {"city": "Paris"}
+            if call_id == "toolu_regular"
+            else {"query": "one" if call_id.endswith("01Search") else "two"}
+        )
+        assert any(
+            event["type"] == "response.output_item.done"
+            and event.get("item") == item
+            and event["output_index"] == completed_indexes[item["id"]]
+            for event in events
+        )
 
 
 def test_tool_calls_present_only_in_final_response_are_emitted_before_completed():
@@ -628,3 +838,79 @@ def test_streamed_anthropic_tool_call_events_correlate_on_normalized_item_id():
     assert item_dones[0].item.call_id == "toolu_01AbCdEf"
     for evt in deltas + dones:
         assert evt.item_id == added[0].item.id
+
+
+def _tool_call_chunk(finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        {
+                            "id": "call_pwd",
+                            "type": "function",
+                            "function": {"name": "run_command", "arguments": '{"command":"pwd"}'},
+                            "index": 0,
+                        }
+                    ],
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+def test_streamed_named_tool_choice_is_echoed_in_responses_api_shape() -> None:
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper([_tool_call_chunk(finish_reason="tool_calls")]),
+        request_input="Run the command pwd.",
+        responses_api_request={
+            "tools": [{"type": "function", "name": "run_command", "parameters": {"type": "object"}}],
+            "tool_choice": {"type": "function", "name": "run_command"},
+        },
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    events: Final = list(iterator)
+
+    response_events: Final = [event for event in events if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES]
+    assert [event.type for event in response_events] == [
+        "response.created",
+        "response.in_progress",
+        "response.completed",
+    ]
+    assert [event.response.tool_choice for event in response_events] == [
+        {"type": "function", "name": "run_command"},
+        {"type": "function", "name": "run_command"},
+        {"type": "function", "name": "run_command"},
+    ]
+    assert any(getattr(event, "type", None) == "response.output_item.done" for event in events)
+
+
+def test_streamed_unrecognized_tool_choice_is_echoed_as_auto() -> None:
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper([_tool_call_chunk(finish_reason="tool_calls")]),
+        request_input="Run the command pwd.",
+        responses_api_request={
+            "tools": [{"type": "function", "name": "run_command", "parameters": {"type": "object"}}],
+            "tool_choice": "any",
+        },
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    response_events: Final = [
+        event for event in iterator if getattr(event, "type", None) in RESPONSE_ID_EVENT_TYPES
+    ]
+
+    assert [event.response.tool_choice for event in response_events] == ["auto", "auto", "auto"]

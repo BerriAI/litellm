@@ -857,6 +857,24 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
         litellm.add_known_models(model_cost_map={})
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
 
+
+def test_azure_ai_wildcard_lists_the_foundry_gpt_6_astra_entry(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    foundry_key = "azure_ai/gpt-6-astra"
+    local_entry = litellm.get_model_cost_map(url="")[foundry_key]
+    registered_before = foundry_key in litellm.azure_ai_models
+    try:
+        litellm.add_known_models(model_cost_map={foundry_key: local_entry})
+        assert foundry_key in get_known_models_from_wildcard("azure_ai/*")
+    finally:
+        if not registered_before:
+            litellm.azure_ai_models.discard(foundry_key)
+            litellm.add_known_models(model_cost_map={})
+
+
 def test_get_complete_model_list_drops_no_default_models_sentinel():
     from litellm.proxy.auth.model_checks import get_complete_model_list
 

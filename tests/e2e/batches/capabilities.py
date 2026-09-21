@@ -109,6 +109,10 @@ class Capability:
         return f"{self.provider}-{self.scenario}"
 
     @property
+    def file_provider(self) -> str | None:
+        return self.provider if self.scenario in {"model_param", "provider_fallback"} else None
+
+    @property
     def jsonl_model(self) -> str:
         # Always the provider deployment name. Unified routes via
         # target_model_names; the JSONL body.model must still be a name Azure /

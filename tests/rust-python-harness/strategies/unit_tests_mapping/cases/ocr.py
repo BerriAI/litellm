@@ -230,6 +230,10 @@ _HOST_ONLY_BRIDGE_EXCLUSIONS: Final = tuple(
             "test_ocr_exception_type_uses_resolved_provider_context",
             "Python wraps bridge exceptions into public errors.",
         ),
+        (
+            "test_rust_upstream_error_uses_ocr_provider_error_mapping",
+            "Python maps native upstream errors through the selected OCR provider config.",
+        ),
         ("test_aocr_routes_to_async_rust_when_enabled", "Python selects and invokes the async native bridge."),
         ("test_aocr_exception_type_uses_resolved_provider_context", "Python wraps async bridge exceptions."),
         ("test_ocr_forwards_timeout_to_rust", "Python converts and forwards explicit timeouts."),

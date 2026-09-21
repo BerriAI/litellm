@@ -198,6 +198,9 @@ def test_azure_gpt_5_takes_the_reasoning_path() -> None:
     assert "reasoning_effort" in supported
 
 
+_ARTIFACT_FIELD_PATTERN: Final = r'^(?!__.*__$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}"\\./[\]]{1,200}$'
+
+
 class TestAzureToolSchemaCombinatorFlattening:
     """
     Regression tests for LIT-6510: Azure's chat completions validator rejects
@@ -258,6 +261,26 @@ class TestAzureToolSchemaCombinatorFlattening:
         tool = self._anyof_tool()
         self._transform(AzureOpenAIConfig(), "gpt-4o", [tool])
         assert tool == self._anyof_tool()
+
+    def test_transform_request_drops_non_python_regex_pattern(self):
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "Artifact",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"field": {"type": "string", "pattern": _ARTIFACT_FIELD_PATTERN}},
+                },
+            },
+        }
+
+        request = self._transform(AzureOpenAIConfig(), "gpt-4o", [tool])
+
+        assert request["tools"][0]["function"]["parameters"] == {
+            "type": "object",
+            "properties": {"field": {"type": "string"}},
+        }
+        assert tool["function"]["parameters"]["properties"]["field"]["pattern"] == _ARTIFACT_FIELD_PATTERN
 
     def test_clean_object_schema_passes_through_as_same_object(self):
         tool = {

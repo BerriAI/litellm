@@ -704,6 +704,49 @@ describe("buildComplexityRouterConfig scorer knobs", () => {
     expect(buildComplexityRouterConfig(tuned).tier_boundaries).toEqual(BOUNDARIES);
   });
 
+  it("serializes custom rows without changing weights, matcher order, or optional-field absence", () => {
+    const weights = { codePresence: 0.12345678901234568, unknownStoredWeight: 9 };
+    const dimension = { name: "internalFrameworks", weight: 0.3765432109876543, keywords: ["ORBITMESH", "fluxgate"] };
+    const graded = { name: "sqlDdl", weight: 0.5, patterns: ["create table"], scoring_mode: "match_count" as const };
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      dimensionWeights: weights,
+      customDimensions: [
+        { id: "row-1", ...dimension },
+        { id: "row-2", ...graded },
+      ],
+    });
+    expect(payload.dimension_weights).toEqual(weights);
+    expect(payload.custom_dimensions).toEqual([dimension, graded]);
+    expect(buildComplexityRouterConfig(baseParams)).not.toHaveProperty("custom_dimensions");
+    expect(buildComplexityRouterConfig({ ...baseParams, customDimensions: [] }).custom_dimensions).toEqual([]);
+  });
+
+  it.each([
+    ["heuristic", undefined, true],
+    ["heuristic_first", "heuristic", true],
+    ["hybrid", "heuristic", true],
+    ["llm", "heuristic", false],
+    ["custom", "heuristic", false],
+    ["llm", "default_model", false],
+    ["custom", "default_model", false],
+    ["heuristic_v2", undefined, false],
+  ] as const)(
+    "%s with fallback %s only emits custom dimensions when its scorer decides",
+    (classifierType, classifierFallback, emits) => {
+      const dimension = { name: "d", weight: 0.4, keywords: ["orbitmesh"] };
+      const params = {
+        ...baseParams,
+        classifierType,
+        classifierFallback,
+        customDimensions: [{ id: "row", ...dimension }],
+      };
+      const payload = buildComplexityRouterConfig(params);
+      if (emits) expect(payload.custom_dimensions).toEqual([dimension]);
+      else expect(payload).not.toHaveProperty("custom_dimensions");
+    },
+  );
+
   it("drops them when the classifier falls back to the default model and nothing is scored", () => {
     expect(buildComplexityRouterConfig(llmWithDefaultFallback)).not.toHaveProperty("tier_boundaries");
   });
@@ -1060,6 +1103,7 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       tierBoundaries: { simple_medium: 0.1, medium_complex: 0.25, complex_reasoning: 0.5 },
       tokenThresholds: { short: 1, long: 2 },
       dimensionWeights: { length: 1 },
+      customDimensions: [{ id: "row-1", name: "sqlDdl", weight: 0.4, keywords: ["orbitmesh"] }],
       reasoningOverrideMinScore: 0.5,
       heuristicFirstMaxTier: "SIMPLE",
       hybridBoundaryMargin: 0.03,
@@ -1068,7 +1112,8 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
       stallEscalationWindow: 6,
       stallEscalationRepeatThreshold: 3,
     };
-    const emittingType = key === "heuristic_first_max_tier" ? "heuristic_first" : "llm";
+    // custom_dimensions only ever ship when the scorer decides, so "llm" cannot prove it emits.
+    const emittingType = key === "heuristic_first_max_tier" || key === "custom_dimensions" ? "heuristic_first" : "llm";
     const typeForKey = key === "hybrid_boundary_margin" ? "hybrid" : emittingType;
     expect(buildComplexityRouterConfig({ ...baseParams, ...loaded, classifierType: typeForKey })).toHaveProperty(key);
     expect(build(loaded)).not.toHaveProperty(key);

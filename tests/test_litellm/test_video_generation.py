@@ -532,6 +532,32 @@ class TestVideoGeneration:
         assert abs(cost_for("runwayml/seedance2_5", "480p", 8.0) - 1.6) < 0.001
         assert abs(cost_for("runwayml/gen4.5", None, 8.0) - 0.96) < 0.001
 
+    def test_completion_cost_xai_imagine_video_720p_tier_from_cost_map(self, monkeypatch):
+        """720p xAI Imagine Video requests bill the published 720p rate, not the 480p base rate."""
+        from litellm.cost_calculator import completion_cost
+
+        local_map_path = os.path.join(
+            os.path.dirname(__file__), "..", "..", "model_prices_and_context_window.json"
+        )
+        with open(local_map_path, "r") as f:
+            monkeypatch.setattr(litellm, "model_cost", json.load(f))
+
+        def cost_for(model: str, resolution: str, duration: float) -> float:
+            mock_response = MagicMock()
+            mock_response.usage = {"duration_seconds": duration, "video_resolution": resolution}
+            type(mock_response)._hidden_params = {}
+            return completion_cost(
+                completion_response=mock_response,
+                model=model,
+                call_type="create_video",
+                custom_llm_provider="xai",
+            )
+
+        assert abs(cost_for("xai/grok-imagine-video", "720p", 10.0) - 0.7) < 0.001
+        assert abs(cost_for("xai/grok-imagine-video-1.5", "720p", 10.0) - 1.4) < 0.001
+        assert abs(cost_for("xai/grok-imagine-video-1.5", "480p", 10.0) - 0.8) < 0.001
+        assert abs(cost_for("xai/grok-imagine-video-1.5", "1080p", 10.0) - 2.5) < 0.001
+
     def test_completion_cost_veo_31_tiers_pin_published_rates(self, monkeypatch):
         """The gemini and vertex_ai veo 3.1 entries bill Google's published per-second tier rates."""
         from litellm.cost_calculator import completion_cost

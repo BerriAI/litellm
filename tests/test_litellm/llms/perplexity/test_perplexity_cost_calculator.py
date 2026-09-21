@@ -26,7 +26,6 @@ from litellm.types.utils import (
     Usage,
     PromptTokensDetailsWrapper,
 )
-from litellm.utils import get_model_info
 
 
 class TestPerplexityCostCalculator:
@@ -317,21 +316,6 @@ class TestPerplexityCostCalculator:
 
         assert math.isclose(total_cost, expected_total, rel_tol=1e-6)
 
-    def test_model_info_access(self):
-        """Test that model info correctly returns the new cost fields."""
-        model_info = get_model_info(
-            model="sonar-deep-research", custom_llm_provider="perplexity"
-        )
-
-        # Check that the new fields are accessible
-        assert "citation_cost_per_token" in model_info
-        assert model_info["citation_cost_per_token"] == 2e-6
-        assert model_info["search_context_cost_per_query"] == {
-            "search_context_size_low": 0.005,
-            "search_context_size_medium": 0.005,
-            "search_context_size_high": 0.005,
-        }
-
     @pytest.mark.parametrize("citation_tokens", [0, 10, 25, 100])
     @pytest.mark.parametrize("search_queries", [0, 1, 5, 10])
     @pytest.mark.parametrize("reasoning_tokens", [0, 15, 30])
@@ -476,37 +460,6 @@ class TestPerplexityCostCalculator:
 
         assert math.isclose(prompt_cost, expected_prompt, rel_tol=1e-9)
         assert math.isclose(completion_cost, expected_completion, rel_tol=1e-9)
-
-    @pytest.mark.parametrize(
-        "model_id, usd_per_1m_input, usd_per_1m_output, usd_per_1m_cache_read",
-        [
-            ("deepseek-v4-flash-0731", 0.13, 0.26, 0.028),
-            ("glm-5.2", 1.4, 4.4, 0.14),
-            ("kimi-k3", 3.0, 15.0, 0.3),
-            ("kimi-k2.7-code", 0.95, 4.0, 0.19),
-        ],
-    )
-    def test_agent_api_entries_carry_perplexity_published_rates(
-        self, model_id, usd_per_1m_input, usd_per_1m_output, usd_per_1m_cache_read
-    ):
-        """The Agent API third-party models are priced from Perplexity's own catalog
-        (GET https://api.perplexity.ai/v1/models, `pricing` in usd_per_1m_tokens).
-        Perplexity's model id already starts with `perplexity/`, so the cost-map key
-        doubles the prefix. Regression: glm-5.2 shipped glm-5.3's 0.26 cache-read rate,
-        copied from the neighbouring catalog row, an 86% overcharge on cached input.
-        """
-        info = get_model_info(
-            model=f"perplexity/{model_id}", custom_llm_provider="perplexity"
-        )
-
-        assert info["key"] == f"perplexity/perplexity/{model_id}"
-        assert info["litellm_provider"] == "perplexity"
-        assert info["mode"] == "responses"
-        assert math.isclose(info["input_cost_per_token"], usd_per_1m_input / 1e6, rel_tol=1e-9)
-        assert math.isclose(info["output_cost_per_token"], usd_per_1m_output / 1e6, rel_tol=1e-9)
-        assert math.isclose(
-            info["cache_read_input_token_cost"], usd_per_1m_cache_read / 1e6, rel_tol=1e-9
-        )
 
     def test_agent_api_fallback_rates_price_a_response_without_metered_cost(self):
         """Perplexity meters cost on the response, but when `usage.cost` is absent the

@@ -15,6 +15,7 @@ AWS_AUTH_PARAMS = {
     "aws_sts_endpoint": "https://sts.us-west-2.amazonaws.com",
     "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.us-west-2.amazonaws.com",
     "aws_external_id": "external",
+    "aws_session_tags": [{"Key": "team", "Value": "genai"}],
 }
 
 

@@ -3,6 +3,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 """
 
 import base64
+import logging
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,7 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     check_complete_credentials,
     custom_auth_common_checks_warning,
+    log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
     get_key_mcp_rpm_limit,
@@ -99,6 +101,41 @@ class TestWarnOnceIfCustomAuthSkipsCommonChecks:
             logger=logger,
         )
         assert logger.warning.call_count == 0
+
+
+class TestLogOnceIfBudgetReservationDisabled:
+    @pytest.fixture(autouse=True)
+    def _reset_sentinel(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.constants.budget_reservation_disabled_info_emitted",
+            False,
+        )
+
+    def test_logs_info_only_once_when_enabled(self, caplog):
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            log_once_if_budget_reservation_disabled(disabled=False)
+            assert not any(
+                "disable_budget_reservation is enabled" in record.message
+                for record in caplog.records
+            )
+            for _ in range(3):
+                log_once_if_budget_reservation_disabled(disabled=True)
+
+        records = [
+            record
+            for record in caplog.records
+            if "disable_budget_reservation is enabled" in record.message
+        ]
+        assert len(records) == 1
+        assert records[0].levelno == logging.INFO
+
+    def test_logs_to_injected_logger_only_once(self):
+        logger = MagicMock()
+        log_once_if_budget_reservation_disabled(disabled=False, logger=logger)
+        for _ in range(3):
+            log_once_if_budget_reservation_disabled(disabled=True, logger=logger)
+        assert logger.info.call_count == 1
+        assert "disable_budget_reservation is enabled" in logger.info.call_args[0][0]
 
 
 class TestGetKeyModelRpmLimit:
@@ -426,6 +463,138 @@ def test_get_model_from_request_openai_deployment_route_still_works():
         )
         == "my-azure-deployment"
     )
+
+
+def test_get_model_from_request_bedrock_converse_passthrough():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/model/us.anthropic.claude-sonnet-4-6/converse",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def test_get_model_from_request_bedrock_invoke_passthrough():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def test_get_model_from_request_bedrock_v2_converse_stream_passthrough():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/v2/model/us.anthropic.claude-sonnet-4-6/converse-stream",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def test_get_model_from_request_bedrock_model_id_with_slashes():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/model/aws/anthropic/model-name/invoke",
+        )
+        == "aws/anthropic/model-name"
+    )
+
+
+def test_get_model_from_request_bedrock_unparseable_endpoint_returns_none():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/bedrock/agents/some-agent-route",
+        )
+        is None
+    )
+
+
+def test_get_model_from_request_bedrock_url_model_overrides_body_model():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-sonnet-4-6"},
+            route="/bedrock/model/us.anthropic.claude-opus-4-6-v1/converse",
+        )
+        == "us.anthropic.claude-opus-4-6-v1"
+    )
+
+
+def test_get_model_from_request_bedrock_invoke_url_model_overrides_body_model():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-sonnet-4-6"},
+            route="/bedrock/model/us.anthropic.claude-opus-4-6-v1/invoke",
+        )
+        == "us.anthropic.claude-opus-4-6-v1"
+    )
+
+
+def test_get_model_from_request_bedrock_count_tokens_uses_body_model():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-sonnet-4-6"},
+            route="/bedrock/v1/messages/count_tokens",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def test_get_model_from_request_bedrock_uppercase_count_tokens_segment_is_not_count_tokens():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-haiku-4-5-20251001-v1:0"},
+            route="/bedrock/model/us.anthropic.claude-sonnet-4-6/invoke/COUNT_TOKENS",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def test_get_model_from_request_bedrock_unparseable_endpoint_keeps_body_model():
+    assert (
+        get_model_from_request(
+            request_data={"model": "us.anthropic.claude-sonnet-4-6"},
+            route="/bedrock/agents/some-agent-route",
+        )
+        == "us.anthropic.claude-sonnet-4-6"
+    )
+
+
+def _azure_relay_router():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {"model": "azure_ai/gpt-5.4-mini", "api_base": "https://a.services.ai.azure.com", "api_key": "k"},
+            },
+            {
+                "model_name": "other-group",
+                "litellm_params": {"model": "azure/gpt-5.4", "api_base": "https://b.openai.azure.com", "api_key": "k"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/azure_ai/other-group/openai/deployments/other-group/chat/completions", {"model": "gpt"}, "other-group"),
+        ("/azure_ai/other-group/models/chat/completions", {}, "other-group"),
+        ("/azure/openai/deployments/gpt/chat/completions", {"model": "other-group"}, "gpt"),
+        ("/azure/openai/deployments/gpt/chat/completions", {}, "gpt"),
+        ("/azure/openai/deployments/my-azure-deployment/chat/completions", {"model": "gpt"}, "gpt"),
+        ("/azure_ai/gpt", {"model": "other-group"}, "other-group"),
+    ],
+)
+def test_get_model_from_request_azure_relay_routes_use_the_model_group_in_the_path(route, request_data, expected):
+    assert get_model_from_request(request_data=request_data, route=route, llm_router=_azure_relay_router()) == expected
 
 
 def test_get_model_from_request_includes_file_endpoint_header_model():
@@ -3360,7 +3529,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
     @pytest.mark.parametrize(
         "selector",
-        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+        ["aws_profile_name", "aws_session_name", "aws_external_id", "aws_session_tags"],
     )
     def test_aws_identity_selector_in_batch_body_is_rejected(self, selector):
         with pytest.raises(ValueError, match=selector):
@@ -3379,7 +3548,7 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
     @pytest.mark.parametrize(
         "selector",
-        ["aws_profile_name", "aws_session_name", "aws_external_id"],
+        ["aws_profile_name", "aws_session_name", "aws_external_id", "aws_session_tags"],
     )
     def test_aws_identity_selector_under_extra_body_is_rejected(self, selector):
         with pytest.raises(ValueError, match=selector):

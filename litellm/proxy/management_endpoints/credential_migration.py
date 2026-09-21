@@ -43,7 +43,9 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _ALGO_AES_GCM,
     _ENCRYPTION_ALGORITHM_SETTING,
     _V2_GCM_PREFIX,
+    SecretMapDecodeError,
     _get_salt_key,
+    decode_secret_map,
     decrypt_value_helper,
     encrypt_value_helper,
 )
@@ -64,6 +66,20 @@ class LocationReport:
 
     # Used by --check (read-only classification):
     legacy: int = 0  # nacl ciphertext still awaiting migration
+
+    def count(self, classification: ValueClass | None) -> None:
+        if classification is None:
+            return
+        self.scanned += 1
+        match classification:
+            case "migrated":
+                self.already_v2 += 1
+            case "legacy":
+                self.legacy += 1
+            case "undecryptable":
+                self.undecryptable += 1
+            case _:
+                self.plaintext += 1
 
     def as_dict(self) -> dict[str, int]:
         return {
@@ -441,7 +457,7 @@ def _classify_callback_value(value: object) -> ValueClass:
 _COVERED_TABLE_SPECS: Final = [
     ("model_table", "litellm_proxymodeltable", ("litellm_params",), ()),
     ("credentials", "litellm_credentialstable", ("credential_values",), ()),
-    ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars"), ()),
+    ("mcp_server", "litellm_mcpservertable", ("credentials", "env_vars", "static_headers", "env"), ()),
     ("mcp_user_credentials", "litellm_mcpusercredentials", (), ("credential_b64",)),
     ("mcp_user_env_vars", "litellm_mcpuserenvvars", (), ("values_b64",)),
 ]
@@ -472,14 +488,18 @@ def _classify_into_report(report: LocationReport, value: str) -> None:
     names, base URLs, …) do not decrypt and fall through to ``plaintext``, so
     over-scanning a column is harmless to the residual count.
     """
-    report.scanned += 1
-    cls: Final = classify_value(value, key="scan")
-    if cls == "migrated":
-        report.already_v2 += 1
-    elif cls == "legacy":
-        report.legacy += 1
-    else:  # plaintext / not-a-string
-        report.plaintext += 1
+    report.count(classify_value(value, key="scan"))
+
+
+def _classify_secret_map(value: object, key: str) -> ValueClass | None:
+    try:
+        decoded: Final = decode_secret_map(value, key=key)
+    except SecretMapDecodeError:
+        return "undecryptable"
+    if not decoded:
+        return None
+    ciphertext: Final = json.loads(value) if isinstance(value, str) and value.lstrip().startswith('"') else value
+    return "migrated" if is_migrated(ciphertext) else "legacy"
 
 
 async def _scan_one_table(
@@ -502,6 +522,9 @@ async def _scan_one_table(
         for col in json_columns:
             raw = getattr(row, col, None)
             if raw is None:
+                continue
+            if db_attr == "litellm_mcpservertable" and col in ("static_headers", "env"):
+                report.count(_classify_secret_map(raw, col))
                 continue
             if isinstance(raw, str):
                 try:

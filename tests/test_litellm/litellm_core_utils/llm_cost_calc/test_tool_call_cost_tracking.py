@@ -1,5 +1,6 @@
-import os
+import json
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 import pytest
 
@@ -9,8 +10,6 @@ from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
 )
 from litellm.types.llms.openai import FileSearchTool, ResponsesAPIResponse, WebSearchOptions
 from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
-
-
 
 
 def test_web_search_cost_low():
@@ -683,11 +682,12 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
 
 
 def _openai_responses_with_web_search_calls(model, num_calls):
-    from litellm.types.llms.openai import ResponsesAPIResponse
     from openai.types.responses.response_function_web_search import (
         ActionSearch,
         ResponseFunctionWebSearch,
     )
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
 
     output = [
         ResponseFunctionWebSearch(
@@ -859,9 +859,60 @@ def test_dated_search_preview_entries_carry_search_pricing(local_model_cost_map)
         custom_llm_provider="openai",
         standard_built_in_tools_params=None,
     )
-    assert cost == pytest.approx(0.035), (
-        f"dated search-preview id must bill the $0.035 search fee, got ${cost}"
+    assert cost == pytest.approx(0.025), (
+        f"dated search-preview id must bill the $0.025 search fee, got ${cost}"
     )
+
+
+@pytest.mark.parametrize(
+    "web_search_options",
+    [
+        None,
+        WebSearchOptions(search_context_size="low"),
+        WebSearchOptions(search_context_size="medium"),
+        WebSearchOptions(search_context_size="high"),
+    ],
+)
+def test_gpt_4o_mini_snapshot_bills_web_search_like_its_alias(
+    web_search_options: WebSearchOptions | None, local_model_cost_map: None
+) -> None:
+    alias_info = litellm.get_model_info("gpt-4o-mini")
+    snapshot_info = litellm.get_model_info("gpt-4o-mini-2024-07-18")
+
+    assert not snapshot_info["supports_web_search"]
+    assert not alias_info["supports_web_search"]
+
+    snapshot_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        web_search_options=web_search_options, model_info=snapshot_info
+    )
+    alias_cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        web_search_options=web_search_options, model_info=alias_info
+    )
+
+    assert snapshot_cost == alias_cost == 0.025
+
+
+def test_gpt_4o_mini_web_search_price_matches_in_both_cost_maps():
+    repo_root = Path(__file__).parents[4]
+    cost_maps = tuple(
+        json.loads((repo_root / path).read_text(encoding="utf-8"))
+        for path in (
+            "model_prices_and_context_window.json",
+            "litellm/model_prices_and_context_window_backup.json",
+        )
+    )
+    canonical, backup = cost_maps
+    expected_search_price = {
+        "search_context_size_low": 0.025,
+        "search_context_size_medium": 0.025,
+        "search_context_size_high": 0.025,
+    }
+    for model_name in ("gpt-4o-mini", "gpt-4o-mini-2024-07-18"):
+        canonical_entry = canonical[model_name]
+        backup_entry = backup[model_name]
+        assert canonical_entry["search_context_cost_per_query"] == expected_search_price
+        assert backup_entry["search_context_cost_per_query"] == expected_search_price
+        assert canonical_entry == backup_entry
 
 
 # Note: File search integration test removed due to complex annotation detection logic

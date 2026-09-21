@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from http.cookiejar import CookieJar, DefaultCookiePolicy
+from io import BytesIO
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, Optional, TypeAlias, TypedDict, TypeVar
 
@@ -505,6 +506,10 @@ async def _raise_masked_async_error(e: httpx.HTTPStatusError, stream: bool) -> N
     raise MaskedHTTPStatusError(e, message=_text, text=_text) from None
 
 
+class HTTPResponseLimitError(ValueError):
+    pass
+
+
 class MaskedHTTPStatusError(httpx.HTTPStatusError):
     def __init__(self, original_error, message: str | None = None, text: str | None = None):
         # Create a new error with the masked URL
@@ -654,12 +659,23 @@ class AsyncHTTPHandler:
         headers: dict | None = None,
         follow_redirects: bool | None = None,
         timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
     ):
         # Set follow_redirects to UseClientDefault if None
         _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
 
         params = params or {}
         params.update(HTTPHandler.extract_query_params(url))
+
+        if max_response_bytes is not None:
+            return await self._get_with_response_limit(
+                url,
+                params=httpx.QueryParams(params),
+                headers=httpx.Headers(headers),
+                max_bytes=max_response_bytes,
+                follow_redirects=self.client.follow_redirects if follow_redirects is None else follow_redirects,
+                timeout=self.client.timeout if timeout is None else httpx.Timeout(timeout),
+            )
 
         response: Final = await self.client.get(
             url,
@@ -669,6 +685,57 @@ class AsyncHTTPHandler:
             timeout=timeout if timeout is not None else USE_CLIENT_DEFAULT,
         )
         return response
+
+    async def _get_with_response_limit(
+        self,
+        url: str,
+        *,
+        params: httpx.QueryParams,
+        headers: httpx.Headers,
+        timeout: httpx.Timeout,
+        max_bytes: int,
+        follow_redirects: bool,
+    ) -> httpx.Response:
+        request: Final = self.client.build_request(
+            "GET",
+            url,
+            headers=MappingProxyType({**headers, "accept-encoding": "identity"}),
+            params=params,
+            timeout=timeout,
+        )
+        response: Final = await self.client.send(request, stream=True, follow_redirects=False)
+        return await self._read_with_response_limit(response, max_bytes=max_bytes, follow_redirects=follow_redirects)
+
+    async def _read_with_response_limit(
+        self, response: httpx.Response, *, max_bytes: int, follow_redirects: bool, redirects_remaining: int = 10
+    ) -> httpx.Response:
+        try:
+            if response.next_request is not None and follow_redirects:
+                if redirects_remaining == 0:
+                    raise ValueError("Too many redirects")
+                await response.aclose()
+                following: Final = await self.client.send(
+                    response.next_request, auth=None, stream=True, follow_redirects=False
+                )
+                return await self._read_with_response_limit(
+                    following, max_bytes=max_bytes, follow_redirects=True, redirects_remaining=redirects_remaining - 1
+                )
+            if response.is_redirect or response.is_error:
+                return httpx.Response(response.status_code, headers=response.headers, request=response.request)
+            if response.headers.get("content-encoding", "identity").lower() != "identity":
+                raise HTTPResponseLimitError("Response size limits require an uncompressed response")
+            if int(response.headers.get("content-length", "0")) > max_bytes:
+                raise HTTPResponseLimitError("Response exceeds the configured size limit")
+            with BytesIO() as body:
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    if body.tell() + len(chunk) > max_bytes:
+                        raise HTTPResponseLimitError("Response exceeds the configured size limit")
+                    body.write(chunk)
+                return httpx.Response(
+                    response.status_code, headers=response.headers, content=body.getvalue(), request=response.request
+                )
+        finally:
+            await response.aclose()
 
     @track_llm_api_timing()
     async def post(
@@ -751,7 +818,9 @@ class AsyncHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         stream: bool = False,
         content: _RequestContent | None = None,
+        follow_redirects: bool | None = None,
     ):
+        _follow_redirects: Final = follow_redirects if follow_redirects is not None else USE_CLIENT_DEFAULT
         try:
             if timeout is None:
                 timeout = self.timeout
@@ -769,22 +838,30 @@ class AsyncHTTPHandler:
                 timeout=timeout,
                 content=request_content,
             )
-            response: Final = await self.client.send(req)
+            response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
         except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
-                return await self.single_connection_post_request(
-                    url=url,
-                    client=new_client,
-                    data=data,
+                retry_data, retry_content = _prepare_request_data_and_content(data, content)
+                retry: Final = new_client.build_request(
+                    "PUT",
+                    url,
+                    data=retry_data,
                     json=json,
                     params=params,
                     headers=headers,
-                    stream=stream,
+                    timeout=timeout,
+                    content=retry_content,
                 )
+                retried: Final = await new_client.send(retry, stream=stream, follow_redirects=_follow_redirects)
+                try:
+                    retried.raise_for_status()
+                except httpx.HTTPStatusError as retried_error:
+                    await _raise_masked_async_error(retried_error, stream)
+                return retried
             finally:
                 await new_client.aclose()
         except httpx.TimeoutException as e:
