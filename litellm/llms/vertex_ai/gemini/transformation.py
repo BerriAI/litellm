@@ -4,8 +4,6 @@ Transformation logic from OpenAI format to Gemini format.
 Why separate file? Make it easy to see how transformation works
 """
 
-import base64
-import binascii
 import json
 import os
 import re
@@ -657,9 +655,7 @@ def _is_valid_thought_signature(signature: str | None) -> bool:
     if any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_-=" for c in signature):
         return False
     # Padding must only appear at the end
-    if "=" in signature.rstrip("="):
-        return False
-    return True
+    return "=" not in signature.rstrip("=")
 
 
 def _collect_tool_call_thought_signatures(
