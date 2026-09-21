@@ -64,16 +64,7 @@ class AnthropicCountTokensConfig:
             )
         )
 
-    def get_required_headers(self, api_key: str) -> dict[str, str]:
-        """
-        Get the required headers for the CountTokens API.
-
-        Args:
-            api_key: The Anthropic API key
-
-        Returns:
-            Dictionary of required headers
-        """
+    def get_required_headers(self, api_key: str, api_base: str | None = None) -> dict[str, str]:
         from litellm.llms.anthropic.common_utils import (
             optionally_handle_anthropic_oauth,
         )
@@ -84,7 +75,7 @@ class AnthropicCountTokensConfig:
             "anthropic-version": "2023-06-01",
             "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
         }
-        headers, _ = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        headers, _ = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key, api_base=api_base)
         return headers
 
     def validate_request(

@@ -8,6 +8,7 @@ from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeVar
+from urllib.parse import urlparse
 
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
@@ -234,20 +235,66 @@ def _merge_beta_headers(existing: str | None, new_beta: str) -> str:
     return ",".join(sorted(betas))
 
 
-def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tuple[dict, str | None]:
-    """
-    Handle Anthropic OAuth token detection and header setup.
+def is_anthropic_api_base(api_base: str | None) -> bool:
+    if not api_base:
+        return True
+    from litellm.secret_managers.main import get_secret_str
 
-    If an OAuth token is detected in the Authorization header (any casing),
-    extracts it and sets the required OAuth headers.
+    configured_base: Final = (
+        get_secret_str("ANTHROPIC_API_BASE")
+        or get_secret_str("ANTHROPIC_BASE_URL")
+        or litellm.api_base
+    )
+    parsed: Final = urlparse(api_base)
+    scheme: Final = parsed.scheme.lower()
+    if scheme != "https":
+        return bool(
+            configured_base is not None
+            and api_base.rstrip("/") == configured_base.rstrip("/")
+            and parsed.hostname in ("localhost", "127.0.0.1")
+        )
+    hostname: Final = (parsed.hostname or "").lower()
+    if hostname == "anthropic.com" or hostname.endswith(".anthropic.com"):
+        return True
+    return bool(configured_base is not None and api_base.rstrip("/") == configured_base.rstrip("/"))
 
-    Args:
-        headers: Request headers dict
-        api_key: Current API key (may be None)
 
-    Returns:
-        Tuple of (updated headers, api_key)
-    """
+def optionally_handle_anthropic_oauth(
+    headers: dict,
+    api_key: str | None,
+    api_base: str | None = None,
+) -> tuple[dict, str | None]:
+    if not is_anthropic_api_base(api_base):
+        from litellm._logging import verbose_proxy_logger
+
+        verbose_proxy_logger.warning(
+            "Stripping Anthropic OAuth token from request to non-Anthropic api_base: %s",
+            api_base,
+        )
+        auth_header_name: Final = next(
+            (
+                name
+                for name, value in headers.items()
+                if name.lower() == "authorization" and is_anthropic_oauth_key(value)
+            ),
+            None,
+        )
+        if auth_header_name:
+            headers.pop(auth_header_name)
+        existing_beta: Final[str | None] = headers.get("anthropic-beta")
+        if existing_beta:
+            filtered_betas: Final = tuple(
+                b.strip()
+                for b in existing_beta.split(",")
+                if b.strip() and b.strip() != ANTHROPIC_OAUTH_BETA_HEADER
+            )
+            if filtered_betas:
+                headers["anthropic-beta"] = ",".join(filtered_betas)
+            else:
+                headers.pop("anthropic-beta", None)
+        headers.pop("anthropic-dangerous-direct-browser-access", None)
+        return headers, api_key
+
     # Check Authorization header (passthrough / forwarded requests)
     auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
     if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
@@ -992,11 +1039,17 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     ) -> dict:
         if api_base is None and isinstance(litellm_params, dict):
             api_base = litellm_params.get("api_base")
+        if api_base is None and isinstance(optional_params, dict):
+            api_base = optional_params.get("api_base")
         use_bearer_for_custom_base: Final[bool] = bool(
             isinstance(litellm_params, dict) and litellm_params.get("use_bearer_for_custom_base", False)
         )
         # Check for Anthropic OAuth token in headers
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        headers, api_key = optionally_handle_anthropic_oauth(
+            headers=headers,
+            api_key=api_key,
+            api_base=api_base,
+        )
         api_key = AnthropicModelInfo.get_api_key(api_key)
         # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
         auth_token: str | None = None
@@ -1092,12 +1145,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """
         resolved_key: Final = AnthropicModelInfo.get_api_key(api_key)
         if resolved_key is not None:
-            if is_anthropic_oauth_key(resolved_key):
+            if is_anthropic_oauth_key(resolved_key) and is_anthropic_api_base(api_base):
                 return {"authorization": f"Bearer {resolved_key}"}
             return AnthropicModelInfo._make_api_key_auth_header(resolved_key, api_base, use_bearer_for_custom_base)
         auth_token: Final = AnthropicModelInfo.get_auth_token()
         if auth_token is not None:
-            return {"authorization": f"Bearer {auth_token}"}
+            if is_anthropic_api_base(api_base):
+                return {"authorization": f"Bearer {auth_token}"}
+            return None
         return None
 
     @staticmethod
