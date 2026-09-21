@@ -16,7 +16,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
-    cast,
+    cast,  # noqa: TID251  # runtime Mapping checks establish the nested response shapes
     overload,
     runtime_checkable,
 )
