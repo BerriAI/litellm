@@ -5,9 +5,7 @@ use std::sync::Arc;
 
 use veil::Redact;
 
-use crate::Error;
-
-use super::{ResolvedCredential, SecretValue, TokenProviderHandle};
+use crate::{Error, ResolvedCredential, SecretValue, TokenProviderHandle};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CredentialFileRef {

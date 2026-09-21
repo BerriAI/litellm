@@ -1,7 +1,5 @@
-use crate::Error;
-
-use super::http::apply_credential;
-use super::{CredentialPlacement, ResolvedCredential};
+use crate::http::apply_credential;
+use crate::{CredentialPlacement, Error, ResolvedCredential};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CredentialPlanKind {

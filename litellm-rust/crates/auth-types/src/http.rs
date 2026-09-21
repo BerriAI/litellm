@@ -40,9 +40,6 @@ pub fn apply_credential(
     )
 }
 
-/// How the upstream call is authenticated. API-key strategies become headers
-/// in `prepare`; SigV4 covers the serialized body, so it is applied where the
-/// outbound request is built.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RequestAuth {
     Header {
