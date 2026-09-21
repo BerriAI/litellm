@@ -92,7 +92,7 @@ async def get_router_settings(
 
         # Try to get router settings from config
         config: Final = await proxy_config.get_config()
-        router_settings_from_config: Final = config.get("router_settings", {})
+        router_settings_from_config: Final = config.router_settings
 
         current_values: Final[dict[str, Any]] = {}
         if llm_router is not None:

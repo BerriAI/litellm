@@ -196,7 +196,7 @@ async def _current_coordination_redis_settings() -> dict[str, object] | None:
     if persisted is not None:
         return persisted
 
-    config_state: Final = _SETTINGS_ADAPTER.validate_python(proxy_config.get_config_state())
+    config_state: Final = _SETTINGS_ADAPTER.validate_python(proxy_config.get_config_state().to_mapping())
     general_settings: Final = config_state.get(_GENERAL_SETTINGS_PARAM_NAME)
     if not isinstance(general_settings, Mapping):
         return None

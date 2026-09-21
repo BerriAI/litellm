@@ -26,4 +26,4 @@ def read_model_list(config_path: str) -> list[dict[str, Any]]:
     from litellm.proxy.proxy_server import ProxyConfig
 
     config: Final = asyncio.run(ProxyConfig().get_config(config_file_path=config_path))
-    return config.get("model_list") or []
+    return [dict(model) for model in config.model_list]  # mutable-ok: callers consume plain dicts

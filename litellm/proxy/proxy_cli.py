@@ -1195,10 +1195,9 @@ def run_server(
             _config: Final = asyncio.run(proxy_config.get_config(config_file_path=config))
 
             ### LITELLM SETTINGS ###
-            litellm_settings = _config.get("litellm_settings", None)
+            litellm_settings = _config.litellm_settings
             if (
-                litellm_settings is not None
-                and "json_logs" in litellm_settings
+                "json_logs" in litellm_settings
                 and litellm_settings["json_logs"] is True
             ):
                 import litellm
@@ -1207,12 +1206,10 @@ def run_server(
 
                 litellm._turn_on_json()
             ### GENERAL SETTINGS ###
-            general_settings = _config.get("general_settings", {})
-            if general_settings is None:
-                general_settings = {}
+            general_settings = _config.general_settings
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings: Final = general_settings.get("key_management_settings", None)
-            if key_management_settings is not None:
+            if isinstance(key_management_settings, Mapping):
                 import litellm
 
                 litellm._key_management_settings = KeyManagementSettings(**key_management_settings)

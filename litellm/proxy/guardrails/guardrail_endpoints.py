@@ -167,11 +167,11 @@ async def list_guardrails():
     """
     from litellm.proxy.proxy_server import proxy_config
 
-    config: Final = proxy_config.config
+    _guardrails_config: Final = [  # mutable-ok: dict copies for the response layer
+        dict(guardrail) for guardrail in proxy_config.config.guardrails
+    ]
 
-    _guardrails_config: Final = cast(list[dict] | None, config.get("guardrails"))
-
-    if _guardrails_config is None:
+    if not _guardrails_config:
         return _get_guardrails_list_response([])
 
     return _get_guardrails_list_response(_guardrails_config)

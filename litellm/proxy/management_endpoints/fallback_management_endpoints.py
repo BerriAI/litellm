@@ -11,7 +11,7 @@ DELETE /fallback/{model} - Delete fallbacks for a specific model
 # pyright: reportMissingImports=false
 
 import json
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -124,7 +124,7 @@ async def create_fallback(
 
         # Load existing config
         config: Final = await proxy_config.get_config()
-        router_settings: Final = config.get("router_settings", {})
+        router_settings: Final = dict(config.router_settings)  # mutable-ok: fallback list is rewritten below before the DB upsert
 
         # Get the appropriate fallback list based on type
         fallback_key = "fallbacks"
@@ -134,7 +134,9 @@ async def create_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final[list[dict[str, list[str]]]] = router_settings.get(fallback_key, [])
+        existing_fallbacks: Final[list[dict[str, list[str]]]] = list(  # mutable-ok: copy so edits stay off the frozen config
+            cast("list[dict[str, list[str]]]", router_settings.get(fallback_key))  # cast-ok: entries are model -> fallback models maps
+        )
 
         # Update or add the fallback configuration
         fallback_updated = False
@@ -293,7 +295,7 @@ async def delete_fallback(
 
         # Load existing config
         config: Final = await proxy_config.get_config()
-        router_settings: Final = config.get("router_settings", {})
+        router_settings: Final = dict(config.router_settings)  # mutable-ok: fallback list is rewritten below before the DB upsert
 
         # Get the appropriate fallback list based on type
         fallback_key = "fallbacks"
@@ -303,7 +305,9 @@ async def delete_fallback(
             fallback_key = "content_policy_fallbacks"
 
         # Get existing fallbacks
-        existing_fallbacks: Final[list[dict[str, list[str]]]] = router_settings.get(fallback_key, [])
+        existing_fallbacks: Final[list[dict[str, list[str]]]] = list(  # mutable-ok: copy so edits stay off the frozen config
+            cast("list[dict[str, list[str]]]", router_settings.get(fallback_key))  # cast-ok: entries are model -> fallback models maps
+        )
 
         # Find and remove the fallback configuration
         fallback_found = False
