@@ -9,6 +9,28 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 
 @pytest.mark.asyncio
+async def test_oauth_prefetch_failure_does_not_log_caller_or_exception_text(caplog):
+    from litellm.proxy._experimental.mcp_server.operations import _prefetch_oauth_creds_for_user
+
+    user_id = "caller\nFORGED-USER-LINE"
+    fetch = AsyncMock(side_effect=RuntimeError("database\nFORGED-ERROR-LINE"))
+    database = object()
+    with (
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=database),
+        patch("litellm.proxy._experimental.mcp_server.db.list_user_oauth_credentials", fetch),
+        caplog.at_level("WARNING", logger="LiteLLM"),
+    ):
+        result = await _prefetch_oauth_creds_for_user(UserAPIKeyAuth(user_id=user_id))
+    assert result == {}
+    fetch.assert_awaited_once_with(database, user_id)
+    warnings = [record.getMessage() for record in caplog.records if "prefetch" in record.getMessage()]
+    assert len(warnings) == 1
+    assert "failed" in warnings[0]
+    assert "\n" not in warnings[0]
+    assert "FORGED" not in warnings[0]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_uses_explicit_context_when_ambient_caller_differs():
     from mcp.server.auth.middleware.auth_context import auth_context_var
     from litellm.proxy._experimental.mcp_server.server import set_auth_context

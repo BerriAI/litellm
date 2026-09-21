@@ -416,7 +416,10 @@ def _proxy_exception_to_http_exception(exc: ProxyException) -> HTTPException:
 if MCP_AVAILABLE:
     __all__ = (
         "_MCP_CREDENTIAL_REQUEST_FIELDS",
+        "BlobResourceContents",
         "ListMCPToolsRestAPIResponseObject",
+        "ResourceTemplate",
+        "TextResourceContents",
         "_McpDeniedDetail",
         "_aggregate_server_key",
         "_build_virtual_call_logging_obj",
