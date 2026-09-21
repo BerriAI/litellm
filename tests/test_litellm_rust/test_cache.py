@@ -2,8 +2,10 @@ import asyncio
 import contextvars
 import gc
 import json
+import os
 import threading
 import time
+import uuid
 import weakref
 from collections.abc import Generator
 from types import SimpleNamespace
@@ -13,10 +15,13 @@ from urllib.parse import urlparse
 import fakeredis
 import pytest
 import redis
+from azure.storage.blob import ContainerClient
 
 import litellm
+from litellm.caching.azure_blob_cache import AzureBlobCache
 from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
 from tests.test_litellm_rust.support.isolation import rebound
@@ -43,6 +48,44 @@ def redis_url() -> Generator[str]:
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+
+
+@pytest.fixture
+def azure_blob_facade() -> Generator[Cache]:
+    account_url: Final = os.environ.get("AZURE_BLOB_CACHE_ACCOUNT_URL")
+    if account_url is None:
+        pytest.skip(
+            "live Azure Blob parity needs AZURE_BLOB_CACHE_ACCOUNT_URL plus DefaultAzureCredential inputs in the environment"
+        )
+    facade: Final = Cache(
+        type=LiteLLMCacheType.AZURE_BLOB,
+        azure_account_url=account_url,
+        azure_blob_container=f"litellm-parity-{uuid.uuid4().hex[:12]}",
+    )
+    backend: Final = facade.cache
+    assert isinstance(backend, AzureBlobCache)
+    try:
+        yield facade
+    finally:
+        backend.container_client.delete_container()
+        asyncio.run(backend.disconnect())
+
+
+def azure_blob_handle(facade: Cache) -> _native._CacheTestHandle:
+    backend: Final = facade.cache
+    assert isinstance(backend, AzureBlobCache)
+    return _native._CacheTestHandle.azure_blob(
+        backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}"),
+        backend.container_client.container_name,
+    )
+
+
+@pytest.fixture
+def cluster_nodes() -> tuple[tuple[str, int], ...]:
+    configured: Final = os.environ.get("LITELLM_TEST_REDIS_CLUSTER_NODES")
+    if not configured:
+        pytest.skip("LITELLM_TEST_REDIS_CLUSTER_NODES is not set")
+    return tuple((host, int(port)) for host, _, port in (node.partition(":") for node in configured.split(",")))
 
 
 def test_existing_constructor_and_global_are_unchanged() -> None:
@@ -361,6 +404,89 @@ def test_facade_registration_rejects_mismatched_capacity() -> None:
         _native._CacheTestHandle.memory(capacity=7)._bind_facade(facade)
 
 
+def test_azure_blob_facade_serves_natively_and_python_reads_the_same_blobs(azure_blob_facade: Cache) -> None:
+    backend: Final = azure_blob_facade.cache
+    assert isinstance(backend, AzureBlobCache)
+    handle: Final = azure_blob_handle(azure_blob_facade)
+    assert handle.backend == "azure-blob"
+    account_url: Final = backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}")
+    with pytest.raises(TypeError, match="containers must match"):
+        _native._CacheTestHandle.azure_blob(account_url, f"{backend.container_client.container_name}-other")._bind_facade(
+            azure_blob_facade
+        )
+    handle._bind_facade(azure_blob_facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=azure_blob_facade))
+    native: Final = resolver.resolve()
+    assert native.kind == "native"
+
+    response: Final = {"choices": [{"text": "caf\u00e9 \u2603"}], "usage": {"total_tokens": 3}, "flag": True, "empty": None}
+    native.store({**request("sync"), "ttl_seconds": 0.001}, response)
+    native.store(request("sync"), {"choices": [{"text": "second"}]})
+    time.sleep(0.01)
+    stored: Final = json.loads(backend.container_client.download_blob("sync").readall())
+    assert stored["response"] == response
+    assert isinstance(stored["timestamp"], float)
+    assert native.lookup(request("sync")) == response
+    assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="sync") == response
+
+    backend.set_cache("python", {"timestamp": time.time(), "response": response})
+    backend.set_cache("legacy", "bare legacy value")
+    backend.container_client.upload_blob("invalid", b"{not json", overwrite=True)
+    assert native.lookup(request("python")) == response
+    assert native.lookup(request("legacy")) == cast(CacheLookup, azure_blob_facade).get_cache(cache_key="legacy")
+    assert native.lookup_batch([request("python"), request("missing"), request("invalid"), request("sync")]) == {
+        "values": [response, None, None, response],
+        "missing_indices": [1, 2],
+    }
+
+    with rebound(azure_blob_facade, "ttl", 12):
+        assert resolver.resolve().kind == "python_callback"
+    with rebound(backend, "container_client", ContainerClient.from_container_url(backend.container_client.url)):
+        assert resolver.resolve().kind == "python_callback"
+
+    def custom_get(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    with rebound(backend, "get_cache", custom_get):
+        assert resolver.resolve().kind == "python_callback"
+    assert resolver.resolve().kind == "python_callback"
+    assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="sync") == response
+
+    class CustomBlobCache(AzureBlobCache):
+        pass
+
+    with rebound(azure_blob_facade, "cache", CustomBlobCache(account_url, backend.container_client.container_name)):
+        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(TypeError):
+            azure_blob_handle(azure_blob_facade)._bind_facade(azure_blob_facade)
+
+
+async def test_azure_blob_native_async_writes_overwrite_batch_and_flush_like_python(azure_blob_facade: Cache) -> None:
+    backend: Final = azure_blob_facade.cache
+    assert isinstance(backend, AzureBlobCache)
+    azure_blob_handle(azure_blob_facade)._bind_facade(azure_blob_facade)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=azure_blob_facade)).resolve()
+    assert binding.kind == "native"
+    ping: Final = cast(dict[str, object], await binding.ping())
+    assert ping["status"] == "success", ping
+
+    await binding.async_store(request("async"), {"value": 1})
+    await binding.async_store({**request("async"), "ttl_seconds": 0.001}, {"value": 2})
+    time.sleep(0.01)
+    assert await binding.async_lookup(request("async")) == {"value": 2}
+    assert await backend.async_get_cache("async") == json.loads(backend.container_client.download_blob("async").readall())
+    assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="async") == {"value": 2}
+
+    await binding.async_store_batch([request("first"), request("second")], [{"value": 3}, {"value": 4}])
+    assert await binding.async_lookup_batch([request("second"), request("missing"), request("first")]) == {
+        "values": [{"value": 4}, None, {"value": 3}],
+        "missing_indices": [1],
+    }
+    await binding.async_flush()
+    assert [blob.name for blob in backend.container_client.list_blobs()] == []
+    assert await binding.async_lookup(request("async")) is None
+
+
 async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
     parsed: Final = urlparse(redis_url)
     with rebound(litellm, "default_redis_ttl", 60):
@@ -393,3 +519,64 @@ async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
     assert client.get("second") is not None
     await facade.cache.disconnect()
     client.close()
+
+
+async def test_redis_cluster_facade_serves_multi_slot_batches_and_scoped_flush_natively(
+    cluster_nodes: tuple[tuple[str, int], ...],
+) -> None:
+    startup_nodes: Final = [{"host": host, "port": port} for host, port in cluster_nodes]
+    url: Final = f"redis://{cluster_nodes[0][0]}:{cluster_nodes[0][1]}"
+    with rebound(litellm, "default_redis_ttl", 60):
+        facade: Final = Cache(type=LiteLLMCacheType.REDIS, redis_startup_nodes=startup_nodes, namespace="parity")
+        assert type(facade.cache) is RedisClusterCache
+        with pytest.raises(TypeError, match="types must match"):
+            _native._CacheTestHandle.redis(url, namespace="parity")._bind_facade(facade)
+        _native._CacheTestHandle.redis(url, namespace="parity", startup_nodes=list(cluster_nodes))._bind_facade(facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    assert resolver.resolve().kind == "native"
+
+    manager: Final = facade.cache.redis_client.nodes_manager
+    with rebound(manager, "connection_kwargs", {**manager.connection_kwargs, "db": 1}):
+        assert resolver.resolve().kind == "python_callback"
+    with rebound(facade.cache, "redis_kwargs", {**facade.cache.redis_kwargs, "startup_nodes": startup_nodes[:1]}):
+        assert resolver.resolve().kind == "python_callback"
+    binding: Final = resolver.resolve()
+    assert binding.kind == "native"
+
+    client: Final = redis.RedisCluster(startup_nodes=[redis.cluster.ClusterNode(*node) for node in cluster_nodes])
+    keys: Final = tuple(f"slot-{index}" for index in range(12))
+    slots: Final = {client.keyslot(f"parity:{key}") for key in keys}
+    assert len(slots) > 1, slots
+    requests: Final = [request(key) for key in keys]
+    values: Final = [{"index": index} for index in range(len(keys))]
+    await binding.async_store_batch(requests, values)
+    client.set("parity:slot-3", "not a cache entry")
+    client.set("parity:slot-7", json.dumps({"timestamp": time.time(), "response": {"index": 7, "python": True}}))
+
+    batch: Final = await binding.async_lookup_batch(requests)
+    assert batch == {
+        "values": [
+            None if index == 3 else {"index": 7, "python": True} if index == 7 else value
+            for index, value in enumerate(values)
+        ],
+        "missing_indices": [3],
+    }
+    assert facade.cache.get_cache("parity:slot-0")["response"] == {"index": 0}
+    assert (await facade.cache.async_get_cache("parity:slot-11"))["response"] == {"index": 11}
+    assert facade.cache.redis_client.mget_nonatomic([f"parity:{key}" for key in keys[:2]]) == [
+        client.get("parity:slot-0"),
+        client.get("parity:slot-1"),
+    ]
+
+    await binding.async_store({**request("pinned"), "ttl_seconds": 12.0}, {"pinned": True})
+    assert 0 < client.ttl("parity:pinned") <= 12
+    client.set("unscoped", "stays")
+
+    await binding.async_flush()
+
+    remaining: Final = tuple(sorted(key for node in client.get_primaries() for key in client.keys("parity:*", target_nodes=node)))
+    assert remaining == (), remaining
+    assert client.get("unscoped") == b"stays"
+    client.delete("unscoped")
+    client.close()
+    facade.cache.redis_client.close()
