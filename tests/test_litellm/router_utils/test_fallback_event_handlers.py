@@ -1305,6 +1305,14 @@ class TestOrderedFallbackLookupGroups:
             "requested-model",
         )
 
+    def test_fallback_hop_resumes_the_original_groups_chain_last(self):
+        from litellm.router_utils.fallback_event_handlers import fallback_lookup_groups
+
+        kwargs = {"metadata": {"model_group": "fb1", "original_model_group": "primary"}}
+
+        assert fallback_lookup_groups(kwargs, "fb1") == ("fb1", "primary")
+        assert fallback_lookup_groups({"metadata": {"original_model_group": 42}}, "fb1") == ("fb1",)
+
     def test_first_resolving_group_wins_and_generic_idx_survives_a_miss(self):
         from litellm.router_utils.fallback_event_handlers import (
             get_fallback_model_group_for_lookup_groups,

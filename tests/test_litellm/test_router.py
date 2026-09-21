@@ -3447,6 +3447,81 @@ def test_completion_streaming_iterator_adopts_the_deployment_that_served_a_neste
     assert result._hidden_params["model_id"] == "served-deployment"
 
 
+@pytest.mark.asyncio
+async def test_acompletion_mid_stream_fallback_walks_every_entry_of_the_configured_list():
+    """LIT-7400: fallbacks=[{primary: [fb1, fb2]}] must reach fb2 when fb1 dies before its first chunk.
+
+    run_async_fallback returns as soon as fb1's stream wrapper exists, so fb1's failure surfaces
+    inside the streaming iterator, where the lookup is keyed by fb1. That key has no chain of its
+    own, so the iterator has to resume the chain of the group the request was originally for.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    attempted_model_groups: list[str] = []
+
+    class FailingStream(CustomStreamWrapper):
+        def __init__(self, model: str):
+            super().__init__(
+                completion_stream=object(), model=model, custom_llm_provider="openai", logging_obj=MagicMock()
+            )
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise MidStreamFallbackError(
+                message=f"provider 500 from {self.model}",
+                model=self.model,
+                llm_provider="openai",
+                generated_content="",
+                is_pre_first_chunk=True,
+                original_exception=litellm.InternalServerError(
+                    message=f"provider 500 from {self.model}", model=self.model, llm_provider="openai"
+                ),
+            )
+
+    class OkStream(FailingStream):
+        def __init__(self, model: str):
+            super().__init__(model)
+            self._chunks = iter(
+                [litellm.ModelResponseStream(choices=[{"index": 0, "delta": {"content": f"ok-from-{model}"}}])]
+            )
+
+        async def __anext__(self):
+            try:
+                return next(self._chunks)
+            except StopIteration:
+                raise StopAsyncIteration from None
+
+    async def fake_acompletion(**kwargs):
+        attempted_model_groups.append(kwargs["metadata"]["model_group"])
+        if "fb2" in kwargs["model"]:
+            return OkStream(kwargs["model"])
+        return FailingStream(kwargs["model"])
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "primary", "litellm_params": {"model": "openai/primary-model", "api_key": "fake-key"}},
+            {"model_name": "fb1", "litellm_params": {"model": "openai/fb1-model", "api_key": "fake-key"}},
+            {"model_name": "fb2", "litellm_params": {"model": "openai/fb2-model", "api_key": "fake-key"}},
+        ],
+        fallbacks=[{"primary": ["fb1", "fb2"]}],
+        num_retries=0,
+    )
+
+    with patch("litellm.acompletion", side_effect=fake_acompletion):
+        response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
+        content: Final = "".join(
+            [chunk.choices[0].delta.content or "" async for chunk in response if chunk is not None]
+        )
+
+    assert content == "ok-from-openai/fb2-model"
+    assert attempted_model_groups == ["primary", "fb1", "fb2"]
+
+
 def test_completion_streaming_iterator_adopts_fallback_response_headers():
     """LIT-6767, sync counterpart of the fallback-adoption test."""
     from unittest.mock import MagicMock, patch
