@@ -110,8 +110,8 @@ async def _upstream_reply() -> AsyncIterator[ModelResponseStream]:
 FORBIDDEN_TOOL = "wire_transfer"
 
 
-async def _upstream_tool_call() -> AsyncIterator[ModelResponseStream]:
-    for chunk in REPLY_CHUNKS[:4]:
+async def _upstream_tool_call(include_text: bool = True) -> AsyncIterator[ModelResponseStream]:
+    for chunk in REPLY_CHUNKS[:4] if include_text else ():
         yield _stream_chunk(chunk)
     yield ModelResponseStream(
         model="gpt-4o-mini",
@@ -1157,21 +1157,18 @@ class TestNeuralTrustGuardrail:
         assert _deltas(received) == []
 
     @pytest.mark.asyncio
-    async def test_tool_call_block_under_incremental_diff_leaves_the_turn_unfinished(self) -> None:
-        """A streamed tool call is only scanned once the stream ends, so the turn must not look complete.
-
-        Until then the answer text stays withheld and no finish_reason goes out, so a client cannot treat
-        the turn as done, and the block surfaces as a 400 rather than trailing a finished-looking stream.
-        """
+    @pytest.mark.parametrize("include_text", [True, False])
+    async def test_tool_call_block_under_incremental_diff_sends_nothing(self, include_text: bool) -> None:
         guardrail = _guardrail(event_hook="post_call", default_on=True, streaming_transform_mode="incremental_diff")
         received: list[object] = []  # mutable-ok: collects what the client saw before the block
         with patch.object(guardrail.async_handler, "post", _tool_call_blocking_trustguard()):
             with pytest.raises(HTTPException) as exc_info:
-                await _drain_into(_guardrail_stream(guardrail, _upstream_tool_call()), received)
+                await _drain_into(_guardrail_stream(guardrail, _upstream_tool_call(include_text)), received)
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail["verdict"] == "block"
         assert _deltas(received) == []
         assert _finish_reasons(received) == []
+        assert received == []
 
     @pytest.mark.asyncio
     async def test_default_streaming_mode_leaves_the_transform_off_the_wire(self) -> None:

@@ -1410,8 +1410,16 @@ class TestStreamingTransform:
             ],
         )
 
+        async def upstream():
+            yield tool_chunk
+
+        stream: Final = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key", request_route="/v1/chat/completions"),
+            response=upstream(),
+            request_data={"guardrail_to_apply": _ToolCallBlocker(), "model": "gpt-4"},
+        )
         with pytest.raises(GuardrailRaisedException):
-            await _drive_stream(UnifiedLLMGuardrails(), _ToolCallBlocker(), [tool_chunk])
+            await anext(stream)
 
     @pytest.mark.asyncio
     async def test_mixed_content_and_tool_call_chunk_does_not_leak_text(self):

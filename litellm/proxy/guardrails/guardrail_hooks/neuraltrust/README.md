@@ -62,7 +62,9 @@ Under `incremental_diff` the reply is held until the end-of-stream evaluate retu
 
 `incremental_diff` covers OpenAI chat completions streaming; other surfaces fall back to `block_only`.
 
-Streamed tool calls are the exception in either mode: LiteLLM forwards the tool-call deltas as they arrive and only sends the assembled call to TrustGuard once the stream ends, so a blocked call can already have reached the client. `incremental_diff` narrows that window, holding back the answer text and the turn's `finish_reason` so the block lands as an error instead of trailing a stream that looks complete. Use non-streaming requests where a tool call must be vetted before the client ever sees it.
+Under `incremental_diff`, LiteLLM buffers tool-call deltas until TrustGuard inspects the assembled response. A blocking verdict releases no tool-call arguments or finish signal. Allowed tool calls retain their original deltas and order
+
+The default `block_only` mode still forwards tool-call deltas before inspection. Use `incremental_diff` or non-streaming requests when tool calls must be checked before delivery. Streamed tool-call rewrites are not supported; use non-streaming requests for transformed tool arguments
 
 ## References
 

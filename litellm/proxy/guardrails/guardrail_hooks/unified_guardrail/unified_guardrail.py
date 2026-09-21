@@ -708,40 +708,10 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         try:
             async for item in response:
-                # v1 transforms only text. A chunk carrying tool_calls is passed
-                # through raw so function-calling turns are not dropped, but ONLY
-                # its tool-call fields are forwarded: content is stripped so any
-                # response text (in the same delta, or in another choice of an n>1
-                # chunk) can never bypass the transform. The original chunk is kept
-                # in responses_so_far so its text is still accumulated + redacted +
-                # emitted as synthetic deltas, and so the guardrail inspects the
-                # assembled tool calls at end of stream (see the block inspection
-                # below), matching block_only. finish_reason rides on the raw
-                # tool-only chunk, so it is not recorded for the text flush.
                 if self._chunk_has_tool_calls(item):
                     saw_tool_calls = True
                     responses_so_far.append(item)
                     last_chunk = item
-                    # Fix #3 — flush accumulated text BEFORE the tool-call
-                    # passthrough. Without this, a stream of text chunks that
-                    # hasn't yet hit a sampled round can be trailed by a
-                    # tool-call chunk carrying finish_reason="tool_calls"; an
-                    # SSE-compliant client stops reading at that finish_reason
-                    # and drops the end-of-stream text flush that would follow.
-                    if saw_text_content:
-                        async for out in _round(item, is_final=False):
-                            yield out
-                    # Fix #1 — pass finish_reason_per_choice into the
-                    # passthrough so a mixed content+tool_call chunk defers its
-                    # finish_reason to the final text terminator (see the
-                    # _tool_call_passthrough_chunk docstring).
-                    tool_only = self._tool_call_passthrough_chunk(
-                        item,
-                        finish_reason_per_choice=finish_reason_per_choice,
-                        held_choices=_held_choices(held_chars_per_choice),
-                    )
-                    responses_yielded.append(tool_only)
-                    yield tool_only
                     continue
 
                 if self._is_trailing_metadata_chunk(item):
@@ -759,6 +729,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 # sampled round here would guardrail the same content twice.
                 if (
                     not end_of_stream_only
+                    and not saw_tool_calls
                     and not self._chunk_has_finish_reason(item)
                     and chunk_counter % sampling_rate == 0
                 ):
@@ -790,6 +761,21 @@ class UnifiedLLMGuardrails(CustomLogger):
                     responses_yielded=responses_yielded,
                 ):
                     yield out
+
+                if saw_text_content:
+                    async for out in _round(last_chunk, is_final=False):
+                        yield out
+                for tool_only in (
+                    self._tool_call_passthrough_chunk(
+                        buffered_item,
+                        finish_reason_per_choice=finish_reason_per_choice,
+                        held_choices=_held_choices(held_chars_per_choice),
+                    )
+                    for buffered_item in responses_so_far
+                    if self._chunk_has_tool_calls(buffered_item)
+                ):
+                    responses_yielded.append(tool_only)
+                    yield tool_only
 
             async for out in self._emit_stream_tail(
                 last_chunk=last_chunk,
