@@ -9,6 +9,7 @@ use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_response::{
     CacheEntry, PartialHits, ResponseCache, ResponseCacheCodec, ResponseCacheRequest, WriteBuffer,
 };
+use litellm_cache_s3::{S3Cache, S3CacheConfig};
 use serde_json::Value;
 
 #[derive(Clone)]
@@ -18,6 +19,7 @@ pub(super) enum NativeResponseCache {
         cache: Arc<ResponseCache<RedisCache<ResponseCacheCodec>>>,
         buffer: Option<Arc<WriteBuffer>>,
     },
+    S3(Arc<ResponseCache<S3Cache<ResponseCacheCodec>>>),
     Gcs(Arc<ResponseCache<GcsCache<ResponseCacheCodec>>>),
     Disk(Arc<ResponseCache<DiskCache<ResponseCacheCodec>>>),
     AzureBlob(Arc<ResponseCache<AzureBlobCache<ResponseCacheCodec>>>),
@@ -50,6 +52,14 @@ impl NativeResponseCache {
             cache: Arc::new(ResponseCache::new(Arc::new(backend))),
             buffer: None,
         })
+    }
+    pub async fn s3(config: S3CacheConfig) -> Self {
+        let runtime = tokio::runtime::Handle::current();
+        Self::S3(Arc::new(ResponseCache::new(Arc::new(S3Cache::new(
+            config,
+            ResponseCacheCodec,
+            runtime,
+        )))))
     }
     pub fn disk(directory: &str) -> Result<Self, Error> {
         let cache = DiskCache::open(directory, ResponseCacheCodec)?;
@@ -87,7 +97,9 @@ impl NativeResponseCache {
                 cache.backend().account_url(),
                 cache.backend().container_name(),
             )),
-            Self::Memory(_) | Self::Redis { .. } | Self::Disk(_) | Self::Gcs(_) => None,
+            Self::Memory(_) | Self::Redis { .. } | Self::S3(_) | Self::Disk(_) | Self::Gcs(_) => {
+                None
+            }
         }
     }
 }
@@ -97,6 +109,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) => "memory",
             Self::Redis { .. } => "redis",
+            Self::S3(_) => "s3",
             Self::Gcs(_) => "gcs",
             Self::Disk(_) => "disk",
             Self::AzureBlob(_) => "azure-blob",
@@ -107,9 +120,38 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
+            Self::S3(cache) => cache.default_ttl(),
             Self::Gcs(cache) => cache.default_ttl(),
             Self::Disk(cache) => cache.default_ttl(),
             Self::AzureBlob(cache) => cache.default_ttl(),
+        }
+    }
+
+    pub fn bucket(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => Some(cache.backend().bucket()),
+            _ => None,
+        }
+    }
+
+    pub fn key_prefix(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => Some(cache.backend().key_prefix()),
+            _ => None,
+        }
+    }
+
+    pub fn region(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => Some(cache.backend().region()),
+            _ => None,
+        }
+    }
+
+    pub fn endpoint(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => cache.backend().endpoint(),
+            _ => None,
         }
     }
 
@@ -117,7 +159,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) | Self::Disk(_) | Self::AzureBlob(_) => None,
             Self::Redis { cache, .. } => cache.backend().namespace(),
-            Self::Gcs(_) => None,
+            Self::S3(_) | Self::Gcs(_) => None,
         }
     }
 
@@ -125,20 +167,29 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) | Self::Disk(_) | Self::AzureBlob(_) | Self::Gcs(_) => None,
             Self::Redis { cache, .. } => Some(cache.backend().topology()),
+            Self::S3(_) => None,
         }
     }
 
     pub fn capacity(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
-            Self::Redis { .. } | Self::Disk(_) | Self::AzureBlob(_) | Self::Gcs(_) => None,
+            Self::Redis { .. }
+            | Self::S3(_)
+            | Self::Disk(_)
+            | Self::AzureBlob(_)
+            | Self::Gcs(_) => None,
         }
     }
 
     pub fn max_entry_bytes(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => cache.backend().max_entry_bytes(),
-            Self::Redis { .. } | Self::Disk(_) | Self::AzureBlob(_) | Self::Gcs(_) => None,
+            Self::Redis { .. }
+            | Self::S3(_)
+            | Self::Disk(_)
+            | Self::AzureBlob(_)
+            | Self::Gcs(_) => None,
         }
     }
 
@@ -155,7 +206,11 @@ impl NativeResponseCache {
     pub fn directory(&self) -> Option<&Path> {
         match self {
             Self::Disk(cache) => Some(cache.backend().directory()),
-            Self::Memory(_) | Self::Redis { .. } | Self::AzureBlob(_) | Self::Gcs(_) => None,
+            Self::Memory(_)
+            | Self::Redis { .. }
+            | Self::S3(_)
+            | Self::AzureBlob(_)
+            | Self::Gcs(_) => None,
         }
     }
 
@@ -167,6 +222,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.lookup(request, now),
             Self::Redis { cache, .. } => cache.lookup(request, now),
+            Self::S3(cache) => cache.lookup(request, now),
             Self::Gcs(cache) => cache.lookup(request, now),
             Self::Disk(cache) => cache.lookup(request, now),
             Self::AzureBlob(cache) => cache.lookup(request, now),
@@ -182,6 +238,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.store(request, response, now),
             Self::Redis { cache, .. } => cache.store(request, response, now),
+            Self::S3(cache) => cache.store(request, response, now),
             Self::Gcs(cache) => cache.store(request, response, now),
             Self::Disk(cache) => cache.store(request, response, now),
             Self::AzureBlob(cache) => cache.store(request, response, now),
@@ -196,6 +253,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.lookup_batch(requests, now),
             Self::Redis { cache, .. } => cache.lookup_batch(requests, now),
+            Self::S3(cache) => cache.lookup_batch(requests, now),
             Self::Gcs(cache) => cache.lookup_batch(requests, now),
             Self::Disk(cache) => cache.lookup_batch(requests, now),
             Self::AzureBlob(cache) => cache.lookup_batch(requests, now),
@@ -210,6 +268,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.async_lookup(request, now).await,
             Self::Redis { cache, .. } => cache.async_lookup(request, now).await,
+            Self::S3(cache) => cache.async_lookup(request, now).await,
             Self::Gcs(cache) => cache.async_lookup(request, now).await,
             Self::Disk(cache) => cache.async_lookup(request, now).await,
             Self::AzureBlob(cache) => cache.async_lookup(request, now).await,
@@ -232,6 +291,7 @@ impl NativeResponseCache {
                 cache,
                 buffer: Some(buffer),
             } => buffer.async_store(cache, request, response, now).await,
+            Self::S3(cache) => cache.async_store(request, response, now).await,
             Self::Gcs(cache) => cache.async_store(request, response, now).await,
             Self::Disk(cache) => cache.async_store(request, response, now).await,
             Self::AzureBlob(cache) => cache.async_store(request, response, now).await,
@@ -246,6 +306,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.async_lookup_batch(requests, now).await,
             Self::Redis { cache, .. } => cache.async_lookup_batch(requests, now).await,
+            Self::S3(cache) => cache.async_lookup_batch(requests, now).await,
             Self::Gcs(cache) => cache.async_lookup_batch(requests, now).await,
             Self::Disk(cache) => cache.async_lookup_batch(requests, now).await,
             Self::AzureBlob(cache) => cache.async_lookup_batch(requests, now).await,
@@ -260,6 +321,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.async_store_batch(entries, now).await,
             Self::Redis { cache, .. } => cache.async_store_batch(entries, now).await,
+            Self::S3(cache) => cache.async_store_batch(entries, now).await,
             Self::Gcs(cache) => cache.async_store_batch(entries, now).await,
             Self::Disk(cache) => cache.async_store_batch(entries, now).await,
             Self::AzureBlob(cache) => cache.async_store_batch(entries, now).await,
@@ -275,6 +337,7 @@ impl NativeResponseCache {
                 }
                 cache.async_flush().await
             }
+            Self::S3(cache) => cache.async_flush().await,
             Self::Gcs(cache) => cache.async_flush().await,
             Self::Disk(cache) => cache.async_flush().await,
             Self::AzureBlob(cache) => cache.async_flush().await,
@@ -285,6 +348,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.test_connection().await,
             Self::Redis { cache, .. } => cache.test_connection().await,
+            Self::S3(cache) => cache.test_connection().await,
             Self::Gcs(cache) => cache.test_connection().await,
             Self::Disk(cache) => cache.test_connection().await,
             Self::AzureBlob(cache) => cache.test_connection().await,
