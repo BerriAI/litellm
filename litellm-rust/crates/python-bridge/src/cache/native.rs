@@ -83,6 +83,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) => None,
             Self::Redis { cache, .. } => Some(cache.backend().topology()),
+            Self::Disk(_) => None,
         }
     }
 
