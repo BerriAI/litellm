@@ -14,7 +14,7 @@ import asyncio
 import datetime
 import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, suppress
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
 from json import JSONDecodeError
@@ -940,10 +940,9 @@ def _cost_map_entry(db_model: Deployment, incoming_model_info: Mapping[str, obje
     lookup: Final = base_model if isinstance(base_model, str) else _decrypted_model(db_model.litellm_params.model)
     if lookup is None:
         return MappingProxyType({})
-    try:
+    with suppress(Exception):
         return MappingProxyType(dict(litellm.get_model_info(model=lookup)))
-    except Exception:
-        return MappingProxyType({})
+    return MappingProxyType({})
 
 
 LoadedCatalog: TypeAlias = Callable[[], Mapping[str, Mapping[str, object]]]  # mutable-ok: Callable parameter syntax
