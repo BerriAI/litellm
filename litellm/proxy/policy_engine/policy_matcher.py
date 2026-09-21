@@ -114,7 +114,7 @@ class PolicyMatcher:
             verbose_proxy_logger.debug("AttachmentRegistry not initialized, returning empty list")
             return []
 
-        return registry.get_attached_policies(context)
+        return registry.get_attached_policies(context, PolicyMatcher.policy_applies(context))
 
     @staticmethod
     def get_matching_policies_from_registry(
@@ -137,13 +137,21 @@ class PolicyMatcher:
         policies: dict[str, Policy] | None = None,
     ) -> Callable[[str], bool]:
         """Predicate telling whether a policy exists and its condition matches the context."""
+        resolved: Final = policies if policies is not None else PolicyMatcher._registry_policies()
         return lambda policy_name: bool(
             PolicyMatcher.get_policies_with_matching_conditions(
                 policy_names=(policy_name,),
                 context=context,
-                policies=policies,
+                policies=resolved,
             )
         )
+
+    @staticmethod
+    def _registry_policies() -> dict[str, Policy]:
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+        registry: Final = get_policy_registry()
+        return registry.get_all_policies() if registry.is_initialized() else {}
 
     @staticmethod
     def get_policies_with_matching_conditions(
@@ -167,17 +175,12 @@ class PolicyMatcher:
             List of policy names whose conditions match the context
         """
         from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
-        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 
-        if policies is None:
-            registry: Final = get_policy_registry()
-            if not registry.is_initialized():
-                return []
-            policies = registry.get_all_policies()
+        resolved: Final = policies if policies is not None else PolicyMatcher._registry_policies()
 
         matching_policies: Final = []
         for policy_name in policy_names:
-            policy = policies.get(policy_name)
+            policy = resolved.get(policy_name)
             if policy is None:
                 continue
             # Policy matches if it has no condition OR condition evaluates to True
