@@ -1,7 +1,15 @@
+use litellm_cache_redis_semantic::RedisSemanticConfig;
 use litellm_host_python::release_gil;
-use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*};
+use pyo3::{
+    PyTraverseError, PyVisit,
+    exceptions::{PyRuntimeError, PyTypeError},
+    prelude::*,
+};
 
-use super::{cache_error, facade::FacadeGuard, native::NativeResponseCache, request::duration};
+use super::{
+    cache_error, config::project_redis_semantic, embedder::PythonEmbedder, facade::FacadeGuard,
+    native::NativeResponseCache, request::duration,
+};
 
 #[pyclass(frozen, name = "_CacheTestHandle")]
 pub(crate) struct CacheTestHandle {
@@ -51,6 +59,36 @@ impl CacheTestHandle {
         })
     }
 
+    #[staticmethod]
+    fn redis_semantic(py: Python<'_>, backend: Bound<'_, PyAny>) -> PyResult<Self> {
+        let class = py
+            .import("litellm.caching.redis_semantic_cache")?
+            .getattr("RedisSemanticCache")?;
+        if !backend.get_type().is(&class) {
+            return Err(PyTypeError::new_err(
+                "native redis-semantic handles require the built-in RedisSemanticCache",
+            ));
+        }
+        let config = project_redis_semantic(&backend)?;
+        let embedder = PythonEmbedder::new(backend.unbind());
+        let service = release_gil(py, move || {
+            NativeResponseCache::redis_semantic(
+                &config.redis_url,
+                embedder,
+                RedisSemanticConfig {
+                    index_name: config.index_name,
+                    similarity_threshold: config.similarity_threshold as f32,
+                },
+            )
+        })
+        .map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
     #[getter]
     fn backend(&self) -> &'static str {
         self.service.kind()
@@ -76,6 +114,7 @@ impl CacheTestHandle {
     }
 
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+        self.service.traverse(&visit)?;
         if let Some(guard) = &self.guard {
             guard.traverse(visit)?;
         }

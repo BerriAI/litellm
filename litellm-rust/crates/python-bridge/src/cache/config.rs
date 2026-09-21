@@ -73,9 +73,23 @@ pub(super) struct RedisCacheConfig {
     pub(super) connection: RedisConnectionConfig,
 }
 
+#[allow(
+    dead_code,
+    reason = "embedding settings are projected so drift falls back to Python"
+)]
+pub(super) struct RedisSemanticCacheConfig {
+    pub(super) redis_url: String,
+    pub(super) index_name: String,
+    pub(super) similarity_threshold: f64,
+    pub(super) embedding_model: String,
+    pub(super) embedding_max_input_tokens: Option<u64>,
+    pub(super) embedding_timeout: Option<f64>,
+}
+
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
+    RedisSemantic(Box<RedisSemanticCacheConfig>),
 }
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
@@ -142,9 +156,14 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::RedisSemantic) => project_redis_semantic(&backend).map(|backend| {
+                CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::RedisSemantic(Box::new(backend)),
+                }))
+            }),
             Some(
-                CacheType::RedisSemantic
-                | CacheType::ValkeySemantic
+                CacheType::ValkeySemantic
                 | CacheType::S3
                 | CacheType::Disk
                 | CacheType::QdrantSemantic
@@ -159,10 +178,11 @@ impl NativeCacheConfig {
 
     pub(super) fn service_mismatch(&self, service: &NativeResponseCache) -> Option<&'static str> {
         if service.default_ttl()
-            != Some(match &self.backend {
-                CacheBackendConfig::Memory(config) => config.default_ttl,
-                CacheBackendConfig::Redis(config) => config.default_ttl,
-            })
+            != match &self.backend {
+                CacheBackendConfig::Memory(config) => Some(config.default_ttl),
+                CacheBackendConfig::Redis(config) => Some(config.default_ttl),
+                CacheBackendConfig::RedisSemantic(_) => None,
+            }
         {
             return Some("facade and native backend default TTLs must match");
         }
@@ -185,8 +205,43 @@ impl NativeCacheConfig {
             CacheBackendConfig::Redis(config) => (service.namespace()
                 != config.namespace.as_deref())
             .then_some("facade and native backend namespaces must match"),
+            CacheBackendConfig::RedisSemantic(_) if service.kind() != "redis_semantic" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::RedisSemantic(config)
+                if service.index_name() != Some(config.index_name.as_str()) =>
+            {
+                Some("facade and native backend index names must match")
+            }
+            CacheBackendConfig::RedisSemantic(config)
+                if service.similarity_threshold() != Some(config.similarity_threshold as f32) =>
+            {
+                Some("facade and native backend similarity thresholds must match")
+            }
+            CacheBackendConfig::RedisSemantic(_) => None,
         }
     }
+}
+
+#[inline(never)]
+pub(super) fn project_redis_semantic(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<RedisSemanticCacheConfig> {
+    Ok(RedisSemanticCacheConfig {
+        redis_url: backend.getattr("_redis_url")?.extract::<String>()?,
+        index_name: backend
+            .getattr("_index_name")?
+            .extract::<Option<String>>()?
+            .unwrap_or_else(|| "litellm_semantic_cache_index".into()),
+        similarity_threshold: backend.getattr("similarity_threshold")?.extract::<f64>()?,
+        embedding_model: backend.getattr("embedding_model")?.extract::<String>()?,
+        embedding_max_input_tokens: backend
+            .getattr("embedding_max_input_tokens")?
+            .extract::<Option<u64>>()?,
+        embedding_timeout: backend
+            .getattr("embedding_timeout")?
+            .extract::<Option<f64>>()?,
+    })
 }
 
 #[inline(never)]

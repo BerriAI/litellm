@@ -192,6 +192,11 @@ impl FacadeGuard {
         let (module, name, cache_kind) = match kind {
             "memory" => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
             "redis" => ("litellm.caching.redis_cache", "RedisCache", "redis"),
+            "redis_semantic" => (
+                "litellm.caching.redis_semantic_cache",
+                "RedisSemanticCache",
+                "redis-semantic",
+            ),
             _ => unreachable!(),
         };
         let backend = facade.getattr("cache")?;
@@ -210,6 +215,15 @@ impl FacadeGuard {
         };
         if let Some(message) = config.service_mismatch(service) {
             return Err(PyTypeError::new_err(message));
+        }
+        if kind == "redis_semantic"
+            && service
+                .embedder_object()
+                .is_none_or(|embedder| !backend.is(embedder.bind(py)))
+        {
+            return Err(PyTypeError::new_err(
+                "facade backend must be the native embedder",
+            ));
         }
         Ok(Self {
             outer: ObjectGuard::capture(
@@ -235,6 +249,13 @@ impl FacadeGuard {
                     "max_size_per_item",
                     "redis_kwargs",
                     "redis_flush_size",
+                    "similarity_threshold",
+                    "distance_threshold",
+                    "embedding_model",
+                    "embedding_max_input_tokens",
+                    "embedding_timeout",
+                    "_index_name",
+                    "_redis_url",
                 ],
             )?,
             redis_pool: (kind == "redis")
