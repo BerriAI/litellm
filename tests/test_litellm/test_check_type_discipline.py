@@ -761,6 +761,29 @@ def test_frozen_false_is_flagged(tmp_path):
     assert "LIT013" in _codes(tmp_path, src)
 
 
+def test_later_model_config_frozen_false_overrides_earlier_frozen_true(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class P(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "    model_config = ConfigDict(frozen=False)\n"
+    )
+    assert "LIT013" in _codes(tmp_path, src)
+
+
+def test_subclass_frozen_false_overrides_frozen_parent(tmp_path):
+    src = (
+        "from pydantic import BaseModel, ConfigDict\n"
+        "class Base(BaseModel):\n"
+        "    model_config = ConfigDict(frozen=True)\n"
+        "class Writable(Base):\n"
+        "    model_config = ConfigDict(frozen=False)\n"
+        "class StillFrozen(Base):\n"
+        "    model_config = ConfigDict(extra='allow')\n"
+    )
+    assert _codes(tmp_path, src).count("LIT013") == 1
+
+
 def test_root_model_without_frozen_is_flagged(tmp_path):
     src = "from pydantic import RootModel\nclass P(RootModel):\n    root: int\n"
     assert "LIT013" in _codes(tmp_path, src)

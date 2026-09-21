@@ -1073,25 +1073,23 @@ def _pydantic_classes(tree: ast.AST) -> tuple[ast.ClassDef, ...]:
     return tuple(cls for cls in classes if cls.name in names)
 
 
-def _model_config_is_frozen(value: ast.expr) -> bool:
-    """`ConfigDict(frozen=True)` in any kwarg position, or a dict literal carrying
-    `"frozen": True`."""
+def _bool_constant(value: ast.expr) -> bool | None:
+    return value.value if isinstance(value, ast.Constant) and isinstance(value.value, bool) else None
+
+
+def _model_config_frozen(value: ast.expr) -> bool | None:
+    """The `frozen` flag a `ConfigDict(...)` call or dict literal sets, None when it sets none."""
     if isinstance(value, ast.Call) and _head_name(value.func) == "ConfigDict":
-        return any(
-            kw.arg == "frozen"
-            and isinstance(kw.value, ast.Constant)
-            and kw.value.value is True
-            for kw in value.keywords
-        )
+        flags = tuple(_bool_constant(kw.value) for kw in value.keywords if kw.arg == "frozen")
+        return flags[-1] if flags else None
     if isinstance(value, ast.Dict):
-        return any(
-            isinstance(key, ast.Constant)
-            and key.value == "frozen"
-            and isinstance(item, ast.Constant)
-            and item.value is True
+        flags = tuple(
+            _bool_constant(item)
             for key, item in zip(value.keys, value.values)
+            if isinstance(key, ast.Constant) and key.value == "frozen"
         )
-    return False
+        return flags[-1] if flags else None
+    return None
 
 
 def _assigns_name(stmt: ast.stmt, name: str) -> ast.expr | None:
@@ -1103,33 +1101,44 @@ def _assigns_name(stmt: ast.stmt, name: str) -> ast.expr | None:
     return None
 
 
-def _config_class_is_frozen(node: ast.ClassDef) -> bool:
-    """An inner `class Config:` counts only when it binds `frozen = True`."""
-    return any(
-        isinstance(value, ast.Constant) and value.value is True
+def _config_class_frozen(node: ast.ClassDef) -> bool | None:
+    """The `frozen = ...` flag an inner `class Config:` binds, None when it binds none."""
+    flags = tuple(
+        _bool_constant(value)
         for stmt in node.body
         for value in (_assigns_name(stmt, "frozen"),)
         if value is not None
     )
+    return flags[-1] if flags else None
 
 
-def _class_is_frozen(cls: ast.ClassDef) -> bool:
-    for stmt in cls.body:
-        config_value = _assigns_name(stmt, "model_config")
-        if config_value is not None and _model_config_is_frozen(config_value):
-            return True
-        if isinstance(stmt, ast.ClassDef) and stmt.name == "Config" and _config_class_is_frozen(stmt):
-            return True
-    return False
+def _stmt_frozen_flag(stmt: ast.stmt) -> bool | None:
+    config_value = _assigns_name(stmt, "model_config")
+    if config_value is not None:
+        return _model_config_frozen(config_value)
+    if isinstance(stmt, ast.ClassDef) and stmt.name == "Config":
+        return _config_class_frozen(stmt)
+    return None
+
+
+def _class_frozen_override(cls: ast.ClassDef) -> bool | None:
+    """The `frozen` flag the class body itself sets; the last statement that sets one wins,
+    like pydantic. None means the class inherits its parent's setting."""
+    flags = tuple(flag for flag in map(_stmt_frozen_flag, cls.body) if flag is not None)
+    return flags[-1] if flags else None
 
 
 def iter_pydantic_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
     models = _pydantic_classes(tree)
     bases_of = {cls.name: _base_names(cls) for cls in models}
 
+    override_of = {cls.name: _class_frozen_override(cls) for cls in models}
+
     def frozen(known: frozenset[str]) -> frozenset[str]:
         grown = known | frozenset(
-            cls.name for cls in models if _class_is_frozen(cls) or bases_of[cls.name] & known
+            cls.name
+            for cls in models
+            if override_of[cls.name] is True or (override_of[cls.name] is None and bases_of[cls.name] & known)
         )
         return grown if grown == known else frozen(grown)
 
