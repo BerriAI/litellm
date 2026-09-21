@@ -707,6 +707,26 @@ class EmbedResponse(BaseModel):
     model: str | None = None
 
 
+# ---------- rerank ----------
+
+
+class RerankBody(BaseModel):
+    model: str
+    query: str
+    documents: list[str]
+    top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class RerankItem(BaseModel):
+    index: int | None = None
+    relevance_score: float | None = None
+
+
+class RerankResponse(BaseModel):
+    results: list[RerankItem] = []
+
+
 # ---------- ocr ----------
 
 
@@ -1001,6 +1021,7 @@ class LiteLLMParamsBody(BaseModel):
     s3_region_name: str | None = None
     s3_access_key_id: str | None = None
     s3_secret_access_key: str | None = None
+    s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
     aws_role_name: str | None = None
     aws_session_name: str | None = None
