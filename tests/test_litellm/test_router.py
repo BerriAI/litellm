@@ -17087,7 +17087,9 @@ def test_router_fallback_ignores_injected_original_prompt_params(
         if kwargs.get("model") == "openai/gpt-4o-primary":
             raise litellm.RateLimitError(
                 message="Rate limit reached",
-                response=httpx.Response(429, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")),
+                response=httpx.Response(
+                    429, request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+                ),
                 llm_provider="openai",
                 model="gpt-4o-primary",
             )

@@ -474,13 +474,15 @@ def creates_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     return getattr(kwargs.get("original_function"), "__name__", None) in PROVIDER_SCOPED_CREATION_FUNCTION_NAMES
 
 
-ALLOWED_FALLBACK_PROMPT_PARAMS: Final = frozenset({
-    "prompt_id",
-    "prompt_variables",
-    "prompt_label",
-    "prompt_version",
-    "prompt_environment",
-})
+ALLOWED_FALLBACK_PROMPT_PARAMS: Final = frozenset(
+    {
+        "prompt_id",
+        "prompt_variables",
+        "prompt_label",
+        "prompt_version",
+        "prompt_environment",
+    }
+)
 
 
 def _restore_fallback_prompt_state(kwargs: dict[str, object]) -> None:
