@@ -1,5 +1,7 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 const DISALLOWED_OUTSIDE_INTEROP: &[&str] = &[
     "py.import(\"json\")",

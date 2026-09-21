@@ -9,7 +9,7 @@ import functools
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
 if TYPE_CHECKING:
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm import verbose_logger
@@ -28,6 +29,7 @@ from litellm.llms.base_llm.anthropic_messages.transformation import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import AllMessageValues
@@ -83,19 +85,7 @@ class BedrockError(BaseLLMException):
         )
 
 
-_BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (
-    "aws_access_key_id",
-    "aws_secret_access_key",
-    "aws_session_token",
-    "aws_region_name",
-    "aws_session_name",
-    "aws_profile_name",
-    "aws_role_name",
-    "aws_web_identity_token",
-    "aws_sts_endpoint",
-    "aws_external_id",
-    "aws_session_tags",
-)
+_BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (*AWS_AUTH_PARAM_KEYS, "aws_region_name")
 
 
 def merge_bedrock_aws_request_params(
@@ -339,6 +329,17 @@ def normalize_custom_field_on_tools(request_body: dict) -> None:
         deferred: object = custom.get("defer_loading")
         if isinstance(deferred, bool):
             tool["defer_loading"] = deferred
+
+
+_TOOL_DICTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def tools_without_eager_input_streaming(request_body: Mapping[str, object]) -> Sequence[object] | None:
+    try:
+        tools: Final = _TOOL_DICTS_ADAPTER.validate_python(request_body.get("tools"))
+    except ValidationError:
+        return None
+    return [{key: value for key, value in tool.items() if key != "eager_input_streaming"} for tool in tools]
 
 
 def normalize_json_schema_custom_types_to_object(schema: dict) -> None:
@@ -1669,20 +1670,9 @@ class CommonBatchFilesUtils:
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
 
-        # Get AWS credentials using existing methods
         aws_region_name: Final = self._base_aws._get_aws_region_name(optional_params=optional_params, model="")
-        credentials: Final = self._base_aws.get_credentials(
-            aws_access_key_id=optional_params.get("aws_access_key_id"),
-            aws_secret_access_key=optional_params.get("aws_secret_access_key"),
-            aws_session_token=optional_params.get("aws_session_token"),
-            aws_region_name=aws_region_name,
-            aws_session_name=optional_params.get("aws_session_name"),
-            aws_profile_name=optional_params.get("aws_profile_name"),
-            aws_role_name=optional_params.get("aws_role_name"),
-            aws_web_identity_token=optional_params.get("aws_web_identity_token"),
-            aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
-            aws_external_id=optional_params.get("aws_external_id"),
-            aws_session_tags=optional_params.get("aws_session_tags"),
+        credentials: Final = self._base_aws.resolve_credentials(
+            AwsAuthParams.model_validate(optional_params), aws_region_name
         )
 
         # Prepare the request data

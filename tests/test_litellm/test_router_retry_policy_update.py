@@ -360,7 +360,7 @@ async def test_config_update_persists_and_reads_back_retry_policy(monkeypatch):
 
     async def _apply_router_settings(*args, **kwargs):
         await proxy_server.proxy_config._add_router_settings_from_db_config(
-            config_data={}, llm_router=router, prisma_client=prisma_client
+            llm_router=router, prisma_client=prisma_client
         )
 
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)

@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmUserRoles,
     Member,
+    ProxyException,
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
@@ -27,6 +28,8 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _raise_if_rate_limits_required_but_missing,
     clear_cache,
     delete_team_models,
+    patch_model,
+    update_model,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.router import Router
@@ -3709,6 +3712,91 @@ class TestModelInfoServerDerivedPricingFilter:
             assert field not in info, f"{field} was persisted as a per-deployment override"
             assert field not in params
 
+    def test_echoed_pricing_overrides_report_is_not_persisted(self):
+        """LIT-8064. `/model/info` reports which pricing fields a deployment overrides; a
+        client echoing that response back must not store the report as a field."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6"),
+            model_info=ModelInfo(id="dep-report-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-report-0", access_groups=["prod"], pricing_overrides=[]),
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        assert info["access_groups"] == ["prod"]
+        assert "pricing_overrides" not in info
+
+    def test_a_row_pinned_before_1_102_drops_its_cost_map_copy_on_its_next_save(self, monkeypatch: pytest.MonkeyPatch):
+        """LIT-8064. A stored ``model_info`` carrying ``key`` is a ``/model/info`` response an old
+        UI wrote back, so its pricing is the cost map of that day. The next edit of the row, here
+        only its reasoning level, leaves that copy behind and keeps everything the operator set."""
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-lit8064-heal-on-save")
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6", reasoning_effort="medium"),
+            model_info=ModelInfo(
+                id="dep-pinned-0",
+                key="gpt-5.6",
+                mode="chat",
+                access_groups=["prod"],
+                input_cost_per_token=4e-06,
+                output_cost_per_token=2e-05,
+                cache_read_input_token_cost_above_272k_tokens=8e-07,
+            ),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(reasoning_effort="low")),
+        )
+
+        info = json.loads(result["model_info"])
+        params = json.loads(result["litellm_params"])
+        assert decrypt_value_helper(value=params["reasoning_effort"], key="reasoning_effort") == "low"
+        assert (info["key"], info["mode"], info["access_groups"]) == ("gpt-5.6", "chat", ["prod"])
+        for field in ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost_above_272k_tokens"):
+            assert field not in info, f"{field} still pins the row to the cost map of the day it was saved"
+            assert field not in params
+
+    def test_a_litellm_params_price_survives_the_cost_map_copy_being_dropped(self):
+        """The price an operator typed on ``litellm_params`` is the override the customer asked
+        for, so dropping the echoed ``model_info`` copy must leave it in place."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+        db_model = Deployment(
+            model_name="gpt-5.6",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.6", input_cost_per_token=3e-06),
+            model_info=ModelInfo(id="dep-typed-0", key="gpt-5.6", input_cost_per_token=3e-06),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(model_info=ModelInfo(id="dep-typed-0", access_groups=["prod"])),
+        )
+
+        assert json.loads(result["litellm_params"])["input_cost_per_token"] == 3e-06
+        assert json.loads(result["model_info"])["access_groups"] == ["prod"]
+
     def test_tiered_above_threshold_pricing_is_dropped(self):
         """Tiered rates ride `get_model_info` on a pattern match and are declared on no
         model, so a filter built only from the declared pricing fields would miss them."""
@@ -6516,6 +6604,65 @@ class TestTeamMemberAutoRouterWrites:
         assert saved_info["member_auto_router"] is (change == "unrelated")
         assert saved_info["team_id"] == "member-team"
         assert saved_info["access_groups"] == ["retained-admin-group"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic"])
+    async def test_jev_dashboard_save_preserves_server_transport(self, endpoint: str, change: str) -> None:
+        original: Final = self._row()
+        transport: Final = {"api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com"}
+        stored_config: Final = {
+            "classifier_type": "jev",
+            "tiers": {"SIMPLE": "allowed"},
+            "jev_classifier_config": {**transport, "instructions": "Old instructions", "timeout_ms": 6100},
+        }
+        row: Final = original.model_copy(
+            update={
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": stored_config,
+                },
+            }
+        )
+        database: Final = self._database(self._team(), row)
+        overrides: Final = {
+            "save": {},
+            "rotate": {"api_key": "synthetic-replacement-jev-key"},
+            "move": {"api_base": "https://new-jev.example.com", "api_key": "synthetic-replacement-jev-key"},
+            "move-without-key": {"api_base": "https://new-jev.example.com"},
+            "reset": {"api_key": None, "api_base": None},
+            "heuristic": {},
+        }[change]
+        config: Final = {
+            "tiers": {"SIMPLE": "allowed"},
+            "classifier_type": "heuristic" if change == "heuristic" else "jev",
+            **({} if change == "heuristic" else {"jev_classifier_config": {"timeout_ms": 8100, **overrides}}),
+        }
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(complexity_router_config=config),
+            model_info=ModelInfo(id=row.model_id),
+        )
+        actor: Final = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        with self._environment(database, row):
+            operation: Final = (
+                patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+            )
+            if change == "move-without-key":
+                with pytest.raises(ProxyException, match="api_base requires"):
+                    await operation
+                database.db.litellm_proxymodeltable.update.assert_not_awaited()
+                return
+            await operation
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
+        expected: Final = (
+            config
+            if change == "heuristic"
+            else {**config, "jev_classifier_config": {**transport, "timeout_ms": 8100, **overrides}}
+        )
+        assert saved == expected
+        assert row.litellm_params["complexity_router_config"] == stored_config
+        assert request.litellm_params.complexity_router_config == config
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])

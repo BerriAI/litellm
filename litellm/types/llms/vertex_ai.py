@@ -425,22 +425,35 @@ class UrlContextMetadata(TypedDict, total=False):
     urlMetadata: list[UrlMetadata]
 
 
+GeminiFinishReason = Literal[
+    "FINISH_REASON_UNSPECIFIED",
+    "STOP",
+    "MAX_TOKENS",
+    "SAFETY",
+    "RECITATION",
+    "LANGUAGE",
+    "OTHER",
+    "BLOCKLIST",
+    "PROHIBITED_CONTENT",
+    "SPII",
+    "MALFORMED_FUNCTION_CALL",
+    "IMAGE_SAFETY",
+    "IMAGE_PROHIBITED_CONTENT",
+    "TOO_MANY_TOOL_CALLS",
+    "MALFORMED_RESPONSE",
+    "NO_IMAGE",
+    "IMAGE_RECITATION",
+    "IMAGE_OTHER",
+    "ESCALATION",
+    "UNEXPECTED_TOOL_CALL",
+    "MISSING_THOUGHT_SIGNATURE",
+]
+
+
 class Candidates(TypedDict, total=False):
     index: int
     content: HttpxContentType
-    finishReason: Literal[
-        "FINISH_REASON_UNSPECIFIED",
-        "STOP",
-        "MAX_TOKENS",
-        "SAFETY",
-        "RECITATION",
-        "OTHER",
-        "BLOCKLIST",
-        "PROHIBITED_CONTENT",
-        "SPII",
-        "MALFORMED_FUNCTION_CALL",
-        "IMAGE_SAFETY",
-    ]
+    finishReason: GeminiFinishReason
     safetyRatings: list[SafetyRatings]
     citationMetadata: CitationMetadata
     groundingMetadata: GroundingMetadata

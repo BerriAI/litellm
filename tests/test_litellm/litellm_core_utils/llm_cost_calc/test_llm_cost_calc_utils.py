@@ -15,6 +15,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _is_off_peak,
     _is_within_off_peak_window,
     apply_off_peak_pricing,
+    apply_provider_cache_read_default,
     calculate_cache_writing_cost,
     generic_cost_per_token,
     get_billed_token_rates,
@@ -48,7 +49,7 @@ def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize("prompt_tokens", [100, 200000, 200001])
 @pytest.mark.parametrize("read_rate", [None, 0.0, 0.25e-6])
 @pytest.mark.parametrize("service_tier", [None, "priority"])
-def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, service_tier):
+def test_missing_cache_read_rate_resolves_to_input_rate(prompt_tokens, read_rate, service_tier):
     info = {
         "input_cost_per_token": 3e-6,
         "input_cost_per_token_priority": 4e-6,
@@ -59,14 +60,54 @@ def test_missing_cache_read_policy_preserves_billing(prompt_tokens, read_rate, s
     }
     usage = Usage(prompt_tokens=prompt_tokens, prompt_tokens_details={"cached_tokens": 100})
     billed = _get_token_base_cost(info, usage, service_tier=service_tier)
-    savings = _get_token_base_cost(info, usage, service_tier=service_tier, missing_cache_read_uses_input=True)
     prompt_cost, _ = generic_cost_per_token(
         "policy-fixture", usage, "openai", service_tier=service_tier, model_info=info
     )
-    assert billed[4] == pytest.approx(read_rate or 0.0)
-    assert savings[:4] == billed[:4]
-    assert savings[4] == pytest.approx(billed[0] if read_rate is None else read_rate)
+    assert billed[4] == pytest.approx(read_rate if read_rate is not None else billed[0])
     assert prompt_cost == pytest.approx((prompt_tokens - 100) * billed[0] + 100 * billed[4])
+
+
+def test_generic_cost_per_token_bills_cache_reads_at_input_rate_when_no_cache_read_rate() -> None:
+    model_info: ModelInfo = {
+        "key": "bare-model",
+        "max_tokens": None,
+        "max_input_tokens": None,
+        "max_output_tokens": None,
+        "input_cost_per_token": 2.4e-7,
+        "output_cost_per_token": 9.7e-7,
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "supported_openai_params": None,
+    }
+    usage = Usage(
+        prompt_tokens=12928,
+        completion_tokens=380,
+        total_tokens=13308,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=12288),
+    )
+
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model="bare-model",
+        usage=usage,
+        custom_llm_provider="bedrock",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(12928 * 2.4e-7)
+    assert completion_cost == pytest.approx(380 * 9.7e-7)
+
+
+def test_apply_provider_cache_read_default_only_derives_a_rate_for_fireworks() -> None:
+    openai_info: ModelInfo = {"input_cost_per_token": 2e-6}
+    fireworks_info: ModelInfo = {"input_cost_per_token": 2e-6}
+
+    assert apply_provider_cache_read_default(openai_info, "openai") is openai_info
+    assert apply_provider_cache_read_default(openai_info, None) is openai_info
+
+    processed_fireworks_info = apply_provider_cache_read_default(fireworks_info, "fireworks_ai")
+
+    assert processed_fireworks_info is not fireworks_info
+    assert processed_fireworks_info["cache_read_input_token_cost"] == pytest.approx(2e-6 * 0.5)
 
 
 def test_generic_cost_per_token_prefers_audio_per_second_rate() -> None:
@@ -180,11 +221,7 @@ def test_missing_cache_read_uses_off_peak_input_rate():
     }
     when = datetime(2026, 9, 7, 12, tzinfo=timezone.utc)
     billed = _get_token_base_cost(info, Usage(prompt_tokens=100), current_time=when)
-    savings = _get_token_base_cost(
-        info, Usage(prompt_tokens=100), current_time=when, missing_cache_read_uses_input=True
-    )
-    assert billed[4] == 0.0
-    assert savings[0] == savings[4] == 5e-6
+    assert billed[0] == billed[4] == 5e-6
 
 
 def test_reasoning_tokens_no_price_set(_local_model_cost_map):
@@ -216,9 +253,7 @@ def test_reasoning_tokens_no_price_set(_local_model_cost_map):
         model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
         10,
     )
-    print(f"completion_cost: {completion_cost}")
     expected_completion_cost = model_cost_map["output_cost_per_token"] * usage.completion_tokens
-    print(f"expected_completion_cost: {expected_completion_cost}")
     assert round(completion_cost, 10) == round(
         expected_completion_cost,
         10,

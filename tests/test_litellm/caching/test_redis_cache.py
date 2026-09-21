@@ -1502,3 +1502,51 @@ async def test_async_set_cache_pipeline_with_ttls_keeps_each_entry_ttl(monkeypat
         ("ns:u1", '{"user_id": "u1"}', timedelta(seconds=7)),
         ("ns:org_id:o1", '{"a": 1}', timedelta(seconds=300)),
     ]
+
+
+class _ListPipeline:
+    def __init__(self, rows: list[str]) -> None:
+        self.rows = rows
+        self.queued: list[tuple[str, ...]] = []
+
+    async def __aenter__(self) -> "_ListPipeline":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    def rpush(self, key: str, *values: str) -> None:
+        self.queued.append(("rpush", key, *values))
+
+    def ltrim(self, key: str, start: int, end: int) -> None:
+        self.queued.append(("ltrim", key, str(start), str(end)))
+
+    async def execute(self) -> list[object]:
+        results: list[object] = []
+        for op in self.queued:
+            if op[0] == "rpush":
+                self.rows.extend(op[2:])
+                results.append(len(self.rows))
+            else:
+                start, end = int(op[2]), int(op[3])
+                del self.rows[: max(len(self.rows) + start, 0) if start < 0 else start]
+                results.append(True)
+        return results
+
+
+@pytest.mark.asyncio
+async def test_async_rpush_and_trim_runs_push_and_trim_in_one_transaction(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache(namespace="ns")
+    rows = ["a", "b"]
+    pipe = _ListPipeline(rows)
+    client = MagicMock()
+    client.pipeline = MagicMock(return_value=pipe)
+
+    with patch.object(redis_cache, "init_async_client", return_value=client):
+        pushed_len = await redis_cache.async_rpush_and_trim(key="buf", values=["c", "d"], max_len=3)
+
+    client.pipeline.assert_called_once_with(transaction=True)
+    assert pushed_len == 4
+    assert rows == ["b", "c", "d"]
+    assert pipe.queued == [("rpush", "ns:buf", "c", "d"), ("ltrim", "ns:buf", "-3", "-1")]

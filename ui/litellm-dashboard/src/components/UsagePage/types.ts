@@ -50,6 +50,7 @@ export interface KeyMetadata {
   team_id: string | null;
   user_id?: string | null;
   user_email?: string | null;
+  key_exists?: boolean | null;
   tags?: { tag: string; usage: number }[];
 }
 

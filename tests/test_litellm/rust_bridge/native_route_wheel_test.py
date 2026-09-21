@@ -73,7 +73,7 @@ def assert_native_request(
     headers: HTTPMessage,
     body: object,
 ) -> None:
-    if route not in {"transcription", "messages", "chat_completions"}:
+    if route not in {"transcription", "chat_completions"}:
         raise AssertionError(f"unexpected route marker: {route!r}")
     if outcome not in {"success", "429", "hang"}:
         raise AssertionError(f"unexpected outcome marker: {outcome!r}")
@@ -89,10 +89,6 @@ def assert_native_request(
     assert path == "/v1/messages"
     assert headers.get("x-api-key") == "sk-native"
     assert body["model"] == "claude-sonnet-4-5"
-    if route == "messages":
-        assert body["max_tokens"] == 16
-        assert body["messages"][0]["content"] == "hello-from-messages"
-        return
     assert body["max_tokens"] == 17
     assert body["messages"][0]["content"] == [{"type": "text", "text": "hello-from-chat"}]
 
@@ -132,17 +128,6 @@ def route_kwargs(route: str, api_base: str, outcome: str) -> dict[str, object]:
                 "language": "en",
             },
         }
-    if route == "messages":
-        return common | {
-            "model": "claude-sonnet-4-5",
-            "body": {
-                "model": "claude-sonnet-4-5",
-                "max_tokens": 16,
-                "messages": [{"role": "user", "content": "hello-from-messages"}],
-            },
-            "api_key": "sk-native",
-            "custom_llm_provider": "anthropic",
-        }
     if route == "chat_completions":
         return common | {
             "model": "anthropic/claude-sonnet-4-5",
@@ -165,8 +150,6 @@ def assert_success(route: str, response: object) -> None:
 def success_value(route: str, response: dict[object, object]) -> object:
     if route == "transcription":
         return response["text"]
-    if route == "messages":
-        return response["content"][0]["text"]
     return response["choices"][0]["message"]["content"]
 
 
@@ -181,7 +164,7 @@ def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
 
 
 def exercise_sync(native: object, api_base: str) -> None:
-    for route in ("transcription", "messages", "chat_completions"):
+    for route in ("transcription", "chat_completions"):
         function: Final = getattr(native, route)
         assert_success(route, function(**route_kwargs(route, api_base, "success")))
         try:
@@ -193,7 +176,7 @@ def exercise_sync(native: object, api_base: str) -> None:
 
 
 async def exercise_async(native: object, api_base: str) -> None:
-    for route in ("transcription", "messages", "chat_completions"):
+    for route in ("transcription", "chat_completions"):
         function: Final = getattr(native, f"a{route}")
         assert_success(route, await function(**route_kwargs(route, api_base, "success")))
         try:
@@ -206,11 +189,11 @@ async def exercise_async(native: object, api_base: str) -> None:
 
 async def exercise_async_concurrency(native: object, api_base: str) -> None:
     responses: Final = await asyncio.wait_for(
-        asyncio.gather(*(native.amessages(**route_kwargs("messages", api_base, "success")) for _ in range(32))),
+        asyncio.gather(*(native.achat_completions(**route_kwargs("chat_completions", api_base, "success")) for _ in range(32))),
         timeout=15,
     )
     for response in responses:
-        assert_success("messages", response)
+        assert_success("chat_completions", response)
 
 
 def exercise_routes(native_path: Path, api_base: str) -> object:
@@ -223,8 +206,8 @@ def exercise_routes(native_path: Path, api_base: str) -> object:
 
 def exercise_signal(native: object, api_base: str) -> int:
     try:
-        native.messages(
-            **route_kwargs("messages", api_base, "hang"),
+        native.chat_completions(
+            **route_kwargs("chat_completions", api_base, "hang"),
         )
     except KeyboardInterrupt:
         sys.stdout.write("KeyboardInterrupt\n")

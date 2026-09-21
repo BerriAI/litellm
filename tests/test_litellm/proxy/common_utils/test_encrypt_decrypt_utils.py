@@ -6,12 +6,16 @@ gate, and the backward-compatibility guarantees that let legacy XSalsa20-Poly130
 (nacl) ciphertext and new AES values coexist and decrypt correctly.
 """
 
+import base64
+
 import pytest
 
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _V2_GCM_PREFIX,
+    decrypt_if_encrypted_with,
     decrypt_value_helper,
+    encrypt_value,
     encrypt_value_helper,
 )
 
@@ -185,3 +189,50 @@ def test_decrypt_failure_debug_log_omits_raw_value(monkeypatch):
         "the failing key should still be named in the breadcrumb"
     )
     assert result == secret
+
+
+@pytest.mark.parametrize("use_aes", [False, True])
+def test_explicit_key_decrypt_reads_only_values_written_under_that_key(monkeypatch, use_aes: bool):
+    if use_aes:
+        _use_aes(monkeypatch)
+    written_with_previous_key = encrypt_value_helper("stored-secret", new_encryption_key="sk-1234")
+
+    assert decrypt_if_encrypted_with(written_with_previous_key, "sk-1234") == "stored-secret"
+    assert decrypt_if_encrypted_with(written_with_previous_key, "sk-another-key") is None
+    assert decrypt_value_helper(written_with_previous_key, key="t", exception_type="debug") is None
+
+
+@pytest.mark.parametrize(
+    "not_a_ciphertext",
+    [
+        "",
+        "gpt-5.4-mini",
+        "https://example.invalid/v1",
+        "v2:gcm:",
+        "aGVsbG8=",
+        "*",
+        "-",
+        "_",
+        "...",
+        " ",
+        "{}",
+        "[]",
+        "=",
+    ],
+)
+def test_explicit_key_decrypt_rejects_values_that_are_not_ciphertexts(not_a_ciphertext: str):
+    assert decrypt_if_encrypted_with(not_a_ciphertext, "sk-1234") is None
+
+
+@pytest.mark.parametrize("use_aes", [False, True])
+def test_explicit_key_decrypt_tells_an_encrypted_empty_string_from_no_ciphertext(monkeypatch, use_aes: bool):
+    if use_aes:
+        _use_aes(monkeypatch)
+
+    assert decrypt_if_encrypted_with(encrypt_value_helper("", new_encryption_key="sk-1234"), "sk-1234") == ""
+
+
+def test_explicit_key_decrypt_supports_the_empty_master_key():
+    written_with_empty_key = encrypt_value(value="stored-secret", signing_key="")
+
+    assert decrypt_if_encrypted_with(base64.urlsafe_b64encode(written_with_empty_key).decode(), "") == "stored-secret"

@@ -10,7 +10,11 @@ have been aggregated across models.
 
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, Final, NamedTuple
+from math import isclose, isfinite
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple
+
+from pydantic import BaseModel, ConfigDict, Field
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -65,7 +69,7 @@ def _resolve_model(model: str | None, custom_llm_provider: str | None) -> _Model
         return None
     try:
         resolved_model, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception as e:  # noqa: BLE001  # get_llm_provider raises for unroutable names; degrade to zero savings
+    except Exception as e:  # noqa: BLE001  # get_llm_provider raises for unroutable names; degrade to an unavailable estimate
         verbose_proxy_logger.debug(
             "savings: cannot resolve provider for model=%s custom_llm_provider=%s (%s)", model, custom_llm_provider, e
         )
@@ -116,6 +120,68 @@ class PricingBasis(NamedTuple):
 
 
 _STANDARD_RATES: Final = PricingBasis()
+
+
+class BaselineCostSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    model: str
+    provider: str
+    prices: ModelInfo | None
+    basis: PricingBasis = _STANDARD_RATES
+    actual_spend: float = Field(allow_inf_nan=False, ge=0)
+    actual_token_cost: float | None = Field(default=None, allow_inf_nan=False, ge=0)
+    classifier_cost: float = Field(default=0.0, allow_inf_nan=False, ge=0)
+
+
+def baseline_cost_snapshot(
+    model: str,
+    prices: ModelInfo | None,
+    actual_spend: float,
+    cost_breakdown: Mapping[str, object] | None,
+    routing_decision: Mapping[str, object] | None,
+) -> BaselineCostSnapshot:
+    return BaselineCostSnapshot(
+        model=model,
+        provider="anthropic",
+        prices=prices,
+        actual_spend=actual_spend,
+        basis=_pricing_basis(cost_breakdown),
+        actual_token_cost=_recorded_token_cost(cost_breakdown),
+        classifier_cost=classifier_cost_from_decision(routing_decision) or 0.0,
+    )
+
+
+class BaselineCosts(NamedTuple):
+    actual: float
+    baseline: float
+
+    @property
+    def savings(self) -> float:
+        return self.baseline - self.actual
+
+
+def price_baseline_comparison(
+    snapshot: BaselineCostSnapshot,
+    baseline_usage: Usage | None,
+    provenance: Literal["observed_identical", "modeled"] | None,
+) -> BaselineCosts | None:
+    if baseline_usage is None or provenance is None:
+        return None
+    actual: Final = snapshot.actual_spend + snapshot.classifier_cost
+    if provenance == "observed_identical":
+        return BaselineCosts(actual=actual, baseline=snapshot.actual_spend)
+    if snapshot.prices is None or snapshot.actual_token_cost is None:
+        return None
+    token_cost: Final = _cost_of_usage(
+        _ModelIdentity(snapshot.model, snapshot.provider), baseline_usage, snapshot.prices, snapshot.basis
+    )
+    if token_cost is None or not isfinite(token_cost) or token_cost < 0:
+        return None
+    baseline: Final = snapshot.actual_spend + token_cost - snapshot.actual_token_cost
+    if not isfinite(baseline) or baseline < 0:
+        return None
+    return BaselineCosts(actual=actual, baseline=baseline)
 
 
 def _pricing_basis(cost_breakdown: Mapping[str, object] | None) -> PricingBasis:
@@ -225,56 +291,16 @@ def _baseline_cache_rate_keys(baseline_info: ModelInfo | None) -> tuple[bool, bo
     )
 
 
-def _baseline_usage(usage: Usage, conversation_continuing: bool, baseline_info: ModelInfo | None = None) -> Usage:
-    """The same request as a single-model baseline would have met it.
-
-    The baseline is one model serving every turn, so whether it had this prompt cached
-    is simply whether the conversation was already underway. On a continuing
-    conversation it wrote the prompt on an earlier turn and would only read it now, so
-    the cache tokens move into the read bucket and whatever this request paid to write
-    counts against the saving; that write is what switching models costs.
-
-    On a conversation's first turn nothing was cached anywhere, for any model. The
-    baseline would have written the same prompt, so the cache buckets stay where they are
-    and both arms carry the write at their own rates, unless the baseline has no rate for
-    a bucket, in which case those tokens are its plain input. Charging the write to this case
-    too, which is all a single rollup row can support, understates a first turn to a
-    few percent of its value and can render a profitable route as a loss.
-
-    A continuing turn that mostly read from cache is the third case: the selected model
-    was already warm, so it is the one that has been serving this conversation and the
-    baseline's cache holds exactly what its does. The tokens written are the turn's own
-    growth, new to every model, and the baseline would have paid to write them too.
-    Moving them would forgive the baseline a write it really owes and shrink the
-    reported saving. "Mostly read" rather than "read anything" on purpose: a switch onto
-    a model holding a small prefix of this prompt still writes most of it, and must keep
-    counting that write against the saving.
-
-    Only the cache buckets move. Every other field the request was priced on travels
-    through untouched, audio and image and video counts among them, because the baseline
-    is this same request served by a model that happened to be warm; naming the fields to
-    keep instead would price the baseline on a request that never ran, and would go stale
-    the next time a priced field is added.
-    """
+def _baseline_usage(usage: Usage, baseline_info: ModelInfo | None = None) -> Usage:
     cache_read, cache_creation = _cache_token_split(usage)
     details: Final = usage.prompt_tokens_details
     if details is None or (cache_read <= 0 and cache_creation <= 0):
         return usage
-
-    # The tokens this request paid to write move into the cached count and the creation
-    # charge is dropped: on one model that cache was already warm, so the baseline would
-    # have read them rather than paying to create them. The 5m/1h breakdown goes with
-    # them; left behind it re-charges the write.
-    warm: Final = conversation_continuing and cache_creation > 0 and cache_read <= cache_creation
-    reads = cache_read + cache_creation if warm else cache_read
-    writes = 0 if warm else cache_creation
-
     prices_reads, prices_writes = _baseline_cache_rate_keys(baseline_info)
-    reads = reads if prices_reads else 0
-    writes = writes if prices_writes else 0
+    reads: Final = cache_read if prices_reads else 0
+    writes: Final = cache_creation if prices_writes else 0
     if (reads, writes) == (cache_read, cache_creation):
         return usage
-
     other_modalities: Final = sum(
         (getattr(details, field, 0) or 0) for field in ("audio_tokens", "image_tokens", "video_tokens")
     )
@@ -309,64 +335,47 @@ def compute_autorouter_savings(
     cost_breakdown: Mapping[str, object] | None = None,
     baseline_deployment_id: str | None = None,
     selected_deployment_id: str | None = None,
-) -> float:
-    """Net dollars the router saved, or cost, by serving this request on ``selected_model``.
-
-    Signed on purpose. Switching models leaves the new one with a cold cache, so the
-    request pays a cache-creation charge that staying on one model would not have
-    incurred; when that charge outweighs the cheaper rates, routing lost money and the
-    dashboard has to be able to say so. Zero when both sides resolve to the same
-    deployment, or when either cannot be resolved or priced.
-
-    Only one side of this subtraction is a counterfactual. What the request cost on the
-    model that served it is a number the operator was actually billed, and the cost
-    calculator already wrote it down, so ``cost_breakdown`` is read rather than
-    re-derived. Recomputing it means restating every pricing dimension the biller
-    applied, and each one omitted is a silent disagreement with the ``spend`` column
-    beside it; a request billed at a priority tier recomputed at standard rates reads as
-    half its real cost.
-
-    The baseline has no such record, since it never ran, so it is priced through the same
-    cost engine on the basis the biller used for this request. An operator running that
-    one model instead of the router would have sent this request to the same tier and the
-    same region, because both are properties of the request and the deployment's
-    contract, not of which model the router happened to pick.
-
-    ``conversation_continuing`` says whether the baseline would already have had this
-    prompt cached. It defaults to True because that is the conservative reading: a
-    request whose shape the router could not determine is charged the write and
-    under-claims rather than inflating a savings figure.
-    """
-    # No provider argument for the baseline on purpose: it arrives from the routing
-    # metadata as a single self-describing string, already qualified by the auto-router,
-    # so there is no second field that could disagree with it.
+    baseline_usage: Usage | None = None,
+    baseline_provenance: Literal["observed_initial", "modeled"] | None = None,
+) -> float | None:
+    """Price established baseline usage; conversation shape cannot establish cache warmth."""
     baseline: Final = _resolve_model(baseline_model, None)
     selected: Final = _resolve_model(selected_model, selected_provider)
     if baseline is None or selected is None:
-        return 0.0
-    same_target: Final = (
-        baseline_deployment_id == selected_deployment_id
-        if baseline_deployment_id and selected_deployment_id
-        else baseline == selected
-    )
-    if same_target:
-        return 0.0
+        return None
+    if baseline_usage is None and any(_cache_token_split(usage)):
+        return None
     basis: Final = _pricing_basis(cost_breakdown)
     effective_baseline_info: Final = baseline_info if baseline_info is not None else _model_info(baseline)
+    modeled_usage: Final = baseline_usage if baseline_usage is not None else usage
     baseline_cost: Final = _cost_of_usage(
-        baseline,
-        _baseline_usage(usage, conversation_continuing, effective_baseline_info),
-        effective_baseline_info,
-        basis,
+        baseline, _baseline_usage(modeled_usage, effective_baseline_info), effective_baseline_info, basis
     )
-    # Falls back to pricing the request only when the biller recorded nothing, which is
-    # every row written before the breakdown carried its basis.
-    selected_cost = _recorded_token_cost(cost_breakdown)
-    if selected_cost is None:
-        selected_cost = _cost_of_usage(selected, usage, selected_info, basis)
+    recorded_selected_cost: Final = _recorded_token_cost(cost_breakdown)
+    selected_cost: Final = (
+        recorded_selected_cost
+        if recorded_selected_cost is not None
+        else _cost_of_usage(selected, usage, selected_info, basis)
+    )
     if baseline_cost is None or selected_cost is None:
-        return 0.0
-    return baseline_cost - selected_cost
+        return None
+    if baseline_provenance == "observed_initial":
+        same_prices: Final = effective_baseline_info == (
+            selected_info if selected_info is not None else _model_info(selected)
+        )
+        equivalent: Final = (
+            baseline_usage is not None
+            and baseline_usage == usage
+            and baseline == selected
+            and bool(baseline_deployment_id)
+            and baseline_deployment_id == selected_deployment_id
+            and same_prices
+            and recorded_selected_cost is not None
+            and isclose(baseline_cost, recorded_selected_cost, rel_tol=1e-9, abs_tol=1e-12)
+        )
+        return 0.0 if equivalent else None
+    difference: Final = baseline_cost - selected_cost
+    return difference if isfinite(difference) else None
 
 
 def _usage_from_spend_log(usage_object: Mapping[str, object] | None) -> Usage | None:
@@ -463,9 +472,21 @@ def _proxy_llm_router() -> "Router | None":
 
 def _numeric_savings(value: object) -> float | None:
     """``value`` as a recorded savings figure, or ``None`` when it is not one."""
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not isfinite(value):
         return None
     return float(value)
+
+
+def recorded_estimated_autorouter_savings(metadata: Mapping[str, object]) -> float | None:
+    estimate: Final = metadata.get("autorouter_savings_estimate")
+    if (
+        not isinstance(estimate, Mapping)
+        or type(estimate.get("version")) is not int
+        or estimate.get("version") not in (1, 2, 3)
+        or estimate.get("status") != "estimated"
+    ):
+        return None
+    return _numeric_savings(metadata.get("autorouter_savings"))
 
 
 def classifier_cost_from_decision(routing_decision: Mapping[str, object] | None) -> float | None:
@@ -490,22 +511,10 @@ def autorouter_savings_for_request(
     model_id: str | None = None,
     llm_router: "Callable[[], Router | None] | None" = None,
     cost_breakdown: Mapping[str, object] | None = None,
+    baseline_usage: Usage | None = None,
+    baseline_provenance: Literal["observed_initial", "modeled"] | None = None,
 ) -> float | None:
-    """Auto-router savings for one request, net of the classifier call that routed it,
-    or ``None`` when the driver is off.
-
-    ``None`` and ``0.0`` are different facts: ``None`` means this request cannot carry a
-    figure at all (no routing decision, no baseline, unusable usage), while ``0.0`` is a
-    real figure for a routed request whose baseline resolved to the served deployment.
-    Never raises: pricing failures inside degrade to zero, and the driver-off cases
-    return ``None``, so this is safe on the logging path where a raise would fail the
-    request's logging.
-
-    The classifier deduction lives here, at the figure's one computation owner, rather
-    than in any reader: the stamped ``autorouter_savings`` is then already net, so the
-    session rollup, the daily tables and every logging consumer agree without each
-    re-deriving the deduction, and the recorded-figure-wins path cannot deduct twice.
-    """
+    """Return net savings for established usage, or None when the estimate is unavailable."""
     usage: Final = _usage_from_spend_log(usage_object)
     if usage is None or not model:
         return None
@@ -522,15 +531,16 @@ def autorouter_savings_for_request(
         selected_model=model,
         selected_provider=custom_llm_provider,
         usage=usage,
-        # Absent means the router never recorded a shape, which is the conservative
-        # reading: charge the cache write rather than claim a first turn's saving.
-        conversation_continuing=decision.get("conversation_continuing") is not False,
         selected_info=_effective_model_info(router_instance, model_id, model or ""),
         baseline_info=_effective_model_info(router_instance, baseline_id, baseline_model or ""),
         cost_breakdown=cost_breakdown,
         baseline_deployment_id=baseline_id,
         selected_deployment_id=model_id,
+        baseline_usage=baseline_usage,
+        baseline_provenance=baseline_provenance,
     )
+    if gross is None:
+        return None
     classifier_cost: Final = classifier_cost_from_decision(decision)
     return gross if classifier_cost is None else gross - classifier_cost
 
@@ -542,6 +552,8 @@ def autorouter_savings_for_logging_payload(
     model_id: str | None,
     usage_object: Mapping[str, object] | None,
     cost_breakdown: Mapping[str, object] | None,
+    baseline_usage: Usage | None = None,
+    baseline_provenance: Literal["observed_initial", "modeled"] | None = None,
 ) -> float | None:
     """The figure the logging payload records for a request, or ``None`` when none should be.
 
@@ -561,6 +573,8 @@ def autorouter_savings_for_logging_payload(
         model_id=model_id,
         llm_router=_proxy_llm_router,
         cost_breakdown=cost_breakdown,
+        baseline_usage=baseline_usage,
+        baseline_provenance=baseline_provenance,
     )
 
 
@@ -575,6 +589,7 @@ def compute_savings_spend(
     llm_router: "Callable[[], Router | None] | None" = None,
     cost_breakdown: Mapping[str, object] | None = None,
     recorded_autorouter_savings: object = None,
+    recorded_autorouter_savings_estimate: Mapping[str, object] | None = None,
     billed_at: datetime | str | None = None,
 ) -> SavingsSpend:
     """
@@ -604,11 +619,9 @@ def compute_savings_spend(
     figure is normally the smaller of the two, being a subset of the same requests, but
     not always: a request that only writes cache and never reads it has negative net
     savings, and dropping such a request from the attributed figure can lift it above
-    the total. Auto-router savings compare the
-    served ``model`` against the counterfactual baseline the router recorded on
-    its ``routing_decision``, and are zero unless the two differ. That record
-    also says whether the conversation was already underway, which is what tells
-    a mid-conversation switch from a first turn.
+    the total. Auto-router savings compare established baseline usage against the
+    recorded selected-model cost. Versioned unknown estimates contribute no dollars
+    to this subtotal and are excluded from the separately reported coverage cohort.
 
     ``llm_router`` is passed as a provider rather than a router because every spend write
     calls this and only auto-routed ones need one, so looking it up eagerly at the call
@@ -653,10 +666,21 @@ def compute_savings_spend(
 
     # The figure the logging path recorded wins, before the usage gate on purpose: a row
     # whose usage no longer parses still carries the number computed when it did.
-    recorded_savings: Final = _numeric_savings(recorded_autorouter_savings)
+    recorded_savings: Final = (
+        recorded_estimated_autorouter_savings(
+            MappingProxyType(
+                {
+                    "autorouter_savings": recorded_autorouter_savings,
+                    "autorouter_savings_estimate": recorded_autorouter_savings_estimate,
+                }
+            )
+        )
+        if recorded_autorouter_savings_estimate is not None
+        else _numeric_savings(recorded_autorouter_savings)
+    )
     autorouter: Final = (
         recorded_savings
-        if recorded_savings is not None
+        if recorded_savings is not None or recorded_autorouter_savings_estimate is not None
         else autorouter_savings_for_request(
             model=model,
             custom_llm_provider=custom_llm_provider,

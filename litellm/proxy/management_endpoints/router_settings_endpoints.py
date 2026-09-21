@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.config_resolvers import SettingsSource, SettingsStore, source_for
+from litellm.proxy.config_resolvers import FieldSource, SettingsStore, source_for
 from litellm.router import Router
 from litellm.types.management_endpoints import (
     ROUTER_SETTINGS_FIELDS,
@@ -31,7 +31,7 @@ class RouterSettingsResponse(BaseModel):
     fields: list[RouterSettingsField] = Field(description="List of all configurable router settings with metadata")
     current_values: dict[str, Any] = Field(description="Current values of router settings")
     routing_strategy_descriptions: dict[str, str] = Field(description="Descriptions for each routing strategy option")
-    source: dict[str, SettingsSource] = Field(description="Source of each current router setting")
+    source: dict[str, FieldSource] = Field(description="Source of each current router setting")
 
 
 class RouterFieldsResponse(BaseModel):
@@ -46,7 +46,7 @@ def _router_setting_source(
     key: str,
     current_value: object,
     field_default: object,
-) -> SettingsSource:
+) -> FieldSource:
     source: Final = source_for(settings, key, field_default)
     if source != "unset":
         return source
@@ -131,7 +131,7 @@ async def get_router_settings(
             field.field_name: cast(object, field.field_default)  # cast-ok: Pydantic field defaults are untyped
             for field in router_fields
         }
-        source: Final[dict[str, SettingsSource]] = {
+        source: Final[dict[str, FieldSource]] = {
             key: _router_setting_source(
                 proxy_config.router_settings,
                 key,

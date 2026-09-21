@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.realtime_streaming import DefaultLoggedRealTimeEventTypes
+from litellm.types.llms.bedrock import AwsAuthParams
 from litellm.types.llms.openai import OpenAIRealtimeEvents
 from litellm.types.realtime import RealtimeResponseTransformInput
 
@@ -257,6 +258,7 @@ class BedrockRealtime(BaseAWSLLM):
         aws_sts_endpoint: str | None = None,
         aws_bedrock_runtime_endpoint: str | None = None,
         aws_external_id: str | None = None,
+        aws_session_tags: object = None,
         **kwargs: object,
     ):
         """
@@ -297,20 +299,20 @@ class BedrockRealtime(BaseAWSLLM):
 
         verbose_proxy_logger.debug("Bedrock Realtime: Connecting to %s with model %s", endpoint_uri, model)
 
-        credentials: Final = await run_aws_signing(
-            self.get_credentials,
+        auth_params: Final = AwsAuthParams(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
             aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
             aws_session_name=aws_session_name,
             aws_profile_name=aws_profile_name,
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
         )
-        if credentials is None:
+        credentials: Final = await run_aws_signing(self.resolve_credentials, auth_params, aws_region_name)
+        if credentials is None:  # pyright: ignore[reportUnnecessaryComparison]  # boto3.Session() env fallback yields None
             raise BedrockError(
                 status_code=401,
                 message=(

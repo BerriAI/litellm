@@ -36,7 +36,6 @@ IGNORE_FUNCTIONS = [
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
     "_mask_sequence",  # max depth set.
-    "_walk_payload",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER).
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
@@ -56,6 +55,7 @@ IGNORE_FUNCTIONS = [
     "apply_json_merge_patch",  # max depth set (_MAX_MERGE_DEPTH=64); fails closed by raising ValueError at the cap.
     "_filter_argument_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by blocking the tool call at the cap.
     "_redact_scanned_content",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning "[REDACTED]" at the cap.
+    "replace_ciphertexts",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); walks stored JSON, which has no cycles, and leaves values below the cap untouched.
     "_iter_fallback_targets",  # max depth set (2 * ROUTER_MAX_FALLBACKS); fails closed by raising ValueError at the cap.
     "_mergeable_branch",  # max depth set (_MAX_SCHEMA_FLATTEN_DEPTH=32) plus a seen_refs cycle guard; passes the schema through untouched at the cap.
     "json_string_leaves",  # max depth set (MAX_STRUCTURED_CONTENT_SCAN_DEPTH); fails closed by raising at the cap so nothing goes unscanned.

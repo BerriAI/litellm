@@ -2,8 +2,10 @@ use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResp
 use pyo3::prelude::*;
 use serde_json::Value;
 
-use crate::errors::responses_error_to_pyerr;
-use crate::marshal::{marshal_headers, optional_timeout};
+use crate::{
+    errors::responses_error_to_pyerr,
+    marshal::{marshal_headers, optional_timeout},
+};
 
 #[pyclass]
 pub(crate) struct ResponsesWebSocketConnection {
@@ -23,7 +25,7 @@ impl ResponsesWebSocketConnection {
     ) -> PyResult<Bound<'py, PyAny>> {
         let headers = marshal_headers(headers)?;
         let timeout = optional_timeout(timeout_seconds);
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        litellm_host_python::run_async_value(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
                 .map_err(responses_error_to_pyerr)?;
@@ -33,7 +35,7 @@ impl ResponsesWebSocketConnection {
 
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        litellm_host_python::run_async_value(py, async move {
             inner
                 .send_text(text)
                 .await
@@ -43,14 +45,14 @@ impl ResponsesWebSocketConnection {
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        litellm_host_python::run_async_value(py, async move {
             inner.recv_text().await.map_err(responses_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
-        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        litellm_host_python::run_async_value(py, async move {
             inner.close().await.map_err(responses_error_to_pyerr)
         })
     }
@@ -58,16 +60,18 @@ impl ResponsesWebSocketConnection {
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::CString;
-    use std::time::Duration;
+    use std::{ffi::CString, time::Duration};
 
     use futures_util::{SinkExt, StreamExt};
-    use pyo3::prelude::*;
-    use pyo3::types::PyDict;
+    use pyo3::{prelude::*, types::PyDict};
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 
     #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test server shares the routes' runtime"
+    )]
     fn responses_websocket_connection_round_trips_through_python() {
         Python::initialize();
         let runtime = pyo3_async_runtimes::tokio::get_runtime();

@@ -20,6 +20,7 @@ OWNED_DIRECTORIES: Final = frozenset(
         "observability",
         "compatibility",
         "sdk",
+        "cost_calculation",
     }
 )
 
