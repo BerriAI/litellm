@@ -484,9 +484,15 @@ class LoggingWorker:
         so it correctly handles items that have been dequeued but whose
         callback hasn't finished yet — ``queue.empty()`` would return True in
         that window and cause us to skip the wait.
+
+        ``start()`` runs first so that, after an event loop change, the tasks
+        still on the previous loop's queue move onto this loop and a worker
+        here drains them; joining the old queue directly would wait on a
+        counter nothing on this loop ever decrements.
         """
         if self._queue is None:
             return
+        self.start()
         await self._queue.join()
 
     async def clear_queue(self):
