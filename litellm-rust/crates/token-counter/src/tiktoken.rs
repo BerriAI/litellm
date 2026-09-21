@@ -1,4 +1,4 @@
-use litellm_token_counter_tiktoken::UnsupportedTokenizer;
+use litellm_token_counter_tiktoken::{LoadError, UnsupportedTokenizer};
 pub use litellm_token_counter_tiktoken::{TiktokenTokenizer, encoding_for_model};
 
 use crate::{Error, TextCodec, TokenCounter, Tokenizer};
@@ -34,5 +34,14 @@ impl TextCodec for TiktokenTokenizer {
 impl From<UnsupportedTokenizer> for Error {
     fn from(error: UnsupportedTokenizer) -> Self {
         Self::UnsupportedTokenizer(error.0)
+    }
+}
+
+impl From<LoadError> for Error {
+    fn from(error: LoadError) -> Self {
+        match error {
+            LoadError::Unsupported(error) => error.into(),
+            LoadError::Ranks(message) => Self::Ranks(message),
+        }
     }
 }

@@ -84,7 +84,8 @@ impl TokenCounter {
     fn from_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<Self> {
         #[cfg(feature = "tiktoken")]
         {
-            Self::load(py, || CoreTokenCounter::from_tiktoken(encoding))
+            let tokenizer = crate::tokenizer::load_tiktoken(py, encoding)?;
+            Self::load(py, || Ok(CoreTokenCounter::new(tokenizer)))
         }
         #[cfg(not(feature = "tiktoken"))]
         {

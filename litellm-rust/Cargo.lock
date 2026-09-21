@@ -2288,6 +2288,9 @@ dependencies = [
 name = "litellm-token-counter-tiktoken"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
+ "once_cell",
+ "rustc-hash",
  "thiserror 2.0.19",
  "tiktoken-rs",
 ]

@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod ranks;
 
 use std::collections::HashSet;
 
 pub use error::UnsupportedTokenizer;
+pub use ranks::LoadError;
 
 pub struct TiktokenTokenizer {
     encoder: &'static tiktoken_rs::CoreBPE,
@@ -12,6 +14,14 @@ pub struct TiktokenTokenizer {
 }
 
 impl TiktokenTokenizer {
+    pub fn from_cached_ranks(
+        name: &str,
+        load: impl FnOnce(&str) -> std::io::Result<String>,
+    ) -> Result<Self, LoadError> {
+        let (encoder, name) = ranks::load(name, load)?;
+        Ok(Self { encoder, name })
+    }
+
     pub fn from_name(name: &str) -> Result<Self, UnsupportedTokenizer> {
         let (encoder, canonical_name) = match name {
             "cl100k_base" => (tiktoken_rs::cl100k_base_singleton(), "cl100k_base"),

@@ -30,6 +30,20 @@ use litellm_token_counter::huggingface::{
 #[cfg(feature = "tiktoken")]
 use litellm_token_counter::tiktoken::TiktokenTokenizer;
 
+#[cfg(feature = "tiktoken")]
+pub(crate) fn load_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<TiktokenTokenizer> {
+    let resource: std::path::PathBuf =
+        PyModule::import(py, "litellm.litellm_core_utils.tokenizers")?
+            .getattr("__file__")?
+            .extract()?;
+    release_gil(py, || {
+        TiktokenTokenizer::from_cached_ranks(encoding, |file| {
+            std::fs::read_to_string(resource.with_file_name(file))
+        })
+    })
+    .map_err(|error| token_count_error_to_pyerr(error.into()))
+}
+
 enum Codec {
     #[cfg(feature = "tiktoken")]
     Tiktoken(TiktokenTokenizer),
@@ -59,8 +73,7 @@ impl Tokenizer {
     fn from_tiktoken(py: Python<'_>, encoding: &str) -> PyResult<Self> {
         #[cfg(feature = "tiktoken")]
         {
-            let tokenizer = release_gil(py, || TiktokenTokenizer::from_name(encoding))
-                .map_err(|error| token_count_error_to_pyerr(error.into()))?;
+            let tokenizer = load_tiktoken(py, encoding)?;
             Ok(Self {
                 inner: Arc::new(Codec::Tiktoken(tokenizer)),
             })

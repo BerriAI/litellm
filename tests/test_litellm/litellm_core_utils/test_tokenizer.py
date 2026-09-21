@@ -17,9 +17,11 @@ from litellm.utils import claude_json_str
 from tests.test_litellm.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
 
 
-@pytest.mark.parametrize("name", ("cl100k_base", "o200k_base", "p50k_base", "r50k_base", "o200k_harmony"))
 @pytest.mark.parametrize(
-    "text", ("hello world", "café 漢字 🙂", "", "a\ud800b", "\ud83d\ude42", "🙂\ud83d\ude42\udfff")
+    "name", ("cl100k_base", "o200k_base", "p50k_base", "p50k_edit", "r50k_base", "gpt2", "o200k_harmony")
+)
+@pytest.mark.parametrize(
+    "text", ("hello world", "café 漢字 🙂", "", "a\ud800b", "\ud83d\ude42", "🙂\ud83d\ude42\udfff", " " * 64)
 )
 def test_openai_encoding_matches_python_unicode_and_batches(name: str, text: str) -> None:
     reference: Final = tiktoken.get_encoding(name)
@@ -238,17 +240,26 @@ print("compatible")
     assert result.stdout.strip() == "compatible"
 
 
-def test_installed_tokenization_does_not_import_python_tokenizer_packages() -> None:
+def test_installed_tokenization_does_not_import_python_tokenizer_packages(tmp_path: Path) -> None:
     script: Final = """
 import importlib.abc
 import sys
 sys.path.insert(0, sys.argv[1])
+def reject_network(event, args):
+    if event == "socket.connect":
+        raise AssertionError("tokenizer attempted a network connection")
+sys.addaudithook(reject_network)
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
         if fullname.split(".")[0] in {"tiktoken", "tokenizers"}:
             raise AssertionError("unexpected runtime dependency: " + fullname)
 sys.meta_path.insert(0, Block())
 import litellm
+from litellm.litellm_core_utils.tokenizer import OpenAIEncoding
+for name in ("cl100k_base", "o200k_base", "o200k_harmony", "p50k_base", "p50k_edit", "r50k_base", "gpt2"):
+    encoding = OpenAIEncoding.from_tiktoken(name)
+    text = "offline café 漢字 🙂" + " " * 64
+    assert encoding.decode(encoding.encode(text)) == text
 ids = litellm.encode(text="hello world")
 assert litellm.decode(tokens=ids) == "hello world"
 assert litellm.token_counter(model=None, text="hello world") == len(ids)
@@ -261,10 +272,17 @@ print("compatible")
         capture_output=True,
         text=True,
         timeout=30,
-        env={**os.environ, "LITELLM_RUST": "0", "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "LITELLM_RUST": "0",
+            "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+            "TIKTOKEN_CACHE_DIR": str(tmp_path / "unused-tokenizer-cache"),
+        },
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == "compatible"
+    assert not (tmp_path / "unused-tokenizer-cache").exists()
 
 
 @pytest.mark.parametrize("is_pretokenized", (False, True))
