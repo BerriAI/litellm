@@ -1,0 +1,63 @@
+suite: test fixed replica count on the component deployments
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+  - backend/deployment.yaml
+  - ui/deployment.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders replicaCount as spec.replicas when the component HPA is disabled
+    set:
+      gateway.hpa.enabled: false
+      gateway.replicaCount: 3
+      backend.hpa.enabled: false
+      backend.replicaCount: 2
+      ui.hpa.enabled: false
+      ui.replicaCount: 4
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+        template: gateway/deployment.yaml
+      - equal:
+          path: spec.replicas
+          value: 2
+        template: backend/deployment.yaml
+      - equal:
+          path: spec.replicas
+          value: 4
+        template: ui/deployment.yaml
+
+  - it: leaves spec.replicas to the HPA when the component HPA is enabled
+    set:
+      gateway.hpa.enabled: true
+      gateway.replicaCount: 3
+      backend.hpa.enabled: true
+      backend.replicaCount: 2
+      ui.hpa.enabled: true
+      ui.replicaCount: 4
+    asserts:
+      - notExists:
+          path: spec.replicas
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: backend/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: ui/deployment.yaml
+
+  - it: pins one component while another stays autoscaled
+    set:
+      gateway.hpa.enabled: false
+      gateway.replicaCount: 5
+      backend.hpa.enabled: true
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 5
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: backend/deployment.yaml
