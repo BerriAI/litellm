@@ -9,6 +9,7 @@ This guide provides instructions for building and running the LiteLLM applicatio
 >
 > ```bash
 > curl -sSLO https://github.com/BerriAI/litellm/raw/main/docker/docker-compose.quickstart.yml
+> printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
 > docker compose -f docker-compose.quickstart.yml up -d
 > ```
 

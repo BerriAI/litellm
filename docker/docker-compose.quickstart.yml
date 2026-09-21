@@ -3,19 +3,20 @@
 # https://docs.litellm.ai/docs/proxy/docker_quick_start
 #
 #   curl -sSLO https://github.com/BerriAI/litellm/raw/main/docker/docker-compose.quickstart.yml
+#   printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
 #   docker compose -f docker-compose.quickstart.yml up -d
 #
-# The credentials below are placeholders for local evaluation. Before any real
-# use, set LITELLM_MASTER_KEY and LITELLM_SALT_KEY to long random values and
-# pin the image to a specific release tag.
+# Compose reads .env from this directory. Keep it: regenerating LITELLM_SALT_KEY
+# makes credentials already stored in the database unreadable. For anything
+# beyond local evaluation, pin the image to a specific release tag.
 services:
   litellm:
     image: docker.litellm.ai/berriai/litellm:main-stable
     ports:
       - "4000:4000"
     environment:
-      LITELLM_MASTER_KEY: sk-1234
-      LITELLM_SALT_KEY: sk-XXXXXXXXXXXXXXXX
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set it in .env - see the header of this file}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set it in .env - see the header of this file}
       DATABASE_URL: postgresql://litellm:litellm@db:5432/litellm
       STORE_MODEL_IN_DB: "True"
     depends_on:
