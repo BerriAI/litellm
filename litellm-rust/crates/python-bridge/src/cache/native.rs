@@ -1,12 +1,16 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::{CacheCodec, CacheConnectionResult, Error};
+use litellm_cache::{CacheCodec, CacheConnectionResult, Error, ExactCacheContext};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
+use litellm_cache_redis_semantic::{RedisSemanticCache, RedisSemanticConfig};
 use litellm_cache_response::{
     CacheEntry, PartialHits, ResponseCache, ResponseCacheCodec, ResponseCacheRequest, WriteBuffer,
 };
+use pyo3::{Py, PyAny, PyTraverseError, PyVisit};
 use serde_json::Value;
+
+use super::{embedder::PythonEmbedder, request::CacheRequest};
 
 #[derive(Clone)]
 pub(super) enum NativeResponseCache {
@@ -15,6 +19,7 @@ pub(super) enum NativeResponseCache {
         cache: Arc<ResponseCache<RedisCache<ResponseCacheCodec>>>,
         buffer: Option<Arc<WriteBuffer>>,
     },
+    RedisSemantic(Arc<ResponseCache<RedisSemanticCache<PythonEmbedder>>>),
 }
 
 impl NativeResponseCache {
@@ -43,6 +48,17 @@ impl NativeResponseCache {
             buffer: None,
         })
     }
+
+    pub fn redis_semantic(
+        url: &str,
+        embedder: PythonEmbedder,
+        config: RedisSemanticConfig,
+    ) -> Result<Self, Error> {
+        let backend = RedisSemanticCache::new(url, embedder, config)?;
+        Ok(Self::RedisSemantic(Arc::new(ResponseCache::new(Arc::new(
+            backend,
+        )))))
+    }
 }
 
 impl NativeResponseCache {
@@ -50,6 +66,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) => "memory",
             Self::Redis { .. } => "redis",
+            Self::RedisSemantic(_) => "redis_semantic",
         }
     }
 
@@ -57,12 +74,13 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
+            Self::RedisSemantic(cache) => cache.default_ttl(),
         }
     }
 
     pub fn namespace(&self) -> Option<&str> {
         match self {
-            Self::Memory(_) => None,
+            Self::Memory(_) | Self::RedisSemantic(_) => None,
             Self::Redis { cache, .. } => cache.backend().namespace(),
         }
     }
@@ -70,15 +88,43 @@ impl NativeResponseCache {
     pub fn capacity(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
-            Self::Redis { .. } => None,
+            Self::Redis { .. } | Self::RedisSemantic(_) => None,
         }
     }
 
     pub fn max_entry_bytes(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => cache.backend().max_entry_bytes(),
-            Self::Redis { .. } => None,
+            Self::Redis { .. } | Self::RedisSemantic(_) => None,
         }
+    }
+
+    pub fn index_name(&self) -> Option<&str> {
+        match self {
+            Self::RedisSemantic(cache) => Some(cache.backend().index_name()),
+            Self::Memory(_) | Self::Redis { .. } => None,
+        }
+    }
+
+    pub fn similarity_threshold(&self) -> Option<f32> {
+        match self {
+            Self::RedisSemantic(cache) => Some(cache.backend().similarity_threshold()),
+            Self::Memory(_) | Self::Redis { .. } => None,
+        }
+    }
+
+    pub fn embedder_object(&self) -> Option<&Py<PyAny>> {
+        match self {
+            Self::RedisSemantic(cache) => Some(cache.backend().embedder().object()),
+            Self::Memory(_) | Self::Redis { .. } => None,
+        }
+    }
+
+    pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        if let Self::RedisSemantic(cache) = self {
+            cache.backend().embedder().traverse(visit)?;
+        }
+        Ok(())
     }
 
     pub fn with_redis_flush_size(self, flush_size: Option<usize>) -> Self {
@@ -87,93 +133,144 @@ impl NativeResponseCache {
                 cache,
                 buffer: flush_size.map(|flush_size| Arc::new(WriteBuffer::new(flush_size))),
             },
-            memory => memory,
+            other => other,
         }
     }
 
-    pub fn lookup(
-        &self,
-        request: &ResponseCacheRequest,
-        now: Duration,
-    ) -> Result<Option<Value>, Error> {
+    fn exact_requests(requests: &[CacheRequest]) -> Vec<ResponseCacheRequest<ExactCacheContext>> {
+        requests.iter().map(CacheRequest::exact).collect()
+    }
+
+    pub fn lookup(&self, request: &CacheRequest, now: Duration) -> Result<Option<Value>, Error> {
         match self {
-            Self::Memory(cache) => cache.lookup(request, now),
-            Self::Redis { cache, .. } => cache.lookup(request, now),
+            Self::Memory(cache) => cache.lookup(&request.exact(), now),
+            Self::Redis { cache, .. } => cache.lookup(&request.exact(), now),
+            Self::RedisSemantic(cache) => cache.lookup(&request.semantic(), now),
         }
     }
 
     pub fn store(
         &self,
-        request: &ResponseCacheRequest,
+        request: &CacheRequest,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
         match self {
-            Self::Memory(cache) => cache.store(request, response, now),
-            Self::Redis { cache, .. } => cache.store(request, response, now),
+            Self::Memory(cache) => cache.store(&request.exact(), response, now),
+            Self::Redis { cache, .. } => cache.store(&request.exact(), response, now),
+            Self::RedisSemantic(cache) => cache.store(&request.semantic(), response, now),
         }
     }
 
     pub fn lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest],
+        requests: &[CacheRequest],
         now: Duration,
     ) -> Result<PartialHits, Error> {
         match self {
-            Self::Memory(cache) => cache.lookup_batch(requests, now),
-            Self::Redis { cache, .. } => cache.lookup_batch(requests, now),
+            Self::Memory(cache) => cache.lookup_batch(&Self::exact_requests(requests), now),
+            Self::Redis { cache, .. } => cache.lookup_batch(&Self::exact_requests(requests), now),
+            Self::RedisSemantic(_) => Err(Error::UnsupportedOperation),
         }
     }
 
     pub async fn async_lookup(
         &self,
-        request: &ResponseCacheRequest,
+        request: &CacheRequest,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
         match self {
-            Self::Memory(cache) => cache.async_lookup(request, now).await,
-            Self::Redis { cache, .. } => cache.async_lookup(request, now).await,
+            Self::Memory(cache) => cache.async_lookup(&request.exact(), now).await,
+            Self::Redis { cache, .. } => cache.async_lookup(&request.exact(), now).await,
+            Self::RedisSemantic(cache) => cache.async_lookup(&request.semantic(), now).await,
         }
     }
 
     pub async fn async_store(
         &self,
-        request: &ResponseCacheRequest,
+        request: &CacheRequest,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
         match self {
-            Self::Memory(cache) => cache.async_store(request, response, now).await,
+            Self::Memory(cache) => cache.async_store(&request.exact(), response, now).await,
             Self::Redis {
                 cache,
                 buffer: None,
-            } => cache.async_store(request, response, now).await,
+            } => cache.async_store(&request.exact(), response, now).await,
             Self::Redis {
                 cache,
                 buffer: Some(buffer),
-            } => buffer.async_store(cache, request, response, now).await,
+            } => {
+                buffer
+                    .async_store(cache, &request.exact(), response, now)
+                    .await
+            }
+            Self::RedisSemantic(cache) => {
+                cache.async_store(&request.semantic(), response, now).await
+            }
         }
     }
 
     pub async fn async_lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest],
+        requests: &[CacheRequest],
         now: Duration,
     ) -> Result<PartialHits, Error> {
         match self {
-            Self::Memory(cache) => cache.async_lookup_batch(requests, now).await,
-            Self::Redis { cache, .. } => cache.async_lookup_batch(requests, now).await,
+            Self::Memory(cache) => {
+                cache
+                    .async_lookup_batch(&Self::exact_requests(requests), now)
+                    .await
+            }
+            Self::Redis { cache, .. } => {
+                cache
+                    .async_lookup_batch(&Self::exact_requests(requests), now)
+                    .await
+            }
+            Self::RedisSemantic(_) => Err(Error::UnsupportedOperation),
         }
     }
 
     pub async fn async_store_batch(
         &self,
-        entries: Vec<(ResponseCacheRequest, Value)>,
+        entries: Vec<(CacheRequest, Value)>,
         now: Duration,
     ) -> Result<(), Error> {
         match self {
-            Self::Memory(cache) => cache.async_store_batch(entries, now).await,
-            Self::Redis { cache, .. } => cache.async_store_batch(entries, now).await,
+            Self::Memory(cache) => {
+                cache
+                    .async_store_batch(
+                        entries
+                            .into_iter()
+                            .map(|(request, value)| (request.exact(), value))
+                            .collect(),
+                        now,
+                    )
+                    .await
+            }
+            Self::Redis { cache, .. } => {
+                cache
+                    .async_store_batch(
+                        entries
+                            .into_iter()
+                            .map(|(request, value)| (request.exact(), value))
+                            .collect(),
+                        now,
+                    )
+                    .await
+            }
+            Self::RedisSemantic(cache) => {
+                cache
+                    .async_store_batch(
+                        entries
+                            .into_iter()
+                            .map(|(request, value)| (request.semantic(), value))
+                            .collect(),
+                        now,
+                    )
+                    .await
+            }
         }
     }
 
@@ -186,6 +283,7 @@ impl NativeResponseCache {
                 }
                 cache.async_flush().await
             }
+            Self::RedisSemantic(_) => Err(Error::UnsupportedOperation),
         }
     }
 
@@ -193,6 +291,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.test_connection().await,
             Self::Redis { cache, .. } => cache.test_connection().await,
+            Self::RedisSemantic(_) => Err(Error::UnsupportedOperation),
         }
     }
 }

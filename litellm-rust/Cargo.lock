@@ -2683,6 +2683,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-redis",
+ "litellm-cache-redis-semantic",
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
  "litellm-core",
