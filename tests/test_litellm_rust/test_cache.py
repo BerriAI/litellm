@@ -3,7 +3,6 @@ import contextvars
 import gc
 import hashlib
 import json
-import os
 import math
 import os
 import threading
