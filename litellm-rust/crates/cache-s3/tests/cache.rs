@@ -126,6 +126,13 @@ async fn get_hit_miss_expired_and_invalid_entries() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
+        .and(path("/cache-bucket/team/denied"))
+        .respond_with(
+            ResponseTemplate::new(403).set_body_string("<Error><Code>AccessDenied</Code></Error>"),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
         .and(path("/cache-bucket/team/expired"))
         .respond_with(
             ResponseTemplate::new(200)
@@ -147,6 +154,7 @@ async fn get_hit_miss_expired_and_invalid_entries() {
         Some(json!({"answer": 3}))
     );
     assert_eq!(cache.get_cache("missing", &context).unwrap(), None);
+    assert_eq!(cache.get_cache("denied", &context).unwrap(), None);
     assert_eq!(cache.get_cache("expired", &context).unwrap(), None);
     assert_eq!(
         cache.get_cache("malformed", &context),

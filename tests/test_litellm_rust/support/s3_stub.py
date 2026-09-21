@@ -51,7 +51,7 @@ class S3Stub:
             def do_PUT(self) -> None:
                 body: Final = self._read_body()
                 headers: Final = {name: self.headers[name] for name in _STORED_HEADERS if name in self.headers}
-                stub._objects[self._key()] = S3Object(body=body, headers=headers)
+                stub._objects = {**stub._objects, self._key(): S3Object(body=body, headers=headers)}
                 self.send_response(200)
                 self.send_header("ETag", '"stub"')
                 self.send_header("Content-Length", "0")
@@ -83,7 +83,9 @@ class S3Stub:
                 if send_body:
                     self.wfile.write(entry.body)
 
-            def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            def log_message(
+                self, format: str, *args: object
+            ) -> None:  # BaseHTTPRequestHandler.log_message names this parameter format
                 pass
 
         self._server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -100,7 +102,7 @@ class S3Stub:
         return self._objects
 
     def put_object(self, key: str, body: bytes, headers: dict[str, str] | None = None) -> None:
-        self._objects[key] = S3Object(body=body, headers=headers or {})
+        self._objects = {**self._objects, key: S3Object(body=body, headers=headers or {})}
 
     def expires(self, key: str) -> object:
         header: Final = self._objects[key].headers.get("expires")

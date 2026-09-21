@@ -11,6 +11,7 @@ from collections.abc import Generator
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Final, Protocol, cast
+from unittest.mock import Mock
 from urllib.parse import urlparse
 
 import boto3
@@ -24,8 +25,8 @@ import litellm
 from litellm.caching.azure_blob_cache import AzureBlobCache
 from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
 from litellm.caching.in_memory_cache import InMemoryCache
-from litellm.caching.s3_cache import S3Cache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.caching.s3_cache import S3Cache
 from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
 from tests.test_litellm_rust.support.isolation import rebound
@@ -416,15 +417,20 @@ def test_azure_blob_facade_serves_natively_and_python_reads_the_same_blobs(azure
     assert handle.backend == "azure-blob"
     account_url: Final = backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}")
     with pytest.raises(TypeError, match="containers must match"):
-        _native._CacheTestHandle.azure_blob(account_url, f"{backend.container_client.container_name}-other")._bind_facade(
-            azure_blob_facade
-        )
+        _native._CacheTestHandle.azure_blob(
+            account_url, f"{backend.container_client.container_name}-other"
+        )._bind_facade(azure_blob_facade)
     handle._bind_facade(azure_blob_facade)
     resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=azure_blob_facade))
     native: Final = resolver.resolve()
     assert native.kind == "native"
 
-    response: Final = {"choices": [{"text": "caf\u00e9 \u2603"}], "usage": {"total_tokens": 3}, "flag": True, "empty": None}
+    response: Final = {
+        "choices": [{"text": "caf\u00e9 \u2603"}],
+        "usage": {"total_tokens": 3},
+        "flag": True,
+        "empty": None,
+    }
     native.store({**request("sync"), "ttl_seconds": 0.001}, response)
     native.store(request("sync"), {"choices": [{"text": "second"}]})
     time.sleep(0.01)
@@ -479,7 +485,9 @@ async def test_azure_blob_native_async_writes_overwrite_batch_and_flush_like_pyt
     await binding.async_store({**request("async"), "ttl_seconds": 0.001}, {"value": 2})
     time.sleep(0.01)
     assert await binding.async_lookup(request("async")) == {"value": 2}
-    assert await backend.async_get_cache("async") == json.loads(backend.container_client.download_blob("async").readall())
+    assert await backend.async_get_cache("async") == json.loads(
+        backend.container_client.download_blob("async").readall()
+    )
     assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="async") == {"value": 2}
 
     await binding.async_store_batch([request("first"), request("second")], [{"value": 3}, {"value": 4}])
@@ -624,11 +632,11 @@ def test_s3_facade_binds_only_exact_configuration_and_falls_back_on_mutation(s3_
     binding: Final = resolver.resolve()
     assert binding.kind == "native"
 
-    calls: Final = []
-    facade.cache.s3_client.meta.events.register("before-call.s3.*", lambda **_kwargs: calls.append(1))
+    handler: Final = Mock()
+    facade.cache.s3_client.meta.events.register("before-call.s3.*", handler)
     binding.store(request("native"), {"answer": 1})
     assert binding.lookup(request("native")) == {"answer": 1}
-    assert calls == []
+    assert handler.call_count == 0
     assert "team/native" in s3_stub.objects
 
     with rebound(facade.cache, "bucket_name", "other"):
@@ -756,7 +764,9 @@ async def test_redis_cluster_facade_serves_multi_slot_batches_and_scoped_flush_n
 
     await binding.async_flush()
 
-    remaining: Final = tuple(sorted(key for node in client.get_primaries() for key in client.keys("parity:*", target_nodes=node)))
+    remaining: Final = tuple(
+        sorted(key for node in client.get_primaries() for key in client.keys("parity:*", target_nodes=node))
+    )
     assert remaining == (), remaining
     assert client.get("unscoped") == b"stays"
     client.delete("unscoped")
