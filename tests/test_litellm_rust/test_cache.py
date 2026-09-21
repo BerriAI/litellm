@@ -3,6 +3,7 @@ import contextvars
 import gc
 import hashlib
 import json
+import os
 import math
 import os
 import threading
@@ -22,6 +23,7 @@ import redis
 import litellm
 from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.caching.redis_semantic_cache import RedisSemanticCache
 from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
@@ -54,6 +56,14 @@ def redis_url() -> Generator[str]:
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+
+
+@pytest.fixture
+def cluster_nodes() -> tuple[tuple[str, int], ...]:
+    configured: Final = os.environ.get("LITELLM_TEST_REDIS_CLUSTER_NODES")
+    if not configured:
+        pytest.skip("LITELLM_TEST_REDIS_CLUSTER_NODES is not set")
+    return tuple((host, int(port)) for host, _, port in (node.partition(":") for node in configured.split(",")))
 
 
 def test_existing_constructor_and_global_are_unchanged() -> None:
@@ -404,6 +414,67 @@ async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
     assert client.get("second") is not None
     await facade.cache.disconnect()
     client.close()
+
+
+async def test_redis_cluster_facade_serves_multi_slot_batches_and_scoped_flush_natively(
+    cluster_nodes: tuple[tuple[str, int], ...],
+) -> None:
+    startup_nodes: Final = [{"host": host, "port": port} for host, port in cluster_nodes]
+    url: Final = f"redis://{cluster_nodes[0][0]}:{cluster_nodes[0][1]}"
+    with rebound(litellm, "default_redis_ttl", 60):
+        facade: Final = Cache(type=LiteLLMCacheType.REDIS, redis_startup_nodes=startup_nodes, namespace="parity")
+        assert type(facade.cache) is RedisClusterCache
+        with pytest.raises(TypeError, match="types must match"):
+            _native._CacheTestHandle.redis(url, namespace="parity")._bind_facade(facade)
+        _native._CacheTestHandle.redis(url, namespace="parity", startup_nodes=list(cluster_nodes))._bind_facade(facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    assert resolver.resolve().kind == "native"
+
+    manager: Final = facade.cache.redis_client.nodes_manager
+    with rebound(manager, "connection_kwargs", {**manager.connection_kwargs, "db": 1}):
+        assert resolver.resolve().kind == "python_callback"
+    with rebound(facade.cache, "redis_kwargs", {**facade.cache.redis_kwargs, "startup_nodes": startup_nodes[:1]}):
+        assert resolver.resolve().kind == "python_callback"
+    binding: Final = resolver.resolve()
+    assert binding.kind == "native"
+
+    client: Final = redis.RedisCluster(startup_nodes=[redis.cluster.ClusterNode(*node) for node in cluster_nodes])
+    keys: Final = tuple(f"slot-{index}" for index in range(12))
+    slots: Final = {client.keyslot(f"parity:{key}") for key in keys}
+    assert len(slots) > 1, slots
+    requests: Final = [request(key) for key in keys]
+    values: Final = [{"index": index} for index in range(len(keys))]
+    await binding.async_store_batch(requests, values)
+    client.set("parity:slot-3", "not a cache entry")
+    client.set("parity:slot-7", json.dumps({"timestamp": time.time(), "response": {"index": 7, "python": True}}))
+
+    batch: Final = await binding.async_lookup_batch(requests)
+    assert batch == {
+        "values": [
+            None if index == 3 else {"index": 7, "python": True} if index == 7 else value
+            for index, value in enumerate(values)
+        ],
+        "missing_indices": [3],
+    }
+    assert facade.cache.get_cache("parity:slot-0")["response"] == {"index": 0}
+    assert (await facade.cache.async_get_cache("parity:slot-11"))["response"] == {"index": 11}
+    assert facade.cache.redis_client.mget_nonatomic([f"parity:{key}" for key in keys[:2]]) == [
+        client.get("parity:slot-0"),
+        client.get("parity:slot-1"),
+    ]
+
+    await binding.async_store({**request("pinned"), "ttl_seconds": 12.0}, {"pinned": True})
+    assert 0 < client.ttl("parity:pinned") <= 12
+    client.set("unscoped", "stays")
+
+    await binding.async_flush()
+
+    remaining: Final = tuple(sorted(key for node in client.get_primaries() for key in client.keys("parity:*", target_nodes=node)))
+    assert remaining == (), remaining
+    assert client.get("unscoped") == b"stays"
+    client.delete("unscoped")
+    client.close()
+    facade.cache.redis_client.close()
 
 
 PARAPHRASE_MARKER: Final = " (paraphrase)"
