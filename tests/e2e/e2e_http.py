@@ -677,9 +677,8 @@ def send(
 
 
 class AbandonedRequest(BaseModel):
-    """A non-streaming request the client walked away from: the socket was closed
-    ``after`` seconds in, before the proxy had answered, so the proxy saw a client
-    disconnect with the upstream call still in flight."""
+    """A non-streaming request whose socket the client closed ``after`` seconds in,
+    before the proxy had answered."""
 
     kind: Literal["abandoned"] = "abandoned"
     after: float
@@ -688,10 +687,8 @@ class AbandonedRequest(BaseModel):
 def abandon(
     url: URL, *, headers: BaseModel, json: BaseModel, after: float, connect_timeout: float = 10.0
 ) -> AbandonedRequest | StreamingResponse:
-    """POST and hang up ``after`` seconds if no response head has arrived by then,
-    closing the connection so the proxy observes the disconnect. Returns the
-    response instead when the proxy answered first, so a test can tell a real
-    disconnect from a generation that finished too fast to be cancelled."""
+    """POST and close the connection ``after`` seconds if no response head has arrived
+    by then; returns the response instead when the proxy answered first."""
     sent_at: Final = time.monotonic()
     session: Final = requests.Session()
     try:

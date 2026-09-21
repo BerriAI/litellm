@@ -1,27 +1,19 @@
 """Live e2e: a client hanging up mid-request under cancel_on_disconnect never
 benches the deployment it was talking to.
 
-With `general_settings.cancel_on_disconnect: true` the proxy cancels the in-flight
-provider call the moment the client's socket closes. The Azure handler used to
-turn that cancellation into a fake 500, which the router booked as a deployment
-failure: one impatient client benched a healthy deployment and every caller
-behind it paid for fallbacks (GitHub issues #35329 and #42222). This cell pins the
-fix at the seam a customer sees. The group is the cooldown suite's pair: the live
-Azure deployment holding all of the shuffle weight, benched on its first failure
-of any class (the fake 500 carried no provider body, so litellm mapped it to a
-bare APIError no named policy class covers) with a cooldown long enough to
-outlast the test, plus a healthy backup at weight 0 the shuffle can only reach
-once the Azure deployment is benched. One cheap call first proves the Azure
-deployment answers the key and leaves the key's auth path warm. The test then
-asks for a long answer, retries off, and hangs up a few seconds in: the client's
-read timeout closes the socket well after the proxy has handed the call to Azure
-(a cold virtual-key auth can take a couple of seconds on its own, and a hang-up
-that lands before the provider call is in flight cancels nothing the router could
-bench, so a shorter window passes vacuously) and well before the answer is done.
-After a settle window wide enough for a sibling replica to have read any bench
-from Redis, every one of the next calls has to come back 200 from the Azure
-deployment itself, named in x-litellm-model-id; a single answer from the backup
-means the hang-up was booked as a failure.
+The group is the cooldown suite's pair: the live Azure deployment holding all of
+the shuffle weight, benched on its first failure of any class with a cooldown that
+outlasts the test, plus a healthy backup at weight 0 the shuffle only reaches once
+the Azure deployment is benched. A cheap call first proves the Azure deployment
+answers the key and warms its auth path. The test then asks for an answer far
+longer than CLIENT_HANGS_UP_AFTER_SECONDS of generation, retries off, and hangs up
+that many seconds in: late enough that the proxy has handed the call to Azure (a
+hang-up before the provider call is in flight cancels nothing the router could
+bench, so the cell would pass vacuously), and should the proxy ever answer first
+the cell fails out loud naming the window instead of passing. After the cooldown
+suite's replica propagation window, every one of the next calls has to come back
+200 from the Azure deployment itself, named in x-litellm-model-id; a single answer
+from the backup means the hang-up was booked as a failure.
 
 The test reads `cancel_on_disconnect` back from the proxy first: without the flag
 the hang-up cancels nothing and the cell would pass vacuously.
@@ -38,6 +30,7 @@ from e2e_http import AbandonedRequest, StreamingResponse
 from lifecycle import ResourceManager
 from models import ChatMessage, ReliabilityChatBody, RouterSettingsOverride
 from reliability_support import (
+    REPLICA_PROPAGATION_SECONDS,
     chat_override,
     create_azure_benched_on_first_failure_deployment,
     create_zero_weight_backup_deployment,
@@ -47,9 +40,8 @@ from reliability_support import (
 pytestmark = pytest.mark.e2e
 
 CLIENT_HANGS_UP_AFTER_SECONDS = 8.0
-LONG_ANSWER_MAX_TOKENS = 4096
+LONG_ANSWER_MAX_TOKENS = 16384
 BENCH_OUTLASTS_TEST_SECONDS = 300.0
-SETTLE_AFTER_HANGUP_SECONDS = 3.0
 CALLS_AFTER_HANGUP = 6
 
 
@@ -64,8 +56,6 @@ def _say_hi(client: ComplexityRouterClient, key: str, group: str) -> StreamingRe
 
 
 def _hang_up_mid_answer(client: ComplexityRouterClient, key: str, group: str) -> None:
-    """Send a request whose answer takes far longer than the client waits, so the
-    client closes the socket while the provider is still generating."""
     outcome = client.proxy.transport.abandon(
         "/chat/completions",
         headers=client.proxy.transport.bearer(key),
@@ -74,7 +64,10 @@ def _hang_up_mid_answer(client: ComplexityRouterClient, key: str, group: str) ->
             messages=[
                 ChatMessage(
                     role="user",
-                    content=f"Write a 3000 word essay on the history of the telegraph. {unique_marker()}",
+                    content=(
+                        "Write a 10000 word essay on the history of the telegraph, one section per decade. "
+                        f"{unique_marker()}"
+                    ),
                 )
             ],
             max_tokens=LONG_ANSWER_MAX_TOKENS,
@@ -117,7 +110,7 @@ class TestReliabilityCancelOnDisconnect:
         )
 
         _hang_up_mid_answer(client, scoped_key, group)
-        time.sleep(SETTLE_AFTER_HANGUP_SECONDS)
+        time.sleep(REPLICA_PROPAGATION_SECONDS)
 
         for call in range(1, CALLS_AFTER_HANGUP + 1):
             resp = _say_hi(client, scoped_key, group)
