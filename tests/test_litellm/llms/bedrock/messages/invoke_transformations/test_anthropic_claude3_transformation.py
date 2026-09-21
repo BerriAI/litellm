@@ -1651,12 +1651,19 @@ def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
     assert set(result).issubset(cfg.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
 
 
-def test_bedrock_messages_forwards_safeguards_with_dangerous_tool_use_beta(local_beta_headers_config):
+@pytest.mark.parametrize(
+    "client_beta_header",
+    ["dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14", "interleaved-thinking-2025-05-14"],
+    ids=["client_sends_beta", "client_omits_beta"],
+)
+def test_bedrock_messages_forwards_safeguards_with_dangerous_tool_use_beta(local_beta_headers_config, client_beta_header):
     """
     Claude Code's server-side auto-mode classifier sends `safeguards` alongside the
     dangerous-tool-use-2026-09-03 beta. Bedrock Invoke accepts the pair, answers
     "safeguards: Extra inputs are not permitted" for the field alone, and returns
-    `safeguard_results: []` for the beta alone, so both must reach it unchanged.
+    `safeguard_results: []` for the beta alone, so the field reaches it unchanged
+    and the beta rides along whether or not the client sent it, as every other
+    body-driven beta does here.
     """
     from litellm.types.router import GenericLiteLLMParams
 
@@ -1668,11 +1675,28 @@ def test_bedrock_messages_forwards_safeguards_with_dangerous_tool_use_beta(local
         messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
         anthropic_messages_optional_request_params={"max_tokens": 64, "safeguards": safeguards},
         litellm_params=GenericLiteLLMParams(),
-        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"},
+        headers={"anthropic-beta": client_beta_header},
     )
 
     assert result["safeguards"] == safeguards
-    assert "dangerous-tool-use-2026-09-03" in result["anthropic_beta"]
+    assert result["anthropic_beta"].count("dangerous-tool-use-2026-09-03") == 1
+
+
+def test_bedrock_messages_does_not_add_dangerous_tool_use_beta_without_safeguards(local_beta_headers_config):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "safeguards" not in result
+    assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
 
 
 def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
