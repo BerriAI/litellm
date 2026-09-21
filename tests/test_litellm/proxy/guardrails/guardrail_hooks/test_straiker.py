@@ -2431,3 +2431,46 @@ async def test_v3_the_block_memory_is_scoped_by_principal_when_there_is_no_sessi
                 logging_obj=_logging_obj(),
             )
     assert g.async_handler.post.await_count == 4
+
+
+V3_GATEWAY_KILLSWITCH = {
+    "hookSpecificOutput": {
+        "hookEventName": "GatewayRequest",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": "block",
+    },
+    "straiker": {
+        "archetype": "coding_agent",
+        "ingress": "gateway",
+        "turn_id": "6f0a0f1e-2c1a-4f2d-9a0e-2b0e0d1c5a77",
+        "action": "block",
+        "controls": [],
+        "blocked_by": [],
+        "config_hash": "c1c2a7c07da46113",
+        "killswitch": True,
+    },
+}
+
+
+@pytest.mark.asyncio
+async def test_v3_a_killswitch_block_is_not_remembered_so_restoring_it_takes_effect():
+    """A block that names no control comes from state, not content: an engaged kill switch.
+    An administrator lifts it, so the next request must ask the platform again rather than
+    being refused by a remembered copy."""
+    g = _make_guardrail(api_key=V3_KEY)
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_KILLSWITCH)
+    turn = [{"role": "system", "content": "You are a helpful assistant."}, {"role": "user", "content": "Say OK."}]
+    with pytest.raises(GuardrailRaisedException) as blocked:
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]},
+            request_data=_v3_conversation(turn),
+            input_type="request",
+            logging_obj=_logging_obj(),
+        )
+    assert "Killswitch" in str(blocked.value) or "blocked" in str(blocked.value).lower()
+
+    g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data=_v3_conversation(turn), input_type="request", logging_obj=_logging_obj()
+    )
+    assert g.async_handler.post.await_count == 2

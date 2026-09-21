@@ -83,6 +83,9 @@ class StraikerWebhookResponse(BaseModel):
 
     action: StraikerWebhookAction = "NONE"
     blocked_reason: str | None = None
+    #: The controls that blocked this turn, when the platform names them. Empty for a block
+    #: that comes from state rather than content, such as an engaged kill switch.
+    blocked_by: tuple[str, ...] = ()
     texts: list[str] | None = None
     schema_version: str | None = None
     turn_id: str | None = Field(default=None, alias="turnId")

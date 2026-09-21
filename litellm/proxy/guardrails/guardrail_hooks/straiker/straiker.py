@@ -843,6 +843,7 @@ def _v3_response(body: Mapping[str, object]) -> StraikerWebhookResponse:
     return StraikerWebhookResponse(
         action="BLOCKED" if blocked else "NONE",
         blocked_reason=reason,
+        blocked_by=blocked_by,
         turnId=_as_optional_str(verdict.get("turn_id")) or _as_optional_str(body.get("turn_id")),
     )
 
@@ -1228,7 +1229,11 @@ class StraikerGuardrail(CustomGuardrail):
         self._record(request_data=request_data, logging_obj=logging_obj, parsed=parsed)
         if parsed.action == "BLOCKED":
             message: Final = parsed.blocked_reason or DEFAULT_BLOCK_MESSAGE
-            if prefixes:
+            # Only a block that names a control is remembered. The same words are the same
+            # attack tomorrow, but a block that comes from state -- an engaged kill switch,
+            # a governance action -- is lifted by an administrator, and a remembered copy
+            # would keep refusing a conversation the platform now allows.
+            if prefixes and parsed.blocked_by:
                 self._v3_blocked_turns.set_cache(f"{scope}\0{prefixes[-1]}", message)
             self._block(request_data=request_data, input_type=input_type, message=message, blocked_content=True)
         return inputs
