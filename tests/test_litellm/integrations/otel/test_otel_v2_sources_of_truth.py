@@ -872,6 +872,45 @@ def test_chat_choices_win_over_a_responses_output_list():
     assert data.finish_reasons == ("stop",)
 
 
+def _ocr_payload(pages: list[object]):
+    return _sample_payload(
+        call_type="aocr",
+        custom_llm_provider="mistral",
+        model="mistral-ocr-latest",
+        messages=None,
+        response={"object": "ocr", "model": "mistral-ocr-latest", "pages": pages, "usage_info": {"pages_processed": 2}},
+    )
+
+
+def test_ocr_pages_become_one_assistant_choice_joined_in_page_order():
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _ocr_payload([{"index": 0, "markdown": "# Invoice"}, {"index": 1, "markdown": "Total: 42"}]),
+        capture_content=True,
+    )
+
+    assert data.choices_out == (
+        {
+            "message": {"role": "assistant", "content": "# Invoice\n\nTotal: 42", "refusal": None, "tool_calls": None},
+            "finish_reason": None,
+        },
+    )
+    assert data.finish_reasons == ()
+
+
+def test_ocr_output_follows_the_content_capture_gate():
+    data = LLMCallSpanData.from_standard_logging_payload(_ocr_payload([{"index": 0, "markdown": "# Invoice"}]))
+
+    assert data.choices_out == ()
+
+
+def test_ocr_pages_without_markdown_stay_empty():
+    data = LLMCallSpanData.from_standard_logging_payload(
+        _ocr_payload([{"index": 0, "images": []}, "not-a-page"]), capture_content=True
+    )
+
+    assert data.choices_out == ()
+
+
 def test_request_identity_prefers_canonical_team_keys():
     from litellm.integrations.otel.model.payloads import RequestIdentity
 
