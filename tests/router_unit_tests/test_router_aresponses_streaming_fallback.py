@@ -424,6 +424,44 @@ async def test_aresponses_per_request_fallbacks_survive_into_hop_streams():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_attempt_strips_the_controls_carrier_and_wraps_every_hop_stream():
+    """Each attempt of the chain, not only the primary's, comes back wrapped for mid-stream
+    failover, and the per-request controls carrier rides into the wrapper's re-entry kwargs
+    without ever reaching the provider call."""
+    from types import MappingProxyType
+
+    from litellm.router_utils.fallback_event_handlers import (
+        MID_STREAM_FALLBACK_CONTROLS_KEY,
+        MidStreamFallbackControls,
+    )
+
+    router = _make_three_tier_router()
+    completed_event = _make_completed_event(1, 1, 2)
+    hop_stream = _scripted_responses_stream([completed_event])
+    seen: dict = {}
+
+    async def fake_original(**kwargs):
+        seen.update(kwargs)
+        return hop_stream
+
+    controls = MidStreamFallbackControls(MappingProxyType({"fallbacks": [{"primary": ["fb1", "fb2"]}]}))
+    stream = await router._ageneric_api_call_with_fallbacks_responses_attempt(
+        model="fb1",
+        original_generic_function=fake_original,
+        stream=True,
+        input="hi",
+        **{MID_STREAM_FALLBACK_CONTROLS_KEY: controls},
+    )
+    collected = [event async for event in stream]
+
+    assert seen["model"] == "openai/fb1-model"
+    assert MID_STREAM_FALLBACK_CONTROLS_KEY not in seen
+    assert "fallbacks" not in seen
+    assert stream is not hop_stream
+    assert collected == [completed_event]
+
+
+@pytest.mark.asyncio
 async def test_aresponses_fallback_on_in_stream_error_event():
     """A retriable in-stream error event (429) must trigger the router's mid-stream
     fallback path: the wrapper catches MidStreamFallbackError raised by the source
