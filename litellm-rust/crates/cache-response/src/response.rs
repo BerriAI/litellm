@@ -52,6 +52,10 @@ where
         &self.backend
     }
 
+    pub fn backend_arc(&self) -> &Arc<B> {
+        &self.backend
+    }
+
     pub fn default_ttl(&self) -> Option<Duration> {
         self.backend.get_ttl(&B::Context::default())
     }
