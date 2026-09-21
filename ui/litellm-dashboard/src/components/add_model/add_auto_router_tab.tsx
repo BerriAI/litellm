@@ -47,6 +47,7 @@ import {
   buildComplexityRouterConfig,
   getKeywordTierRulesError,
   getClassifierModelError,
+  getHeuristicV2SuccessThresholdError,
   getClassifierReasoningEffortError,
   getMissingTiersError,
   getPlanModeTierError,
@@ -146,6 +147,7 @@ export const getSubmitBlockedReason = (
     getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
     getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
     getClassifierModelError(config) ??
+    getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold) ??
     (heuristicScoringRole(config) === "decides" ? customDimensionsError(config.custom_dimensions) : null) ??
     getClassifierReasoningEffortError(config, modelInfo) ??
     getReferencedModelsError(referencedModelsParams, availability)
@@ -405,6 +407,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     classificationMode: complexityRouterConfig.classification_mode,
     tierLabels: complexityRouterConfig.tier_labels,
     classifierType: complexityRouterConfig.classifier_type,
+    heuristicV2SuccessThreshold: complexityRouterConfig.heuristic_v2_success_threshold,
     capabilityClassifierConfig: complexityRouterConfig.capability_classifier_config,
     llmV2Config: complexityRouterConfig.llm_v2_config,
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
