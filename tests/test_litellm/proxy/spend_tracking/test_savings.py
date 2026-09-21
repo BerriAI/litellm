@@ -11,11 +11,48 @@ from litellm.proxy.spend_tracking.savings import (
     compute_autorouter_savings,
     compute_savings_spend,
     marks_gateway_injection,
+    prompt_caching_savings_for_request,
 )
 from litellm.router import Router
 from litellm.types.utils import Usage
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
+
+
+@pytest.mark.parametrize("model,usage", [
+    (None, {"cache_read_input_tokens": 100}),
+    ("claude-sonnet-5", None),
+    ("claude-sonnet-5", {"prompt_tokens": "invalid"}),
+])
+def test_prompt_cache_estimate_distinguishes_unknown_from_zero(model: str | None, usage: dict[str, object] | None) -> None:
+    assert prompt_caching_savings_for_request(model, "anthropic", usage) is None
+    assert compute_savings_spend(model, "anthropic", 0, False, usage_object=usage).prompt_caching == 0
+    assert prompt_caching_savings_for_request("claude-sonnet-5", "anthropic", {"prompt_tokens": 100}) == 0
+
+
+def test_prompt_cache_estimate_uses_the_rollup_pricing_and_retains_write_premiums() -> None:
+    router: Final = Router(model_list=[{
+        "model_name": "negotiated",
+        "litellm_params": {
+            "model": "anthropic/claude-sonnet-5", "input_cost_per_token": 1e-6,
+            "cache_creation_input_token_cost": 1.25e-6, "cache_read_input_token_cost": 1e-7,
+        },
+        "model_info": {"id": "negotiated-cache-prices"},
+    }])
+
+    def current_router() -> Router:
+        return router
+
+    usage: Final = {"cache_read_input_tokens": 1000, "cache_creation_input_tokens": 20000}
+    estimate: Final = prompt_caching_savings_for_request(
+        "claude-sonnet-5", "anthropic", usage, model_id="negotiated-cache-prices", llm_router=current_router,
+    )
+    rollup: Final = compute_savings_spend(
+        "claude-sonnet-5", "anthropic", 0, True, usage_object=usage,
+        model_id="negotiated-cache-prices", llm_router=current_router,
+    )
+    assert estimate == pytest.approx(1000 * (1e-6 - 1e-7) - 20000 * (1.25e-6 - 1e-6))
+    assert estimate == rollup.prompt_caching == rollup.gateway_injected_caching
 
 
 @pytest.mark.parametrize("modifier", [{"speed": "fast"}, {"inference_geo": "us"}])
