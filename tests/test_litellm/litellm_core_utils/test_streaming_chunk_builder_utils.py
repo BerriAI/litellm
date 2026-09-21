@@ -1648,3 +1648,83 @@ def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_ad
     )
 
     assert usage.prompt_tokens == 77
+
+
+_ZERO_USAGE_TEXT_CHUNKS: Final = (
+    _openai_chunk(choices=[{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}]),
+    _openai_chunk(choices=[{"index": 0, "delta": {"content": " there"}, "finish_reason": None}]),
+    _openai_chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+)
+
+
+@pytest.mark.parametrize(
+    "reported",
+    [
+        pytest.param({"prompt_tokens": 0, "completion_tokens": 17, "total_tokens": 17}, id="zero_prompt"),
+        pytest.param({"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5}, id="zero_completion"),
+        pytest.param({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}, id="all_zero"),
+    ],
+)
+def test_calculate_usage_keeps_an_explicit_provider_zero(reported: Mapping[str, int]) -> None:
+    chunks: Final = [*_ZERO_USAGE_TEXT_CHUNKS, _openai_chunk(choices=[], usage=reported)]
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="Hi there",
+        messages=[{"role": "user", "content": "hi"}],
+        count_prompt_tokens=lambda: 999,
+    )
+
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (
+        reported["prompt_tokens"],
+        reported["completion_tokens"],
+        reported["prompt_tokens"] + reported["completion_tokens"],
+    )
+
+
+def test_stream_chunk_builder_keeps_an_explicit_zero_prompt_count_end_to_end() -> None:
+    reported: Final = {"prompt_tokens": 0, "completion_tokens": 17, "total_tokens": 17}
+    chunks: Final = [*_ZERO_USAGE_TEXT_CHUNKS, _openai_chunk(choices=[], usage=reported)]
+
+    response: Final = stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+    assert response is not None
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (0, 17, 17)
+
+
+def test_calculate_usage_estimates_only_when_no_chunk_reported_usage() -> None:
+    chunks: Final = list(_ZERO_USAGE_TEXT_CHUNKS)
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="Hi there",
+        count_prompt_tokens=lambda: 77,
+    )
+
+    assert usage.prompt_tokens == 77
+    assert usage.completion_tokens > 0
+    assert usage.total_tokens == 77 + usage.completion_tokens
+
+
+def test_calculate_usage_keeps_a_reported_count_over_a_later_chunks_zero() -> None:
+    chunks: Final = [
+        _openai_chunk(
+            choices=[{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": None}],
+            usage={"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+        ),
+        _openai_chunk(
+            choices=[{"index": 0, "delta": {"content": " there"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 0, "completion_tokens": 17, "total_tokens": 17},
+        ),
+    ]
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="Hi there",
+        count_prompt_tokens=lambda: 999,
+    )
+
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (5, 17, 22)
