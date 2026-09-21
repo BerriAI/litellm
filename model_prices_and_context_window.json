@@ -23728,6 +23728,16 @@
         ],
         "supports_vision": true
     },
+    "fal_ai/high/1536-x-1024/openai/gpt-image-2.5/flare/text-to-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.04116,
+        "source": "https://fal.ai/models/openai/gpt-image-2.5/flare/text-to-image",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ],
+        "supports_vision": true
+    },
     "fal_ai/high/1920-x-1080/openai/gpt-image-2.5/flare/text-to-image": {
         "litellm_provider": "fal_ai",
         "mode": "image_generation",
