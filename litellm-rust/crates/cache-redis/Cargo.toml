@@ -7,7 +7,7 @@ repository.workspace = true
 
 [dependencies]
 litellm-cache.workspace = true
-redis = { version = "1.7.0", features = ["tls-rustls"] }
+redis = { version = "1.7.0", features = ["cluster", "tls-rustls"] }
 r2d2 = "0.8.10"
 tokio.workspace = true
 
