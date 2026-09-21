@@ -181,7 +181,7 @@ class AmazonNovaCanvasConfig:
         for _img in nova_response.get("images", []):
             openai_images.append(Image(b64_json=_img))
 
-        model_response.data = openai_images  # pyright: ignore[reportAttributeAccessIssue]  # legacy OpenAI image response type
+        model_response.data = openai_images
         return model_response
 
     @classmethod

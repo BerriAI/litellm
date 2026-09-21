@@ -125,7 +125,7 @@ class AmazonStabilityConfig:
             _image = Image(b64_json=artifact["base64"])
             image_list.append(_image)
 
-        model_response.data = image_list  # pyright: ignore[reportAttributeAccessIssue]  # legacy OpenAI image response type
+        model_response.data = image_list
 
         return model_response
 

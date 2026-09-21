@@ -163,7 +163,7 @@ def test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image(gate
             },
         ]
         cost: Final = _response_cost(response)
-        assert cost == _approx(4 * _catalog_cost("fal_ai/fal-ai/flux/dev", "output_cost_per_pixel") * 1_000_000)
+        assert cost == _approx(3 * _catalog_cost("fal_ai/fal-ai/flux/dev", "output_cost_per_pixel") * 1_048_576)
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/fal-ai/flux/dev")]
 
 

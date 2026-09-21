@@ -24921,7 +24921,7 @@
         },
         "mode": "image_generation",
         "output_cost_per_image": 0.025,
-        "output_cost_per_pixel": 2.5e-08,
+        "output_cost_per_pixel": 2.384185791015625e-08,
         "source": "https://fal.ai/models/fal-ai/flux/dev",
         "supported_endpoints": [
             "/v1/images/generations"

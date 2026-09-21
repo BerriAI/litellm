@@ -219,7 +219,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             if (inline_data := part.get("inlineData")) and (b64_json := inline_data.get("data"))
         ]
 
-        model_response.data = cast(list[OpenAIImage], data_list)  # pyright: ignore[reportAttributeAccessIssue]  # legacy OpenAI image response type
+        model_response.data = cast(list[OpenAIImage], data_list)
         return model_response
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:
