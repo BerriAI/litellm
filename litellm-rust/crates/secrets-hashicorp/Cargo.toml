@@ -9,11 +9,13 @@ repository.workspace = true
 litellm-core-utils.workspace = true
 litellm-secrets-types.workspace = true
 moka.workspace = true
-reqwest.workspace = true
+rustify.workspace = true
+rustify_derive.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+vaultrs.workspace = true
 veil.workspace = true
 
 [dev-dependencies]

@@ -124,10 +124,24 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
     let found_server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/v1/secret/data/KEY"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(serde_json::json!({"data": {"data": {"key": "remote"}}})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": {
+                "data": {"key": "remote"},
+                "metadata": {
+                    "created_time": "",
+                    "deletion_time": "",
+                    "custom_metadata": null,
+                    "destroyed": false,
+                    "version": 1
+                }
+            },
+            "lease_id": "",
+            "lease_duration": 0,
+            "renewable": false,
+            "request_id": "",
+            "warnings": null,
+            "wrap_info": null
+        })))
         .mount(&found_server)
         .await;
     let found_environment: Arc<dyn Lookup + Send + Sync> = Arc::new({
@@ -139,8 +153,7 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
         }
     });
     let found_config = HashicorpVaultConfig::from_environment(found_environment.as_ref()).unwrap();
-    let found_manager =
-        HashicorpVault::with_client(reqwest::Client::new(), found_config, true).unwrap();
+    let found_manager = HashicorpVault::from_config(found_config, true).unwrap();
     let found_resolver = SecretResolver::new(
         Arc::new(SecretManagerState::new(
             SecretManager::HashicorpVault(found_manager),
@@ -164,7 +177,9 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
 
     let missing_server = MockServer::start().await;
     Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(404))
+        .respond_with(
+            ResponseTemplate::new(404).set_body_json(serde_json::json!({"errors": ["missing"]})),
+        )
         .mount(&missing_server)
         .await;
     let missing_environment: Arc<dyn Lookup + Send + Sync> = Arc::new({
@@ -177,8 +192,7 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
     });
     let missing_config =
         HashicorpVaultConfig::from_environment(missing_environment.as_ref()).unwrap();
-    let missing_manager =
-        HashicorpVault::with_client(reqwest::Client::new(), missing_config, true).unwrap();
+    let missing_manager = HashicorpVault::from_config(missing_config, true).unwrap();
     let missing_state = SecretManagerState::new(
         SecretManager::HashicorpVault(missing_manager),
         KeyManagementSettings {
@@ -198,7 +212,9 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
 
     let failed_server = MockServer::start().await;
     Mock::given(method("GET"))
-        .respond_with(ResponseTemplate::new(500))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_json(serde_json::json!({"errors": ["failed"]})),
+        )
         .mount(&failed_server)
         .await;
     let failed_environment: Arc<dyn Lookup + Send + Sync> = Arc::new({
@@ -211,8 +227,7 @@ async fn hashicorp_handler_resolves_found_missing_and_failed_values() {
     });
     let failed_config =
         HashicorpVaultConfig::from_environment(failed_environment.as_ref()).unwrap();
-    let failed_manager =
-        HashicorpVault::with_client(reqwest::Client::new(), failed_config, true).unwrap();
+    let failed_manager = HashicorpVault::from_config(failed_config, true).unwrap();
     let failed_state = SecretManagerState::new(
         SecretManager::HashicorpVault(failed_manager),
         KeyManagementSettings {
