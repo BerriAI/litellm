@@ -1,10 +1,12 @@
 import json
 from datetime import datetime
-from typing import Any, Optional, Union
+from types import MappingProxyType
+from typing import Any, Final
 from urllib.parse import urlparse
 
 import httpx
 
+from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -24,15 +26,23 @@ from .llm_provider_handlers.cohere_passthrough_logging_handler import (
 from .llm_provider_handlers.cursor_passthrough_logging_handler import (
     CursorPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.deepgram_listen_passthrough_logging_handler import (
+    DeepgramListenPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
+)
+from .llm_provider_handlers.transcribe_passthrough_logging_handler import (
+    TRANSCRIBE_CUSTOM_LLM_PROVIDER,
+    PassThroughLogDispatch,
+    TranscribePassthroughLoggingHandler,
 )
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
 from .upstream_usage_headers import has_upstream_reported_usage
 
-cohere_passthrough_logging_handler = CoherePassthroughLoggingHandler()
+cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
 
 
 def _safe_response_text(httpx_response: httpx.Response) -> str:
@@ -48,7 +58,15 @@ def _safe_response_text(httpx_response: httpx.Response) -> str:
 
 
 class PassThroughEndpointLogging:
-    def __init__(self):
+    def __init__(
+        self,
+        transcribe_handler: TranscribePassthroughLoggingHandler | None = None,
+        log_dispatch: PassThroughLogDispatch | None = None,
+    ):
+        self.transcribe_passthrough_logging_handler: Final = (
+            transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
+        )
+        self._injected_log_dispatch: Final = log_dispatch
         self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
             "streamGenerateContent",
@@ -90,14 +108,16 @@ class PassThroughEndpointLogging:
         # Vertex AI Live API WebSocket
         self.TRACKED_VERTEX_AI_LIVE_ROUTES = ["/vertex_ai/live"]
 
+    @property
+    def _log_dispatch(self) -> PassThroughLogDispatch:
+        return self._injected_log_dispatch if self._injected_log_dispatch is not None else self._handle_logging
+
     async def _handle_logging(
         self,
         logging_obj: LiteLLMLoggingObj,
-        standard_logging_response_object: Union[
-            StandardPassThroughResponseObject,
-            PassThroughEndpointLoggingResultValues,
-            dict,
-        ],
+        standard_logging_response_object: StandardPassThroughResponseObject
+        | PassThroughEndpointLoggingResultValues
+        | dict,
         result: str,
         start_time: datetime,
         end_time: datetime,
@@ -124,7 +144,7 @@ class PassThroughEndpointLogging:
     def normalize_llm_passthrough_logging_payload(
         self,
         httpx_response: httpx.Response,
-        response_body: Optional[dict],
+        response_body: dict | list[dict[str, object]] | None,
         request_body: dict,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
@@ -132,19 +152,19 @@ class PassThroughEndpointLogging:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
         **kwargs,
     ):
-        return_dict = {
+        return_dict: Final = {
             "standard_logging_response_object": None,
             "kwargs": kwargs,
         }
-        standard_logging_response_object: Optional[Any] = None
+        standard_logging_response_object: Any | None = None
 
         if self.is_gemini_route(url_route, custom_llm_provider):
             gemini_passthrough_logging_handler_result = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -171,10 +191,10 @@ class PassThroughEndpointLogging:
             standard_logging_response_object = vertex_passthrough_logging_handler_result["result"]
             kwargs = vertex_passthrough_logging_handler_result["kwargs"]
         elif self.is_anthropic_route(url_route):
-            anthropic_passthrough_logging_handler_result = (
+            anthropic_passthrough_logging_handler_result: Final = (
                 AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
                     httpx_response=httpx_response,
-                    response_body=response_body or {},
+                    response_body=response_body if isinstance(response_body, dict) else {},
                     logging_obj=logging_obj,
                     url_route=url_route,
                     result=result,
@@ -191,7 +211,7 @@ class PassThroughEndpointLogging:
         elif self.is_cohere_route(url_route):
             cohere_passthrough_logging_handler_result = cohere_passthrough_logging_handler.cohere_passthrough_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -210,7 +230,7 @@ class PassThroughEndpointLogging:
 
             openai_passthrough_logging_handler_result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -226,7 +246,7 @@ class PassThroughEndpointLogging:
         elif self.is_cursor_route(url_route, custom_llm_provider):
             cursor_passthrough_logging_handler_result = CursorPassthroughLoggingHandler.cursor_passthrough_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -238,17 +258,89 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = cursor_passthrough_logging_handler_result["result"]
             kwargs = cursor_passthrough_logging_handler_result["kwargs"]
+        elif self.is_comprehend_medical_route(custom_llm_provider):
+            from .llm_provider_handlers.comprehend_medical_passthrough_logging_handler import (
+                ComprehendMedicalPassthroughLoggingHandler,
+            )
+
+            comprehend_medical_handler_result: Final = (
+                ComprehendMedicalPassthroughLoggingHandler.comprehend_medical_passthrough_handler(
+                    httpx_response=httpx_response,
+                    logging_obj=logging_obj,
+                    url_route=url_route,
+                    result=result,
+                    start_time=start_time,
+                    end_time=end_time,
+                    cache_hit=cache_hit,
+                    request_body=request_body,
+                    **kwargs,
+                )
+            )
+            standard_logging_response_object = comprehend_medical_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = comprehend_medical_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif self.is_azure_speech_route(custom_llm_provider):
+            from .llm_provider_handlers.azure_speech_passthrough_logging_handler import (
+                AzureSpeechPassthroughLoggingHandler,
+            )
+
+            azure_speech_handler_result: Final = AzureSpeechPassthroughLoggingHandler.azure_speech_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = azure_speech_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = azure_speech_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif self.is_transcribe_route(custom_llm_provider):
+            transcribe_handler_result: Final = TranscribePassthroughLoggingHandler.transcribe_passthrough_handler(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = transcribe_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = transcribe_handler_result["kwargs"]  # rebind-ok: elif-chain contract
+        elif self.is_typesafe_route(custom_llm_provider):
+            from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
+                TypeSafePassthroughLoggingHandler,
+            )
+
+            typesafe_handler_result: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+                httpx_response=httpx_response,
+                response_body=response_body if isinstance(response_body, dict) else MappingProxyType({}),
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                **kwargs,
+            )
+            standard_logging_response_object = typesafe_handler_result["result"]
+            kwargs = typesafe_handler_result["kwargs"]
         elif self.is_vertex_ai_live_route(url_route):
             from .llm_provider_handlers.vertex_ai_live_passthrough_logging_handler import (
                 VertexAILivePassthroughLoggingHandler,
             )
 
-            vertex_ai_live_handler = VertexAILivePassthroughLoggingHandler()
+            vertex_ai_live_handler: Final = VertexAILivePassthroughLoggingHandler()
 
             # For WebSocket responses, response_body should be a list of messages
-            websocket_messages: list[dict[str, Any]] = response_body if isinstance(response_body, list) else []
+            websocket_messages: Final[list[dict[str, Any]]] = response_body if isinstance(response_body, list) else []
 
-            vertex_ai_live_handler_result = vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
+            vertex_ai_live_handler_result: Final = vertex_ai_live_handler.vertex_ai_live_passthrough_handler(
                 websocket_messages=websocket_messages,
                 logging_obj=logging_obj,
                 url_route=url_route,
@@ -260,6 +352,21 @@ class PassThroughEndpointLogging:
 
             standard_logging_response_object = vertex_ai_live_handler_result["result"]
             kwargs = vertex_ai_live_handler_result["kwargs"]
+        elif DeepgramListenPassthroughLoggingHandler.is_deepgram_listen_route(url_route):
+            deepgram_handler_result: Final = (
+                DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
+                    websocket_messages=tuple(
+                        message
+                        for message in (response_body if isinstance(response_body, list) else ())
+                        if isinstance(message, dict)
+                    ),
+                    logging_obj=logging_obj,
+                    upstream_url=str(httpx_response.request.url),
+                    kwargs=kwargs,
+                )
+            )
+            standard_logging_response_object = deepgram_handler_result["result"]  # rebind-ok: elif-chain
+            kwargs = deepgram_handler_result["kwargs"]  # rebind-ok: elif-chain contract
         return_dict["standard_logging_response_object"] = standard_logging_response_object
 
         return_dict["kwargs"] = kwargs
@@ -268,7 +375,7 @@ class PassThroughEndpointLogging:
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
-        response_body: Optional[dict],
+        response_body: dict | list[dict[str, object]] | None,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
@@ -277,17 +384,17 @@ class PassThroughEndpointLogging:
         cache_hit: bool,
         request_body: dict,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
-        custom_llm_provider: Optional[str] = None,
+        custom_llm_provider: str | None = None,
         **kwargs,
     ):
-        standard_logging_response_object: Optional[PassThroughEndpointLoggingResultValues] = None
+        standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
-        if self.is_assemblyai_route(url_route):
+        if self.is_assemblyai_route(url_route) and not self.is_azure_speech_route(custom_llm_provider):
             if AssemblyAIPassthroughLoggingHandler._should_log_request(httpx_response.request.method) is not True:
                 return
             self.assemblyai_passthrough_logging_handler.assemblyai_passthrough_logging_handler(
                 httpx_response=httpx_response,
-                response_body=response_body or {},
+                response_body=response_body if isinstance(response_body, dict) else {},
                 logging_obj=logging_obj,
                 url_route=url_route,
                 result=result,
@@ -300,8 +407,26 @@ class PassThroughEndpointLogging:
         elif self.is_langfuse_route(url_route):
             # Don't log langfuse pass-through requests
             return
+        elif self.is_transcribe_route(custom_llm_provider) and TranscribePassthroughLoggingHandler.is_priced_job_start(
+            httpx_response
+        ):
+            self.transcribe_passthrough_logging_handler.schedule_priced_job_logging(
+                httpx_response=httpx_response,
+                response_body=response_body if isinstance(response_body, dict) else None,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                request_body=request_body,
+                log=self._log_dispatch,
+                standard_pass_through_logging_payload=passthrough_logging_payload,
+                **kwargs,
+            )
+            return
         else:
-            normalized_llm_passthrough_logging_payload = self.normalize_llm_passthrough_logging_payload(
+            normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
                 httpx_response=httpx_response,
                 response_body=response_body,
                 request_body=request_body,
@@ -329,7 +454,7 @@ class PassThroughEndpointLogging:
             kwargs=kwargs,
         )
 
-        await self._handle_logging(
+        await self._log_dispatch(
             logging_obj=logging_obj,
             standard_logging_response_object=standard_logging_response_object,
             result=result,
@@ -343,7 +468,9 @@ class PassThroughEndpointLogging:
     def is_vertex_route(self, url_route: str) -> bool:
         if any(f":{method}" in url_route for method in self.TRACKED_VERTEX_METHOD_ROUTES):
             return True
-        return any(resource in url_route for resource in self.TRACKED_VERTEX_RESOURCE_ROUTES)
+        if any(resource in url_route for resource in self.TRACKED_VERTEX_RESOURCE_ROUTES):
+            return True
+        return VertexPassthroughLoggingHandler.is_vertex_interactions_route(url_route)
 
     def is_anthropic_route(self, url_route: str):
         for route in self.TRACKED_ANTHROPIC_ROUTES:
@@ -351,21 +478,35 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
-    def is_cohere_route(self, url_route: str):
+    def is_cohere_route(self, url_route: str) -> bool:
         for route in self.TRACKED_COHERE_ROUTES:
-            if route in url_route:
-                return True
-
-    def is_assemblyai_route(self, url_route: str):
-        parsed_url = urlparse(url_route)
-        if parsed_url.hostname == "api.assemblyai.com":
-            return True
-        elif "/transcript" in parsed_url.path:
+            if route not in url_route:
+                continue
+            if route == "/v1/embed" and "/v1/embeddings" in url_route:
+                continue
             return True
         return False
 
+    def is_assemblyai_route(self, url_route: str):
+        parsed_url: Final = urlparse(url_route)
+        if parsed_url.hostname == "api.assemblyai.com" or "/transcript" in parsed_url.path:
+            return True
+        return False
+
+    def is_comprehend_medical_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "comprehendmedical"
+
+    def is_azure_speech_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == AZURE_SPEECH_CUSTOM_LLM_PROVIDER
+
+    def is_transcribe_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == TRANSCRIBE_CUSTOM_LLM_PROVIDER
+
+    def is_typesafe_route(self, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "typesafe"
+
     def is_langfuse_route(self, url_route: str):
-        parsed_url = urlparse(url_route)
+        parsed_url: Final = urlparse(url_route)
         for route in self.TRACKED_LANGFUSE_ROUTES:
             if route in parsed_url.path:
                 return True
@@ -380,11 +521,11 @@ class PassThroughEndpointLogging:
                 return True
         return False
 
-    def is_cursor_route(self, url_route: str, custom_llm_provider: Optional[str] = None):
+    def is_cursor_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Cursor Cloud Agents API route."""
         if custom_llm_provider == "cursor":
             return True
-        parsed_url = urlparse(url_route)
+        parsed_url: Final = urlparse(url_route)
         if parsed_url.hostname and "api.cursor.com" in parsed_url.hostname:
             return True
         for route in self.TRACKED_CURSOR_ROUTES:
@@ -409,10 +550,14 @@ class PassThroughEndpointLogging:
 
         return _is_openai_compatible_url(url_route)
 
-    def is_gemini_route(self, url_route: str, custom_llm_provider: Optional[str] = None):
+    def is_gemini_route(self, url_route: str, custom_llm_provider: str | None = None):
         """Check if the URL route is a Gemini API route."""
+        if custom_llm_provider != "gemini":
+            return False
+        if VertexPassthroughLoggingHandler.is_interactions_route(url_route):
+            return True
         for route in self.TRACKED_GEMINI_ROUTES:
-            if route in url_route and custom_llm_provider == "gemini":
+            if route in url_route:
                 return True
         return False
 
@@ -433,6 +578,7 @@ class PassThroughEndpointLogging:
 
         return (
             OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_embeddings_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)

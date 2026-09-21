@@ -7,10 +7,11 @@ Vercel AI Gateway is OpenAI-compatible and supports embeddings via the /v1/embed
 Docs: https://vercel.com/docs/ai-gateway/openai-compat/embeddings
 """
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -41,8 +42,8 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         messages: list,
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         """
         Validate environment and set up headers for Vercel AI Gateway API.
@@ -50,7 +51,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         Vercel AI Gateway requires:
         - Authorization header with Bearer token (API key or OIDC token)
         """
-        vercel_headers = {
+        vercel_headers: Final = {
             "Content-Type": "application/json",
         }
 
@@ -59,18 +60,18 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
             vercel_headers["Authorization"] = f"Bearer {api_key}"
 
         # Merge with existing headers (user's extra_headers take priority)
-        merged_headers = {**vercel_headers, **headers}
+        merged_headers: Final = {**vercel_headers, **headers}
 
         return merged_headers
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         """
         Get the complete URL for Vercel AI Gateway Embedding API endpoint.
@@ -112,7 +113,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str],
+        api_key: str | None,
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
@@ -123,7 +124,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # Vercel AI Gateway returns standard OpenAI-compatible embedding response
-        response_json = raw_response.json()
+        response_json: Final = raw_response.json()
 
         return convert_to_model_response_object(
             response_object=response_json,
@@ -160,7 +161,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
+    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> BaseLLMException:
         """
         Get the error class for Vercel AI Gateway errors.
         """

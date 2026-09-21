@@ -1,12 +1,9 @@
-import os
-import sys
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 from litellm.proxy.client.users import (
@@ -87,3 +84,17 @@ def test_delete_user_unauthorized(mock_post, client):
     mock_post.return_value.text = "unauthorized"
     with pytest.raises(UnauthorizedError):
         client.delete_user(["u1"])
+
+
+def test_delete_user_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
+    """
+    A proxy that accepts the connection but never answers used to pin the caller's
+    process forever, since the request carried no timeout at all.
+    """
+    client = UsersManagementClient(base_url=hanging_server, api_key="sk-test", timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        client.delete_user(["u1"])
+
+    assert time.monotonic() - started < 10

@@ -3,15 +3,11 @@
 # These are fast Tests, and make no API calls
 import asyncio
 import os
-import sys
 import time
 import traceback
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
@@ -671,13 +667,10 @@ def test_get_available_deployment_for_pass_through_no_deployments():
         )
 
         # Test that BadRequestError is raised when no pass-through deployments exist
-        try:
+        with pytest.raises(litellm.BadRequestError) as exc_info:
             router.get_available_deployment_for_pass_through("gpt-3.5-turbo")
-            pytest.fail(
-                "Expected BadRequestError when no pass-through deployments exist"
-            )
-        except litellm.BadRequestError as e:
-            assert "use_in_pass_through=True" in str(e)
+        e = exc_info.value
+        assert "use_in_pass_through=True" in str(e)
 
         router.reset()
     except Exception as e:

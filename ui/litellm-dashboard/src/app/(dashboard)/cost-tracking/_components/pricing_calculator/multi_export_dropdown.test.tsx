@@ -1,8 +1,7 @@
 import React from "react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../../../../tests/test-utils";
+import { renderWithProviders, screen, waitFor } from "../../../../../../tests/test-utils";
 import MultiExportDropdown from "./multi_export_dropdown";
 import type { MultiModelResult } from "./types";
 
@@ -64,7 +63,7 @@ describe("MultiExportDropdown", () => {
 
   it("should not render anything when no entries have results", () => {
     const { container } = renderWithProviders(<MultiExportDropdown multiResult={makeMultiResult(false)} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render the Export button when at least one entry has a result", () => {
@@ -78,41 +77,44 @@ describe("MultiExportDropdown", () => {
 
     await user.click(screen.getByRole("button", { name: /^export$/i }));
 
-    expect(screen.getByText("Export as PDF")).toBeInTheDocument();
-    expect(screen.getByText("Export as CSV")).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: "Export as PDF" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Export as CSV" })).toBeInTheDocument();
   });
 
   it("should hide the export menu when the Export button is clicked again", async () => {
     const user = userEvent.setup();
     renderWithProviders(<MultiExportDropdown multiResult={makeMultiResult(true)} />);
 
-    await user.click(screen.getByRole("button", { name: /^export$/i }));
-    expect(screen.getByText("Export as PDF")).toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: /^export$/i });
+    await user.click(trigger);
+    await screen.findByRole("menuitem", { name: "Export as PDF" });
 
-    await user.click(screen.getByRole("button", { name: /^export$/i }));
-    expect(screen.queryByText("Export as PDF")).not.toBeInTheDocument();
+    await user.click(trigger);
+    await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
   });
 
   it("should call exportMultiToPDF and close the menu when Export as PDF is clicked", async () => {
     const user = userEvent.setup();
     renderWithProviders(<MultiExportDropdown multiResult={makeMultiResult(true)} />);
 
-    await user.click(screen.getByRole("button", { name: /^export$/i }));
-    await user.click(screen.getByText("Export as PDF"));
+    const trigger = screen.getByRole("button", { name: /^export$/i });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("menuitem", { name: "Export as PDF" }));
 
     expect(exportMultiToPDF).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Export as PDF")).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
   });
 
   it("should call exportMultiToCSV and close the menu when Export as CSV is clicked", async () => {
     const user = userEvent.setup();
     renderWithProviders(<MultiExportDropdown multiResult={makeMultiResult(true)} />);
 
-    await user.click(screen.getByRole("button", { name: /^export$/i }));
-    await user.click(screen.getByText("Export as CSV"));
+    const trigger = screen.getByRole("button", { name: /^export$/i });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("menuitem", { name: "Export as CSV" }));
 
     expect(exportMultiToCSV).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("Export as CSV")).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
   });
 
   it("should pass the multiResult to the export functions", async () => {
@@ -121,7 +123,7 @@ describe("MultiExportDropdown", () => {
     renderWithProviders(<MultiExportDropdown multiResult={multiResult} />);
 
     await user.click(screen.getByRole("button", { name: /^export$/i }));
-    await user.click(screen.getByText("Export as PDF"));
+    await user.click(await screen.findByRole("menuitem", { name: "Export as PDF" }));
 
     expect(exportMultiToPDF).toHaveBeenCalledWith(multiResult);
   });
@@ -135,10 +137,41 @@ describe("MultiExportDropdown", () => {
       </div>,
     );
 
-    await user.click(screen.getByRole("button", { name: /^export$/i }));
-    expect(screen.getByText("Export as PDF")).toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: /^export$/i });
+    await user.click(trigger);
+    await screen.findByRole("menuitem", { name: "Export as PDF" });
 
-    fireEvent.mouseDown(screen.getByTestId("outside"));
-    expect(screen.queryByText("Export as PDF")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("outside"));
+    await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
+  });
+
+  it("should focus and navigate export options with the keyboard", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<MultiExportDropdown multiResult={makeMultiResult(true)} />);
+
+    const trigger = screen.getByRole("button", { name: /^export$/i });
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+
+    const pdfOption = await screen.findByRole("menuitem", { name: "Export as PDF" });
+    await waitFor(() => expect(pdfOption).toHaveFocus());
+
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Export as CSV" })).toHaveFocus();
+  });
+
+  it("should close the menu and restore trigger focus when Escape is pressed", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<MultiExportDropdown multiResult={makeMultiResult(true)} />);
+
+    const trigger = screen.getByRole("button", { name: /^export$/i });
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+    await screen.findByRole("menuitem", { name: "Export as PDF" });
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
+    expect(trigger).toHaveFocus();
   });
 });

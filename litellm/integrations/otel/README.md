@@ -35,6 +35,15 @@ span orphaned into its own trace). The anchor — a contextvar inherited by thos
 child tasks — gives a stable parent in both cases. DB/service spans keep ambient
 parenting so an auth DB lookup still nests under `auth`.
 
+The anchor is also what `litellm.request.route` is read from: `request_root_http_route`
+returns the server span's own `http.route`, so the LLM call span cannot disagree with
+its parent about which endpoint served the request. That means the route template on a
+normal route and the literal path on a passthrough prefix, because the passthrough hook
+rewrote the attribute; an MCP call anchors the same server span, so it reports the
+`/mcp` mount point. Attributes stay readable after a span ends, so the async close
+callback reads the same value. Where no server span was anchored at all, the route the
+proxy recorded at auth (`metadata.user_api_key_request_route`) is the backstop.
+
 **Which service calls become spans (`spans.span_role_for_service`).** LiteLLM's
 service-logging layer instruments many internal functions, but only some are
 traceable units of work:
@@ -222,7 +231,29 @@ lives in [`plumbing/`](./plumbing):
   otherwise the operator's globally configured `MeterProvider` is reused so its
   readers/exporters receive them alongside the server metrics, and one is built
   and registered as the global only when none is set (mirroring how V2 owns trace
-  export).
+  export). A **failed** call records `gen_ai.client.operation.duration` too,
+  carrying the semconv `error.type` (the mapped provider exception's class name),
+  so the histogram covers the whole traffic and failure-rate panels are buildable;
+  the other five instruments describe a completed generation and are skipped
+  rather than filled with a fabricated zero. `error.type` is stamped after the
+  cardinality filter, so an `otel.attributes` list cannot merge the failure series
+  back into the success series. A proxy-gate rejection (auth / rate limit) records
+  nothing, for the same reason it gets no span: no upstream call happened.
+  Both paths cap their attributes at `METRIC_ATTRIBUTE_CEILING` before the
+  operator's own `otel.attributes` filter runs, so the filter can narrow the set
+  but never widen it. The ceiling is what keeps series count bounded by the
+  deployment's own key/team/user/deployment count instead of by its traffic: a
+  label value that moves per request mints a time series per request, which both
+  bills per request on a hosted backend and leaves a histogram that cannot be
+  aggregated. So client-supplied and per-request metadata (`requester_metadata`,
+  `spend_logs_metadata`, `user_api_key_end_user_id`, `requester_ip_address`) is
+  metric-ineligible and stays on the span, where cardinality is free, and the
+  `hidden_params` label carries only `model_id`, the deployment identity a
+  per-deployment panel joins on. `api_base` is excluded despite naming the same
+  deployment, because it is a documented per-call parameter and so is caller-chosen
+  in SDK use. Because the shared validator accepts every span attribute name, a
+  filter that names a metric-ineligible one logs a warning once when the filter
+  resolves rather than silently emitting nothing for it.
 - [`events.py`](./plumbing/events.py) — GenAI client events. Gated on
   `enable_events` (`LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS`), a failed LLM call
   records the semconv `gen_ai.client.operation.exception` log event at severity
@@ -267,7 +298,10 @@ lives in [`plumbing/`](./plumbing):
 
 - **A new attribute vocabulary for a backend**: add a mapper in `mappers/`
   (a class with a `map(data) -> AttributeMap` method, typically built from
-  `key -> extractor` tables) and register it in `mappers/__init__._MAPPER_BY_NAME`.
+  `key -> extractor` tables) and register it in `mappers/__init__._PLAIN_MAPPERS`.
+  If it spells declared tool definitions out per index, register it in
+  `_TOOL_DEFINITION_MAPPERS` instead and take the shared attribute budget in its
+  constructor, so the family stays bounded span-wide rather than per vocabulary.
 - **A new integration**: add a preset in `presets/` that returns an
   `OpenTelemetryV2Config`, and register it in `presets/__init__.PRESET_BY_CALLBACK`.
   If it supports dynamic credentials, add a header builder to

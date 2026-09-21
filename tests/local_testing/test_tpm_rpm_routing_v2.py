@@ -4,7 +4,6 @@
 import asyncio
 import os
 import random
-import sys
 import time
 import traceback
 from datetime import datetime
@@ -12,11 +11,7 @@ from typing import Dict
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from unittest.mock import AsyncMock, MagicMock, patch
 from litellm.types.utils import StandardLoggingPayload
 import pytest
@@ -399,9 +394,7 @@ async def test_multiple_potential_deployments(sync_mode):
 
 def test_single_deployment_tpm_zero():
     import os
-    from datetime import datetime
 
-    import litellm
 
     model_list = [
         {

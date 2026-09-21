@@ -26,6 +26,11 @@ POSTGRES_IMAGE = os.getenv("LITELLM_TEST_POSTGRES_IMAGE", "postgres:16-alpine")
 MIN_TABLES = int(os.getenv("LITELLM_TEST_MIN_TABLES", "20"))
 NON_ROOT_UID = "12345:0"  # arbitrary uid in GID 0, as OpenShift restricted-v2 assigns
 
+MIGRATION_INTERPRETER = os.getenv("LITELLM_MIGRATION_INTERPRETER", "python")
+MIGRATION_SCRIPT = os.getenv(
+    "LITELLM_MIGRATION_SCRIPT", "litellm/proxy/prisma_migration.py"
+)
+
 pytestmark = [
     pytest.mark.skipif(IMAGE is None, reason="requires a built image (set LITELLM_IMAGE)"),
     pytest.mark.skipif(shutil.which("docker") is None, reason="requires the docker CLI"),
@@ -108,8 +113,8 @@ def test_migration_offline_as_non_root_uid(offline_postgres):
         "-e", f"DATABASE_URL=postgresql://postgres:pw@{pg}:5432/litellm",
         "-e", "LITELLM_MASTER_KEY=sk-offline-migration-test",
         "-e", "DISABLE_SCHEMA_UPDATE=false",
-        "-w", "/app", "--entrypoint", "python",
-        IMAGE, "litellm/proxy/prisma_migration.py",
+        "-w", "/app", "--entrypoint", MIGRATION_INTERPRETER,
+        IMAGE, MIGRATION_SCRIPT,
         check=False,
     )
     tables = _table_count(pg)
@@ -123,6 +128,48 @@ def test_migration_offline_as_non_root_uid(offline_postgres):
         "The prisma bake is not self-contained: it needs a runtime download or a "
         "writable HOME/cache, so OpenShift and air-gapped deployments start on an "
         f"empty database.\nstdout:\n{migrate.stdout}\nstderr:\n{migrate.stderr}"
+    )
+
+
+QUERY_ENGINE_PROBE = """
+from pathlib import Path
+from prisma.client import BINARY_PATHS
+
+for path in BINARY_PATHS.query_engine.values():
+    print(path, Path(path).exists())
+"""
+
+
+def test_baked_query_engine_paths_resolve_for_any_uid():
+    """The generated client's query engine paths survive resolution as an arbitrary uid.
+
+    prisma-python resolves the baked BINARY_PATHS eagerly, before it reads the
+    PRISMA_QUERY_ENGINE_BINARY override, and its existence check propagates
+    EACCES instead of skipping the candidate. A path baked under a build-time
+    HOME is unreadable to a different runtime uid, so client startup dies with a
+    PermissionError that no env override can rescue. Baking under the fixed,
+    world-readable /opt/prisma is what keeps that scan from raising.
+    """
+    assert IMAGE is not None
+    probe = _docker(
+        "run", "--rm", "--user", NON_ROOT_UID, "--entrypoint", "python",
+        IMAGE, "-c", QUERY_ENGINE_PROBE,
+        check=False,
+    )
+
+    assert probe.returncode == 0, (
+        f"resolving the baked query engine paths failed as uid {NON_ROOT_UID}\n"
+        f"stdout:\n{probe.stdout}\nstderr:\n{probe.stderr}"
+    )
+
+    paths = [line.split()[0] for line in probe.stdout.splitlines() if line.startswith("/")]
+    assert paths, f"the generated client baked no query engine paths\nstdout:\n{probe.stdout}"
+
+    outside = [path for path in paths if not path.startswith("/opt/prisma/")]
+    assert not outside, (
+        f"query engine paths baked outside the fixed /opt/prisma location: {outside}. "
+        "Whatever uid can read them at build time is the only uid that can start the "
+        "client, and the PRISMA_QUERY_ENGINE_BINARY override cannot recover from it."
     )
 
 
