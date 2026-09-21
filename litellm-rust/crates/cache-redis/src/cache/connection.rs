@@ -117,7 +117,7 @@ impl r2d2::ManageConnection for ClusterConnectionManager {
     }
 }
 
-pub(crate) enum ConnectionRef<'a> {
+pub enum ConnectionRef<'a> {
     Node(&'a mut dyn redis::ConnectionLike),
     Cluster(&'a mut ClusterConnection),
 }

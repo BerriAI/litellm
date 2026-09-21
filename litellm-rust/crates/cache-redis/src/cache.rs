@@ -14,7 +14,7 @@ use crate::topology::RedisTopology;
 mod connection;
 mod operations;
 
-pub(crate) use connection::ConnectionRef;
+pub use connection::ConnectionRef;
 use connection::{ClusterConnectionManager, ConnectionManager};
 
 pub use operations::{
@@ -40,7 +40,8 @@ const CLAIM_SCRIPT: &str = concat!(
 );
 const CLAIM_ATTEMPTS: usize = 8;
 
-enum Connections<C> {
+#[allow(private_interfaces)]
+pub enum Connections<C> {
     Pool(r2d2::Pool<ConnectionManager>),
     Cluster(r2d2::Pool<ClusterConnectionManager>),
     Fixed(Mutex<C>),
@@ -50,7 +51,7 @@ impl<C> Connections<C>
 where
     C: redis::ConnectionLike + Send + 'static,
 {
-    fn execute<T>(
+    pub fn execute<T>(
         &self,
         operation: impl FnOnce(&mut ConnectionRef<'_>) -> Result<T, Error>,
     ) -> Result<T, Error> {
@@ -71,6 +72,29 @@ where
                 let mut connection = connection.lock().map_err(|_| Error::Unavailable)?;
                 operation(&mut ConnectionRef::Node(&mut *connection))
             }
+        }
+    }
+
+    pub async fn run_blocking<T, F>(connections: Arc<Self>, operation: F) -> Result<T, Error>
+    where
+        T: Send + 'static,
+        F: FnOnce(&mut ConnectionRef<'_>) -> Result<T, Error> + Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || connections.execute(operation))
+            .await
+            .map_err(|_| Error::Unavailable)?
+    }
+
+    pub fn fixed(connection: C) -> Self {
+        Self::Fixed(Mutex::new(connection))
+    }
+
+    pub fn open(url: &str, topology: &RedisTopology) -> Result<Self, Error> {
+        match topology {
+            RedisTopology::Standalone => Ok(Self::Pool(pool(ConnectionManager::open(url)?)?)),
+            RedisTopology::Cluster { startup_nodes } => Ok(Self::Cluster(pool(
+                ClusterConnectionManager::open(url, startup_nodes)?,
+            )?)),
         }
     }
 }
@@ -94,12 +118,7 @@ impl<S: CacheCodec> RedisCache<S> {
         default_ttl: Option<Duration>,
         codec: S,
     ) -> Result<Self, Error> {
-        let connections = match topology {
-            RedisTopology::Standalone => Connections::Pool(pool(ConnectionManager::open(url)?)?),
-            RedisTopology::Cluster { startup_nodes } => {
-                Connections::Cluster(pool(ClusterConnectionManager::open(url, startup_nodes)?)?)
-            }
-        };
+        let connections = Connections::open(url, topology)?;
         Ok(Self {
             connections: Arc::new(connections),
             default_ttl: default_ttl.unwrap_or(DEFAULT_TTL),
@@ -127,7 +146,7 @@ where
 {
     pub fn with_connection(connection: C, default_ttl: Option<Duration>, codec: S) -> Self {
         Self {
-            connections: Arc::new(Connections::Fixed(Mutex::new(connection))),
+            connections: Arc::new(Connections::fixed(connection)),
             default_ttl: default_ttl.unwrap_or(DEFAULT_TTL),
             codec,
             namespace: None,
@@ -203,16 +222,6 @@ where
             .saturating_add(u64::from(ttl.subsec_nanos() > 0))
             .max(1)
     }
-
-    async fn run_blocking<T, F>(connections: Arc<Connections<C>>, operation: F) -> Result<T, Error>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut ConnectionRef<'_>) -> Result<T, Error> + Send + 'static,
-    {
-        tokio::task::spawn_blocking(move || connections.execute(operation))
-            .await
-            .map_err(|_| Error::Unavailable)?
-    }
 }
 
 fn namespaced_key(namespace: Option<&str>, key: &str) -> String {
@@ -271,7 +280,7 @@ where
         let payload = self.codec.encode(&value)?;
         let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(self.get_ttl(&context).unwrap_or(self.default_ttl));
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             connection
                 .set_ex::<_, _, ()>(key, payload, ttl)
                 .map_err(|_| Error::Unavailable)
@@ -285,7 +294,7 @@ where
         _: &ExactCacheContext,
     ) -> Result<Option<Self::Value>, Error> {
         let key = self.namespaced_key(key);
-        let value = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        let value = Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             connection
                 .get::<_, redis::Value>(key)
                 .map_err(|_| Error::Unavailable)
@@ -311,7 +320,7 @@ where
         if entries.is_empty() {
             return Ok(());
         }
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let commands = entries
                 .into_iter()
                 .map(|(key, payload)| {
@@ -330,7 +339,7 @@ where
     }
 
     async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        match Self::run_blocking(Arc::clone(&self.connections), |connection| {
+        match Connections::run_blocking(Arc::clone(&self.connections), |connection| {
             Ok(match connection.ping() {
                 Ok(_) => CacheConnectionResult {
                     status: CacheConnectionStatus::Success,
@@ -391,7 +400,7 @@ where
             .iter()
             .map(|key| self.namespaced_key(key))
             .collect::<Vec<_>>();
-        let values = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        let values = Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             redis::cmd("MGET")
                 .arg(keys)
                 .query::<Vec<redis::Value>>(connection)
@@ -418,7 +427,7 @@ where
 
     async fn async_delete_cache(&self, key: &str) -> Result<(), Error> {
         let key = self.namespaced_key(key);
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             connection.del::<_, ()>(key).map_err(|_| Error::Unavailable)
         })
         .await
@@ -438,7 +447,7 @@ where
 
     async fn async_flush_cache(&self) -> Result<(), Error> {
         let pattern = self.namespaced_pattern()?;
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             Self::flush_matching(connection, &pattern)
         })
         .await
@@ -470,7 +479,7 @@ where
     ) -> Result<f64, Error> {
         let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(self.get_ttl(&context).unwrap_or(self.default_ttl));
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             increment(connection, key, amount, ttl)
         })
         .await
@@ -581,7 +590,7 @@ where
         let key = self.namespaced_key(key);
         let ttl = Self::ttl_seconds(self.get_ttl(&context).unwrap_or(self.default_ttl));
         let codec = self.codec.clone();
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             claim(connection, &codec, &key, candidate, &eligible, ttl)
         })
         .await
