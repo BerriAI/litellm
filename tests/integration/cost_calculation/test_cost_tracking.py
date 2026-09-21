@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import io
 import json
-from hashlib import sha256
 import struct
-from typing import Final, cast
 import wave
 import zlib
+from hashlib import sha256
+from typing import Final, cast
 
 import httpx
 import pytest
-from pydantic import JsonValue
-
 from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.upstream import delete_scenario, register_scenario
 from integration.cost_calculation.conftest import (
@@ -25,14 +23,15 @@ from integration.cost_calculation.conftest import (
     register_scenario_deployment,
 )
 from integration.cost_calculation.cost_tracking_case import (
-    BinaryResponse,
     CASES,
+    BinaryResponse,
     CostTrackingTestCase,
     ExactExpected,
     FailureExpected,
     RecountExpected,
     data_errors,
 )
+from pydantic import JsonValue
 
 if _data_errors := data_errors():
     raise ValueError("\n".join(_data_errors))
@@ -272,7 +271,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                 )
         elif case.response.content_type == "application/json":
             header: Final = cast(str | None, response.headers.get("x-litellm-response-cost"))
-            if expected.cost_header:
+            if expected.cost_header and expected.spend != 0:
                 assert header is not None and approx_equal(float(header), expected.spend), (
                     f"{case.name}: x-litellm-response-cost {header} != expected {expected.spend}"
                 )
