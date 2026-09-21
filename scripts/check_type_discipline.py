@@ -133,7 +133,7 @@ from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import NamedTuple
+from typing import Final, NamedTuple
  
 # Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
 # `typing.Dict`, `collections.deque`, and `collections.abc.MutableMapping` all match
@@ -1062,14 +1062,14 @@ def _pydantic_classes(tree: ast.AST) -> tuple[ast.ClassDef, ...]:
     """ClassDefs that are pydantic models: a PYDANTIC_BASES name among the bases, or
     -- transitively, within this module -- a base that is itself one of these classes.
     TypedDict classes are excluded: their bases name a form that is not pydantic."""
-    classes = tuple(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
-    bases_of = {cls.name: _base_names(cls) for cls in classes}
+    classes: Final = tuple(node for node in ast.walk(tree) if isinstance(node, ast.ClassDef))
+    bases_of: Final = {cls.name: _base_names(cls) for cls in classes}
 
     def expand(known: frozenset[str]) -> frozenset[str]:
         grown = known | frozenset(name for name, bases in bases_of.items() if bases & known)
         return grown if grown == known else expand(grown)
 
-    names = expand(PYDANTIC_BASES) - expand(frozenset((TYPEDDICT_BASE,)))
+    names: Final = expand(PYDANTIC_BASES) - expand(frozenset((TYPEDDICT_BASE,)))
     return tuple(cls for cls in classes if cls.name in names)
 
 
@@ -1080,10 +1080,10 @@ def _bool_constant(value: ast.expr) -> bool | None:
 def _model_config_frozen(value: ast.expr) -> bool | None:
     """The `frozen` flag a `ConfigDict(...)` call or dict literal sets, None when it sets none."""
     if isinstance(value, ast.Call) and _head_name(value.func) == "ConfigDict":
-        flags = tuple(_bool_constant(kw.value) for kw in value.keywords if kw.arg == "frozen")
+        flags: Final = tuple(_bool_constant(kw.value) for kw in value.keywords if kw.arg == "frozen")
         return flags[-1] if flags else None
     if isinstance(value, ast.Dict):
-        flags = tuple(
+        flags: Final = tuple(
             _bool_constant(item)
             for key, item in zip(value.keys, value.values)
             if isinstance(key, ast.Constant) and key.value == "frozen"
@@ -1094,8 +1094,8 @@ def _model_config_frozen(value: ast.expr) -> bool | None:
 
 def _assigns_name(stmt: ast.stmt, name: str) -> ast.expr | None:
     """The value a simple `name = ...` / `name: T = ...` body statement binds."""
-    value = stmt.value if isinstance(stmt, (ast.Assign, ast.AnnAssign)) else None
-    targets = stmt.targets if isinstance(stmt, ast.Assign) else (stmt.target,) if isinstance(stmt, ast.AnnAssign) else ()
+    value: Final = stmt.value if isinstance(stmt, (ast.Assign, ast.AnnAssign)) else None
+    targets: Final = stmt.targets if isinstance(stmt, ast.Assign) else (stmt.target,) if isinstance(stmt, ast.AnnAssign) else ()
     if value is not None and any(isinstance(t, ast.Name) and t.id == name for t in targets):
         return value
     return None
@@ -1103,7 +1103,7 @@ def _assigns_name(stmt: ast.stmt, name: str) -> ast.expr | None:
 
 def _config_class_frozen(node: ast.ClassDef) -> bool | None:
     """The `frozen = ...` flag an inner `class Config:` binds, None when it binds none."""
-    flags = tuple(
+    flags: Final = tuple(
         _bool_constant(value)
         for stmt in node.body
         for value in (_assigns_name(stmt, "frozen"),)
@@ -1113,7 +1113,7 @@ def _config_class_frozen(node: ast.ClassDef) -> bool | None:
 
 
 def _stmt_frozen_flag(stmt: ast.stmt) -> bool | None:
-    config_value = _assigns_name(stmt, "model_config")
+    config_value: Final = _assigns_name(stmt, "model_config")
     if config_value is not None:
         return _model_config_frozen(config_value)
     if isinstance(stmt, ast.ClassDef) and stmt.name == "Config":
@@ -1124,15 +1124,15 @@ def _stmt_frozen_flag(stmt: ast.stmt) -> bool | None:
 def _class_frozen_override(cls: ast.ClassDef) -> bool | None:
     """The `frozen` flag the class body itself sets; the last statement that sets one wins,
     like pydantic. None means the class inherits its parent's setting."""
-    flags = tuple(flag for flag in map(_stmt_frozen_flag, cls.body) if flag is not None)
+    flags: Final = tuple(flag for flag in map(_stmt_frozen_flag, cls.body) if flag is not None)
     return flags[-1] if flags else None
 
 
 def iter_pydantic_violations(path: Path, tree: ast.AST, comments: Comments) -> Iterator[Violation]:
-    models = _pydantic_classes(tree)
-    bases_of = {cls.name: _base_names(cls) for cls in models}
+    models: Final = _pydantic_classes(tree)
+    bases_of: Final = {cls.name: _base_names(cls) for cls in models}
 
-    override_of = {cls.name: _class_frozen_override(cls) for cls in models}
+    override_of: Final = {cls.name: _class_frozen_override(cls) for cls in models}
 
     def frozen(known: frozenset[str]) -> frozenset[str]:
         grown = known | frozenset(
@@ -1142,7 +1142,7 @@ def iter_pydantic_violations(path: Path, tree: ast.AST, comments: Comments) -> I
         )
         return grown if grown == known else frozen(grown)
 
-    frozen_names = frozen(frozenset())
+    frozen_names: Final = frozen(frozenset())
     for cls in models:
         if cls.name in frozen_names or cls.lineno in comments.frozen_ok_lines:
             continue
