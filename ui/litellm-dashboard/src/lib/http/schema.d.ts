@@ -17448,6 +17448,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/utils/model_info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Info Lookup
+         * @description Returns the model cost map entry (token limits, pricing, supports_* capabilities) for any model
+         *     in the cost map, whether or not it is registered on this proxy. `model_info` carries every
+         *     field of the raw cost map entry plus the typed fields `litellm.get_model_info` derives from it
+         *     (`key`, `supported_openai_params`).
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_info_lookup_utils_model_info_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/utils/supported_openai_params": {
         parameters: {
             query?: never;
@@ -63634,6 +63662,38 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_info_lookup_utils_model_info_get: {
+        parameters: {
+            query: {
+                model: string;
+                custom_llm_provider?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
