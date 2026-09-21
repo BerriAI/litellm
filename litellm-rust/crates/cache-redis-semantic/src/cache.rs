@@ -71,7 +71,11 @@ impl Inner {
             Some(true) => self.index_name.clone(),
             Some(false) => self.isolated_index(connection, dims)?,
             None => {
-                create_index(connection, &self.index_name, dims)?;
+                if create_index(connection, &self.index_name, dims).is_err()
+                    && index_compatible(connection, &self.index_name, dims)? != Some(true)
+                {
+                    return Err(Error::Unavailable);
+                }
                 self.index_name.clone()
             }
         };
@@ -509,36 +513,46 @@ fn schema_compatible(info: &redis::Value, dims: usize) -> bool {
         .iter()
         .map(|attribute| {
             let redis::Value::Array(attribute) = attribute else {
-                return (None, None, None);
+                return (None, None, None, None, None);
             };
             let mut name = None;
             let mut field_type = None;
             let mut dim = None;
+            let mut data_type = None;
+            let mut distance_metric = None;
             for pair in attribute.as_chunks::<2>().0 {
                 match string_value(&pair[0]).as_deref() {
                     Some("identifier") => name = string_value(&pair[1]),
                     Some("type") => field_type = string_value(&pair[1]),
                     Some("dim") => dim = number_value(&pair[1]),
+                    Some("data_type") => data_type = string_value(&pair[1]),
+                    Some("distance_metric") => distance_metric = string_value(&pair[1]),
                     _ => {}
                 }
             }
-            (name, field_type, dim)
+            (name, field_type, dim, data_type, distance_metric)
         })
         .collect::<Vec<_>>();
     let has_field = |name: &str, field_type: &str| {
         fields
             .iter()
-            .any(|(n, t, _)| n.as_deref() == Some(name) && t.as_deref() == Some(field_type))
+            .any(|(n, t, ..)| n.as_deref() == Some(name) && t.as_deref() == Some(field_type))
     };
     has_field("prompt", "TEXT")
         && has_field("response", "TEXT")
         && has_field("inserted_at", "NUMERIC")
         && has_field("updated_at", "NUMERIC")
         && has_field(CACHE_KEY_FIELD, "TAG")
-        && fields.iter().any(|(n, t, d)| {
+        && fields.iter().any(|(n, t, d, data, metric)| {
             n.as_deref() == Some(VECTOR_FIELD)
                 && t.as_deref() == Some("VECTOR")
                 && *d == Some(dims as f64)
+                && data
+                    .as_deref()
+                    .is_some_and(|data| data.eq_ignore_ascii_case("float32"))
+                && metric
+                    .as_deref()
+                    .is_some_and(|metric| metric.eq_ignore_ascii_case("cosine"))
         })
 }
 

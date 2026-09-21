@@ -124,7 +124,7 @@ fn index_info(attributes: Vec<redis::Value>) -> redis::Value {
     ])
 }
 
-fn vector_attribute(dims: i64) -> redis::Value {
+fn vector_attribute_with(dims: i64, data_type: &str, distance_metric: &str) -> redis::Value {
     attribute(
         "prompt_vector",
         "VECTOR",
@@ -132,24 +132,32 @@ fn vector_attribute(dims: i64) -> redis::Value {
             s("algorithm"),
             s("FLAT"),
             s("data_type"),
-            s("FLOAT32"),
+            s(data_type),
             s("dim"),
             redis::Value::Int(dims),
             s("distance_metric"),
-            s("COSINE"),
+            s(distance_metric),
         ],
     )
 }
 
-fn compatible_info(dims: i64) -> redis::Value {
+fn vector_attribute(dims: i64) -> redis::Value {
+    vector_attribute_with(dims, "FLOAT32", "COSINE")
+}
+
+fn info_with_vector(vector: redis::Value) -> redis::Value {
     index_info(vec![
         attribute("prompt", "TEXT", vec![]),
         attribute("response", "TEXT", vec![]),
         attribute("inserted_at", "NUMERIC", vec![]),
         attribute("updated_at", "NUMERIC", vec![]),
-        vector_attribute(dims),
+        vector,
         attribute("litellm_cache_key", "TAG", vec![]),
     ])
+}
+
+fn compatible_info(dims: i64) -> redis::Value {
+    info_with_vector(vector_attribute(dims))
 }
 
 fn unscoped_info(dims: i64) -> redis::Value {
@@ -498,6 +506,106 @@ fn incompatible_schema_falls_back_to_isolated_index() {
     let isolated = format!("{INDEX}_isolated");
     let connection = MockRedisConnection::new([
         MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(unscoped_info(3))),
+        MockCmd::new(
+            redis::cmd("FT.INFO").arg(&isolated),
+            Err::<redis::Value, _>(unknown_index_error()),
+        ),
+        MockCmd::new(create_index_command(&isolated, 3), Ok("OK")),
+        MockCmd::new(
+            redis::cmd("HSET")
+                .arg(format!("{isolated}:{}", entry_id(prompt, tag)))
+                .arg("entry_id")
+                .arg(entry_id(prompt, tag))
+                .arg("prompt")
+                .arg(prompt)
+                .arg("response")
+                .arg(encoded(&entry()))
+                .arg("prompt_vector")
+                .arg(vector_bytes(&[0.1f32, 0.2, 0.3]))
+                .arg("inserted_at")
+                .arg("1700000000.5")
+                .arg("updated_at")
+                .arg("1700000000.5")
+                .arg("litellm_cache_key")
+                .arg(tag),
+            Ok(7),
+        ),
+    ])
+    .assert_all_commands_consumed();
+    let (embedder, _) = FakeEmbedder::new(&[]);
+    let cache = RedisSemanticCache::with_connection(connection, embedder, config())
+        .with_clock(|| 1700000000.5);
+
+    cache
+        .set_cache(
+            tag,
+            entry(),
+            &messages_context(vec![json!({"role": "user", "content": prompt})]),
+        )
+        .unwrap();
+}
+
+#[test]
+fn create_index_race_rechecks_schema_and_stores() {
+    let prompt = "hello prompt";
+    let tag = "key1";
+    let connection = MockRedisConnection::new([
+        MockCmd::new(
+            redis::cmd("FT.INFO").arg(INDEX),
+            Err::<redis::Value, _>(unknown_index_error()),
+        ),
+        MockCmd::new(
+            create_index_command(INDEX, 3),
+            Err::<&str, _>(redis::RedisError::from((
+                redis::ErrorKind::Extension,
+                "Index already exists",
+            ))),
+        ),
+        MockCmd::new(redis::cmd("FT.INFO").arg(INDEX), Ok(compatible_info(3))),
+        MockCmd::new(
+            redis::cmd("HSET")
+                .arg(format!("{INDEX}:{}", entry_id(prompt, tag)))
+                .arg("entry_id")
+                .arg(entry_id(prompt, tag))
+                .arg("prompt")
+                .arg(prompt)
+                .arg("response")
+                .arg(encoded(&entry()))
+                .arg("prompt_vector")
+                .arg(vector_bytes(&[0.1f32, 0.2, 0.3]))
+                .arg("inserted_at")
+                .arg("1700000000.5")
+                .arg("updated_at")
+                .arg("1700000000.5")
+                .arg("litellm_cache_key")
+                .arg(tag),
+            Ok(7),
+        ),
+    ])
+    .assert_all_commands_consumed();
+    let (embedder, _) = FakeEmbedder::new(&[]);
+    let cache = RedisSemanticCache::with_connection(connection, embedder, config())
+        .with_clock(|| 1700000000.5);
+
+    cache
+        .set_cache(
+            tag,
+            entry(),
+            &messages_context(vec![json!({"role": "user", "content": prompt})]),
+        )
+        .unwrap();
+}
+
+#[test]
+fn wrong_distance_metric_falls_back_to_isolated_index() {
+    let prompt = "hello prompt";
+    let tag = "key1";
+    let isolated = format!("{INDEX}_isolated");
+    let connection = MockRedisConnection::new([
+        MockCmd::new(
+            redis::cmd("FT.INFO").arg(INDEX),
+            Ok(info_with_vector(vector_attribute_with(3, "FLOAT32", "L2"))),
+        ),
         MockCmd::new(
             redis::cmd("FT.INFO").arg(&isolated),
             Err::<redis::Value, _>(unknown_index_error()),
