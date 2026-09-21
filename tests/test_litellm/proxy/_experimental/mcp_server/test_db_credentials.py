@@ -1755,7 +1755,7 @@ async def test_unverified_legacy_cache_cannot_bypass_enforcement(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, RuntimeError("write failed"), asyncio.CancelledError()])
+@pytest.mark.parametrize("failure", [None, RuntimeError("write failed"), asyncio.CancelledError(), "missing"])
 async def test_config_promotion_commits_update_or_rolls_back_without_publishing(monkeypatch, failure):
     from contextlib import asynccontextmanager
     from copy import deepcopy
@@ -1795,8 +1795,9 @@ async def test_config_promotion_commits_update_or_rolls_back_without_publishing(
     )
     change = UpdateMCPServerRequest(server_id="promoted", description="edited")
     if failure is not None:
-        monkeypatch.setattr(table, "update", AsyncMock(side_effect=failure))
-        with pytest.raises(type(failure)):
+        update = AsyncMock(return_value=None) if failure == "missing" else AsyncMock(side_effect=failure)
+        monkeypatch.setattr(table, "update", update)
+        with pytest.raises(RuntimeError if failure == "missing" else type(failure)):
             await promote_config_mcp_server(prisma, initial, change, "admin", change.fields_set())
         assert table.rows == {}
         publish.assert_not_awaited()

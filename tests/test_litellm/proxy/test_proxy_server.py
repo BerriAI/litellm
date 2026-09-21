@@ -15072,16 +15072,27 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
 
 
 @pytest.mark.asyncio
-async def test_get_config_keeps_mcp_secret_references_for_edit_preflight(tmp_path, monkeypatch):
+async def test_loading_mcp_config_keeps_secret_references_in_edit_preflight(tmp_path, monkeypatch):
+    from fastapi import HTTPException
+
     from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
 
     config_file = tmp_path / "mcp.yaml"
     config_file.write_text("mcp_servers:\n  secret_server:\n    url: https://example.com/mcp\n    authentication_token: os.environ/PROOF_MCP_SECRET\n")
     monkeypatch.setenv("PROOF_MCP_SECRET", "resolved-secret")
     monkeypatch.setattr(proxy_server, "prisma_client", None)
+    manager = mcp_server_manager.MCPServerManager()
+    monkeypatch.setattr(manager, "initialize_tool_name_to_mcp_server_name_mapping", lambda: None)
+    monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     config = proxy_server.ProxyConfig()
-
     resolved = await config.get_config(str(config_file))
 
-    assert resolved["mcp_servers"]["secret_server"]["authentication_token"] == "resolved-secret"
-    assert config.raw_mcp_servers["secret_server"]["authentication_token"] == "os.environ/PROOF_MCP_SECRET"
+    await config._init_non_llm_configs(resolved)
+    server = next(iter(manager.get_registry().values()))
+
+    assert server.authentication_token == "resolved-secret"
+    with pytest.raises(HTTPException) as error:
+        manager.config_server_for_edit(server.server_id)
+    assert error.value.status_code == 400
+    assert "secret references" in error.value.detail["error"]
