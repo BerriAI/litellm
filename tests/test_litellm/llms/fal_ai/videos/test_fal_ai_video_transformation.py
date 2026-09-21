@@ -216,9 +216,10 @@ class TestFalAIVideoTransformation:
             ({"request_id": "abc", "status": "COMPLETED"}, "completed"),
         ],
     )
-    def test_status_response_mapping(self, response_data, expected_status, monkeypatch):
+    def test_status_response_mapping(self, response_data, expected_status):
         status_url = "https://queue.fal.run/bytedance/seedance-2.5/requests/abc/status"
         response = httpx.Response(200, json=response_data, request=httpx.Request("GET", status_url))
+        config = self.config
         if expected_status == "completed":
             result_response: Final = httpx.Response(
                 200,
@@ -227,9 +228,9 @@ class TestFalAIVideoTransformation:
             )
             client: Final = Mock()
             client.get.return_value = result_response
-            monkeypatch.setattr(fal_video_module, "_get_httpx_client", lambda: client)
+            config = FalAIVideoConfig(sync_client_factory=lambda: client)
 
-        video = self.config.transform_video_status_retrieve_response(
+        video = config.transform_video_status_retrieve_response(
             raw_response=response,
             logging_obj=self.logging_obj,
             custom_llm_provider="fal_ai",
@@ -249,7 +250,7 @@ class TestFalAIVideoTransformation:
         )
         assert poll_url == status_url
 
-    def test_status_response_error(self, monkeypatch):
+    def test_status_response_error(self):
         response_data = {
             "request_id": "abc",
             "status": "COMPLETED",
@@ -268,9 +269,9 @@ class TestFalAIVideoTransformation:
         )
         client: Final = Mock()
         client.get.return_value = result_response
-        monkeypatch.setattr(fal_video_module, "_get_httpx_client", lambda: client)
+        config = FalAIVideoConfig(sync_client_factory=lambda: client)
 
-        video = self.config.transform_video_status_retrieve_response(
+        video = config.transform_video_status_retrieve_response(
             raw_response=response,
             logging_obj=self.logging_obj,
             custom_llm_provider="fal_ai",
@@ -279,7 +280,7 @@ class TestFalAIVideoTransformation:
         assert video.status == "failed"
         assert video.error == {"code": "fal_error", "message": "generation failed"}
 
-    def test_status_completed_result_error_surfaces_fal_message(self, monkeypatch):
+    def test_status_completed_result_error_surfaces_fal_message(self):
         status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
         auth_headers: Final = {"Authorization": "Key synthetic-fal-key", "Content-Type": "application/json"}
         response: Final = httpx.Response(
@@ -302,9 +303,9 @@ class TestFalAIVideoTransformation:
         )
         client: Final = Mock()
         client.get.return_value = result_response
-        monkeypatch.setattr(fal_video_module, "_get_httpx_client", lambda: client)
+        config = FalAIVideoConfig(sync_client_factory=lambda: client)
 
-        video = self.config.transform_video_status_retrieve_response(
+        video = config.transform_video_status_retrieve_response(
             raw_response=response,
             logging_obj=self.logging_obj,
             custom_llm_provider="fal_ai",
@@ -314,8 +315,34 @@ class TestFalAIVideoTransformation:
         assert "input.reference_image_urls: Failed to download the file" in video.error["message"]
         client.get.assert_called_once_with(url=result_url, headers=auth_headers)
 
+    @pytest.mark.parametrize("status_code", [429, 503])
+    def test_status_completed_transient_result_error_keeps_completed(self, status_code):
+        status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
+        response: Final = httpx.Response(
+            200,
+            json={"request_id": "abc", "status": "COMPLETED"},
+            request=httpx.Request("GET", status_url),
+        )
+        result_response: Final = httpx.Response(
+            status_code,
+            json={"detail": "temporary fal failure"},
+            request=httpx.Request("GET", status_url.removesuffix("/status")),
+        )
+        client: Final = Mock()
+        client.get.return_value = result_response
+        config = FalAIVideoConfig(sync_client_factory=lambda: client)
+
+        video = config.transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+        )
+
+        assert video.status == "completed"
+        assert video.error is None
+
     @pytest.mark.asyncio
-    async def test_async_status_completed_result_error_surfaces_fal_message(self, monkeypatch):
+    async def test_async_status_completed_result_error_surfaces_fal_message(self):
         status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
         auth_headers: Final = {"Authorization": "Key synthetic-fal-key", "Content-Type": "application/json"}
         response: Final = httpx.Response(
@@ -338,9 +365,9 @@ class TestFalAIVideoTransformation:
         )
         client: Final = Mock()
         client.get = AsyncMock(return_value=result_response)
-        monkeypatch.setattr(fal_video_module, "get_async_httpx_client", lambda llm_provider: client)
+        config = FalAIVideoConfig(async_client_factory=lambda: client)
 
-        video = await self.config.async_transform_video_status_retrieve_response(
+        video = await config.async_transform_video_status_retrieve_response(
             raw_response=response,
             logging_obj=self.logging_obj,
             custom_llm_provider="fal_ai",
@@ -350,7 +377,7 @@ class TestFalAIVideoTransformation:
         assert "input.reference_image_urls: Failed to download the file" in video.error["message"]
         client.get.assert_awaited_once_with(url=result_url, headers=auth_headers)
 
-    def test_status_in_progress_does_not_fetch_result(self, monkeypatch):
+    def test_status_in_progress_does_not_fetch_result(self):
         status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
         response = httpx.Response(
             200,
@@ -359,9 +386,9 @@ class TestFalAIVideoTransformation:
         )
 
         client: Final = Mock()
-        monkeypatch.setattr(fal_video_module, "_get_httpx_client", lambda: client)
+        config = FalAIVideoConfig(sync_client_factory=lambda: client)
 
-        video = self.config.transform_video_status_retrieve_response(
+        video = config.transform_video_status_retrieve_response(
             raw_response=response,
             logging_obj=self.logging_obj,
             custom_llm_provider="fal_ai",
@@ -391,7 +418,7 @@ class TestFalAIVideoTransformation:
         assert decoded["video_id"] == "xyz"
         assert video.model == "workflows/owner/app"
 
-    def test_content_response_downloads_video_url(self, monkeypatch):
+    def test_content_response_downloads_video_url(self):
         content_response = httpx.Response(
             200,
             content=b"video-bytes",
@@ -403,11 +430,11 @@ class TestFalAIVideoTransformation:
                 assert url == "https://cdn.example.com/video.mp4"
                 return content_response
 
-        monkeypatch.setattr(fal_video_module, "_get_httpx_client", lambda: FakeHTTPClient())
+        config = FalAIVideoConfig(sync_client_factory=FakeHTTPClient)
         response = Mock(spec=httpx.Response)
         response.json.return_value = {"video": {"url": "https://cdn.example.com/video.mp4"}}
 
-        assert self.config.transform_video_content_response(response, self.logging_obj) == b"video-bytes"
+        assert config.transform_video_content_response(response, self.logging_obj) == b"video-bytes"
 
     def test_content_response_rejects_missing_video(self):
         response = Mock(spec=httpx.Response)
