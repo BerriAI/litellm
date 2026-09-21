@@ -1248,6 +1248,55 @@ class TestFunctionCallTransformation:
         assert "tool_choice" not in result
         assert "tools" not in result
 
+    def test_safety_identifier_forwarded_to_chat_completion_request(self) -> None:
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="bedrock/global.openai.gpt-5.6-luna",
+            input="hi",
+            responses_api_request={"safety_identifier": "user-7f3a"},
+            custom_llm_provider="bedrock",
+        )
+
+        assert result["safety_identifier"] == "user-7f3a"
+
+    def test_parallel_tool_calls_dropped_when_no_chat_tools_remain(self) -> None:
+        transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
+        codex_tool_search: Final = {
+            "type": "tool_search",
+            "execution": "client",
+            "description": "Searches over deferred tool metadata with BM25.",
+            "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        }
+        function_tool: Final = {
+            "type": "function",
+            "name": "get_goal",
+            "description": "Returns the current goal.",
+            "parameters": {"type": "object", "properties": {}},
+            "strict": True,
+        }
+
+        empty_tools_result: Final = transform(
+            model="azure/gpt-5.4-mini",
+            input="Reply with just the word pong.",
+            responses_api_request={"tools": [], "parallel_tool_calls": True},
+            custom_llm_provider="azure",
+        )
+        hosted_only_result: Final = transform(
+            model="azure/gpt-5.4-mini",
+            input="Reply with just the word pong.",
+            responses_api_request={"tools": [codex_tool_search], "parallel_tool_calls": True},
+            custom_llm_provider="azure",
+        )
+        function_tools_result: Final = transform(
+            model="azure/gpt-5.4-mini",
+            input="Reply with just the word pong.",
+            responses_api_request={"tools": [function_tool], "parallel_tool_calls": True},
+            custom_llm_provider="azure",
+        )
+
+        assert "parallel_tool_calls" not in empty_tools_result
+        assert "parallel_tool_calls" not in hosted_only_result
+        assert function_tools_result["parallel_tool_calls"] is True
+
     def test_function_call_without_call_id_fallback_to_id(self):
         """Test that function_call items can use 'id' field when 'call_id' is missing"""
         function_call_item = {
@@ -1659,6 +1708,82 @@ class TestToolTransformation:
         assert len(result_tools) == 0
         assert web_search_options is None
 
+    def test_transform_codex_tools_drops_hosted_tool_search(self) -> None:
+        codex_tools: Final = [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "description": "Runs a command in a PTY.",
+                "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+                "strict": True,
+            },
+            {
+                "type": "function",
+                "name": "write_stdin",
+                "description": "Writes characters to an existing session's stdin.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"session_id": {"type": "number"}, "chars": {"type": "string"}},
+                    "required": ["session_id", "chars"],
+                },
+                "strict": True,
+            },
+            {
+                "type": "custom",
+                "name": "apply_patch",
+                "description": "The `apply_patch` tool can be used to edit files.",
+                "format": {
+                    "type": "grammar",
+                    "syntax": "lark",
+                    "definition": 'start: begin_patch hunk+ end_patch\nbegin_patch: "*** Begin Patch" LF\n',
+                },
+            },
+            {
+                "type": "tool_search",
+                "execution": "client",
+                "description": (
+                    "# Tool discovery\n\nSearches over deferred tool metadata with BM25 and exposes matching tools "
+                    "for the next model call.\n\nYou have access to tools from the following sources:\n"
+                    "- Multi-agent tools: Spawn and manage sub-agents.\nSome of the tools may not have been provided "
+                    "to you upfront, and you should use this tool (`tool_search`) to search for the required tools. "
+                    "For MCP tool discovery, always use `tool_search` instead of `list_mcp_resources` or "
+                    "`list_mcp_resource_templates`."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "number", "description": "Maximum number of tools to return. Defaults to 8."},
+                        "query": {"type": "string", "description": "Search query for deferred tools."},
+                    },
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+            {"type": "web_search", "external_web_access": False, "search_content_types": ["text", "image"]},
+        ]
+        function_and_custom_count: Final = sum(1 for tool in codex_tools if tool["type"] in ("function", "custom"))
+
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=codex_tools)
+
+        assert not any(tool.get("type") == "tool_search" for tool in result_tools)
+        assert all(tool.get("type") == "function" for tool in result_tools)
+        assert len(result_tools) == function_and_custom_count
+        assert web_search_options is not None
+
+    def test_transform_local_shell_tools_dropped(self) -> None:
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[{"type": "local_shell"}]
+        )
+
+        assert result_tools == []
+        assert web_search_options is None
+
     def test_transform_custom_tools_to_function_tools(self):
         """Test that custom (freeform/grammar) tools are converted to function tools"""
         custom_tool = {
@@ -1900,6 +2025,38 @@ class TestToolTransformation:
         assert "defer_loading" not in result_tool
         assert "allowed_callers" not in result_tool
         assert "input_examples" not in result_tool
+        assert "eager_input_streaming" not in result_tool
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_transform_function_tools_forwards_eager_input_streaming(self, eager_input_streaming: bool) -> None:
+        function_tool: Final = {
+            "type": "function",
+            "name": "write_file",
+            "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[function_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
+
+    @pytest.mark.parametrize("eager_input_streaming", [True, False])
+    def test_chat_completion_tools_to_responses_tools_keeps_eager_input_streaming(
+        self, eager_input_streaming: bool
+    ) -> None:
+        chat_tool: Final = {
+            "type": "function",
+            "function": {"name": "write_file", "parameters": {"type": "object"}},
+            "eager_input_streaming": eager_input_streaming,
+        }
+
+        result_tools: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
+            [chat_tool]
+        )
+
+        assert result_tools[0]["eager_input_streaming"] is eager_input_streaming
 
     def test_transform_code_execution_tools(self):
         """Test that code_execution tools are passed through as-is"""
@@ -2506,6 +2663,7 @@ class TestToolTransformation:
             "tools": [
                 "ignored",
                 {"type": "namespace", "name": "ignored"},
+                {"type": "web_search", "name": "ignored"},
                 {
                     "type": "function",
                     "name": "spawn_agent",
@@ -2526,6 +2684,36 @@ class TestToolTransformation:
             "properties": {"task_name": {"type": "string"}},
             "type": "object",
         }
+
+    def test_transform_nested_namespace_custom_tool_becomes_a_content_function_under_its_short_name(self):
+        namespace_tool = {
+            "type": "namespace",
+            "name": "functions",
+            "description": "Codex shell tools.",
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "exec",
+                    "description": "Runs a shell command.",
+                    "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                },
+            ],
+        }
+
+        result_tools, _ = (
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
+        )
+
+        assert len(result_tools) == 1
+        function = result_tools[0]["function"]
+        assert function["name"] == "exec"
+        assert function["description"].startswith("Codex shell tools.")
+        assert "Runs a shell command." in function["description"]
+        assert "start: /.+/" in function["description"]
+        assert function["parameters"]["required"] == ["content"]
+        assert function["parameters"]["properties"]["content"]["type"] == "string"
 
     @pytest.mark.parametrize(
         "model, custom_llm_provider",
@@ -2789,6 +2977,7 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 5
         assert response_usage.input_tokens_details.text_tokens == 8
+        assert "cache_write_tokens" not in response_usage.input_tokens_details.model_dump()
 
     def test_transform_usage_with_cached_tokens_gemini(self):
         """Test that cached_tokens from Gemini are properly transformed to input_tokens_details"""
@@ -2851,6 +3040,40 @@ class TestUsageTransformation:
         assert response_usage.input_tokens_details is not None
         assert response_usage.input_tokens_details.cached_tokens == 100
         assert getattr(response_usage.input_tokens_details, "cache_write_tokens", None) == 800
+        assert response_usage.input_tokens_details.model_dump()["cache_write_tokens"] == 800
+
+    def test_transform_usage_preserves_input_modality_tokens(self):
+        """Regression: the bridge dropped image and video input tokens.
+
+        Vertex reports prompt tokens split by modality, so a Live session that sends
+        camera frames arrives with image_tokens set. InputTokensDetails declared only
+        audio/cached/text, so those tokens were folded into text and lost their
+        attribution, and any per-modality rate could never apply to them.
+        """
+        usage = Usage(
+            prompt_tokens=300,
+            completion_tokens=10,
+            total_tokens=310,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                text_tokens=20, audio_tokens=80, image_tokens=150, video_tokens=50, cached_tokens=0
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=10),
+        )
+
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=usage
+        )
+        details = response_usage.input_tokens_details
+        assert details is not None
+        assert getattr(details, "image_tokens", None) == 150
+        assert getattr(details, "video_tokens", None) == 50
+        assert getattr(details, "audio_tokens", None) == 80
+
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        back = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_usage.model_dump())
+        assert back.prompt_tokens_details.image_tokens == 150
+        assert back.prompt_tokens_details.video_tokens == 50
 
     def test_transform_usage_with_reasoning_tokens_gemini(self):
         """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""
@@ -3785,6 +4008,143 @@ class TestEnsureOutputItemContentPartAdded:
         added = iterator._pending_tool_events[0]
         assert added.item.name == "spawn_agent"
         assert added.item.namespace == "collaboration"
+
+    def test_streaming_nested_custom_tool_call_comes_back_as_custom_tool_call(self):
+        from litellm.responses.litellm_completion_transformation.custom_tools import extract_custom_tool_names
+
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "functions",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "exec",
+                            "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                        }
+                    ],
+                }
+            ]
+        }
+        iterator._custom_tool_names = extract_custom_tool_names(iterator.responses_api_request.get("tools"))
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+
+        iterator._queue_tool_call_delta_events(
+            [{"index": 0, "id": "call_exec", "function": {"name": "exec", "arguments": '{"content":"ls"}'}}]
+        )
+        iterator._queue_final_tool_call_done_events(
+            ModelResponse(
+                id="chatcmpl-exec",
+                created=1,
+                model="us.openai.gpt-5.6",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id="call_exec",
+                                    type="function",
+                                    function=Function(name="exec", arguments='{"content":"ls"}'),
+                                )
+                            ],
+                        ),
+                    )
+                ],
+            )
+        )
+
+        added = iterator._pending_tool_events[0]
+        assert added.item.type == "custom_tool_call"
+        assert added.item.name == "exec"
+        done = iterator._pending_tool_events[-1]
+        assert done.item.type == "custom_tool_call"
+        assert done.item.input == "ls"
+
+    def test_streaming_namespaced_function_sharing_a_nested_custom_short_name_stays_a_function_call(self):
+        from litellm.responses.litellm_completion_transformation.custom_tools import extract_custom_tool_names
+
+        iterator = self._make_iterator()
+        iterator.responses_api_request = {
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "alpha",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "run",
+                            "format": {"type": "grammar", "syntax": "lark", "definition": "start: /.+/"},
+                        }
+                    ],
+                },
+                {
+                    "type": "namespace",
+                    "name": "beta",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "run",
+                            "parameters": {"type": "object", "properties": {"job_id": {"type": "string"}}},
+                        }
+                    ],
+                },
+            ]
+        }
+        iterator._custom_tool_names = extract_custom_tool_names(iterator.responses_api_request.get("tools"))
+        iterator._namespace_tool_names = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+            iterator.responses_api_request.get("tools")
+        )
+        function_call = {"id": "call_fn", "function": {"name": "beta__run", "arguments": '{"job_id":"42"}'}}
+        custom_call = {"id": "call_custom", "function": {"name": "run", "arguments": '{"content":"echo hi"}'}}
+
+        iterator._queue_tool_call_delta_events([{"index": 0, **function_call}, {"index": 1, **custom_call}])
+        iterator._queue_final_tool_call_done_events(
+            ModelResponse(
+                id="chatcmpl-run",
+                created=1,
+                model="us.openai.gpt-5.6",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason="tool_calls",
+                        index=0,
+                        message=Message(
+                            content=None,
+                            role="assistant",
+                            tool_calls=[
+                                ChatCompletionMessageToolCall(
+                                    id=call["id"], type="function", function=Function(**call["function"])
+                                )
+                                for call in (function_call, custom_call)
+                            ],
+                        ),
+                    )
+                ],
+            )
+        )
+
+        items = [
+            event.item
+            for event in iterator._pending_tool_events
+            if event.type in ("response.output_item.added", "response.output_item.done")
+        ]
+        function_items = [item for item in items if item.call_id == "call_fn"]
+        custom_items = [item for item in items if item.call_id == "call_custom"]
+        assert len(function_items) == 2 and len(custom_items) == 2
+        assert all((item.type, item.name, item.namespace) == ("function_call", "run", "beta") for item in function_items)
+        assert function_items[-1].arguments == '{"job_id":"42"}'
+        assert all(item.type == "custom_tool_call" and item.name == "run" for item in custom_items)
+        assert all(getattr(item, "namespace", None) is None for item in custom_items)
+        assert custom_items[-1].input == "echo hi"
 
     def test_streaming_unqualified_namespace_tool_calls_restore_namespace(self):
         """A unique nested tool name without the namespace still maps back."""
@@ -4736,3 +5096,79 @@ class TestStreamingSnapshotItemIds:
         reasoning_items = _bridged_output_items(completed_event.response, "reasoning")
         assert len(reasoning_items) == 1
         assert reasoning_items[0].id == streamed_event.item_id
+
+
+def test_transform_chat_completion_response_incomplete_details():
+    from litellm.types.llms.openai import IncompleteDetails
+
+    resp_length = ModelResponse(
+        id="resp-length",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    result_length = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_length,
+    )
+    assert result_length.status == "incomplete"
+    assert result_length.incomplete_details is not None
+    assert result_length.incomplete_details.reason == "max_output_tokens"
+
+    resp_filter = ModelResponse(
+        id="resp-filter",
+        choices=[Choices(index=0, finish_reason="content_filter", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_filter = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_filter,
+    )
+    assert result_filter.status == "incomplete"
+    assert result_filter.incomplete_details is not None
+    assert result_filter.incomplete_details.reason == "content_filter"
+
+    resp_refusal = ModelResponse(
+        id="resp-refusal",
+        choices=[Choices(index=0, finish_reason="refusal", message=Message(content=None, role="assistant"))],
+        model="gpt-4o",
+    )
+    result_refusal = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_refusal,
+    )
+    assert result_refusal.status == "incomplete"
+    assert result_refusal.incomplete_details is not None
+    assert result_refusal.incomplete_details.reason == "content_filter"
+
+    existing_details = IncompleteDetails(reason="content_filter")
+    resp_existing = ModelResponse(
+        id="resp-existing",
+        choices=[Choices(index=0, finish_reason="length", message=Message(content="cutoff", role="assistant"))],
+        model="gpt-4o",
+    )
+    resp_existing.incomplete_details = existing_details
+    result_existing = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_existing,
+    )
+    assert result_existing.status == "incomplete"
+    assert result_existing.incomplete_details == existing_details
+
+
+@pytest.mark.parametrize("stream", [True, False])
+async def test_bridge_rejects_untranslatable_tool_choice_with_a_400(stream: bool):
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Which fruit is red?",
+            tools=[{"type": "function", "name": "lookup_fruit", "parameters": {"type": "object"}}],
+            tool_choice={"type": "file_search"},
+            stream=stream,
+            api_key="sk-unused",
+        )
+    assert exc_info.value.status_code == 400
+    assert "tool_choice={'type': 'file_search'}" in str(exc_info.value)

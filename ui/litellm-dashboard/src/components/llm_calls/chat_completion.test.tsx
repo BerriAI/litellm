@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import openai from "openai";
 import { makeOpenAIChatCompletionRequest } from "./chat_completion";
 import type { TokenUsage } from "../chat_ui/ResponseMetrics";
 
@@ -613,5 +614,49 @@ describe("chat_completion response cache", () => {
     );
 
     expect(onUsageData).toHaveBeenCalledWith(expect.not.objectContaining({ servedFromResponseCache: true }));
+  });
+});
+
+describe("chat_completion custom headers", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("sends custom headers alongside the tags header on the OpenAI client", async () => {
+    mockCreate.mockReturnValueOnce(nonStreamingResponse({ choices: [{ message: { content: "Hi" } }] }));
+
+    await makeOpenAIChatCompletionRequest(
+      [{ role: "user", content: "Hello" }],
+      vi.fn(),
+      "gpt-4",
+      "test-token",
+      ["team-a"],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      { "anthropic-beta": "context-1m-2025-08-07", "x-litellm-tags": "overridden" },
+    );
+
+    expect(vi.mocked(openai.OpenAI).mock.calls[0][0]).toMatchObject({
+      defaultHeaders: { "anthropic-beta": "context-1m-2025-08-07", "x-litellm-tags": "overridden" },
+    });
   });
 });

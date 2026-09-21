@@ -2256,6 +2256,22 @@ def drop_tool_reference_parts_from_tool_messages(
     return [_drop_tool_reference_parts(message) for message in messages]  # mutable-ok: pipelines mutate message lists
 
 
+INSTRUCTION_MESSAGE_ROLES: Final = frozenset({"system", "developer"})
+
+
+def _is_instruction_message(message: AllMessageValues) -> bool:
+    return message.get("role") in INSTRUCTION_MESSAGE_ROLES
+
+
+def system_messages_first(
+    messages: list[AllMessageValues],  # mutable-ok: message pipelines type messages as mutable lists
+) -> list[AllMessageValues]:  # mutable-ok: message pipelines type messages as mutable lists
+    return [  # mutable-ok: pipelines mutate message lists
+        *(message for message in messages if _is_instruction_message(message)),
+        *(message for message in messages if not _is_instruction_message(message)),
+    ]
+
+
 def _attempt_json_repair(s: str) -> object | None:
     """
     Attempt to repair truncated JSON produced by LLM tool calls.

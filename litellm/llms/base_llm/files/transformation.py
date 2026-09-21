@@ -1,10 +1,11 @@
 from abc import ABC, abstractmethod
-from collections.abc import Iterator, Mapping
+from collections.abc import AsyncGenerator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Union
 
 import httpx
 from openai.types.file_deleted import FileDeleted
 
+from litellm.files.types import FileContentStreamingResult
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
@@ -195,6 +196,18 @@ class BaseFilesConfig(BaseConfig):
         litellm_params: dict,
     ) -> "HttpxBinaryResponseContent":
         """Transform file content response into OpenAI format."""
+
+    async def transform_file_content_stream(
+        self,
+        *,
+        stream_iterator: AsyncGenerator[bytes, None],
+        headers: Mapping[str, str],
+        request_url: str,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> FileContentStreamingResult:
+        """Transform a streamed file content body. Passes the upstream bytes and headers through by default."""
+        return FileContentStreamingResult(stream_iterator=stream_iterator, headers=headers)
 
     def transform_request(
         self,

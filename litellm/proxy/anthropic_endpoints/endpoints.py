@@ -8,7 +8,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.anthropic_interface.exceptions import AnthropicErrorResponse, AnthropicExceptionMapping
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
@@ -22,13 +21,16 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,
+    log_llm_api_exception,
     proxy_exception_from_http_exception,
+    resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
+    with_litellm_call_id,
 )
 from litellm.types.utils import TokenCountResponse
 
@@ -218,10 +220,12 @@ async def anthropic_response(
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=base_llm_response_processor.data
         )
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.anthropic_response(): Exception occured - %s", e)
+        log_llm_api_exception(e, base_llm_response_processor.litellm_call_id)
 
         if isinstance(e, ProxyException):
-            return _anthropic_error_json_response(e, request)
+            return _anthropic_error_json_response(
+                with_litellm_call_id(e, base_llm_response_processor.litellm_call_id), request
+            )
 
         # Extract model_id from request metadata (same as success path)
         litellm_metadata: Final = data.get("litellm_metadata", {}) or {}
@@ -231,7 +235,7 @@ async def anthropic_response(
         # Get headers
         headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(
             user_api_key_dict=user_api_key_dict,
-            call_id=data.get("litellm_call_id", ""),
+            call_id=base_llm_response_processor.litellm_call_id,
             model_id=model_id,
             version=version,
             response_cost=0,
@@ -288,6 +292,7 @@ async def count_tokens(
     """
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
 
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
     try:
         request_data: Final = await _read_request_body(request=request)
         data: Final[dict] = {**request_data}
@@ -339,7 +344,7 @@ async def count_tokens(
             detail=detail,
         )
     except Exception as e:
-        verbose_proxy_logger.exception("litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - %s", e)
+        log_llm_api_exception(e, litellm_call_id)
         raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
 
 

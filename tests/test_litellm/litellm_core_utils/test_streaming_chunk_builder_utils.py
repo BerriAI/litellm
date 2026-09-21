@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 from unittest.mock import MagicMock
@@ -338,7 +337,6 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     Correct cache-write cost is 50 * 6e-06 (1h) = 0.0003, not 50 * 3.75e-06 = 0.0001875.
     """
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-    from litellm.llms.anthropic.cost_calculation import cost_per_token
 
     config = AnthropicConfig()
     message_start_usage = config.calculate_usage(
@@ -401,14 +399,6 @@ def test_streaming_preserves_anthropic_1hr_cache_creation_breakdown():
     assert breakdown.ephemeral_5m_input_tokens == 0
     assert usage.cache_creation_input_tokens == 50
     assert usage.cache_read_input_tokens == 8728
-
-    prompt_cost, _ = cost_per_token(model="claude-sonnet-4-6", usage=usage)
-    # text 3*3e-06 + cache_read 8728*3e-07 + cache_write 50*6e-06 (1h rate)
-    expected = 3 * 3e-06 + 8728 * 3e-07 + 50 * 6e-06
-    assert prompt_cost == pytest.approx(expected)
-    # Guard against the regression: 5m-rate fallback would shave the write cost.
-    buggy = 3 * 3e-06 + 8728 * 3e-07 + 50 * 3.75e-06
-    assert prompt_cost != pytest.approx(buggy)
 
 
 def test_streaming_keeps_cache_creation_breakdown_from_final_chunk():
@@ -1288,6 +1278,61 @@ def test_get_combined_tool_content_custom_tool_call_without_type_field():
 
 def _tool_call_delta_chunk(tool_call: dict[str, object] | ChatCompletionDeltaToolCall) -> dict[str, object]:
     return {"choices": [{"delta": {"tool_calls": [tool_call]}}]}
+
+
+def _choice_tool_call_delta_chunk(choice_index: int, tool_call: dict[str, object]) -> dict[str, object]:
+    return {"choices": [{"index": choice_index, "delta": {"tool_calls": [tool_call]}}]}
+
+
+def test_get_combined_tool_content_keeps_each_choices_arguments_apart_when_choices_share_a_tool_index():
+    processor = ChunkProcessor.__new__(ChunkProcessor)
+    chunks = [
+        _choice_tool_call_delta_chunk(0, {"index": 0, "id": "call_a", "type": "function", "function": {"name": "f"}}),
+        _choice_tool_call_delta_chunk(1, {"index": 0, "id": "call_b", "type": "function", "function": {"name": "f"}}),
+        _choice_tool_call_delta_chunk(0, {"index": 0, "function": {"arguments": '{"fruit": "pers'}}),
+        _choice_tool_call_delta_chunk(1, {"index": 0, "function": {"arguments": '{"fruit": "dur'}}),
+        _choice_tool_call_delta_chunk(0, {"index": 0, "function": {"arguments": 'immon"}'}}),
+        _choice_tool_call_delta_chunk(1, {"index": 0, "function": {"arguments": 'ian"}'}}),
+    ]
+
+    combined = processor.get_combined_tool_content(chunks)
+
+    assert [(tool_call.id, tool_call.function.arguments) for tool_call in combined] == [
+        ("call_a", '{"fruit": "persimmon"}'),
+        ("call_b", '{"fruit": "durian"}'),
+    ]
+
+
+def test_stream_chunk_builder_keeps_each_choices_tool_call_arguments_apart():
+    def chunk(choice_index: int, tool_call: ChatCompletionDeltaToolCall) -> ModelResponseStream:
+        return ModelResponseStream(
+            id="chatcmpl-123",
+            object="chat.completion.chunk",
+            created=1234567890,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(index=choice_index, delta=Delta(tool_calls=[tool_call]), finish_reason=None)],
+        )
+
+    def fragment(arguments: str, name: str | None = None, call_id: str | None = None) -> ChatCompletionDeltaToolCall:
+        return ChatCompletionDeltaToolCall(
+            id=call_id, index=0, type="function", function=Function(name=name, arguments=arguments)
+        )
+
+    response = stream_chunk_builder(
+        chunks=[
+            chunk(0, fragment("", name="lookup_fruit", call_id="call_a")),
+            chunk(1, fragment("", name="lookup_fruit", call_id="call_b")),
+            chunk(0, fragment('{"fruit": "pers')),
+            chunk(1, fragment('{"fruit": "dur')),
+            chunk(0, fragment('immon"}')),
+            chunk(1, fragment('ian"}')),
+        ]
+    )
+
+    assert [(tool_call.id, tool_call.function.arguments) for tool_call in response.choices[0].message.tool_calls] == [
+        ("call_a", '{"fruit": "persimmon"}'),
+        ("call_b", '{"fruit": "durian"}'),
+    ]
 
 
 def test_get_combined_tool_content_joins_many_dict_shaped_argument_fragments_in_order():

@@ -114,14 +114,16 @@ export const serializeTierModelConfigs = (
   return serialized.length > 0 ? Object.fromEntries(serialized) : undefined;
 };
 
-export const setTierModelReasoningEffort = (
+export type TierModelParamChange = ["reasoning_effort", ReasoningEffort | undefined] | ["speed", "fast" | undefined];
+
+export const setTierModelParam = (
   current: TierModelParamsByTier | undefined,
   tier: string,
   model: string,
-  effort: ReasoningEffort | undefined,
+  [key, value]: TierModelParamChange,
 ): TierModelParamsByTier | undefined => {
-  const { reasoning_effort: _dropped, ...rest } = current?.[tier]?.[model] ?? {};
-  const params = effort === undefined ? rest : { ...rest, reasoning_effort: effort };
+  const { [key]: _dropped, ...rest } = current?.[tier]?.[model] ?? {};
+  const params = value === undefined ? rest : { ...rest, [key]: value };
   const byModel = Object.fromEntries(
     Object.entries({ ...current?.[tier], [model]: params }).filter(([, value]) => Object.keys(value).length > 0),
   );
@@ -130,6 +132,13 @@ export const setTierModelReasoningEffort = (
   );
   return Object.keys(next).length > 0 ? next : undefined;
 };
+
+export const setTierModelReasoningEffort = (
+  current: TierModelParamsByTier | undefined,
+  tier: string,
+  model: string,
+  effort: ReasoningEffort | undefined,
+): TierModelParamsByTier | undefined => setTierModelParam(current, tier, model, ["reasoning_effort", effort]);
 
 export const pruneTierModelParams = (
   current: TierModelParamsByTier | undefined,

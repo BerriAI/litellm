@@ -136,6 +136,7 @@ class LiteLLMBudgetTable(BaseModel):
 
 class KeyInfo(BaseModel):
     key_alias: str | None = None
+    status: str | None = None
     metadata: KeyMetadata | None = None
     models: list[str] = []
     tpm_limit: int | None = None
@@ -191,6 +192,7 @@ class ImageUrl(BaseModel):
 class TextContentPart(BaseModel):
     type: str = "text"
     text: str
+    cache_control: CacheControl | None = None
 
 
 class ImageContentPart(BaseModel):
@@ -283,14 +285,20 @@ class ChatToolResultTurn(BaseModel):
 type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
 
 
+class ChatStreamOptions(BaseModel):
+    include_usage: bool
+
+
 class ChatBody(BaseModel):
     model: str
     messages: Sequence[ChatTurn]
     stream: bool = False
+    stream_options: ChatStreamOptions | None = None
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
     temperature: float | None = None
     user: str | None = None
+    safety_identifier: str | None = None
     metadata: ChatMetadata | None = None
     reasoning_effort: str | None = None
     thinking: ThinkingParam | None = None
@@ -304,20 +312,39 @@ class ChatBody(BaseModel):
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
+RoutingStrategy = Literal[
+    "simple-shuffle",
+    "least-busy",
+    "usage-based-routing-v2",
+    "latency-based-routing",
+    "cost-based-routing",
+]
+
+
 class RouterSettingsOverride(BaseModel):
     """Router settings a test scopes below the global config: sent per request as
     `router_settings_override` in a /chat/completions body (the reliability suite's
-    fallback and retry knobs) or stored on a key as `router_settings` at
-    /key/generate (the auto-router suite's tag filtering switch). Serialized
-    exclude_none, so an override sets only the knobs a test exercises. Each
-    fallbacks map is model_name -> the ordered fallback model_names to try."""
+    fallback, retry, routing-strategy, and deadline knobs) or stored on a key as
+    `router_settings` at /key/generate (the auto-router suite's tag filtering
+    switch). Serialized exclude_none, so an override sets only the knobs a test
+    exercises. Each fallbacks map is model_name -> the ordered fallback model_names
+    to try."""
 
     fallbacks: list[dict[str, list[str]]] | None = None
     context_window_fallbacks: list[dict[str, list[str]]] | None = None
     content_policy_fallbacks: list[dict[str, list[str]]] | None = None
     num_retries: int | None = None
+    routing_strategy: RoutingStrategy | None = None
     model_group_retry_policy: dict[str, dict[str, int]] | None = None
     enable_tag_filtering: bool | None = None
+
+
+class DeploymentExtraBody(BaseModel):
+    """`litellm_params.extra_body` of a deployment whose upstream is another LiteLLM
+    proxy: forwarded verbatim in every request body, so the inner proxy honors the
+    same per-request router knobs an end user could send it."""
+
+    router_settings_override: RouterSettingsOverride | None = None
 
 
 class ReliabilityChatBody(ChatBody):
@@ -488,12 +515,18 @@ class AnthropicToolResultTurn(BaseModel):
 type AnthropicMessage = ChatMessage | AnthropicAssistantTurn | AnthropicToolResultTurn
 
 
+class AnthropicToolChoice(BaseModel):
+    type: Literal["auto", "any", "tool", "none"]
+    name: str | None = None
+
+
 class AnthropicMessagesBody(BaseModel):
     model: str
     messages: list[AnthropicMessage]
     max_tokens: int
     stream: bool | None = None
     tools: list[AnthropicTool] | None = None
+    tool_choice: AnthropicToolChoice | None = None
     guardrails: list[str] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
@@ -540,6 +573,10 @@ class McpInfo(BaseModel):
     logo_url: str | None = None
 
 
+class McpOauthCredentials(BaseModel):
+    upstream_resource: str
+
+
 class McpServerCreateBody(BaseModel):
     """POST /v1/mcp/server. For a gateway-managed OAuth server, `auth_type` is
     `oauth2` and `oauth2_flow` is `authorization_code`; the upstream endpoints
@@ -552,8 +589,11 @@ class McpServerCreateBody(BaseModel):
     allow_all_keys: bool = True
     auth_type: str | None = None
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
+    per_server_oauth_discovery: bool | None = None
     authorization_url: str | None = None
     token_url: str | None = None
+    registration_url: str | None = None
+    credentials: McpOauthCredentials | None = None
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -591,6 +631,26 @@ class McpServerRow(McpServerInfo):
 
 class McpServerListResponse(RootModel[list[McpServerRow]]):
     """GET /v1/mcp/server answers with a bare array of servers."""
+
+
+class McpServerUserCredentialRow(BaseModel):
+    user_id: str
+    credential_type: Literal["oauth2", "byok"]
+    expires_at: str | None = None
+    connected_at: str | None = None
+    updated_at: str
+
+
+class McpServerUserCredentialListResponse(RootModel[tuple[McpServerUserCredentialRow, ...]]):
+    """GET /v1/mcp/server/{server_id}/user-credentials answers with a bare array."""
+
+
+class McpOauthUserCredentialStatus(BaseModel):
+    server_id: str
+    has_credential: bool
+    expires_at: str | None = None
+    is_expired: bool = False
+    connected_at: str | None = None
 
 
 class ToolsetTool(BaseModel):
@@ -845,6 +905,17 @@ class ModelInfoResponse(BaseModel):
     data: list[ModelInfoEntry] = []
 
 
+class RouterCurrentValues(BaseModel):
+    """The `current_values` block of GET /router/settings: the router knobs the
+    proxy is actually running with (only the ones a test preconditions on)."""
+
+    optional_pre_call_checks: tuple[str, ...] = ()
+
+
+class RouterSettingsResponse(BaseModel):
+    current_values: RouterCurrentValues
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(extra="ignore")
     litellm_provider: str | None = None
@@ -906,9 +977,11 @@ class LiteLLMParamsBody(BaseModel):
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
+    allowed_openai_params: list[str] | None = None
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = None
@@ -937,9 +1010,11 @@ class LiteLLMParamsBody(BaseModel):
     tags: list[str] | None = None
     mock_response: str | list[float] | None = None
     timeout: float | None = None
+    max_retries: int | None = None
+    cooldown_time: float | None = None
+    extra_body: DeploymentExtraBody | None = None
     tpm: int | None = None
     weight: int | None = None
-    cooldown_time: float | None = None
     order: int | None = None
 
 
@@ -1091,13 +1166,13 @@ class UiLoginBody(BaseModel):
 
 
 class UiLoginResponse(BaseModel):
-    token: str
+    token: str = Field(repr=False)
     redirect_url: str
 
 
 class UiSessionClaims(BaseModel):
     user_id: str
-    key: str
+    key: str = Field(repr=False)
     user_role: str
     login_method: Literal["sso", "username_password"]
     exp: int
@@ -1126,8 +1201,9 @@ class TeamNewResponse(BaseModel):
 
 class TeamUpdateBody(BaseModel):
     team_id: str
-    team_alias: str
+    team_alias: str | None = None
     models: list[str] | None = None
+    object_permission: ObjectPermission | None = None
 
 
 class TeamInfoParams(BaseModel):
@@ -1135,6 +1211,7 @@ class TeamInfoParams(BaseModel):
 
 
 class TeamData(BaseModel):
+    organization_id: str | None = None
     team_alias: str | None = None
     models: list[str] = []
     members_with_roles: list[TeamMemberEntry] = []
@@ -1175,6 +1252,7 @@ class UserNewBody(BaseModel):
     user_email: str
     user_role: UserRole
     user_id: str | None = None
+    auto_create_key: bool | None = None
 
 
 class UserNewResponse(BaseModel):
@@ -1187,7 +1265,7 @@ class UserUpdateBody(BaseModel):
 
 
 class UserInfoParams(BaseModel):
-    user_id: str
+    user_id: str | None = None
 
 
 class UserData(BaseModel):
@@ -1240,14 +1318,34 @@ class OrgInfoParams(BaseModel):
     organization_id: str
 
 
+class OrgMembership(BaseModel):
+    user_id: str
+    user_role: str
+
+
 class OrgInfoResponse(BaseModel):
     organization_id: str
     organization_alias: str | None = None
     models: list[str] = []
+    members: tuple[OrgMembership, ...] = ()
+
+
+class OrgMemberEntry(BaseModel):
+    user_id: str
+    role: Literal["org_admin", "internal_user"]
+
+
+class OrgMemberAddBody(BaseModel):
+    organization_id: str
+    member: OrgMemberEntry
 
 
 class OrgDeleteBody(BaseModel):
     organization_ids: list[str]
+
+
+class OrgDeleteResponse(RootModel[tuple[OrgInfoResponse, ...]]):
+    pass
 
 
 # ---------- tags (management) ----------

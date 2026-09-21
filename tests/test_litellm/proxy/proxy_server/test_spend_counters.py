@@ -921,6 +921,30 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
     assert fake_invalidate.called is True
 
 
+@pytest.mark.asyncio
+async def test_reconcile_budget_reservation_for_counter_update_finalized_reservation_falls_back_to_direct_increment(
+    monkeypatch,
+):
+    """A reservation already finalized before the counter update (the pre-persist
+    reconcile failed and dropped its counters) must not shield its keys from the
+    direct increment, or the settled cost is never added back after the drop."""
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    fake_reconcile = AsyncMock()
+    monkeypatch.setattr(br, "reconcile_budget_reservation", fake_reconcile)
+
+    result = await ps._reconcile_budget_reservation_for_counter_update(
+        budget_reservation={
+            "finalized": True,
+            "entries": [{"counter_key": "spend:key:abc"}],
+        },
+        response_cost=1.0,
+    )
+
+    assert result == set()
+    fake_reconcile.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # _prepare_end_user_and_tag_spend_increments
 # ---------------------------------------------------------------------------
@@ -1170,6 +1194,24 @@ async def test_apply_spend_counter_increments_open_breaker_invalidates_and_retur
     fake_cache = _make_spend_counter_cache()
     fake_cache.redis_cache.async_increment_pipeline = AsyncMock(
         side_effect=RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+    )
+    monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
+
+    await ps._apply_spend_counter_increments(_two_pending_increments())
+
+    deleted_keys = sorted(call.kwargs["key"] for call in fake_cache.in_memory_cache.delete_cache.call_args_list)
+    assert deleted_keys == ["spend:key:k", "spend:team:t"]
+    fake_cache.in_memory_cache.set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_apply_spend_counter_increments_redis_timeout_invalidates_and_returns(monkeypatch):
+    """A Redis timeout invalidates the counters and returns without reaching the cost callback's error path."""
+    from redis.exceptions import TimeoutError as RedisTimeoutError
+
+    fake_cache = _make_spend_counter_cache()
+    fake_cache.redis_cache.async_increment_pipeline = AsyncMock(
+        side_effect=RedisTimeoutError("Timeout reading from 127.0.0.1:6379")
     )
     monkeypatch.setattr(ps, "spend_counter_cache", fake_cache)
 

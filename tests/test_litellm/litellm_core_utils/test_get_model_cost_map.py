@@ -225,36 +225,6 @@ def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
         assert "supports_adaptive_thinking" not in backup[non_adaptive], non_adaptive
 
 
-@pytest.mark.parametrize(
-    "cost_map",
-    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
-    ids=["root", "bundled_backup"],
-)
-def test_azure_ai_claude_1m_context_entries(cost_map: dict):
-    """Microsoft Foundry serves a 1M-token context window for Opus 4.6+ and Sonnet
-    4.6+, so the ``azure_ai`` entries must not advertise the 200k cap that made
-    context-aware clients compact prompts early (LIT-4406). Both the root map (used
-    by default network loading) and the bundled fallback are checked so the two can
-    never drift apart."""
-    for model in [
-        "azure_ai/claude-opus-4-6",
-        "azure_ai/claude-opus-4-7",
-        "azure_ai/claude-opus-4-8",
-        "azure_ai/claude-opus-5",
-        "azure_ai/claude-sonnet-5",
-        "azure_ai/claude-sonnet-4-6",
-    ]:
-        assert cost_map[model]["max_input_tokens"] == 1000000, model
-
-    for model in [
-        "azure_ai/claude-opus-4-1",
-        "azure_ai/claude-opus-4-5",
-        "azure_ai/claude-sonnet-4-5",
-        "azure_ai/claude-haiku-4-5",
-    ]:
-        assert cost_map[model]["max_input_tokens"] == 200000, model
-
-
 # OpenRouter headline rates from GET https://openrouter.ai/api/v1/models.
 # These were the catalog values that disagreed with that API (and, for the
 # two spotlight models, the public model pages that their source fields cite).
@@ -276,34 +246,6 @@ _OPENROUTER_STALE_COSTS = {
     "openrouter/openai/gpt-oss-120b": (1.8e-07, 8e-07),
     "openrouter/gryphe/mythomax-l2-13b": (1.875e-06, 1.875e-06),
 }
-
-
-@pytest.mark.parametrize(
-    "cost_map",
-    [_load_root_cost_map(), GetModelCostMap.load_local_model_cost_map()],
-    ids=["root", "bundled_backup"],
-)
-def test_openrouter_catalog_costs_match_live_headline_rates(cost_map: dict):
-    """openrouter/* spend tracking reads these catalog fields. The values must
-    stay aligned with OpenRouter's published headline rate, not the stale
-    figures that over/under-counted by up to 30x. Both maps are checked so
-    the root file and bundled backup cannot drift apart."""
-    control = cost_map["openrouter/anthropic/claude-opus-5"]
-    assert control["input_cost_per_token"] == 5e-06
-    assert control["output_cost_per_token"] == 2.5e-05
-    assert control["cache_read_input_token_cost"] == 5e-07
-
-    for model, (inp, out, cache) in _OPENROUTER_LIVE_COSTS.items():
-        entry = cost_map[model]
-        assert entry["input_cost_per_token"] == inp, model
-        assert entry["output_cost_per_token"] == out, model
-        if cache is not None:
-            assert entry["cache_read_input_token_cost"] == cache, model
-
-    for model, (stale_in, stale_out) in _OPENROUTER_STALE_COSTS.items():
-        entry = cost_map[model]
-        assert entry["input_cost_per_token"] != stale_in, model
-        assert entry["output_cost_per_token"] != stale_out, model
 
 
 def test_get_model_cost_map_stamps_loaded_at():

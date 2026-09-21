@@ -98,6 +98,13 @@ def test_token_counter_short_text_matches_tiktoken(text):
     assert token_counter_new(model="us.anthropic.claude-sonnet-4-6", text=text) == expected
 
 
+def test_token_counter_default_encoding_matches_cl100k():
+    encoding: Final = tiktoken.get_encoding("cl100k_base")
+    expected: Final = len(encoding.encode("hello world", disallowed_special=()))
+
+    assert token_counter_new(model=None, text="hello world") == expected
+
+
 def test_token_counter_text_over_chunk_boundary_stays_close_to_tiktoken():
     text = ("The quick brown fox jumps over the lazy dog. " * 30)[:1025]
     encoding = tiktoken.get_encoding("cl100k_base")
@@ -1249,6 +1256,25 @@ def test_token_counter_with_thinking_content():
         tokens_no_thinking < 15
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
 
+
+
+def test_token_counter_with_redacted_thinking_content():
+    """
+    A replayed redacted_thinking block (Anthropic redacted reasoning, or the /v1/messages bridge's stand-in
+    for a reasoning item with no summary) counts zero tokens for its encrypted payload, like a thinking
+    block with no text. It used to raise, which made is_prompt_caching_valid_prompt return False and the
+    prompt_caching pre-call check stop pinning the deployment that held the cached prefix.
+    """
+    model = "anthropic/claude-sonnet-4-5-20250929"
+    reply = {"type": "text", "text": "Draw from the box labeled Mixed, because that label must be wrong."}
+    redacted_block = {"type": "redacted_thinking", "data": "EqQBCkYIBRgCKkBjZ2xhc3M" * 30}
+    user_turn = {"role": "user", "content": [{"type": "text", "text": "Which box do you draw from?"}]}
+    follow_up = {"role": "user", "content": [{"type": "text", "text": "Restate that in one sentence."}]}
+
+    without_block = [user_turn, {"role": "assistant", "content": [reply]}, follow_up]
+    with_block = [user_turn, {"role": "assistant", "content": [redacted_block, reply]}, follow_up]
+
+    assert token_counter(model=model, messages=with_block) == token_counter(model=model, messages=without_block)
 
 def test_token_counter_with_tool_reference_block():
     """

@@ -1,5 +1,16 @@
+import {
+  isForecastClassifier,
+  withoutForecastPromptOverrides,
+  type CapabilitySettings,
+  type FuseSettings,
+} from "./forecast_classifier_config";
 import type { ModelGroup } from "../llm_calls/fetch_models";
 import { KeywordTierRule } from "./KeywordTierRules";
+import {
+  type JevClassifierConfig,
+  jevClassifierConfigSchema,
+  normalizeJevClassifierConfig,
+} from "./jev_classifier_config";
 import {
   type CustomTierSet,
   type TierRow,
@@ -38,6 +49,7 @@ import {
   effectiveTierLabel,
   heuristicScoringRoleFor,
   usesLlmClassifier,
+  usesClassifierContext,
 } from "./ComplexityRouterConfig";
 
 export type ClassifierVisionConfig = { enabled?: boolean; max_images?: number };
@@ -126,6 +138,51 @@ const scorerKnobPayload = ({
       };
 };
 
+export interface StoredComplexityRouterConfig {
+  tiers?: Record<string, unknown>;
+  enable_non_reasoning_tier?: boolean;
+  tier_model_configs?: unknown;
+  default_model?: string | null;
+  plan_mode_min_tier?: unknown;
+  classification_prompt?: unknown;
+  classification_examples?: unknown;
+  heuristic_first_max_tier?: unknown;
+  hybrid_boundary_margin?: unknown;
+  tier_labels?: unknown;
+  classifier_type?: ClassifierType;
+  heuristic_v2_success_threshold?: unknown;
+  capability_classifier_config?: unknown;
+  llm_v2_config?: unknown;
+  classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: unknown;
+  classifier_context_window_size?: unknown;
+  classifier_context_budget_chars?: unknown;
+  classifier_context_per_turn_chars?: unknown;
+  classifier_context_include_assistant_turns?: unknown;
+  classifier_fallback?: unknown;
+  classification_mode?: unknown;
+  tier_boundaries?: unknown;
+  token_thresholds?: unknown;
+  dimension_weights?: unknown;
+  custom_dimensions?: unknown;
+  reasoning_override_min_score?: unknown;
+  session_affinity?: unknown;
+  session_affinity_ttl_seconds?: unknown;
+  modality_routing?: unknown;
+  modality_pin_override?: unknown;
+  deployment_affinity?: unknown;
+  adaptive?: boolean;
+  adaptive_weights?: AdaptiveRouterWeights;
+  tier_distance_penalty?: number;
+  adaptive_eligible?: AdaptiveEligible;
+  return_raw_model_name?: boolean;
+  enable_context_window_escalation?: unknown;
+  context_window_escalation_buffer?: unknown;
+  stall_escalation_enabled?: unknown;
+  stall_escalation_window?: unknown;
+  stall_escalation_repeat_threshold?: unknown;
+}
+
 export interface BuildComplexityRouterConfigParams {
   tiers: ComplexityTiers;
   enableNonReasoningTier?: boolean;
@@ -134,9 +191,14 @@ export interface BuildComplexityRouterConfigParams {
   planModeMinTier: string | undefined;
   tierLabels: ComplexityTierLabels | undefined;
   classifierType: ClassifierType;
+  heuristicV2SuccessThreshold?: number;
+  capabilityClassifierConfig?: CapabilitySettings;
+  llmV2Config?: FuseSettings;
   classifierLlmConfig: ClassifierLLMConfigWire | undefined;
+  jevClassifierConfig?: JevClassifierConfig;
   classifierContextWindowSize: number | undefined;
   classifierContextBudgetChars: number | undefined;
+  classifierContextPerTurnChars?: number;
   classifierContextIncludeAssistantTurns: boolean | undefined;
   classifierFallback: ClassifierFallback | undefined;
   classificationPrompt: string | undefined;
@@ -198,7 +260,11 @@ export interface ComplexityRouterConfigPayload {
   plan_mode_min_tier?: string;
   tier_labels?: ComplexityTierLabels;
   classifier_type: ClassifierType;
+  heuristic_v2_success_threshold?: number;
+  capability_classifier_config?: CapabilitySettings;
+  llm_v2_config?: FuseSettings;
   classifier_llm_config?: ClassifierLLMConfig;
+  jev_classifier_config?: JevClassifierConfig;
   classifier_context_window_size?: number;
   classifier_context_budget_chars?: number;
   classifier_context_per_turn_chars?: number;
@@ -304,11 +370,22 @@ export const getKeywordTierRulesError = (
   return `Keyword rule(s) ${orphaned.join(", ")} route to a tier this router no longer has`;
 };
 
-// An edited tier set forces the LLM classifier, so the model requirement follows the EFFECTIVE type.
-// Both forms' submit gates and their submit handlers read this one answer so they cannot drift.
+export const getHeuristicV2SuccessThresholdError = (threshold: number | undefined): string | null => {
+  if (threshold === undefined) return null;
+  const validProbability = Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
+  return validProbability ? null : "Success threshold must be a number between 0 and 1";
+};
+
 export const getClassifierModelError = (
-  config: Pick<ComplexityRouterConfigValue, "custom_tier_set" | "classifier_type" | "classifier_llm_config">,
+  config: Pick<
+    ComplexityRouterConfigValue,
+    "custom_tier_set" | "classifier_type" | "classifier_llm_config" | "jev_classifier_config"
+  >,
 ): string | null => {
+  if (effectiveClassifierType(config) === "jev") {
+    const parsed = jevClassifierConfigSchema.safeParse(config.jev_classifier_config ?? {});
+    return parsed.success ? null : "Enter a JEV model, a positive whole-number timeout and a positive cooldown";
+  }
   if (!usesLlmClassifier(effectiveClassifierType(config)) || config.classifier_llm_config?.model) return null;
   return config.custom_tier_set
     ? "Please select a classifier model: an edited tier set routes with the LLM classifier"
@@ -343,6 +420,7 @@ export const getSemanticConfigError = ({
 };
 
 interface CustomTierWireFieldInputs {
+  classifierType?: ClassifierType;
   classifierLlmConfig: ClassifierLLMConfigWire | undefined;
   planModeMinTierId: string | undefined;
   classificationPrompt: string | undefined;
@@ -351,7 +429,13 @@ interface CustomTierWireFieldInputs {
 
 export const customTierWireFields = (
   customTierSet: CustomTierSet,
-  { classifierLlmConfig, planModeMinTierId, classificationPrompt, classificationExamples }: CustomTierWireFieldInputs,
+  {
+    classifierType,
+    classifierLlmConfig,
+    planModeMinTierId,
+    classificationPrompt,
+    classificationExamples,
+  }: CustomTierWireFieldInputs,
 ): Partial<ComplexityRouterConfigPayload> => {
   const rows = customTierSet.tiers;
   const fallback = tierRowById(rows, customTierSet.fallback_tier_id);
@@ -360,27 +444,30 @@ export const customTierWireFields = (
     tiers: Object.fromEntries(rows.map((row) => [activeTierName(row), row.models])),
     tier_definitions: tierDefinitionsFromRows(rows),
     ...(fallback && { fallback_tier: activeTierName(fallback) }),
-    classifier_type: "llm",
+    classifier_type: classifierType === "jev" ? "jev" : "llm",
     // Rebuilt from the fields an edited tier set allows. The backend rejects system_prompt and
     // classification_rubric beside tier_definitions, and both live inside this object rather than at
     // the top level the omit list covers. The opening instructions ride classification_prompt below.
-    ...(classifierLlmConfig && {
-      classifier_llm_config: {
-        model: classifierLlmConfig.model,
-        timeout_ms: classifierLlmConfig.timeout_ms,
-        ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
-          circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
-        }),
-        ...(classifierLlmConfig.circuit_breaker_cooldown_seconds !== undefined && {
-          circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
-        }),
-        ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
-        ...(classifierLlmConfig.vision && { vision: classifierLlmConfig.vision }),
-      },
-    }),
+    ...(classifierType !== "jev" &&
+      classifierLlmConfig && {
+        classifier_llm_config: {
+          model: classifierLlmConfig.model,
+          timeout_ms: classifierLlmConfig.timeout_ms,
+          ...(classifierLlmConfig.circuit_breaker_enabled !== undefined && {
+            circuit_breaker_enabled: classifierLlmConfig.circuit_breaker_enabled,
+          }),
+          ...(classifierLlmConfig.circuit_breaker_cooldown_seconds !== undefined && {
+            circuit_breaker_cooldown_seconds: classifierLlmConfig.circuit_breaker_cooldown_seconds,
+          }),
+          ...(classifierLlmConfig.reasoning_effort && { reasoning_effort: classifierLlmConfig.reasoning_effort }),
+          ...(classifierLlmConfig.vision && { vision: classifierLlmConfig.vision }),
+        },
+      }),
     session_affinity: false,
-    ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
-    ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
+    ...(classifierType !== "jev" &&
+      classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
+    ...(classifierType !== "jev" &&
+      classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
     ...(floor && { plan_mode_min_tier: activeTierName(floor) }),
   };
 };
@@ -457,6 +544,7 @@ const classifierWireFields = (
     hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
+    classifierContextPerTurnChars,
     classifierContextIncludeAssistantTurns,
   }: Pick<
     BuildComplexityRouterConfigParams,
@@ -466,30 +554,41 @@ const classifierWireFields = (
     | "hybridBoundaryMargin"
     | "classifierContextWindowSize"
     | "classifierContextBudgetChars"
+    | "classifierContextPerTurnChars"
     | "classifierContextIncludeAssistantTurns"
   >,
-): Partial<ComplexityRouterConfigPayload> => ({
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierLlmConfig && { classifier_llm_config: normalizeClassifierLlmConfig(classifierLlmConfig) }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
-  ...(effectiveType === "heuristic_first" &&
-    heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
-  ...(effectiveType === "hybrid" &&
-    hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierContextWindowSize !== undefined && {
-      classifier_context_window_size: classifierContextWindowSize,
-    }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierContextBudgetChars !== undefined && {
-      classifier_context_budget_chars: classifierContextBudgetChars,
-    }),
-  ...(usesLlmClassifier(effectiveType) &&
-    classifierContextIncludeAssistantTurns !== undefined && {
-      classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
-    }),
-});
+): Partial<ComplexityRouterConfigPayload> => {
+  const supportsFallback = usesClassifierContext(effectiveType) && !isForecastClassifier(effectiveType);
+  return {
+    ...(usesLlmClassifier(effectiveType) &&
+      classifierLlmConfig && {
+        classifier_llm_config: isForecastClassifier(effectiveType)
+          ? withoutForecastPromptOverrides(classifierLlmConfig)
+          : normalizeClassifierLlmConfig(classifierLlmConfig),
+      }),
+    ...(supportsFallback && classifierFallback !== undefined && { classifier_fallback: classifierFallback }),
+    ...(effectiveType === "heuristic_first" &&
+      heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
+    ...(effectiveType === "hybrid" &&
+      hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
+    ...(usesClassifierContext(effectiveType) &&
+      classifierContextWindowSize !== undefined && {
+        classifier_context_window_size: classifierContextWindowSize,
+      }),
+    ...(usesClassifierContext(effectiveType) &&
+      classifierContextBudgetChars !== undefined && {
+        classifier_context_budget_chars: classifierContextBudgetChars,
+      }),
+    ...(usesClassifierContext(effectiveType) &&
+      classifierContextPerTurnChars !== undefined && {
+        classifier_context_per_turn_chars: classifierContextPerTurnChars,
+      }),
+    ...(usesClassifierContext(effectiveType) &&
+      classifierContextIncludeAssistantTurns !== undefined && {
+        classifier_context_include_assistant_turns: classifierContextIncludeAssistantTurns,
+      }),
+  };
+};
 
 export const buildComplexityRouterConfig = ({
   tiers,
@@ -499,9 +598,14 @@ export const buildComplexityRouterConfig = ({
   planModeMinTier,
   tierLabels,
   classifierType,
+  heuristicV2SuccessThreshold,
+  capabilityClassifierConfig,
+  llmV2Config,
   classifierLlmConfig,
+  jevClassifierConfig,
   classifierContextWindowSize,
   classifierContextBudgetChars,
+  classifierContextPerTurnChars,
   classifierContextIncludeAssistantTurns,
   classifierFallback,
   classificationPrompt,
@@ -563,14 +667,15 @@ export const buildComplexityRouterConfig = ({
     hybridBoundaryMargin,
     classifierContextWindowSize,
     classifierContextBudgetChars,
+    classifierContextPerTurnChars,
     classifierContextIncludeAssistantTurns,
   };
-  // An edited tier set forces the LLM classifier, so llm-only inputs must survive a classifier_type
-  // the form never rewrote. The UI gates the same controls on this, not on the raw value.
-  const effectiveType: ClassifierType = customTierSet ? "llm" : classifierType;
+  const effectiveType = effectiveClassifierType({ custom_tier_set: customTierSet, classifier_type: classifierType });
+  const forecast = isForecastClassifier(effectiveType);
 
+  const supportsOpeningPrompt = !customTierSet && !forecast && usesLlmClassifier(effectiveType);
   const payload: ComplexityRouterConfigPayload = {
-    tiers,
+    tiers: forecast ? Object.fromEntries(Object.entries(tiers).filter(([, models]) => models.length > 0)) : tiers,
     // The backend rejects the flag beside a custom tier set.
     ...(!customTierSet && enableNonReasoningTier && { enable_non_reasoning_tier: true }),
     ...(serializedTierModelConfigs && { tier_model_configs: serializedTierModelConfigs }),
@@ -578,11 +683,18 @@ export const buildComplexityRouterConfig = ({
     ...(planModeMinTier?.trim() && { plan_mode_min_tier: planModeMinTier }),
     ...(cleanedTierLabels && { tier_labels: cleanedTierLabels }),
     classifier_type: classifierType,
+    ...(effectiveType === "jev" && { jev_classifier_config: normalizeJevClassifierConfig(jevClassifierConfig) }),
+    ...(heuristicV2SuccessThreshold !== undefined && {
+      heuristic_v2_success_threshold: heuristicV2SuccessThreshold,
+    }),
     ...classifierWireFields(effectiveType, classifierInputs),
+    ...(effectiveType === "capability" &&
+      capabilityClassifierConfig && { capability_classifier_config: capabilityClassifierConfig }),
+    ...(effectiveType === "llm_v2" && { llm_v2_config: llmV2Config }),
+    ...(forecast && { adaptive: false }),
     // A built-in router's opening instructions. Suppressed beside a legacy whole-prompt override,
     // which the backend rejects as a second override of the same prompt.
-    ...(!customTierSet &&
-      usesLlmClassifier(effectiveType) &&
+    ...(supportsOpeningPrompt &&
       !classifierLlmConfig?.system_prompt?.trim() && {
         ...(classificationPrompt?.trim() && { classification_prompt: classificationPrompt.trim() }),
         ...(classificationExamples?.trim() && { classification_examples: classificationExamples.trim() }),
@@ -594,7 +706,7 @@ export const buildComplexityRouterConfig = ({
     modality_pin_override: modalityPinOverride ?? false,
     ...(customTechnicalKeywords.length > 0 && { custom_technical_keywords: customTechnicalKeywords }),
     ...(cleanedKeywordTierRules.length > 0 && { keyword_tier_rules: cleanedKeywordTierRules }),
-    escalation_keywords: cleanedEscalationKeywords,
+    escalation_keywords: forecast ? [] : cleanedEscalationKeywords,
     // Only written when on: the backend rejects it alongside session_affinity, user_turn mode and
     // a custom tier set, so an off router must not carry the key into any of those saves.
     ...(stallEscalationEnabled && {
@@ -609,19 +721,22 @@ export const buildComplexityRouterConfig = ({
       embedding_model: embeddingModel,
       match_threshold: matchThreshold,
     }),
-    ...(adaptive && {
-      adaptive: true,
-      adaptive_weights: adaptiveWeights,
-      ...(adaptiveEligible === "all" && { tier_distance_penalty: tierDistancePenalty }),
-      adaptive_eligible: adaptiveEligible,
-    }),
+    ...(adaptive &&
+      !forecast && {
+        adaptive: true,
+        adaptive_weights: adaptiveWeights,
+        ...(adaptiveEligible === "all" && { tier_distance_penalty: tierDistancePenalty }),
+        adaptive_eligible: adaptiveEligible,
+      }),
     ...(returnRawModelName && { return_raw_model_name: true }),
-    ...(enableContextWindowEscalation !== undefined && {
-      enable_context_window_escalation: enableContextWindowEscalation,
+    // Omission enables the backend default, so hidden forecast controls need an explicit opt-out.
+    ...((forecast || enableContextWindowEscalation !== undefined) && {
+      enable_context_window_escalation: forecast ? false : enableContextWindowEscalation,
     }),
-    ...(contextWindowEscalationBuffer !== undefined && {
-      context_window_escalation_buffer: contextWindowEscalationBuffer,
-    }),
+    ...(!forecast &&
+      contextWindowEscalationBuffer !== undefined && {
+        context_window_escalation_buffer: contextWindowEscalationBuffer,
+      }),
     ...(sessionAffinityTtlSeconds !== undefined && {
       session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
     }),
@@ -632,6 +747,7 @@ export const buildComplexityRouterConfig = ({
     Object.entries(payload).filter(([key]) => !CUSTOM_TIER_STRIPPED_KEYS.includes(key)),
   ) as ComplexityRouterConfigPayload;
   const customTierInputs: CustomTierWireFieldInputs = {
+    classifierType: effectiveType,
     classifierLlmConfig,
     planModeMinTierId: planModeMinTier,
     classificationPrompt,

@@ -39,7 +39,7 @@ from litellm.proxy.client.cli.commands.claude_settings import (
 
 
 def _owners(*backup_paths):
-    """Stand-in owners for the real `lite up` / `lite autoroute up` registry."""
+    """Stand-in owners for the real `lite up` / `lite autoroute start` registry."""
     return tuple(SettingsFileOwner(path, "lite up", "lite down") for path in backup_paths)
 
 
@@ -162,7 +162,7 @@ class TestConfigureClaudeSettings:
 
 
 class TestConflictingOwnersOfTheSettingsFile:
-    """Both `lite up` and `lite autoroute up` restore a backup when they stop.
+    """Both `lite up` and `lite autoroute start` restore a backup when they stop.
 
     Guarding only one of them leaves the other free to silently revert this
     write, which is the exact hazard the guard exists to prevent.
@@ -184,11 +184,11 @@ class TestConflictingOwnersOfTheSettingsFile:
         settings_path = tmp_path / "claude" / "settings.json"
         backup = tmp_path / "auto.json"
         backup.write_text("{}")
-        autoroute = SettingsFileOwner(backup, "lite autoroute up", "lite autoroute down")
+        autoroute = SettingsFileOwner(backup, "lite autoroute start", "lite autoroute stop")
 
-        with pytest.raises(ClaudeSettingsError, match="`lite autoroute up` is currently managing"):
+        with pytest.raises(ClaudeSettingsError, match="`lite autoroute start` is currently managing"):
             _static_configure("https://proxy.example.com", settings_path, (autoroute,))
-        with pytest.raises(ClaudeSettingsError, match="Run `lite autoroute down` first"):
+        with pytest.raises(ClaudeSettingsError, match="Run `lite autoroute stop` first"):
             _static_configure("https://proxy.example.com", settings_path, (autoroute,))
 
     def test_the_registry_matches_the_paths_the_commands_actually_use(self):
@@ -197,7 +197,7 @@ class TestConflictingOwnersOfTheSettingsFile:
 
         assert AUTOROUTE_BACKUP_PATH == AUTOROUTE_DIR / "claude_settings_backup.json"
         assert {o.backup_path for o in SETTINGS_FILE_OWNERS} == {BACKUP_PATH, AUTOROUTE_BACKUP_PATH}
-        assert {o.stop_command for o in SETTINGS_FILE_OWNERS} == {"lite down", "lite autoroute down"}
+        assert {o.stop_command for o in SETTINGS_FILE_OWNERS} == {"lite down", "lite autoroute stop"}
 
 
 class TestDoesNotDestroyUserOwnedStructure:
@@ -297,7 +297,7 @@ class TestConfigureStatePath:
 
 
 class TestMergeClaudeSettings:
-    """One merge for every way Claude Code gets wired: `lite up`, `lite configure claude` and `lite autoroute up`."""
+    """One merge for every way Claude Code gets wired: `lite up`, `lite configure claude` and `lite autoroute start`."""
 
     def test_a_static_token_lands_in_env_and_the_helper_slot_is_cleared(self):
         settings = {"apiKeyHelper": "/usr/local/bin/lite auth print-token", "env": {"ANTHROPIC_API_KEY": "leaked"}}
@@ -337,7 +337,7 @@ class TestMergeClaudeSettings:
 
     def test_a_tier_model_forces_every_claude_code_tier_as_autoroute_needs(self):
         # Router's auto-router registry is keyed by the literal requested model string with no
-        # wildcard resolution, so `lite autoroute up` overrides the env var each tier reads.
+        # wildcard resolution, so `lite autoroute start` overrides the env var each tier reads.
         settings = {"env": {"ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-opus-4-8"}}
         merged = merge_claude_settings(
             settings, "http://127.0.0.1:4000", StaticToken("token-abc"), tier_model="autorouter"
