@@ -2121,6 +2121,11 @@ class ComplexityRouter(CustomLogger):
         client: Final = self._jev_client
         if config is None or client is None:
             return self._classifier_failure_outcome("jev classifier is not configured", prompt, system_prompt)
+        marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
+        if _encrypted_classifier_task(request_kwargs, marker_pairs) is not None:
+            return self._classifier_failure_outcome(
+                "jev classifier does not support encrypted agent tasks", prompt, system_prompt
+            )
         breaker: Final = self._classifier_circuit_breaker
         permit: Final = breaker.acquire_permit() if breaker is not None else None
         if breaker is not None and permit is None:
