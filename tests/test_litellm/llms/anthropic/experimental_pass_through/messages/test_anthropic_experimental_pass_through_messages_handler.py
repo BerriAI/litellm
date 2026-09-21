@@ -1442,10 +1442,12 @@ async def test_anthropic_messages_leaves_non_provider_failures_unmapped():
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthropic():
+    """Shapes are what Claude Code 2.1.278 sends and api.anthropic.com returns, captured 2026-09-21."""
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
 
-    safeguards = {"auto_mode": {"enabled": True, "version": "2026-09-01"}}
-    client_betas = "safeguards-2026-09-01,interleaved-thinking-2025-05-14"
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    client_betas = "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": {}}}]
     captured: dict[str, object] = {}
 
     def upstream_records_the_request(request: httpx.Request) -> httpx.Response:
@@ -1462,7 +1464,7 @@ async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthro
                 "stop_reason": "end_turn",
                 "stop_sequence": None,
                 "usage": {"input_tokens": 1, "output_tokens": 1},
-                "safeguard_results": {"verdict": "allow"},
+                "safeguard_results": safeguard_results,
             },
             request=request,
         )
@@ -1483,15 +1485,17 @@ async def test_anthropic_messages_forwards_safeguards_and_unknown_beta_to_anthro
 
     assert captured["body"]["safeguards"] == safeguards
     assert set(captured["anthropic-beta"].split(",")) == set(client_betas.split(","))
-    assert response["safeguard_results"] == {"verdict": "allow"}
+    assert response["safeguard_results"] == safeguard_results
 
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_streaming_forwards_safeguards_and_keeps_safeguard_results():
+    """Shapes are what Claude Code 2.1.278 sends and api.anthropic.com returns, captured 2026-09-21."""
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
 
-    safeguards = {"auto_mode": {"enabled": True, "version": "2026-09-01"}}
-    safeguard_results = {"verdict": "allow", "checks": ["shell_command"]}
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+    tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
     captured: dict[str, object] = {}
     message_start = {
         "type": "message_start",
