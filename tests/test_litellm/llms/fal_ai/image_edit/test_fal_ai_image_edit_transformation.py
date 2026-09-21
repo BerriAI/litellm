@@ -120,12 +120,29 @@ def test_transform_request_reads_every_file_types_input(tmp_path, image_factory)
 
 
 def test_transform_response_maps_fal_images():
-    raw = httpx.Response(200, json={"images": [{"url": "https://fal.media/out.png"}]})
+    raw = httpx.Response(
+        200,
+        json={
+            "images": [
+                {
+                    "url": "https://fal.media/out.png",
+                    "width": 1024,
+                    "height": 1536,
+                    "content_type": "image/png",
+                }
+            ]
+        },
+    )
     response = FalAIImageEditConfig().transform_image_edit_response(
         model="openai/gpt-image-2.5/flare/edit", raw_response=raw, logging_obj=None
     )
     assert isinstance(response, ImageResponse)
     assert [image.url for image in response.data] == ["https://fal.media/out.png"]
+    assert response.data[0].provider_specific_fields == {
+        "width": 1024,
+        "height": 1536,
+        "content_type": "image/png",
+    }
 
 
 @pytest.mark.parametrize("image", [None, []])
