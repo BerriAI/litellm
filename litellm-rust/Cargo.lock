@@ -2698,6 +2698,7 @@ dependencies = [
  "litellm-core-utils",
  "litellm-secrets-aws",
  "litellm-secrets-google",
+ "litellm-secrets-hashicorp",
  "litellm-secrets-types",
  "moka",
  "reqwest 0.12.28",
@@ -2749,6 +2750,24 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "veil",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-secrets-hashicorp"
+version = "0.1.0"
+dependencies = [
+ "litellm-core-utils",
+ "litellm-secrets-types",
+ "moka",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "veil",

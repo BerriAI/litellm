@@ -19,3 +19,5 @@ pub use state::{SecretManagerState, secret_manager_would_be_consulted};
 pub use litellm_secrets_aws as aws;
 #[cfg(feature = "google")]
 pub use litellm_secrets_google as google;
+#[cfg(feature = "hashicorp")]
+pub use litellm_secrets_hashicorp as hashicorp;
