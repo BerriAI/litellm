@@ -443,13 +443,13 @@ class TestAnthropicBetaHeadersFiltering:
 
         assert filtered == ["thinking-binding-controls-2026-08-01"]
 
-    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "vertex_ai"])
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
     def test_dangerous_tool_use_forwarded(self, provider):
         """Claude Code's server-side auto-mode classifier sends `safeguards` together with
-        dangerous-tool-use-2026-09-03. Bedrock Invoke and Vertex rawPredict both answer
-        "safeguards: Extra inputs are not permitted" when the body field arrives without
-        the beta (probed 2026-09-21), so dropping the header turned every auto-mode turn
-        into a 400 on Vertex and silently disabled the classifier on Bedrock."""
+        dangerous-tool-use-2026-09-03. Bedrock Invoke, Bedrock Mantle, and Vertex rawPredict
+        all answer "safeguards: Extra inputs are not permitted" when the body field arrives
+        without the beta (probed 2026-09-21), so dropping the header turned every auto-mode
+        turn into a 400 on Vertex and silently disabled the classifier on Bedrock."""
         filtered = filter_and_transform_beta_headers(
             beta_headers=["dangerous-tool-use-2026-09-03"],
             provider=provider,
