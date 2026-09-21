@@ -28,7 +28,6 @@ struct ObjectGuard {
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
-    config: NativeCacheConfig,
 }
 
 impl ObjectGuard {
@@ -191,15 +190,12 @@ impl FacadeGuard {
                     "redis_flush_size",
                 ],
             )?,
-            config,
         })
     }
 
     fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
-        let projected = NativeCacheConfig::project(facade)?;
         Ok(self.outer.matches(py, facade)?
-            && self.backend.matches(py, &facade.getattr("cache")?)?
-            && matches!(projected, CacheConfigProjection::Native(config) if *config == self.config))
+            && self.backend.matches(py, &facade.getattr("cache")?)?)
     }
 
     pub(super) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {

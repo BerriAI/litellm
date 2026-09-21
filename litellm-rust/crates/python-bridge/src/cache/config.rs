@@ -8,7 +8,7 @@ use pyo3::{
 
 use super::{native::NativeResponseCache, request::duration};
 
-#[derive(PartialEq)]
+#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct CachePolicy {
     pub(super) mode: String,
     pub(super) ttl: Option<Duration>,
@@ -18,7 +18,6 @@ pub(super) struct CachePolicy {
     pub(super) semantic_cache_scope: String,
 }
 
-#[derive(PartialEq)]
 pub(super) struct MemoryCacheConfig {
     pub(super) default_ttl: Duration,
     pub(super) capacity: usize,
@@ -38,7 +37,7 @@ pub(super) enum CertificateRequirement {
     Required,
 }
 
-#[derive(PartialEq)]
+#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct RedisTlsConfig {
     pub(super) certificate_requirement: CertificateRequirement,
     pub(super) check_hostname: bool,
@@ -48,7 +47,7 @@ pub(super) struct RedisTlsConfig {
     pub(super) client_key: Option<String>,
 }
 
-#[derive(PartialEq)]
+#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct RedisConnectionConfig {
     pub(super) host: String,
     pub(super) port: u16,
@@ -65,7 +64,7 @@ pub(super) struct RedisConnectionConfig {
     pub(super) tls: Option<RedisTlsConfig>,
 }
 
-#[derive(PartialEq)]
+#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct RedisCacheConfig {
     pub(super) default_ttl: Duration,
     pub(super) namespace: Option<String>,
@@ -73,13 +72,12 @@ pub(super) struct RedisCacheConfig {
     pub(super) connection: RedisConnectionConfig,
 }
 
-#[derive(PartialEq)]
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
 }
 
-#[derive(PartialEq)]
+#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
 pub(super) struct NativeCacheConfig {
     pub(super) policy: CachePolicy,
     pub(super) backend: CacheBackendConfig,
@@ -261,7 +259,7 @@ fn project_redis(
         return Ok(Err(UnsupportedCacheConfig::RedisConnection));
     };
 
-    let protocol = match optional_u8(&resolved, "protocol")?.unwrap_or(2) {
+    let protocol = match optional_i64(&resolved, "protocol")?.unwrap_or(2) {
         2 => RedisProtocol::Resp2,
         3 => RedisProtocol::Resp3,
         _ => return Err(PyValueError::new_err("unsupported Redis protocol version")),
@@ -274,7 +272,8 @@ fn project_redis(
         flush_size: backend.getattr("redis_flush_size")?.extract::<usize>()?,
         connection: RedisConnectionConfig {
             host: required_string(&resolved, "host")?,
-            port: required_u16(&resolved, "port")?,
+            port: u16::try_from(required_i64(&resolved, "port")?)
+                .map_err(|_| PyValueError::new_err("invalid Redis port"))?,
             database: optional_i64(&resolved, "db")?.unwrap_or(0),
             username: optional_dict_string(&resolved, "username")?,
             password: optional_dict_string(&resolved, "password")?,
@@ -320,14 +319,20 @@ fn certificate_requirement(values: &Bound<'_, PyDict>) -> PyResult<CertificateRe
             )),
         };
     }
-    match value.str()?.to_str()?.to_ascii_lowercase().as_str() {
-        "none" | "cert_none" => Ok(CertificateRequirement::None),
-        "optional" | "cert_optional" => Ok(CertificateRequirement::Optional),
-        "required" | "cert_required" => Ok(CertificateRequirement::Required),
-        _ => Err(PyValueError::new_err(
-            "invalid Redis TLS certificate requirement",
-        )),
+    let text = value.str()?;
+    let text = text.to_str()?;
+    if text.eq_ignore_ascii_case("none") || text.eq_ignore_ascii_case("cert_none") {
+        return Ok(CertificateRequirement::None);
     }
+    if text.eq_ignore_ascii_case("optional") || text.eq_ignore_ascii_case("cert_optional") {
+        return Ok(CertificateRequirement::Optional);
+    }
+    if text.eq_ignore_ascii_case("required") || text.eq_ignore_ascii_case("cert_required") {
+        return Ok(CertificateRequirement::Required);
+    }
+    Err(PyValueError::new_err(
+        "invalid Redis TLS certificate requirement",
+    ))
 }
 
 #[inline(never)]
@@ -386,11 +391,11 @@ fn required_string(values: &Bound<'_, PyDict>, key: &str) -> PyResult<String> {
 }
 
 #[inline(never)]
-fn required_u16(values: &Bound<'_, PyDict>, key: &str) -> PyResult<u16> {
+fn required_i64(values: &Bound<'_, PyDict>, key: &str) -> PyResult<i64> {
     values
         .get_item(key)?
         .ok_or_else(|| PyTypeError::new_err("Redis connection is incomplete"))?
-        .extract::<u16>()
+        .extract::<i64>()
 }
 
 #[inline(never)]
@@ -418,14 +423,6 @@ fn optional_i64(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<i64>> 
 }
 
 #[inline(never)]
-fn optional_u8(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<u8>> {
-    match values.get_item(key)? {
-        Some(value) => value.extract::<Option<u8>>(),
-        None => Ok(None),
-    }
-}
-
-#[inline(never)]
 fn optional_bool(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Option<bool>> {
     match values.get_item(key)? {
         Some(value) => value.extract::<Option<bool>>(),
@@ -442,10 +439,9 @@ fn optional_coerced_bool(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Opti
         return Ok(None);
     }
     if let Ok(text) = value.extract::<String>() {
-        return Ok(Some(matches!(
-            text.to_ascii_lowercase().as_str(),
-            "true" | "1" | "yes"
-        )));
+        return Ok(Some(
+            text == "1" || text.eq_ignore_ascii_case("true") || text.eq_ignore_ascii_case("yes"),
+        ));
     }
     value.extract::<bool>().map(Some)
 }
