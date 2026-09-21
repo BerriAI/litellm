@@ -6,7 +6,7 @@ import types
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final, NoReturn, TypeAlias, assert_never, overload
+from typing import Any, Final, NoReturn, TypeAlias, overload
 
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
@@ -34,7 +34,7 @@ from mcp.types import (
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, ConfigDict, Field, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
 from litellm.constants import (

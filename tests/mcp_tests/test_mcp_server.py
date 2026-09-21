@@ -922,7 +922,7 @@ async def test_get_tools_from_mcp_servers():
         )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
             mock_manager,
         ):
             # Test with specific servers
@@ -950,6 +950,7 @@ async def test_get_tools_from_mcp_servers():
                 extra_headers=None,
                 add_prefix=False,
                 raw_headers=None,
+                client_ip=None,
                 user_api_key_auth=None,
                 oauth2_headers=None,
             ):
@@ -966,7 +967,7 @@ async def test_get_tools_from_mcp_servers():
             )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
             mock_manager_2,
         ):
             result = await _get_tools_from_mcp_servers(
@@ -998,7 +999,7 @@ async def test_get_tools_from_mcp_servers():
         )
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
             mock_manager,
         ):
             with patch(
@@ -1981,6 +1982,7 @@ async def test_get_tools_for_single_server():
             extra_headers=None,
             add_prefix=False,
             raw_headers=None,
+            client_ip=None,
             user_api_key_auth=None,
         )
 
@@ -2076,7 +2078,7 @@ async def test_rest_listing_hides_key_grants_dispatch_would_refuse():
     with patch(
         "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
     ) as mock_manager, patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
     ) as mock_server_manager, patch.object(
         MCPRequestHandler,
         "get_allowed_tools_for_server",
@@ -2473,7 +2475,7 @@ async def test_filter_tools_by_allowed_tools_integration():
 
     # Mock the global MCP server manager
     with patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
     ) as mock_manager:
         # Mock manager methods
         mock_manager.get_allowed_mcp_servers = AsyncMock(
@@ -2588,7 +2590,7 @@ async def test_filter_tools_by_disallowed_tools_integration():
 
     # Mock the global MCP server manager
     with patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
     ) as mock_manager:
         # Mock manager methods
         mock_manager.get_allowed_mcp_servers = AsyncMock(
@@ -2689,7 +2691,7 @@ async def test_filter_tools_no_restrictions_integration():
 
     # Mock the global MCP server manager
     with patch(
-        "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager"
+        "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager"
     ) as mock_manager:
         # Mock manager methods
         mock_manager.get_allowed_mcp_servers = AsyncMock(
@@ -2970,10 +2972,10 @@ async def test_call_mcp_tool_uses_manager_permission_lookup():
             return_value=mock_server,
         ) as mock_get_server,
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry"
         ) as mock_tool_registry,
         patch(
-            "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+            "litellm.proxy._experimental.mcp_server.operations._handle_managed_mcp_tool",
             new_callable=AsyncMock,
         ) as mock_handle_managed,
         patch(
@@ -3046,10 +3048,10 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
             return_value=mock_server,
         ) as mock_get_server,
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_tool_registry"
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_tool_registry"
         ) as mock_tool_registry,
         patch(
-            "litellm.proxy._experimental.mcp_server.server._handle_managed_mcp_tool",
+            "litellm.proxy._experimental.mcp_server.operations._handle_managed_mcp_tool",
             new_callable=AsyncMock,
         ) as mock_handle_managed,
         patch(
