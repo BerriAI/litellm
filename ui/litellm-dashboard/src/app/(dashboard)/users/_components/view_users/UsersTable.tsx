@@ -16,6 +16,7 @@ import {
   DataTableFilterDrawer,
   DataTableFilterField,
   DataTableToolbar,
+  usePersistedColumnVisibility,
 } from "@/components/shared/DataTable";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Input } from "@/components/ui/input";
@@ -31,6 +32,7 @@ interface UsersTableProps {
   data: UserInfo[];
   rowCount: number;
   isLoading: boolean;
+  isError?: boolean;
   possibleUIRoles: Record<string, Record<string, string>> | null;
   teams: UsersTableTeamOption[] | null;
   sorting: SortingState;
@@ -72,6 +74,7 @@ export function UsersTable({
   data,
   rowCount,
   isLoading,
+  isError = false,
   possibleUIRoles,
   teams,
   sorting,
@@ -90,6 +93,7 @@ export function UsersTable({
   onResetPassword,
 }: UsersTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const { columnVisibility, onColumnVisibilityChange } = usePersistedColumnVisibility("users");
 
   const columns = useMemo(() => {
     const columnDeps = {
@@ -146,9 +150,12 @@ export function UsersTable({
       filterMode="server"
       columnFilters={columnFilters}
       onColumnFiltersChange={onColumnFiltersChange}
+      columnVisibility={columnVisibility}
+      onColumnVisibilityChange={onColumnVisibilityChange}
       rowSelection={rowSelection}
       onRowSelectionChange={onRowSelectionChange}
       isLoading={isLoading}
+      isError={isError}
       loadingMessage="Loading users…"
       noDataMessage={<EmptyState />}
       size="compact"

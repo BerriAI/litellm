@@ -3,7 +3,7 @@ import type { PaginationState, RowSelectionState, SortingState } from "@tanstack
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
-import { describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { UserInfo } from "@/components/networking";
 
@@ -252,6 +252,40 @@ describe("UsersTable", () => {
       await user.click(screen.getByTestId("datatable-select-row-user-1"));
 
       expect(screen.getByTestId("datatable-select-all")).toBePartiallyChecked();
+    });
+  });
+
+  describe("column visibility", () => {
+    const storageKey = "litellm_table_columns_users";
+    const headerRow = () => screen.getAllByRole("row")[0];
+
+    afterEach(() => localStorage.removeItem(storageKey));
+
+    it("remembers a hidden column across remounts under the users table key", async () => {
+      const user = userEvent.setup();
+      const { unmount } = render(<Harness />);
+      expect(headerRow()).toHaveTextContent("SSO ID");
+
+      await user.click(screen.getByTestId("view-options-trigger"));
+      await user.click(await screen.findByTestId("view-option-sso_user_id"));
+
+      expect(headerRow()).not.toHaveTextContent("SSO ID");
+      expect(JSON.parse(localStorage.getItem(storageKey) ?? "null")).toEqual({ sso_user_id: false });
+      unmount();
+
+      render(<Harness />);
+      expect(headerRow()).not.toHaveTextContent("SSO ID");
+      expect(headerRow()).toHaveTextContent("Email");
+    });
+
+    it("starts with the columns a previous visit hid", () => {
+      localStorage.setItem(storageKey, JSON.stringify({ user_alias: false, spend: false }));
+
+      render(<Harness />);
+
+      expect(headerRow()).not.toHaveTextContent("User Alias");
+      expect(headerRow()).not.toHaveTextContent("Spend (USD)");
+      expect(headerRow()).toHaveTextContent("Budget (USD)");
     });
   });
 

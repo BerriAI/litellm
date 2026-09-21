@@ -800,6 +800,63 @@ describe("CreateKey", () => {
 
       expect((await createdPayload()).key_type).toBe("management");
     });
+
+    it("reports the auto-open once and keeps the prefilled modal after the deep link props are cleared", async () => {
+      const onAutoOpened = vi.fn();
+      const { rerender } = renderCreateKey({
+        autoOpenCreate: true,
+        prefillData: { key_alias: "prefilled-key" },
+        onAutoOpened,
+      });
+
+      expect(await screen.findByLabelText(/Key Name/)).toHaveValue("prefilled-key");
+      expect(onAutoOpened).toHaveBeenCalledTimes(1);
+
+      rerender(<CreateKey team={null} teams={[]} data={[]} addKey={vi.fn()} onAutoOpened={onAutoOpened} />);
+
+      expect(screen.getByLabelText(/Key Name/)).toHaveValue("prefilled-key");
+      expect(onAutoOpened).toHaveBeenCalledTimes(1);
+    });
+
+    it("still prefills models when the deep link props are cleared before the model list arrives", async () => {
+      const models = Promise.withResolvers<{ data: { id: string }[] }>();
+      vi.mocked(modelAvailableCall).mockReturnValue(models.promise);
+      const onAutoOpened = vi.fn();
+      const { rerender } = renderCreateKey({
+        autoOpenCreate: true,
+        prefillData: { models: ["gpt-4"] },
+        onAutoOpened,
+      });
+
+      await screen.findByLabelText(/Key Name/);
+      expect(onAutoOpened).toHaveBeenCalledTimes(1);
+      rerender(<CreateKey team={null} teams={[]} data={[]} addKey={vi.fn()} onAutoOpened={onAutoOpened} />);
+      expect(screen.queryByLabelText("gpt-4")).not.toBeInTheDocument();
+
+      await act(async () => models.resolve({ data: [{ id: "gpt-4" }] }));
+
+      expect(await screen.findByLabelText("gpt-4", {}, { timeout: 5000 })).toBeInTheDocument();
+    });
+
+    it("does not report an auto-open for a role without write access", async () => {
+      state.authorized = { ...state.authorized, userRole: "Admin Viewer" };
+      const onAutoOpened = vi.fn();
+      renderCreateKey({ autoOpenCreate: true, prefillData: { key_alias: "prefilled-key" }, onAutoOpened });
+
+      await act(async () => {});
+      expect(screen.queryByTestId("create-key-button")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/Key Name/)).not.toBeInTheDocument();
+      expect(onAutoOpened).not.toHaveBeenCalled();
+    });
+
+    it("does not report an auto-open without the create flag", async () => {
+      const onAutoOpened = vi.fn();
+      renderCreateKey({ prefillData: { key_alias: "prefilled-key" }, onAutoOpened });
+
+      expect(await screen.findByTestId("create-key-button")).toBeInTheDocument();
+      expect(screen.queryByLabelText(/Key Name/)).not.toBeInTheDocument();
+      expect(onAutoOpened).not.toHaveBeenCalled();
+    });
   });
 
   describe("models dropdown team gating", () => {
