@@ -1,5 +1,7 @@
 """Regression tests for https://github.com/BerriAI/litellm/issues/42185
 
+Lives under litellm_core_utils so the core-utils CI shard collects it (misc currently lists missing paths and collects zero tests).
+
 POST /v1/images/edits without a multipart `image` used to TypeError inside
 aimage_edit (required positional arg) and surface as HTTP 500. A missing client
 field must be BadRequestError 400.
