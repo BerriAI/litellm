@@ -59,6 +59,34 @@ pub(super) struct FacadeGuard {
 }
 
 impl ObjectGuard {
+    fn class_behaviors(class: &Bound<'_, PyType>) -> PyResult<Vec<(String, Py<PyAny>)>> {
+        let py = class.py();
+        let builtins = py.import("builtins")?;
+        let property_type = builtins.getattr("property")?;
+        let staticmethod_type = builtins.getattr("staticmethod")?;
+        let classmethod_type = builtins.getattr("classmethod")?;
+        class
+            .getattr("__dict__")?
+            .call_method0("items")?
+            .try_iter()?
+            .map(|item| {
+                let item = item?;
+                let (name, value): (String, Py<PyAny>) = item.extract()?;
+                let value_bound = value.bind(py);
+                let is_behavior = value_bound.is_callable()
+                    || value_bound.is_instance(&property_type)?
+                    || value_bound.is_instance(&staticmethod_type)?
+                    || value_bound.is_instance(&classmethod_type)?;
+                Ok(is_behavior.then_some((name, value)))
+            })
+            .filter_map(|result| match result {
+                Ok(Some(attribute)) => Some(Ok(attribute)),
+                Ok(None) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect()
+    }
+
     fn capture(
         py: Python<'_>,
         object: &Bound<'_, PyAny>,
@@ -71,12 +99,7 @@ impl ObjectGuard {
             .iter()
             .map(|class| {
                 let class = class.cast_into::<PyType>()?;
-                let attributes = class
-                    .getattr("__dict__")?
-                    .call_method0("items")?
-                    .try_iter()?
-                    .map(|item| item?.extract::<(String, Py<PyAny>)>())
-                    .collect::<PyResult<Vec<_>>>()?;
+                let attributes = Self::class_behaviors(&class)?;
                 Ok(ClassGuard {
                     class: class.unbind(),
                     attributes,
@@ -129,15 +152,21 @@ impl ObjectGuard {
         }
         let instance = object.getattr("__dict__")?.cast_into::<PyDict>()?;
         for (class, expected) in mro.iter().zip(&self.classes) {
+            let class = class.cast_into::<PyType>()?;
             if !class.is(expected.class.bind(py)) {
                 return Ok(false);
             }
-            let attributes = class.getattr("__dict__")?;
-            if attributes.len()? != expected.attributes.len() {
+            let attributes = Self::class_behaviors(&class)?;
+            if attributes.len() != expected.attributes.len() {
                 return Ok(false);
             }
-            for (name, value) in &expected.attributes {
-                if instance.contains(name)? || !attributes.get_item(name)?.is(value.bind(py)) {
+            for ((name, value), (expected_name, expected_value)) in
+                attributes.iter().zip(&expected.attributes)
+            {
+                if name != expected_name
+                    || instance.contains(name)?
+                    || !value.bind(py).is(expected_value.bind(py))
+                {
                     return Ok(false);
                 }
             }
@@ -341,4 +370,52 @@ pub(super) fn resolve(
         return Ok(None);
     }
     handle.service().map(Some)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ObjectGuard;
+    use pyo3::{prelude::*, types::PyDict};
+
+    #[test]
+    fn class_data_shadowing_is_ignored_but_method_mutations_are_rejected() {
+        Python::initialize();
+        Python::attach(|py| {
+            let namespace = PyDict::new(py);
+            py.run(
+                c"class Example:\n    data = 1\n    def method(self):\n        return 1\nobject = Example()\nobject.data = 2",
+                None,
+                Some(&namespace),
+            )
+            .unwrap();
+            let object = namespace.get_item("object").unwrap().unwrap();
+            let guard = ObjectGuard::capture(py, &object, &[]).unwrap();
+
+            assert!(guard.matches(py, &object).unwrap());
+
+            py.run(c"object.method = lambda: 2", None, Some(&namespace))
+                .unwrap();
+            assert!(!guard.matches(py, &object).unwrap());
+        });
+    }
+
+    #[test]
+    fn class_method_replacement_is_rejected() {
+        Python::initialize();
+        Python::attach(|py| {
+            let namespace = PyDict::new(py);
+            py.run(
+                c"class Example:\n    def method(self):\n        return 1\nobject = Example()",
+                None,
+                Some(&namespace),
+            )
+            .unwrap();
+            let object = namespace.get_item("object").unwrap().unwrap();
+            let guard = ObjectGuard::capture(py, &object, &[]).unwrap();
+
+            py.run(c"Example.method = lambda self: 2", None, Some(&namespace))
+                .unwrap();
+            assert!(!guard.matches(py, &object).unwrap());
+        });
+    }
 }
