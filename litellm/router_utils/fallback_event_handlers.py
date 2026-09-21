@@ -307,13 +307,19 @@ def fallbacks_disabled_for_request(kwargs: Mapping[str, Any]) -> bool:
 def fallback_lookup_groups(kwargs: Mapping[str, object], model_group: str | None) -> tuple[str, ...]:
     """
     Ordered keys for resolving a fallback chain: the tier a pre-routing hook selected wins,
-    then the routed group, then the requested group. The routed group differs when Claude Code
-    session affinity remaps a subagent's concrete model to its bound router.
+    then the routed group, then the requested group, then the group the request was
+    originally for. The routed group differs when Claude Code session affinity remaps a
+    subagent's concrete model to its bound router. The original group differs on a fallback
+    hop that fails after `run_async_fallback` already returned its stream: the hop has no
+    chain of its own, so it resumes the original group's chain, and `attempted_targets` keeps
+    the entries already tried from being repeated.
     """
     metadata: Final = kwargs.get(get_metadata_variable_name_from_kwargs(kwargs))
     routed_group_value: Final = metadata.get("model_group") if isinstance(metadata, Mapping) else None
     routed_group: Final = routed_group_value if isinstance(routed_group_value, str) else None
-    ordered: Final = (get_pre_routing_selection(kwargs), routed_group, model_group)
+    original_group_value: Final = metadata.get("original_model_group") if isinstance(metadata, Mapping) else None
+    original_group: Final = original_group_value if isinstance(original_group_value, str) else None
+    ordered: Final = (get_pre_routing_selection(kwargs), routed_group, model_group, original_group)
     return tuple(dict.fromkeys(group for group in ordered if group))
 
 
