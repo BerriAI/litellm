@@ -71,6 +71,135 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 
 
+@pytest.mark.asyncio
+async def test_manager_sampling_preserves_explicit_headers_without_ambient_context():
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
+
+    caller = UserAPIKeyAuth(user_id="sampling-caller")
+    upstream = MCPServer(
+        server_id="sampling-context",
+        name="sampling_context",
+        url="https://example.invalid/mcp",
+        transport=MCPTransport.http,
+        allow_sampling=True,
+    )
+    sampling = AsyncMock()
+    client = MagicMock()
+    client.call_tool = AsyncMock(return_value=CallToolResult(content=[]))
+    assert legacy_server.get_active_auth_context() is None
+    with (
+        patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient", return_value=client) as factory,
+        patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", sampling),
+    ):
+        await MCPServerManager()._call_regular_mcp_tool(
+            mcp_server=upstream,
+            original_tool_name="probe",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={"x-test-caller": "sampling-caller"},
+            proxy_logging_obj=None,
+            user_api_key_auth=caller,
+        )
+        callback = factory.call_args.kwargs["sampling_callback"]
+        await callback(None, None)
+    assert sampling.await_args.kwargs["user_api_key_auth"].user_id == "sampling-caller"
+    assert sampling.await_args.kwargs["raw_headers"] == {"x-test-caller": "sampling-caller"}
+
+
+
+@pytest.mark.asyncio
+async def test_sampling_callback_keeps_creation_context_after_caller_switch():
+    from mcp.server.auth.middleware.auth_context import auth_context_var
+
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_sampling_callback
+
+    token = auth_context_var.set(None)
+    recorder = AsyncMock()
+    try:
+        original = UserAPIKeyAuth(user_id="alpha", models=["alpha-model"])
+        original.mcp_admitted_user_subject = True
+        headers = {"x-caller": "alpha"}
+        legacy_server.set_auth_context(original, raw_headers=headers, client_ip="192.0.2.1")
+        callback = _create_sampling_callback()
+        original.models.append("bravo-model")
+        headers["x-caller"] = "bravo"
+        legacy_server.set_auth_context(UserAPIKeyAuth(user_id="bravo"), raw_headers={"x-caller": "bravo"})
+        with patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", recorder):
+            await callback(None, None)
+        observed = recorder.await_args.kwargs
+        assert observed["user_api_key_auth"].user_id == "alpha"
+        assert observed["user_api_key_auth"].models == ["alpha-model"]
+        assert observed["user_api_key_auth"].mcp_admitted_user_subject is True
+        assert observed["raw_headers"] == {"x-caller": "alpha"}
+        assert observed["client_ip"] == "192.0.2.1"
+    finally:
+        auth_context_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_elicitation_callback_keeps_initiating_session():
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_elicitation_callback
+
+    initiating = MagicMock()
+    replacement = MagicMock()
+    recorder = AsyncMock()
+    token = legacy_server.active_mcp_session_var.set(initiating)
+    try:
+        callback = _create_elicitation_callback()
+        legacy_server.active_mcp_session_var.set(replacement)
+        with patch("litellm.proxy._experimental.mcp_server.elicitation_handler.handle_elicitation_request", recorder):
+            await callback(None, None)
+        assert recorder.await_args.kwargs["downstream_session"] is initiating
+        assert recorder.await_args.kwargs["downstream_capabilities"] is initiating.capabilities
+    finally:
+        legacy_server.active_mcp_session_var.reset(token)
+
+
+@pytest.mark.asyncio
+async def test_sampling_callbacks_isolate_callers_and_cancellation():
+    from mcp.types import ErrorData
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_sampling_callback
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    observed = {}
+
+    async def record_sampling(*, user_api_key_auth, raw_headers, **kwargs):
+        label = user_api_key_auth.user_id
+        if label == "cancelled":
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+        await asyncio.sleep(0)
+        observed[label] = raw_headers["x-caller"]
+        return ErrorData(code=-1, message=label)
+
+    callbacks = tuple(
+        _create_sampling_callback(UserAPIKeyAuth(user_id=label), raw_headers={"x-caller": label})
+        for label in ("alpha", "bravo", "cancelled")
+    )
+    with patch(
+        "litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", record_sampling
+    ):
+        tasks = tuple(asyncio.create_task(callback(None, None)) for callback in callbacks)
+        await asyncio.wait_for(started.wait(), timeout=2)
+        tasks[2].cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    assert observed == {"alpha": "alpha", "bravo": "bravo"}
+    assert [result.message for result in results[:2]] == ["alpha", "bravo"]
+    assert isinstance(results[2], asyncio.CancelledError)
+    assert cancelled.is_set()
+
+
 def _reload_mcp_manager_module():
     utils_module = sys.modules["litellm.proxy._experimental.mcp_server.utils"]
     manager_module = sys.modules["litellm.proxy._experimental.mcp_server.mcp_server_manager"]
@@ -82,6 +211,9 @@ def _reload_mcp_manager_module():
     server_module = sys.modules.get("litellm.proxy._experimental.mcp_server.server")
     if server_module is not None and hasattr(server_module, "global_mcp_server_manager"):
         server_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
+    operations_module = sys.modules.get("litellm.proxy._experimental.mcp_server.operations")
+    if operations_module is not None:
+        operations_module.global_mcp_server_manager = reloaded.global_mcp_server_manager
     return reloaded
 
 
@@ -3921,6 +4053,7 @@ class TestMCPServerManager:
             result = await manager.get_resource_templates_from_server(
                 server=server,
                 user_api_key_auth=None,
+                raw_headers=None,
                 mcp_auth_header="auth",
                 extra_headers=None,
                 add_prefix=False,
@@ -3933,6 +4066,8 @@ class TestMCPServerManager:
             stdio_env=None,
             subject_token=None,
             user_api_key_auth=None,
+            raw_headers=None,
+            client_ip=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
         assert result == expected_templates
@@ -5847,7 +5982,7 @@ class TestMCPServerManager:
         stored = {"Authorization": "Bearer stored-user-token"}
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.operations._get_user_oauth_extra_headers_from_db",
             new=AsyncMock(return_value=stored),
         ) as mock_lookup:
             result = await manager._resolve_oauth2_headers_for_tool_call(
@@ -5874,7 +6009,7 @@ class TestMCPServerManager:
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.operations._get_user_oauth_extra_headers_from_db",
             new=AsyncMock(return_value={"Authorization": "Bearer should-not-be-used"}),
         ) as mock_lookup:
             result = await manager._resolve_oauth2_headers_for_tool_call(
@@ -5900,7 +6035,7 @@ class TestMCPServerManager:
         user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.operations._get_user_oauth_extra_headers_from_db",
             new=AsyncMock(side_effect=RuntimeError("redis down")),
         ):
             result = await manager._resolve_oauth2_headers_for_tool_call(
@@ -6056,7 +6191,7 @@ class TestMCPServerManager:
         user_auth = UserAPIKeyAuth(api_key="sk-test")
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.operations._get_user_oauth_extra_headers_from_db",
             new=AsyncMock(return_value={"Authorization": "Bearer x"}),
         ) as mock_lookup:
             result = await manager._resolve_oauth2_headers_for_tool_call(
@@ -6860,7 +6995,8 @@ class TestMCPServerManager:
         }
         user_api_key_auth = UserAPIKeyAuth(api_key="sk-test", user_id="user-123")
 
-        token = _mcp_active_toolset_id.set("toolset-abc")
+        user_api_key_auth.mcp_toolset_id = "toolset-abc"
+        token = _mcp_active_toolset_id.set("unrelated-ambient-toolset")
         try:
             with (
                 patch.object(proxy_server_module, "user_api_key_cache", cache),
@@ -14075,3 +14211,31 @@ async def test_request_selected_during_guardrail_runs_concurrently_with_tool(mon
     assert guardrail_started.is_set() is selected
     assert result.is_error is False
     assert result.content[0].text == "executed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_caller", [True, False])
+async def test_client_sampling_does_not_fill_explicit_context_from_another_ambient_caller(with_caller):
+    from mcp.server.auth.middleware.auth_context import auth_context_var
+    from litellm.proxy._experimental.mcp_server import server as legacy_server
+
+    upstream = MCPServer(server_id="explicit-empty", name="explicit_empty", url="https://example.invalid/mcp", transport=MCPTransport.http, allow_sampling=True)
+    token = auth_context_var.set(None)
+    sampling = AsyncMock()
+    try:
+        legacy_server.set_auth_context(UserAPIKeyAuth(user_id="unrelated"), raw_headers={"authorization": "unrelated-credential"}, client_ip="192.0.2.99")
+        with (
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as factory,
+            patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", sampling),
+        ):
+            await MCPServerManager()._create_mcp_client(upstream, user_api_key_auth=UserAPIKeyAuth(user_id="explicit") if with_caller else None)
+            await factory.call_args.kwargs["sampling_callback"](None, None)
+        captured = sampling.await_args.kwargs
+        if with_caller:
+            assert captured["user_api_key_auth"].user_id == "explicit"
+        else:
+            assert captured["user_api_key_auth"] is None
+        assert captured["raw_headers"] is None
+        assert captured["client_ip"] is None
+    finally:
+        auth_context_var.reset(token)

@@ -564,7 +564,7 @@ class TestMCPActiveToolsetContextVar:
                 MagicMock(get_mcp_client_ip=MagicMock(return_value="127.0.0.1")),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
                 MagicMock(get_mcp_server_by_name=MagicMock(return_value=None)),
             ),
             patch(
