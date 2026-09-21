@@ -2,6 +2,13 @@ use std::future::Future;
 
 use crate::{BaseCache, CacheKwargs, Error};
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct IncrementOperation {
+    pub key: String,
+    pub amount: f64,
+    pub ttl: Option<std::time::Duration>,
+}
+
 pub trait CounterCache: BaseCache<Value = f64> {
     fn increment_cache(&self, key: &str, amount: f64, kwargs: CacheKwargs) -> Result<f64, Error>;
 

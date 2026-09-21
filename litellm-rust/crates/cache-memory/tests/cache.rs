@@ -8,7 +8,7 @@ use std::{
 
 use litellm_cache::{
     BaseCache, CacheBackend, CacheConnectionStatus, CacheKwargs, ClaimCache, CounterCache, Error,
-    get_cache, set_cache,
+    IncrementOperation, get_cache, set_cache,
 };
 use litellm_cache_memory::{CacheWrite, InMemoryCache};
 use rstest::{fixture, rstest};
@@ -304,4 +304,47 @@ fn disabled_cache_does_not_retain_claims_or_counters() {
         2.0
     );
     assert_eq!(counters.get_cache("key").unwrap(), None);
+}
+
+#[tokio::test]
+async fn ttl_and_oldest_key_operations_use_the_stored_expirations() {
+    let clock = Arc::new(AtomicU64::new(100));
+    let cache = cache(clock, 3);
+    cache
+        .set_cache("later", "2".into(), Some(Duration::from_secs(20)))
+        .unwrap();
+    cache
+        .set_cache("first", "1".into(), Some(Duration::from_secs(10)))
+        .unwrap();
+
+    assert_eq!(
+        cache.async_get_ttl("first").await.unwrap(),
+        Some(Duration::from_secs(110))
+    );
+    assert_eq!(cache.async_get_oldest_n_keys(1).await.unwrap(), ["first"]);
+    assert_eq!(cache.async_get_ttl("missing").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn increment_pipeline_preserves_operation_order() {
+    let cache = InMemoryCache::<f64>::new(Some(3), None);
+    assert_eq!(
+        cache
+            .async_increment_pipeline(vec![
+                IncrementOperation {
+                    key: "a".into(),
+                    amount: 1.0,
+                    ttl: Some(Duration::from_secs(10)),
+                },
+                IncrementOperation {
+                    key: "a".into(),
+                    amount: 2.0,
+                    ttl: Some(Duration::from_secs(20)),
+                },
+            ])
+            .await
+            .unwrap(),
+        [1.0, 3.0]
+    );
+    assert_eq!(cache.get_cache("a").unwrap(), Some(3.0));
 }

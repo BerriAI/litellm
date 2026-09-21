@@ -9,6 +9,10 @@ use litellm_cache::{
 };
 use redis::Commands;
 
+mod operations;
+
+pub use operations::{RedisArg, RedisLpopOperation, RedisLpopResult, RedisRpushOperation};
+
 const DEFAULT_TTL: Duration = Duration::from_secs(600);
 const REDIS_TIMEOUT: Duration = Duration::from_secs(5);
 const REDIS_POOL_SIZE: u32 = 16;

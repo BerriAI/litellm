@@ -2,9 +2,11 @@ use std::time::Duration;
 
 use litellm_cache::{
     BaseCache, BatchEntry, CacheCodec, CacheConnectionStatus, CacheKwargs, ClaimCache,
-    CounterCache, Error, JsonCodec, get_cache, set_cache,
+    CounterCache, Error, IncrementOperation, JsonCodec, get_cache, set_cache,
 };
-use litellm_cache_redis::RedisCache;
+use litellm_cache_redis::{
+    RedisArg, RedisCache, RedisLpopOperation, RedisLpopResult, RedisRpushOperation,
+};
 use redis_test::{MockCmd, MockRedisConnection};
 
 struct TaggedByteCodec(u8);
@@ -258,6 +260,307 @@ async fn async_flush_deletes_each_scan_page_separately() {
         .with_namespace(Some("team".into()));
 
     cache.async_flush_cache().await.unwrap();
+}
+
+#[tokio::test]
+async fn direct_redis_operations_preserve_namespace_values_and_missing_ttls() {
+    let mut sadd_pipeline = redis::pipe();
+    sadd_pipeline
+        .cmd("SADD")
+        .arg("team:members")
+        .arg("a")
+        .arg("b")
+        .cmd("EXPIRE")
+        .arg("team:members")
+        .arg(600u64)
+        .ignore();
+    let connection = MockRedisConnection::new([
+        MockCmd::new(
+            redis::cmd("MGET").arg("team:count").arg("team:missing"),
+            Ok(redis_test::redis_value!(["7", nil])),
+        ),
+        MockCmd::new(
+            redis::cmd("MGET").arg("team:count").arg("team:missing"),
+            Ok(redis_test::redis_value!(["7", nil])),
+        ),
+        MockCmd::new(redis::cmd("PING"), Ok("PONG")),
+        MockCmd::new(redis::cmd("PING"), Ok("PONG")),
+        MockCmd::new(redis::cmd("TTL").arg("team:missing"), Ok(-2i64)),
+        MockCmd::new(
+            redis::cmd("SCAN")
+                .cursor_arg(0)
+                .arg("MATCH")
+                .arg("team:job-*")
+                .arg("COUNT")
+                .arg(25),
+            Ok(redis_test::redis_value!(["4", ["team:job-a"]])),
+        ),
+        MockCmd::new(
+            redis::cmd("SCAN")
+                .cursor_arg(4)
+                .arg("MATCH")
+                .arg("team:job-*")
+                .arg("COUNT")
+                .arg(25),
+            Ok(redis_test::redis_value!(["0", ["team:job-b"]])),
+        ),
+        MockCmd::new(
+            redis::cmd("DEL").arg("team:job-a").arg("team:job-b"),
+            Ok(2u32),
+        ),
+        MockCmd::with_values(
+            sadd_pipeline,
+            Ok(vec![redis::Value::Int(2), redis::Value::Int(1)]),
+        ),
+        MockCmd::new(
+            redis::cmd("RPUSH").arg("team:queue").arg("a").arg("b"),
+            Ok(2u32),
+        ),
+        MockCmd::new(
+            redis::cmd("LPOP").arg("team:queue").arg(2usize),
+            Ok(redis_test::redis_value!(["a", "b"])),
+        ),
+        MockCmd::new(
+            redis::cmd("EVAL")
+                .arg("return KEYS[1]")
+                .arg(1usize)
+                .arg("team:key"),
+            Ok("team:key"),
+        ),
+        MockCmd::new(redis::cmd("CLIENT").arg("LIST"), Ok("id=1")),
+        MockCmd::new(redis::cmd("INFO"), Ok("redis_version:7")),
+        MockCmd::new(redis::cmd("FLUSHALL"), Ok("OK")),
+    ])
+    .assert_all_commands_consumed();
+    let cache = RedisCache::with_connection(connection, None, JsonCodec::<String>::new())
+        .with_namespace(Some("team".into()));
+
+    assert_eq!(
+        cache
+            .batch_get_counts(&["count".into(), "missing".into()])
+            .unwrap(),
+        [Some(7), None]
+    );
+    assert_eq!(
+        cache
+            .async_batch_get_counts(vec!["count".into(), "missing".into()])
+            .await
+            .unwrap(),
+        [Some(7), None]
+    );
+    assert!(cache.sync_ping().unwrap());
+    assert!(cache.ping().await.unwrap());
+    assert_eq!(cache.async_get_ttl("missing").await.unwrap(), None);
+    assert_eq!(
+        cache.async_scan_iter("job-", 25).await.unwrap(),
+        ["team:job-a", "team:job-b"]
+    );
+    assert_eq!(
+        cache
+            .delete_cache_keys(vec!["job-a".into(), "job-b".into()])
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        cache
+            .async_set_cache_sadd("members", vec!["a".into(), "b".into()], None)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        cache
+            .async_rpush("queue", vec!["a".into(), "b".into()])
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        cache.async_lpop("queue", Some(2)).await.unwrap(),
+        RedisLpopResult::Values(vec![b"a".to_vec(), b"b".to_vec()])
+    );
+    assert_eq!(
+        cache
+            .async_eval("return KEYS[1]".into(), vec!["key".into()], Vec::new())
+            .await
+            .unwrap(),
+        redis::Value::BulkString(b"team:key".to_vec())
+    );
+    assert_eq!(cache.client_list().unwrap(), "id=1");
+    assert_eq!(cache.info().unwrap(), "redis_version:7");
+    cache.flushall().unwrap();
+}
+
+#[tokio::test]
+async fn direct_redis_pipelines_preserve_operation_order() {
+    let mut rpush_pipeline = redis::pipe();
+    rpush_pipeline
+        .cmd("RPUSH")
+        .arg("team:a")
+        .arg("one")
+        .cmd("RPUSH")
+        .arg("team:b")
+        .arg("two");
+    let mut lpop_pipeline = redis::pipe();
+    lpop_pipeline
+        .cmd("LPOP")
+        .arg("team:a")
+        .arg(2usize)
+        .cmd("LPOP")
+        .arg("team:b");
+    let connection = MockRedisConnection::new([
+        MockCmd::with_values(
+            rpush_pipeline,
+            Ok(vec![redis::Value::Int(1), redis::Value::Int(2)]),
+        ),
+        MockCmd::with_values(
+            lpop_pipeline,
+            Ok(vec![redis_test::redis_value!(["one"]), redis::Value::Nil]),
+        ),
+    ])
+    .assert_all_commands_consumed();
+    let queue = RedisCache::with_connection(connection, None, JsonCodec::<String>::new())
+        .with_namespace(Some("team".into()));
+
+    assert_eq!(
+        queue
+            .async_rpush_pipeline(vec![
+                RedisRpushOperation {
+                    key: "a".into(),
+                    values: vec![RedisArg::from("one")],
+                },
+                RedisRpushOperation {
+                    key: "b".into(),
+                    values: vec![RedisArg::from("two")],
+                },
+            ])
+            .await
+            .unwrap(),
+        [1, 2]
+    );
+    assert_eq!(
+        queue
+            .async_lpop_pipeline(vec![
+                RedisLpopOperation {
+                    key: "a".into(),
+                    count: Some(2),
+                },
+                RedisLpopOperation {
+                    key: "b".into(),
+                    count: None,
+                },
+            ])
+            .await
+            .unwrap(),
+        [
+            RedisLpopResult::Values(vec![b"one".to_vec()]),
+            RedisLpopResult::Missing,
+        ]
+    );
+
+    let mut increment_pipeline = redis::pipe();
+    increment_pipeline
+        .cmd("INCRBYFLOAT")
+        .arg("team:counter")
+        .arg(1.5f64)
+        .cmd("EXPIRE")
+        .arg("team:counter")
+        .arg(10u64)
+        .ignore()
+        .cmd("INCRBYFLOAT")
+        .arg("team:counter")
+        .arg(2.0f64);
+    let connection = MockRedisConnection::new([MockCmd::with_values(
+        increment_pipeline,
+        Ok(vec![
+            redis::Value::BulkString(b"1.5".to_vec()),
+            redis::Value::Int(1),
+            redis::Value::BulkString(b"3.5".to_vec()),
+        ]),
+    )])
+    .assert_all_commands_consumed();
+    let counters = RedisCache::with_connection(connection, None, JsonCodec::<f64>::new())
+        .with_namespace(Some("team".into()));
+    assert_eq!(
+        counters
+            .async_increment_pipeline(vec![
+                IncrementOperation {
+                    key: "counter".into(),
+                    amount: 1.5,
+                    ttl: Some(Duration::from_secs(10)),
+                },
+                IncrementOperation {
+                    key: "counter".into(),
+                    amount: 2.0,
+                    ttl: None,
+                },
+            ])
+            .await
+            .unwrap(),
+        [1.5, 3.5]
+    );
+}
+
+const INCREMENT_WITH_FLOOR_SCRIPT: &str = concat!(
+    "local count = redis.call('INCRBY', KEYS[1], ARGV[1]); ",
+    "if count < 0 then count = redis.call('INCRBY', KEYS[1], -count); end; ",
+    "if redis.call('TTL', KEYS[1]) < 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]); end; ",
+    "return count"
+);
+const SET_MAX_SCRIPT: &str = concat!(
+    "local current = redis.call('GET', KEYS[1]); ",
+    "if current == false or tonumber(current) < tonumber(ARGV[1]) then ",
+    "redis.call('SET', KEYS[1], ARGV[1]); ",
+    "if tonumber(ARGV[2]) > 0 then redis.call('EXPIRE', KEYS[1], ARGV[2]); end; ",
+    "return ARGV[1]; end; return current"
+);
+
+#[tokio::test]
+async fn counter_repairs_are_atomic_and_use_default_ttl() {
+    let floor = || {
+        redis::cmd("EVAL")
+            .arg(INCREMENT_WITH_FLOOR_SCRIPT)
+            .arg(1)
+            .arg("team:counter")
+            .arg(-2i64)
+            .arg(30u64)
+            .clone()
+    };
+    let connection = MockRedisConnection::new([
+        MockCmd::new(floor(), Ok(0i64)),
+        MockCmd::new(floor(), Ok(0i64)),
+        MockCmd::new(
+            redis::cmd("EVAL")
+                .arg(SET_MAX_SCRIPT)
+                .arg(1)
+                .arg("team:counter")
+                .arg(4.5f64)
+                .arg(600u64),
+            Ok("4.5"),
+        ),
+    ])
+    .assert_all_commands_consumed();
+    let cache = RedisCache::with_connection(connection, None, JsonCodec::<f64>::new())
+        .with_namespace(Some("team".into()));
+
+    assert_eq!(
+        cache
+            .increment_with_floor("counter", -2, Duration::from_secs(30))
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        cache
+            .async_increment_with_floor("counter", -2, Duration::from_secs(30))
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        cache.async_set_max("counter", 4.5, None).await.unwrap(),
+        4.5
+    );
 }
 
 const CLAIM_SCRIPT: &str = concat!(
