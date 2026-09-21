@@ -1,10 +1,12 @@
 use std::time::Duration;
 
+use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache::CacheType;
+use litellm_cache_s3::{S3CacheConfig, S3Endpoint};
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
+    exceptions::{PyAttributeError, PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyDict, PyString},
+    types::{PyAny, PyBool, PyDict, PyString},
 };
 
 use super::{native::NativeResponseCache, request::duration};
@@ -76,6 +78,7 @@ pub(super) struct RedisCacheConfig {
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
+    S3(Box<S3CacheConfig>),
 }
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
@@ -90,6 +93,9 @@ pub(super) enum UnsupportedCacheConfig {
     RedisCredentials,
     RedisConnection,
     RedisOption,
+    S3Client,
+    S3Credentials,
+    S3Option,
 }
 
 impl UnsupportedCacheConfig {
@@ -100,6 +106,9 @@ impl UnsupportedCacheConfig {
             Self::RedisCredentials => "native Redis credentials require Python",
             Self::RedisConnection => "native Redis connection type is not implemented",
             Self::RedisOption => "native Redis configuration requires Python",
+            Self::S3Client => "native S3 client type is not implemented",
+            Self::S3Credentials => "native S3 credentials require Python",
+            Self::S3Option => "native S3 configuration requires Python",
         }
     }
 }
@@ -142,10 +151,16 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::S3) => match project_s3(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::S3(Box::new(backend)),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
             Some(
                 CacheType::RedisSemantic
                 | CacheType::ValkeySemantic
-                | CacheType::S3
                 | CacheType::Disk
                 | CacheType::QdrantSemantic
                 | CacheType::AzureBlob
@@ -159,10 +174,11 @@ impl NativeCacheConfig {
 
     pub(super) fn service_mismatch(&self, service: &NativeResponseCache) -> Option<&'static str> {
         if service.default_ttl()
-            != Some(match &self.backend {
-                CacheBackendConfig::Memory(config) => config.default_ttl,
-                CacheBackendConfig::Redis(config) => config.default_ttl,
-            })
+            != match &self.backend {
+                CacheBackendConfig::Memory(config) => Some(config.default_ttl),
+                CacheBackendConfig::Redis(config) => Some(config.default_ttl),
+                CacheBackendConfig::S3(_) => None,
+            }
         {
             return Some("facade and native backend default TTLs must match");
         }
@@ -185,6 +201,18 @@ impl NativeCacheConfig {
             CacheBackendConfig::Redis(config) => (service.namespace()
                 != config.namespace.as_deref())
             .then_some("facade and native backend namespaces must match"),
+            CacheBackendConfig::S3(_) if service.kind() != "s3" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::S3(config) if service.bucket() != Some(config.bucket.as_str()) => {
+                Some("facade and native backend buckets must match")
+            }
+            CacheBackendConfig::S3(config)
+                if service.key_prefix() != Some(config.key_prefix.as_str()) =>
+            {
+                Some("facade and native backend key prefixes must match")
+            }
+            CacheBackendConfig::S3(_) => None,
         }
     }
 }
@@ -300,6 +328,77 @@ fn project_redis(
 }
 
 #[inline(never)]
+fn project_s3(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<S3CacheConfig, UnsupportedCacheConfig>> {
+    let client = backend.getattr("s3_client")?;
+    if !instance_class_is(&client, "botocore.client", "S3")? {
+        return Ok(Err(UnsupportedCacheConfig::S3Client));
+    }
+    let meta = client.getattr("meta")?;
+    let Some(region) = optional_string(meta.getattr("region_name")?)? else {
+        return Ok(Err(UnsupportedCacheConfig::S3Option));
+    };
+    let Some(endpoint_url) = optional_string(meta.getattr("endpoint_url")?)? else {
+        return Ok(Err(UnsupportedCacheConfig::S3Option));
+    };
+    let client_config = meta.getattr("config")?;
+    for name in ["s3", "proxies", "client_cert"] {
+        if optional_attribute(&client_config, name)?.is_some_and(|value| !value.is_none()) {
+            return Ok(Err(UnsupportedCacheConfig::S3Option));
+        }
+    }
+    let signature = match optional_attribute(&client_config, "signature_version")? {
+        Some(value) => value.extract::<Option<String>>()?,
+        None => None,
+    };
+    if signature.as_deref() != Some("s3v4") {
+        return Ok(Err(UnsupportedCacheConfig::S3Option));
+    }
+    let insecure = endpoint_url.starts_with("http://");
+    let verify = optional_attribute_chain(&client, &["_endpoint", "http_session", "_verify"])?;
+    let verified = verify
+        .and_then(|value| value.cast::<PyBool>().ok().map(|value| value.is_true()))
+        .unwrap_or(false);
+    if !verified && !insecure {
+        return Ok(Err(UnsupportedCacheConfig::S3Option));
+    }
+    let credentials = optional_attribute_chain(&client, &["_request_signer", "_credentials"])?
+        .ok_or(UnsupportedCacheConfig::S3Credentials);
+    let credentials = match credentials {
+        Ok(credentials) if !credentials.is_none() => credentials,
+        _ => return Ok(Err(UnsupportedCacheConfig::S3Credentials)),
+    };
+    let auth = if credentials.getattr("method")?.extract::<String>()?.as_str() == "explicit" {
+        AwsAuthConfig {
+            access_key_id: credentials
+                .getattr("access_key")?
+                .extract::<Option<String>>()?,
+            secret_access_key: credentials
+                .getattr("secret_key")?
+                .extract::<Option<String>>()?,
+            session_token: credentials.getattr("token")?.extract::<Option<String>>()?,
+            region_name: Some(region.clone()),
+            ..Default::default()
+        }
+    } else {
+        AwsAuthConfig {
+            region_name: Some(region.clone()),
+            ..Default::default()
+        }
+    };
+    let default_endpoint = endpoint_url == format!("https://s3.{region}.amazonaws.com")
+        || (region == "us-east-1" && endpoint_url == "https://s3.amazonaws.com");
+    Ok(Ok(S3CacheConfig {
+        bucket: backend.getattr("bucket_name")?.extract::<String>()?,
+        key_prefix: backend.getattr("key_prefix")?.extract::<String>()?,
+        region,
+        endpoint: (!default_endpoint).then_some(S3Endpoint { url: endpoint_url }),
+        auth,
+    }))
+}
+
+#[inline(never)]
 fn project_tls(values: &Bound<'_, PyDict>) -> PyResult<RedisTlsConfig> {
     Ok(RedisTlsConfig {
         certificate_requirement: certificate_requirement(values)?,
@@ -378,6 +477,33 @@ fn optional_attribute_string(value: &Bound<'_, PyAny>, name: &str) -> PyResult<O
         }
         Err(error) => Err(error),
     }
+}
+
+#[inline(never)]
+fn optional_attribute<'py>(
+    value: &Bound<'py, PyAny>,
+    name: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    match value.getattr(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.is_instance_of::<PyAttributeError>(value.py()) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+#[inline(never)]
+fn optional_attribute_chain<'py>(
+    value: &Bound<'py, PyAny>,
+    names: &[&str],
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let mut current = value.clone();
+    for name in names {
+        match optional_attribute(&current, name)? {
+            Some(next) => current = next,
+            None => return Ok(None),
+        }
+    }
+    Ok(Some(current))
 }
 
 #[inline(never)]
@@ -589,6 +715,147 @@ mod tests {
                 panic!("dynamic authentication must stay on Python");
             };
             assert_eq!(reason.message(), "native Redis credentials require Python");
+        });
+    }
+
+    fn s3_facade<'py>(py: Python<'py>, body: &str) -> Bound<'py, PyAny> {
+        let locals = PyDict::new(py);
+        py.run(
+            &CString::new(format!(
+                "from types import SimpleNamespace\n\
+                 S3Client = type('S3', (), {{'__module__': 'botocore.client'}})\n\
+                 client = S3Client()\n\
+                 client.meta = SimpleNamespace(region_name='us-east-1', endpoint_url='https://example.test', config=SimpleNamespace(s3=None, proxies=None, client_cert=None, signature_version='s3v4'))\n\
+                 client._endpoint = SimpleNamespace(http_session=SimpleNamespace(_verify=True))\n\
+                 client._request_signer = SimpleNamespace(_credentials=SimpleNamespace(method='explicit', access_key='key', secret_key='secret', token='token'))\n\
+                 backend = SimpleNamespace(bucket_name='bucket', key_prefix='team/', s3_client=client)\n\
+                 facade = SimpleNamespace(type='s3', mode='default-on', ttl=None, namespace=None, supported_call_types=[], redis_flush_size=None, semantic_cache_scope='key', cache=backend)\n\
+                 {body}"
+            ))
+            .unwrap(),
+            None,
+            Some(&locals),
+        )
+        .unwrap();
+        locals.get_item("facade").unwrap().unwrap()
+    }
+
+    #[test]
+    fn projects_s3_configuration_with_explicit_credentials_and_custom_endpoint() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = s3_facade(py, "");
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("S3 cache should be supported");
+            };
+            let CacheBackendConfig::S3(s3) = config.backend else {
+                panic!("expected S3 configuration");
+            };
+            assert_eq!(s3.bucket, "bucket");
+            assert_eq!(s3.key_prefix, "team/");
+            assert_eq!(s3.region, "us-east-1");
+            assert_eq!(
+                s3.endpoint.map(|endpoint| endpoint.url).as_deref(),
+                Some("https://example.test")
+            );
+            assert_eq!(s3.auth.access_key_id.as_deref(), Some("key"));
+            assert_eq!(s3.auth.secret_access_key.as_deref(), Some("secret"));
+            assert_eq!(s3.auth.session_token.as_deref(), Some("token"));
+            assert_eq!(s3.auth.region_name.as_deref(), Some("us-east-1"));
+        });
+    }
+
+    #[test]
+    fn default_s3_endpoint_projects_no_custom_endpoint() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = s3_facade(
+                py,
+                "facade.cache.s3_client.meta.endpoint_url = 'https://s3.us-east-1.amazonaws.com'",
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("S3 cache should be supported");
+            };
+            let CacheBackendConfig::S3(s3) = config.backend else {
+                panic!("expected S3 configuration");
+            };
+            assert!(s3.endpoint.is_none());
+        });
+    }
+
+    #[test]
+    fn non_sigv4_proxies_and_disabled_verification_stay_on_python() {
+        Python::initialize();
+        Python::attach(|py| {
+            for (body, message) in [
+                (
+                    "facade.cache.s3_client.meta.config.signature_version = 's3'",
+                    "native S3 configuration requires Python",
+                ),
+                (
+                    "facade.cache.s3_client.meta.config.proxies = {'https': 'proxy'}",
+                    "native S3 configuration requires Python",
+                ),
+                (
+                    "facade.cache.s3_client._endpoint.http_session._verify = False",
+                    "native S3 configuration requires Python",
+                ),
+                (
+                    "del facade.cache.s3_client._endpoint.http_session._verify",
+                    "native S3 configuration requires Python",
+                ),
+            ] {
+                let facade = s3_facade(py, body);
+                let CacheConfigProjection::Unsupported(reason) =
+                    NativeCacheConfig::project(&facade).unwrap()
+                else {
+                    panic!("{body} must stay on Python");
+                };
+                assert_eq!(reason.message(), message);
+            }
+            let facade = s3_facade(py, "facade.cache.s3_client = SimpleNamespace()");
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("non-botocore client must stay on Python");
+            };
+            assert_eq!(reason.message(), "native S3 client type is not implemented");
+            let facade = s3_facade(
+                py,
+                "facade.cache.s3_client._request_signer._credentials = None",
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("missing credentials must stay on Python");
+            };
+            assert_eq!(reason.message(), "native S3 credentials require Python");
+        });
+    }
+
+    #[test]
+    fn non_explicit_s3_credentials_use_the_default_chain() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = s3_facade(
+                py,
+                "facade.cache.s3_client._request_signer._credentials = SimpleNamespace(method='sso', access_key=None, secret_key=None, token=None)",
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("default-chain credentials should be supported");
+            };
+            let CacheBackendConfig::S3(s3) = config.backend else {
+                panic!("expected S3 configuration");
+            };
+            assert_eq!(s3.auth.access_key_id, None);
+            assert_eq!(s3.auth.secret_access_key, None);
+            assert_eq!(s3.auth.region_name.as_deref(), Some("us-east-1"));
         });
     }
 }

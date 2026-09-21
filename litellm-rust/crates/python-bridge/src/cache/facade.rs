@@ -32,10 +32,15 @@ struct RedisPoolGuard {
     max_connections: usize,
 }
 
+struct S3ClientGuard {
+    reference: Py<PyAny>,
+}
+
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
     redis_pool: Option<RedisPoolGuard>,
+    s3_client: Option<S3ClientGuard>,
 }
 
 impl ObjectGuard {
@@ -176,6 +181,22 @@ impl RedisPoolGuard {
     }
 }
 
+impl S3ClientGuard {
+    fn capture(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            reference: backend.getattr("s3_client")?.unbind(),
+        })
+    }
+
+    fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
+        Ok(self.reference.bind(py).is(&backend.getattr("s3_client")?))
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.reference)
+    }
+}
+
 impl FacadeGuard {
     pub(super) fn capture(
         py: Python<'_>,
@@ -192,6 +213,7 @@ impl FacadeGuard {
         let (module, name, cache_kind) = match kind {
             "memory" => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
             "redis" => ("litellm.caching.redis_cache", "RedisCache", "redis"),
+            "s3" => ("litellm.caching.s3_cache", "S3Cache", "s3"),
             _ => unreachable!(),
         };
         let backend = facade.getattr("cache")?;
@@ -235,10 +257,15 @@ impl FacadeGuard {
                     "max_size_per_item",
                     "redis_kwargs",
                     "redis_flush_size",
+                    "bucket_name",
+                    "key_prefix",
                 ],
             )?,
             redis_pool: (kind == "redis")
                 .then(|| RedisPoolGuard::capture(&backend))
+                .transpose()?,
+            s3_client: (kind == "s3")
+                .then(|| S3ClientGuard::capture(&backend))
                 .transpose()?,
         })
     }
@@ -252,15 +279,23 @@ impl FacadeGuard {
             return Ok(false);
         }
         match &self.redis_pool {
-            Some(guard) => guard.matches(py, &backend),
-            None => Ok(true),
+            Some(guard) if !guard.matches(py, &backend)? => return Ok(false),
+            _ => {}
         }
+        match &self.s3_client {
+            Some(guard) if !guard.matches(py, &backend)? => return Ok(false),
+            _ => {}
+        }
+        Ok(true)
     }
 
     pub(super) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.outer.traverse(&visit)?;
         self.backend.traverse(&visit)?;
         if let Some(guard) = &self.redis_pool {
+            guard.traverse(&visit)?;
+        }
+        if let Some(guard) = &self.s3_client {
             guard.traverse(&visit)?;
         }
         Ok(())
