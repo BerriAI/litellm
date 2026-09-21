@@ -406,7 +406,7 @@ class VectorStorePreCallHook(CustomLogger):
         request_data: dict,
         response_chunk: Any,
         call_type: CallTypes | None,
-    ) -> Any | None:
+    ) -> object | None:
         """
         Add search results to the final streaming chunk.
 
