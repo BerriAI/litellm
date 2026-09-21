@@ -73,6 +73,18 @@ impl CacheTestHandle {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (directory))]
+    fn disk(py: Python<'_>, directory: String) -> PyResult<Self> {
+        let service =
+            release_gil(py, move || NativeResponseCache::disk(&directory)).map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
     #[pyo3(signature = (account_url, container))]
     fn azure_blob(py: Python<'_>, account_url: String, container: String) -> PyResult<Self> {
         let service = run_sync_value(py, async move {

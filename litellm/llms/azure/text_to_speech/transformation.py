@@ -19,6 +19,7 @@ from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
@@ -67,15 +68,15 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
-        extra_headers: dict[str, Any] | None,
-        base_llm_http_handler: Any,
+        extra_headers: dict[str, object] | None,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        Coroutine[object, object, "HttpxBinaryResponseContent"],
     ]:
         """
         Dispatch method to handle Azure AVA TTS requests

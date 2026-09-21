@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -151,7 +151,7 @@ class _AnthropicToolResultBlock(TypedDict, total=False):
     content: ReadOnly[object]
 
 
-_ENUM_TYPE_CHECKS: Final[Mapping[str, Callable[[object], bool]]] = MappingProxyType(
+_ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingProxyType(
     {
         "null": lambda v: v is None,
         "boolean": lambda v: isinstance(v, bool),
@@ -164,7 +164,7 @@ _ENUM_TYPE_CHECKS: Final[Mapping[str, Callable[[object], bool]]] = MappingProxyT
 )
 
 
-def _enum_conflicts_with_declared_type(schema: Mapping[str, Any]) -> bool:
+def _enum_conflicts_with_declared_type(schema: Mapping[str, object]) -> bool:
     """Whether ``schema``'s ``enum`` cannot match its declared ``type``."""
     enum_values: Final = schema.get("enum")
     declared_type: Final = schema.get("type")
@@ -659,7 +659,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return result
 
-    def get_json_schema_from_pydantic_object(self, response_format: Any | dict | None) -> dict | None:
+    def get_json_schema_from_pydantic_object(self, response_format: type[BaseModel] | dict | None) -> dict | None:
         return type_to_response_format_param(
             response_format, ref_template="/$defs/{model}"
         )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
@@ -1072,7 +1072,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _sanitize_tool_names_in_request(
-        optional_params: dict[str, Any],
+        optional_params: dict[str, object],
     ) -> tuple[dict[str, str], dict[str, str]]:
         """Sanitize ``optional_params['tools']`` and ``optional_params['tool_choice']``
         in place so every name matches Anthropic's ``^[a-zA-Z0-9_-]{1,128}$``.
@@ -1119,7 +1119,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         #    so a caller reusing the same tool list/dicts across requests
         #    doesn't see its inputs permanently rewritten (which would also
         #    drop the original key from `forward` on the next request).
-        new_tools: Final[list[Any]] = []
+        new_tools: Final[list[object]] = []
         for t in tools:
             if (
                 isinstance(t, dict)
@@ -1442,7 +1442,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
                 entry_type = entry.get("type")
                 if entry_type == "compaction":
-                    anthropic_edit: dict[str, Any] = {"type": "compact_20260112"}
+                    anthropic_edit: dict[str, object] = {"type": "compact_20260112"}
                     compact_threshold = entry.get("compact_threshold")
                     # Rewrite to 'trigger' with correct nesting if threshold exists
                     if compact_threshold is not None and isinstance(compact_threshold, (int, float)):
@@ -2442,9 +2442,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         code_by_id: Final[dict[str, str]] = {}
         for tc in tool_calls:
             try:
-                args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                args: object = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                if not isinstance(args, Mapping):
+                    continue
                 call_id = tc.get("id")
-                command = args.get("command", "")
+                command: object = args.get("command", "")
                 if isinstance(call_id, str):
                     code_by_id[call_id] = command if isinstance(command, str) else ""
             except Exception:
@@ -2514,8 +2516,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_results: Sequence[_AnthropicToolResultBlock] | None,
         compaction_blocks: Sequence[object] | None,
         tool_calls: list[ChatCompletionToolCallChunk],
-    ) -> dict[str, Any]:
-        provider_specific_fields: Final[dict[str, Any]] = {
+    ) -> dict[str, object]:
+        provider_specific_fields: Final[dict[str, object]] = {
             "citations": citations,
             "thinking_blocks": thinking_blocks,
         }
