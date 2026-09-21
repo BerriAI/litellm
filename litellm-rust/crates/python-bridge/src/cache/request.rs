@@ -1,5 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use litellm_cache::ExactCacheContext;
 use litellm_cache_response::{CacheControls, CacheKeyInput, ResponseCacheRequest};
 use litellm_host_python::from_py;
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -20,7 +21,7 @@ pub(super) fn request(value: &Bound<'_, PyAny>) -> PyResult<ResponseCacheRequest
 }
 
 fn request_input(input: RequestInput) -> PyResult<ResponseCacheRequest> {
-    let mut request = ResponseCacheRequest::new(input.key);
+    let mut request = ResponseCacheRequest::<ExactCacheContext>::new(input.key);
     if let Some(controls) = input.controls {
         request.controls = controls;
     }
