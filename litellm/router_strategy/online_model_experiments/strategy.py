@@ -143,12 +143,20 @@ def _stamp_experiment_metadata(
     assignment_key: str,
     bucket: int,
 ) -> None:
-    metadata: Final = request_kwargs.get("metadata")
-    metadata_values: Final = dict(metadata) if isinstance(metadata, Mapping) else {}
-    request_kwargs["metadata"] = {
-        **metadata_values,
+    experiment_metadata: Final = {
         "online_model_experiment_id": experiment_id,
         "online_model_experiment_variant": variant_name,
         "online_model_experiment_assignment_key": assignment_key,
         "online_model_experiment_bucket": bucket,
+    }
+    metadata: Final = request_kwargs.get("metadata")
+    metadata_values: Final = dict(metadata) if isinstance(metadata, Mapping) else {}
+    request_kwargs["metadata"] = {**metadata_values, **experiment_metadata}
+    litellm_params: Final = request_kwargs.get("litellm_params")
+    litellm_params_values: Final = dict(litellm_params) if isinstance(litellm_params, Mapping) else {}
+    litellm_metadata: Final = litellm_params_values.get("metadata")
+    litellm_metadata_values: Final = dict(litellm_metadata) if isinstance(litellm_metadata, Mapping) else {}
+    request_kwargs["litellm_params"] = {
+        **litellm_params_values,
+        "metadata": {**litellm_metadata_values, **experiment_metadata},
     }
