@@ -1538,6 +1538,12 @@ async def test_proxy_admin_still_told_the_team_is_unknown():
         ({"langsmith_api_key": "k"}, [{"dd_api_key": "k"}], False),
         # variables that configure no backend carry nothing to redirect
         ({"turn_off_message_logging": "true"}, [{"langfuse_secret_key": "sk"}], False),
+        # the span scope picks what the family exports, not where to, so a second
+        # entry may set either legal value next to the family's credentials
+        ({"langfuse_span_scope": "llm_only"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
+        ({"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "full"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"}], False),
+        # the scope on the stored entry must not shield a redirect riding next to it
+        ({"langfuse_host": "http://attacker.invalid", "langfuse_span_scope": "llm_only"}, [{"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"}], True),
         # the same integration registered for a second event: identical values
         # flatten to the identical dict, so there is nothing to redirect
         ({"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}, [{"langfuse_host": "https://us.cloud.langfuse.com", "langfuse_public_key": "pk", "langfuse_secret_key": "sk"}], False),
@@ -1559,3 +1565,48 @@ def test_one_entry_owns_a_credential_family(new_vars, stored, rejected):
     """
     error = cross_entry_family_error(new_vars, stored)
     assert (error is not None) is rejected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", [_admin_auth(), UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="victim_admin", api_key="sk-team-admin")])
+async def test_a_second_entry_may_not_flip_the_span_scope(patched_prisma, caller):
+    """The entries flatten last-wins at request time, so a failure entry saying
+    llm_only next to a success entry saying full would export whichever is stored
+    last. Neither a proxy admin nor a team admin gets to store the disagreement."""
+    patched_prisma.get_data = AsyncMock(
+        return_value=_team_row(
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "full"},
+                    }
+                ]
+            }
+        )
+    )
+    data = AddTeamCallback(
+        callback_name="langfuse_otel",
+        callback_type="failure",
+        callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "langfuse_span_scope": "llm_only"},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await add_team_callbacks(
+            data=data,
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=caller,
+        )
+    assert exc.value.status_code == 400
+    assert "langfuse_span_scope" in str(exc.value.detail) and "'full'" in str(exc.value.detail)
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()
+
+    data.callback_vars["langfuse_span_scope"] = "full"
+    await add_team_callbacks(
+        data=data,
+        http_request=Mock(spec=Request),
+        team_id="team-victim",
+        user_api_key_dict=caller,
+    )
+    patched_prisma.db.litellm_teamtable.update.assert_awaited_once()

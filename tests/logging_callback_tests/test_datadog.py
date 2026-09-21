@@ -578,6 +578,32 @@ async def test_datadog_payload_content_truncation():
     ), "response not truncated correctly"
 
 
+@pytest.mark.asyncio
+async def test_datadog_payload_truncation_leaves_shared_payload_intact(monkeypatch):
+    """
+    Every callback of a request shares one standard logging object, so the datadog truncation
+    must not turn its messages into a string for the callbacks that run after it (the prompt
+    caching router check reads `messages` as a list to pin the deployment holding the cache)
+    """
+    monkeypatch.setenv("DD_SITE", "https://fake.datadoghq.com")
+    monkeypatch.setenv("DD_API_KEY", "anything")
+    dd_logger = DataDogLogger()
+    standard_payload = create_standard_logging_payload()
+    original_messages = [{"role": "user", "content": "x" * 80_000}]
+    standard_payload["messages"] = original_messages
+    kwargs = {"standard_logging_object": standard_payload}
+
+    dd_payload = dd_logger.create_datadog_logging_payload(
+        kwargs=kwargs,
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert kwargs["standard_logging_object"]["messages"] is original_messages
+    assert len(json.loads(dd_payload["message"])["messages"]) < 10_100
+
+
 def test_datadog_static_methods():
     """Test the static helper methods in DataDogLogger class"""
 

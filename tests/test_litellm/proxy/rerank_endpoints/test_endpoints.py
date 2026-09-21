@@ -3,6 +3,8 @@ Tests for rerank_endpoints/endpoints.py response headers.
 """
 
 import json
+import logging
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,6 +12,7 @@ from fastapi import HTTPException, Request, Response
 
 import litellm.proxy.common_request_processing as common_request_processing_mod
 import litellm.proxy.proxy_server as proxy_server_mod
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.rerank_endpoints.endpoints import rerank
 from litellm.types.utils import RerankResponse
@@ -28,7 +31,7 @@ HIDDEN_PARAMS = {
 }
 
 
-def _build_request() -> Request:
+def _build_request(headers: tuple[tuple[bytes, bytes], ...] = ()) -> Request:
     body = json.dumps({"model": "rerank-model", "query": "q", "documents": ["a", "b"]}).encode()
 
     async def receive():
@@ -39,7 +42,7 @@ def _build_request() -> Request:
             "type": "http",
             "method": "POST",
             "path": "/rerank",
-            "headers": [(b"content-type", b"application/json")],
+            "headers": [(b"content-type", b"application/json"), *headers],
             "query_string": b"",
         },
         receive=receive,
@@ -56,7 +59,7 @@ async def _call_rerank(hidden_params: dict = HIDDEN_PARAMS) -> Response:
     proxy_logging_obj.update_request_status = AsyncMock()
 
     async def fake_add_litellm_data_to_request(**kwargs):
-        return {**kwargs["data"], "litellm_call_id": "call-123"}
+        return dict(kwargs["data"])
 
     async def fake_route_request(**kwargs):
         async def _call():
@@ -72,7 +75,7 @@ async def _call_rerank(hidden_params: dict = HIDDEN_PARAMS) -> Response:
         patch.object(proxy_server_mod, "version", "1.2.3"),  # test-quality-ok: the rerank route reads these proxy_server module globals; no injection seam on the FastAPI handler
     ):
         await rerank(
-            request=_build_request(),
+            request=_build_request(headers=((b"x-litellm-call-id", b"call-123"),)),
             fastapi_response=fastapi_response,
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
         )
@@ -121,7 +124,11 @@ async def test_rerank_omits_detailed_timing_headers_when_disabled():
 
 
 async def _rerank_failure(
-    failure: Exception, *, raised_before_routing: bool, monkeypatch: pytest.MonkeyPatch
+    failure: Exception,
+    *,
+    raised_before_routing: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    headers: tuple[tuple[bytes, bytes], ...] = (),
 ) -> ProxyException:
     proxy_logging_obj = MagicMock()
     proxy_logging_obj.pre_call_hook = AsyncMock(
@@ -143,11 +150,43 @@ async def _rerank_failure(
 
     with pytest.raises(ProxyException) as raised:
         await rerank(
-            request=_build_request(),
+            request=_build_request(headers),
             fastapi_response=Response(),
             user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
         )
     return raised.value
+
+
+@pytest.fixture
+def propagating_proxy_logger() -> Iterator[None]:
+    verbose_proxy_logger.propagate = True
+    try:
+        yield
+    finally:
+        verbose_proxy_logger.propagate = False
+
+
+@pytest.mark.asyncio
+async def test_failure_log_carries_the_callers_litellm_call_id(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, propagating_proxy_logger: None
+) -> None:
+    """LIT-7836: the /rerank error line must carry the same litellm_call_id the client
+    sent, both in the rendered message and as a structured log record field."""
+    call_id = "rerank-call-7836"
+    failure = HTTPException(status_code=401, detail={"error": "invalid api key"})
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        raised = await _rerank_failure(
+            failure,
+            raised_before_routing=False,
+            monkeypatch=monkeypatch,
+            headers=((b"x-litellm-call-id", call_id.encode()),),
+        )
+
+    assert raised.headers["x-litellm-call-id"] == call_id
+    record = next(r for r in caplog.records if "Exception occured" in r.getMessage())
+    assert record.litellm_call_id == call_id
+    assert call_id in record.getMessage()
 
 
 @pytest.mark.asyncio

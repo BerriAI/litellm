@@ -22,6 +22,18 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def fal_images_to_image_objects(images: object) -> tuple[ImageObject, ...]:
+    if not isinstance(images, list):
+        return ()
+    return tuple(
+        ImageObject(url=image_data.get("url", None), b64_json=image_data.get("b64_json", None))
+        if isinstance(image_data, dict)
+        else ImageObject(url=image_data, b64_json=None)
+        for image_data in images
+        if isinstance(image_data, (dict, str))
+    )
+
+
 class FalAIBaseConfig(BaseImageGenerationConfig):
     """
     Base configuration for Fal AI image generation models.
@@ -96,26 +108,7 @@ class FalAIBaseConfig(BaseImageGenerationConfig):
         if not model_response.data:
             model_response.data = []
 
-        # Handle fal.ai response format
-        images: Final = response_data.get("images", [])
-        if isinstance(images, list):
-            for image_data in images:
-                if isinstance(image_data, dict):
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data.get("url", None),
-                            b64_json=image_data.get("b64_json", None),
-                        )
-                    )
-                elif isinstance(image_data, str):
-                    # If images is just a list of URLs
-                    model_response.data.append(
-                        ImageObject(
-                            url=image_data,
-                            b64_json=None,
-                        )
-                    )
-
+        model_response.data.extend(fal_images_to_image_objects(response_data.get("images", ())))
         return model_response
 
 

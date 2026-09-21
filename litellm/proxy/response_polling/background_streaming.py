@@ -75,6 +75,10 @@ class _StreamEventParser:
     parse: Callable[[str], _StreamEvent] = staticmethod(json.loads)
 
 
+def _sse_frame_data(frame: str) -> str | None:
+    return next((line[6:].strip() for line in frame.splitlines() if line.startswith("data: ")), None)
+
+
 async def _never_receive() -> Message:
     await asyncio.Event().wait()
     raise AssertionError("unreachable")
@@ -224,8 +228,7 @@ async def background_streaming_task(
                 if isinstance(chunk, bytes):
                     chunk = chunk.decode("utf-8")
 
-                if isinstance(chunk, str) and chunk.startswith("data: "):
-                    chunk_data = chunk[6:].strip()
+                if isinstance(chunk, str) and (chunk_data := _sse_frame_data(chunk)) is not None:
                     if chunk_data == "[DONE]":
                         break
 
