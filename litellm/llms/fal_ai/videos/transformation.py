@@ -1,7 +1,7 @@
 import math
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -212,6 +212,16 @@ def _result_error(raw_response: httpx.Response) -> str | None:
     return response_text or f"fal.ai returned HTTP {raw_response.status_code}"
 
 
+def _terminal_result_error(raw_response: httpx.Response) -> str | None:
+    if raw_response.status_code == 429 or raw_response.status_code >= 500:
+        return None
+    return _result_error(raw_response)
+
+
+def _get_fal_ai_async_httpx_client() -> AsyncHTTPHandler:
+    return get_async_httpx_client(llm_provider=LlmProviders.FAL_AI)
+
+
 def _response_string(response_data: Mapping[str, object], key: str, default: str = "") -> str:
     value: Final[object] = response_data.get(key)
     return value if isinstance(value, str) else default
@@ -265,6 +275,15 @@ def _status_video_object(
 
 
 class FalAIVideoConfig(BaseVideoConfig):
+    def __init__(
+        self,
+        sync_client_factory: Callable[[], HTTPHandler] = _get_httpx_client,
+        async_client_factory: Callable[[], AsyncHTTPHandler] = _get_fal_ai_async_httpx_client,
+    ) -> None:
+        super().__init__()
+        self._sync_client_factory: Final = sync_client_factory
+        self._async_client_factory: Final = async_client_factory
+
     def get_supported_openai_params(self, model: str) -> _SupportedParams:
         supported_params: Final[_SupportedParams] = [  # mutable-ok: BaseVideoConfig requires a list
             "model",
@@ -458,11 +477,11 @@ class FalAIVideoConfig(BaseVideoConfig):
         if result_request is None:
             return None
         result_url, result_headers = result_request
-        result_response: Final[httpx.Response] = _get_httpx_client().get(
+        result_response: Final[httpx.Response] = self._sync_client_factory().get(
             url=result_url,
             headers=result_headers,
         )
-        return _result_error(result_response)
+        return _terminal_result_error(result_response)
 
     async def async_transform_video_status_retrieve_response(
         self,
@@ -488,12 +507,11 @@ class FalAIVideoConfig(BaseVideoConfig):
         if result_request is None:
             return None
         result_url, result_headers = result_request
-        async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(llm_provider=LlmProviders.FAL_AI)
-        result_response: Final[httpx.Response] = await async_httpx_client.get(
+        result_response: Final[httpx.Response] = await self._async_client_factory().get(
             url=result_url,
             headers=result_headers,
         )
-        return _result_error(result_response)
+        return _terminal_result_error(result_response)
 
     @staticmethod
     def _decode_video_id(video_id: str) -> tuple[str, str]:
@@ -547,7 +565,7 @@ class FalAIVideoConfig(BaseVideoConfig):
                 response=raw_response,
             )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
-        httpx_client: Final[HTTPHandler] = _get_httpx_client()
+        httpx_client: Final[HTTPHandler] = self._sync_client_factory()
         video_response: Final[httpx.Response] = httpx_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
             video_url
         )
@@ -565,7 +583,7 @@ class FalAIVideoConfig(BaseVideoConfig):
                 response=raw_response,
             )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
-        async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(llm_provider=LlmProviders.FAL_AI)
+        async_httpx_client: Final[AsyncHTTPHandler] = self._async_client_factory()
         video_response: Final[httpx.Response] = await async_httpx_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
             video_url
         )
