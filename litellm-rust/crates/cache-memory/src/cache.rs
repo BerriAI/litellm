@@ -7,7 +7,7 @@ use std::{
 
 use litellm_cache::{
     BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheKwargs, ClaimCache, CounterCache,
-    Error,
+    Error, IncrementOperation,
 };
 
 const DEFAULT_MAX_SIZE_IN_MEMORY: usize = 200;
@@ -134,6 +134,25 @@ impl<V: Clone> InMemoryCache<V> {
             .copied())
     }
 
+    pub async fn async_get_ttl(&self, key: &str) -> Result<Option<Duration>, Error> {
+        self.expires_at(key)
+    }
+
+    pub async fn async_get_oldest_n_keys(&self, count: usize) -> Result<Vec<String>, Error> {
+        let state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        let mut expirations = state
+            .expirations
+            .iter()
+            .map(|(key, expiration)| (key.clone(), *expiration))
+            .collect::<Vec<_>>();
+        expirations.sort_unstable_by_key(|(_, expiration)| *expiration);
+        Ok(expirations
+            .into_iter()
+            .take(count)
+            .map(|(key, _)| key)
+            .collect())
+    }
+
     pub fn delete_cache(&self, key: &str) -> Result<(), Error> {
         let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
         Self::remove(&mut state, key);
@@ -237,6 +256,27 @@ impl CounterCache for InMemoryCache<f64> {
         }
         state.values.insert(key.into(), value);
         Ok(value)
+    }
+}
+
+impl InMemoryCache<f64> {
+    pub async fn async_increment_pipeline(
+        &self,
+        operations: Vec<IncrementOperation>,
+    ) -> Result<Vec<f64>, Error> {
+        operations
+            .into_iter()
+            .map(|operation| {
+                self.increment_cache(
+                    &operation.key,
+                    operation.amount,
+                    CacheKwargs {
+                        ttl: operation.ttl,
+                        ..CacheKwargs::default()
+                    },
+                )
+            })
+            .collect()
     }
 }
 

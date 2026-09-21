@@ -1,3 +1,3 @@
 mod cache;
 
-pub use cache::RedisCache;
+pub use cache::{RedisArg, RedisCache, RedisLpopOperation, RedisLpopResult, RedisRpushOperation};
