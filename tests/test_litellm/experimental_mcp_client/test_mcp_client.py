@@ -1,10 +1,12 @@
 import asyncio
 import base64
+import importlib
 import json
 import os
 import sys
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -2034,6 +2036,15 @@ async def test_optional_discovery_preserves_cancellation(method: str) -> None:
                     },
                 },
             )
+        if not (payload.params or {}).get("cursor"):
+            field: Final = {
+                "prompts/list": "prompts",
+                "resources/list": "resources",
+                "resources/templates/list": "resourceTemplates",
+            }[method]
+            return httpx2.Response(
+                200, json={"jsonrpc": "2.0", "id": payload.id, "result": {field: [], "nextCursor": "pending-page"}}
+            )
         ready.set()
         await pending.wait()
         return httpx2.Response(202)
@@ -2052,6 +2063,255 @@ async def test_optional_discovery_preserves_cancellation(method: str) -> None:
         with pytest.raises(asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=3)
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("prompts/list", "resources/list", "resources/templates/list"))
+@pytest.mark.parametrize("session_id", (None, "pagination-session"))
+@pytest.mark.parametrize("empty_middle", (False, True))
+async def test_optional_discovery_collects_all_pages(method: str, session_id: str | None, empty_middle: bool) -> None:
+    from mcp.types import Prompt, PromptArgument, Resource, ResourceTemplate
+
+    field: Final = {
+        "prompts/list": "prompts",
+        "resources/list": "resources",
+        "resources/templates/list": "resourceTemplates",
+    }[method]
+    entries: Final = tuple(
+        {
+            "prompts/list": Prompt(
+                name=f"item-{index}",
+                description="prompt description",
+                arguments=[PromptArgument(name="query", required=True)],
+            ),
+            "resources/list": Resource(
+                name=f"item-{index}",
+                uri=f"test://item/{index}",
+                mime_type="text/plain",
+                description="resource description",
+            ),
+            "resources/templates/list": ResourceTemplate(
+                name=f"item-{index}", uri_template=f"test://item/{index}/{{query}}", mime_type="text/plain"
+            ),
+        }[method]
+        for index in range(5)
+    )
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "GET":
+            return httpx2.Response(405)
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                headers={"mcp-session-id": session_id} if session_id else {},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": payload.params["protocolVersion"],
+                        "capabilities": {"prompts": {}, "resources": {}},
+                        "serverInfo": {"name": "paged", "version": "1"},
+                    },
+                },
+            )
+        assert payload.method == method
+        assert request.headers.get("mcp-session-id") == session_id
+        cursor: Final = (payload.params or {}).get("cursor")
+        assert cursor in (None, "opaque:/second+page", "opaque:/last+page")
+        page: Final = (
+            entries[:3] if cursor is None else (() if empty_middle and cursor == "opaque:/second+page" else entries[3:])
+        )
+        next_cursor: Final = (
+            "opaque:/second+page"
+            if cursor is None
+            else "opaque:/last+page"
+            if empty_middle and cursor == "opaque:/second+page"
+            else ""
+        )
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    field: [item.model_dump(mode="json", by_alias=True) for item in page],
+                    "nextCursor": next_cursor,
+                },
+            },
+        )
+
+    responder: Final = Mock(side_effect=respond)
+    client: Final = _MockTransportClient(responder, server_url="https://example.com/mcp")
+    operation: Final = {
+        "prompts/list": client.list_prompts,
+        "resources/list": client.list_resources,
+        "resources/templates/list": client.list_resource_templates,
+    }[method]
+    assert await operation(raise_on_error=True) == list(entries)
+    requests: Final = tuple(
+        _JSONRPC_MESSAGE_ADAPTER.validate_json(call.args[0].content)
+        for call in responder.call_args_list
+        if call.args[0].method == "POST"
+    )
+    assert sum(isinstance(request, JSONRPCRequest) and request.method == "initialize" for request in requests) == 1
+    assert tuple(
+        (request.params or {}).get("cursor")
+        for request in requests
+        if isinstance(request, JSONRPCRequest) and request.method == method
+    ) == ((None, "opaque:/second+page", "opaque:/last+page") if empty_middle else (None, "opaque:/second+page"))
+    assert sum(call.args[0].method == "DELETE" for call in responder.call_args_list) == (1 if session_id else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("prompts/list", "resources/list", "resources/templates/list"))
+@pytest.mark.parametrize(
+    "failure", ("repeat", "cycle", "cap", "method_not_found", "internal_error", "unauthorized", "deadline")
+)
+@pytest.mark.parametrize("strict", (False, True))
+async def test_optional_discovery_rejects_incomplete_walks(
+    method: str, failure: str, strict: bool, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(mcp_client_module, "MCP_TOOL_LISTING_MAX_PAGES", 3 if failure == "cycle" else 2, raising=False)
+    monkeypatch.setattr(mcp_client_module, "MCP_TOOL_LISTING_TIMEOUT", 0.05)
+    field: Final = {
+        "prompts/list": "prompts",
+        "resources/list": "resources",
+        "resources/templates/list": "resourceTemplates",
+    }[method]
+    entry: Final = {
+        "prompts/list": {"name": "first"},
+        "resources/list": {"name": "first", "uri": "test://first"},
+        "resources/templates/list": {"name": "first", "uriTemplate": "test://{name}"},
+    }[method]
+    cancelled: Final = asyncio.Event()
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": payload.params["protocolVersion"],
+                        "capabilities": {"prompts": {}, "resources": {}},
+                        "serverInfo": {"name": "interrupted", "version": "1"},
+                    },
+                },
+            )
+        assert payload.method == method
+        cursor: Final = (payload.params or {}).get("cursor")
+        if cursor is not None:
+            if failure == "deadline":
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    cancelled.set()
+            if failure == "unauthorized":
+                return httpx2.Response(401)
+            if failure in ("method_not_found", "internal_error"):
+                return httpx2.Response(
+                    200,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": payload.id,
+                        "error": {
+                            "code": -32601 if failure == "method_not_found" else -32603,
+                            "message": "Later page unavailable",
+                        },
+                    },
+                )
+        next_cursor: Final = (
+            "private-cursor-2" if cursor == "private-cursor-1" and failure != "repeat" else "private-cursor-1"
+        )
+        return httpx2.Response(
+            200, json={"jsonrpc": "2.0", "id": payload.id, "result": {field: [entry], "nextCursor": next_cursor}}
+        )
+
+    responder: Final = AsyncMock(side_effect=respond)
+    client: Final = _MockTransportClient(responder, server_url="https://example.com/mcp", timeout=0.2)
+    operation: Final = {
+        "prompts/list": client.list_prompts,
+        "resources/list": client.list_resources,
+        "resources/templates/list": client.list_resource_templates,
+    }[method]
+    if strict:
+        error_type: Final = {
+            "internal_error": MCPError,
+            "unauthorized": httpx2.HTTPStatusError,
+            "deadline": TimeoutError,
+        }.get(failure, RuntimeError)
+        with pytest.raises(error_type):
+            await operation(raise_on_error=True)
+    else:
+        assert await operation() == []
+    assert len(
+        tuple(
+            payload
+            for call in responder.call_args_list
+            if isinstance(payload := _JSONRPC_MESSAGE_ADAPTER.validate_json(call.args[0].content), JSONRPCRequest)
+            and payload.method == method
+        )
+    ) == (3 if failure == "cycle" else 2)
+    assert "private-cursor" not in caplog.text
+    if failure == "deadline":
+        assert cancelled.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("prompts/list", "resources/list", "resources/templates/list"))
+async def test_optional_discovery_allows_exhaustion_at_page_cap(method: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(mcp_client_module, "MCP_TOOL_LISTING_MAX_PAGES", 2, raising=False)
+    field: Final = {
+        "prompts/list": "prompts",
+        "resources/list": "resources",
+        "resources/templates/list": "resourceTemplates",
+    }[method]
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            result: Final = {
+                "protocolVersion": payload.params["protocolVersion"],
+                "capabilities": {"prompts": {}, "resources": {}},
+                "serverInfo": {"name": "empty-pages", "version": "1"},
+            }
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+        assert payload.method == method
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {field: [], "nextCursor": None if (payload.params or {}).get("cursor") else "last-page"},
+            },
+        )
+
+    responder: Final = Mock(side_effect=respond)
+    client: Final = _MockTransportClient(responder, server_url="https://example.com/mcp")
+    operation: Final = {
+        "prompts/list": client.list_prompts,
+        "resources/list": client.list_resources,
+        "resources/templates/list": client.list_resource_templates,
+    }[method]
+    assert await operation(raise_on_error=True) == []
+    assert (
+        sum(
+            isinstance(payload := _JSONRPC_MESSAGE_ADAPTER.validate_json(call.args[0].content), JSONRPCRequest)
+            and payload.method == method
+            for call in responder.call_args_list
+        )
+        == 2
+    )
 
 
 def test_client_import_before_proxy_credentials_succeeds_in_fresh_process():
@@ -2160,3 +2420,38 @@ async def test_404_before_session_initialization_preserves_method_not_found() ->
             )
     assert caught.value.error.code == METHOD_NOT_FOUND
     assert caught.value.error.message == "Not Found"
+
+
+@pytest.mark.parametrize("missing_module", ("mcp", "httpx2", "mcp.types", "openai.types.chat"))
+def test_public_mcp_import_missing_dependency(missing_module: str) -> None:
+    with patch.dict(sys.modules):
+        for name in tuple(sys.modules):
+            if name.startswith(("litellm.experimental_mcp_client", "mcp.", "mcp_types.")) or name == "mcp":
+                del sys.modules[name]
+        with patch.dict(sys.modules, {missing_module: None}):
+            with pytest.raises(ImportError) as caught:
+                importlib.import_module("litellm.experimental_mcp_client.client")
+
+    if missing_module in ("mcp", "httpx2"):
+        assert "pip install 'litellm[mcp]'" in str(caught.value)
+        assert isinstance(caught.value.__cause__, ModuleNotFoundError)
+        assert caught.value.__cause__.name == missing_module
+    else:
+        assert isinstance(caught.value, ModuleNotFoundError)
+        assert caught.value.name == missing_module
+        assert caught.value.__cause__ is None
+        assert "litellm[mcp]" not in str(caught.value)
+
+
+def test_public_mcp_import_preserves_incompatible_sdk_error() -> None:
+    with patch.dict(sys.modules):
+        for name in tuple(sys.modules):
+            if name.startswith("litellm.experimental_mcp_client"):
+                del sys.modules[name]
+        with patch.dict(sys.modules, {"mcp": ModuleType("mcp")}):
+            with pytest.raises(ImportError, match="cannot import name 'ClientSession'") as caught:
+                importlib.import_module("litellm.experimental_mcp_client.client")
+
+    assert not isinstance(caught.value, ModuleNotFoundError)
+    assert caught.value.__cause__ is None
+    assert "litellm[mcp]" not in str(caught.value)
