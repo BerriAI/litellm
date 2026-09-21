@@ -858,10 +858,11 @@ def _response_format_needs_converse(model: str, response_format: object) -> bool
         return False
     if not isinstance(response_format, Mapping):
         return not bedrock_runtime_chat_completions_enforces_response_format(model)
-    if response_format.get("type") == "text":
+    response_format_type: Final = response_format.get("type")
+    if response_format_type == "text":
         return False
-    carries_schema: Final = "json_schema" in response_format or "response_schema" in response_format
-    return not (carries_schema and bedrock_runtime_chat_completions_enforces_response_format(model))
+    is_json_schema: Final = response_format_type == "json_schema" and "json_schema" in response_format
+    return not (is_json_schema and bedrock_runtime_chat_completions_enforces_response_format(model))
 
 
 def bedrock_request_needs_converse(model: str, request_params: Mapping[str, object]) -> bool:
@@ -872,11 +873,12 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     AWS's native OpenAI surface, operator-owned request metadata is only written onto the Converse body,
     function tools (``tools`` or legacy ``functions``) on a model without
     ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
-    ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as a JSON schema
-    (a ``json_schema`` or ``response_schema`` mapping, or a pydantic model) on a model with
+    ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as
+    ``{"type": "json_schema", "json_schema": ...}`` (a pydantic model is converted to that) on a model with
     ``supports_bedrock_runtime_chat_completions_response_format``: a schema on any other model is only
-    honored by Converse, and a schema-less ``json_object`` keeps Converse's handling everywhere, since AWS's
-    native surface rejects it with a 400 unless the prompt mentions json.
+    honored by Converse, and every ``json_object`` form (``response_schema`` included) keeps Converse's
+    handling everywhere, since AWS's native surface rejects that type with a 400 unless the prompt
+    mentions json.
     """
     if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
         return True
