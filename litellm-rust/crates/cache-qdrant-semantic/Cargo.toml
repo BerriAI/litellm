@@ -21,3 +21,4 @@ litellm-cache-response.workspace = true
 rstest.workspace = true
 tonic = "0.14"
 tonic-prost = "0.14"
+tokio-stream = "0.1"

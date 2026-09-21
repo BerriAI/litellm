@@ -167,11 +167,11 @@ impl<E: Embedder, C: CacheCodec> QdrantSemanticCache<E, C> {
         let Some(point) = result.result.into_iter().next() else {
             return Ok(None);
         };
-        if f64::from(point.score) < self.config.similarity_threshold {
-            return Ok(None);
-        }
         let payload: Map<String, Value> = Payload::from(point.payload).into();
         if payload.get("litellm_cache_key").and_then(Value::as_str) != Some(key) {
+            return Ok(None);
+        }
+        if f64::from(point.score) < self.config.similarity_threshold {
             return Ok(None);
         }
         let response = payload
