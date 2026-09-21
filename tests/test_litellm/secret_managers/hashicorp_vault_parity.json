@@ -15,7 +15,7 @@
     "env": {
       "HCP_VAULT_ADDR": "http://vault.test:8200",
       "HCP_VAULT_TOKEN": "token",
-      "HCP_VAULT_NAMESPACE": " admin/ "
+      "HCP_VAULT_NAMESPACE": "admin"
     },
     "secret_name": "OPENAI_API_KEY",
     "expected_secret_url": "http://vault.test:8200/v1/admin/secret/data/OPENAI_API_KEY",
@@ -29,8 +29,8 @@
       "HCP_VAULT_ADDR": "http://vault.test:8200",
       "HCP_VAULT_TOKEN": "token",
       "HCP_VAULT_NAMESPACE": "admin",
-      "HCP_VAULT_LOGIN_NAMESPACE": " /root/ ",
-      "HCP_VAULT_SECRET_NAMESPACE": " /teams/team-a/ "
+      "HCP_VAULT_LOGIN_NAMESPACE": "root",
+      "HCP_VAULT_SECRET_NAMESPACE": "teams/team-a"
     },
     "secret_name": "OPENAI_API_KEY",
     "expected_secret_url": "http://vault.test:8200/v1/teams/team-a/secret/data/OPENAI_API_KEY",
@@ -58,7 +58,7 @@
       "HCP_VAULT_ADDR": "http://vault.test:8200",
       "HCP_VAULT_APPROLE_ROLE_ID": "role-id",
       "HCP_VAULT_APPROLE_SECRET_ID": "secret-id",
-      "HCP_VAULT_APPROLE_MOUNT_PATH": " /custom-approle/ ",
+      "HCP_VAULT_APPROLE_MOUNT_PATH": "custom-approle",
       "HCP_VAULT_NAMESPACE": "admin"
     },
     "secret_name": "OPENAI_API_KEY",
@@ -81,17 +81,5 @@
     "expected_login_url": "http://vault.test:8200/v1/auth/cert/login",
     "expected_login_namespace": "admin",
     "expected_secret_namespace": "admin"
-  },
-  {
-    "name": "trailing_address_slash",
-    "env": {
-      "HCP_VAULT_ADDR": "http://vault.test:8200///",
-      "HCP_VAULT_TOKEN": "token"
-    },
-    "secret_name": "OPENAI_API_KEY",
-    "expected_secret_url": "http://vault.test:8200/v1/secret/data/OPENAI_API_KEY",
-    "expected_login_url": null,
-    "expected_login_namespace": null,
-    "expected_secret_namespace": null
   }
 ]

@@ -120,14 +120,12 @@ impl HashicorpVault {
             return Ok(Some(value));
         }
         let token: SecretValue = self.vault_token().await?;
-        let mut request = self
+        let response: reqwest::Response = self
             .client
             .get(&url)
-            .header("X-Vault-Token", token.expose());
-        if let Some(namespace) = self.config.secret_namespace() {
-            request = request.header("X-Vault-Namespace", namespace);
-        }
-        let response: reqwest::Response = request.send().await?;
+            .header("X-Vault-Token", token.expose())
+            .send()
+            .await?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -166,14 +164,13 @@ impl HashicorpVault {
             None => json!({"key": value.expose()}),
         };
         let token: SecretValue = self.vault_token().await?;
-        let mut request = self
+        let response: reqwest::Response = self
             .client
             .post(&url)
-            .header("X-Vault-Token", token.expose());
-        if let Some(namespace) = self.config.secret_namespace() {
-            request = request.header("X-Vault-Namespace", namespace);
-        }
-        let response: reqwest::Response = request.json(&json!({"data": data})).send().await?;
+            .header("X-Vault-Token", token.expose())
+            .json(&json!({"data": data}))
+            .send()
+            .await?;
         if !response.status().is_success() {
             return Err(Error::Status {
                 status: response.status().as_u16(),
@@ -190,14 +187,12 @@ impl HashicorpVault {
     pub async fn async_delete_secret(&self, secret_name: &str) -> Result<(), Error> {
         let url: String = self.secret_url(secret_name)?;
         let token: SecretValue = self.vault_token().await?;
-        let mut request = self
+        let response: reqwest::Response = self
             .client
             .delete(&url)
-            .header("X-Vault-Token", token.expose());
-        if let Some(namespace) = self.config.secret_namespace() {
-            request = request.header("X-Vault-Namespace", namespace);
-        }
-        let response: reqwest::Response = request.send().await?;
+            .header("X-Vault-Token", token.expose())
+            .send()
+            .await?;
         if !response.status().is_success() {
             return Err(Error::Status {
                 status: response.status().as_u16(),
