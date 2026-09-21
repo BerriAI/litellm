@@ -19,10 +19,9 @@ import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import ClassifierVisionConfig from "./ClassifierVisionConfig";
-import {
-  getClassifierPluginTimeoutError,
-  getHeuristicV2SuccessThresholdError,
-} from "./build_complexity_router_config";
+import { getHeuristicV2SuccessThresholdError } from "./build_complexity_router_config";
+import ClassifierPluginTimeoutField from "./ClassifierPluginTimeoutField";
+import ClassifierTypeRadios from "./ClassifierTypeRadios";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
@@ -64,7 +63,6 @@ const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
 const HEURISTIC_V2_SUCCESS_THRESHOLD_ID = "heuristic-v2-success-threshold";
-const CLASSIFIER_PLUGIN_TIMEOUT_ID = "classifier-plugin-timeout-ms";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -205,84 +203,6 @@ export const InactiveHeuristicV2Threshold: React.FC<Pick<ClassificationMethodCon
         Clear Heuristic v2 threshold
       </Button>
     </section>
-  );
-};
-
-const ClassifierTypeRadios: React.FC<{
-  value: ComplexityRouterConfigValue;
-  classifierType: ClassifierType;
-  onTypeChange: (classifierType: ClassifierType) => void;
-}> = ({ value, classifierType, onTypeChange }) => {
-  const scorerLocked = Boolean(value.custom_tier_set);
-  const scorerLockedReason = restrictedBy(value, "heuristicClassifier")?.reason;
-  return (
-    <RadioGroup
-      value={classifierType}
-      onValueChange={(classifierType: unknown) => onTypeChange(classifierType as ClassifierType)}
-      className="w-full"
-    >
-      <div className="flex w-full flex-col items-start gap-2">
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="heuristic" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Heuristic</strong>{" "}
-              <span className="text-muted-foreground">
-                (default), rule-based scoring with no API calls and &lt;1ms latency
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="heuristic_v2" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Heuristic v2</strong>{" "}
-              <span className="text-muted-foreground">
-                uses bundled calibrated four-tier probabilities with no API call
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
-        <Label className="items-start font-normal leading-normal">
-          <RadioGroupItem value="llm" className="mt-0.5" />
-          <span>
-            <strong className="font-semibold">LLM Classifier</strong>{" "}
-            <span className="text-muted-foreground">calls a model to decide the tier (e.g. a small/fast model)</span>
-          </span>
-        </Label>
-        <Label className="items-start font-normal leading-normal">
-          <RadioGroupItem value="jev" className="mt-0.5" />
-          <span>
-            <strong className="font-semibold">JEV Classifier</strong>{" "}
-            <span className="text-muted-foreground">uses TypeSafe System One Choice to decide the tier</span>
-          </span>
-        </Label>
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="heuristic_first" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Heuristic first</strong>{" "}
-              <span className="text-muted-foreground">
-                scores locally, and only pays for the classifier when the score does not confidently land a cheap tier
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
-        <SimpleTooltip content={scorerLockedReason}>
-          <Label className="items-start font-normal leading-normal has-data-disabled:cursor-not-allowed has-data-disabled:opacity-50">
-            <RadioGroupItem value="hybrid" className="mt-0.5" disabled={scorerLocked} />
-            <span>
-              <strong className="font-semibold">Hybrid</strong>{" "}
-              <span className="text-muted-foreground">
-                keeps the local score at any tier, and only pays for the classifier when that score lands near a tier
-                boundary
-              </span>
-            </span>
-          </Label>
-        </SimpleTooltip>
-      </div>
-    </RadioGroup>
   );
 };
 
@@ -472,37 +392,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
       <ClassifierTypeRadios value={value} classifierType={classifierType} onTypeChange={handleClassifierTypeChange} />
 
       {classifierType === "custom" && (
-        <div className="mt-4 space-y-2">
-          <p className="text-sm text-muted-foreground">
-            This router uses a custom classifier plugin set in config.yaml. Pick a classifier below to replace it.
-          </p>
-          <Label htmlFor={CLASSIFIER_PLUGIN_TIMEOUT_ID} className="block font-semibold">
-            Classifier plugin timeout (ms)
-          </Label>
-          <Input
-            id={CLASSIFIER_PLUGIN_TIMEOUT_ID}
-            inputMode="numeric"
-            placeholder="3000"
-            value={value.classifier_plugin_timeout_ms ?? ""}
-            onChange={(event) =>
-              onChange({
-                ...value,
-                classifier_plugin_timeout_ms: event.target.value.trim() === "" ? undefined : Number(event.target.value),
-              })
-            }
-            aria-invalid={Boolean(
-              showValidationErrors && getClassifierPluginTimeoutError(classifierType, value.classifier_plugin_timeout_ms),
-            )}
-          />
-          <p className="text-sm text-muted-foreground">
-            Time budget for the plugin call. On expiry the fallback path decides the tier.
-          </p>
-          {showValidationErrors && getClassifierPluginTimeoutError(classifierType, value.classifier_plugin_timeout_ms) && (
-            <p className="text-sm text-destructive" role="alert">
-              {getClassifierPluginTimeoutError(classifierType, value.classifier_plugin_timeout_ms)}
-            </p>
-          )}
-        </div>
+        <ClassifierPluginTimeoutField value={value} onChange={onChange} showValidationErrors={showValidationErrors} />
       )}
 
       {classifierType === "heuristic_v2" && (

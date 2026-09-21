@@ -347,6 +347,77 @@ describe("EditAutoRouterModal keyword matching", () => {
   });
 });
 
+describe("EditAutoRouterModal advanced field round trips", () => {
+  const storedAdvancedConfig = {
+    ...STORED_CONFIG,
+    route_housekeeping_to_cheapest_tier: false,
+    housekeeping_patterns: ["conversation title"],
+    reminder_markers: [{ open: "<a>", close: "</a>" }],
+    max_tokens_from_tier_model: false,
+  };
+
+  const renderAdvancedModal = (props: Partial<React.ComponentProps<typeof EditAutoRouterModal>> = {}) =>
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: { ...MODEL_DATA.litellm_params, complexity_router_config: storedAdvancedConfig },
+      },
+      ...props,
+    });
+
+  beforeEach(() => {
+    modelPatchUpdateCall.mockClear();
+  });
+
+  it("hydrates housekeeping and reminder fields, then omits the default max-token value after editing", async () => {
+    const user = userEvent.setup();
+    renderAdvancedModal();
+
+    await user.click(await screen.findByText("Advanced: Housekeeping Routing"));
+    expect(screen.getByRole("switch", { name: "Route housekeeping calls to the cheapest tier" })).not.toBeChecked();
+    expect(screen.getByRole("combobox", { name: "e.g., conversation title" })).toHaveValue("");
+
+    await user.click(screen.getByText("Advanced: Reminder Markers"));
+    expect(screen.getByLabelText("Opening delimiter")).toHaveValue("<a>");
+    expect(screen.getByLabelText("Closing delimiter")).toHaveValue("</a>");
+
+    await user.click(screen.getByText("Advanced: Response Format"));
+    const maxTokensSwitch = screen.getByRole("switch", { name: "Cap max_tokens at the tier model's output ceiling" });
+    await user.click(maxTokensSwitch);
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+
+    expect(savedConfig()).not.toHaveProperty("max_tokens_from_tier_model");
+    expect(savedConfig()).toMatchObject({
+      route_housekeeping_to_cheapest_tier: false,
+      housekeeping_patterns: ["conversation title"],
+      reminder_markers: [{ open: "<a>", close: "</a>" }],
+    });
+  });
+
+  it("does not PATCH when the edit is cancelled", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    renderAdvancedModal({ onCancel });
+    await user.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+  });
+
+  it("preserves all stored advanced fields through an untouched save", async () => {
+    const user = userEvent.setup();
+    renderAdvancedModal();
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig()).toMatchObject({
+      route_housekeeping_to_cheapest_tier: false,
+      housekeeping_patterns: ["conversation title"],
+      reminder_markers: [{ open: "<a>", close: "</a>" }],
+      max_tokens_from_tier_model: false,
+    });
+  });
+});
+
 describe("EditAutoRouterModal classifier context window", () => {
   beforeEach(() => {
     modelPatchUpdateCall.mockClear();

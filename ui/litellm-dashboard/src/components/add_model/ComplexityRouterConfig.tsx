@@ -2,21 +2,17 @@ import RoutingOptions from "./RoutingOptions";
 import type { JevClassifierConfig } from "./jev_classifier_config";
 import { type ClassifierType } from "./classifier_types";
 export { type ClassifierType, usesLlmClassifier, usesClassifierContext } from "./classifier_types";
-import PlanModeOverrideControls from "./PlanModeOverrideControls";
 import ForecastClassifierConfig, { ForecastSolverModels } from "./ForecastClassifierConfig";
 import { isForecastClassifier, type CapabilitySettings, type FuseSettings } from "./forecast_classifier_config";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import DefaultModelField from "./DefaultModelField";
-import { ChevronRight, Info, Plus, Trash2, X } from "lucide-react";
+import { Info, Plus, Trash2, X } from "lucide-react";
 
-import { AffinityControls } from "./AffinityControls";
 import NonReasoningTierToggle from "./NonReasoningTierToggle";
 import TierConfigIntro from "./TierConfigIntro";
 import TierRowSelect from "./TierRowSelect";
-import { ModalityRoutingControls } from "./ModalityRoutingControls";
 import { Card, CardContent } from "@/components/ui/card";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import { Button } from "@/components/ui/button";
@@ -39,12 +35,8 @@ import {
 } from "./tier_rows";
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
-import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
-import ClassificationMethodConfig, { InactiveHeuristicV2Threshold } from "./ClassificationMethodConfig";
-import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
-import ResponseFormatControls from "./ResponseFormatControls";
-import StallEscalationConfig from "./StallEscalationConfig";
-import { Restricted, restrictedBy } from "./TierRestrictions";
+import { InactiveHeuristicV2Threshold } from "./ClassificationMethodConfig";
+import ComplexityRouterAdvancedSections from "./ComplexityRouterAdvancedSections";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
   ReasoningEffort,
@@ -56,16 +48,10 @@ import {
   tierRowLabel,
 } from "./complexity_router_tiers";
 import TierModelEffortRows from "./TierModelEffortRows";
-import EscalationKeywords from "./EscalationKeywords";
-import KeywordTierRules, { KeywordTierRule } from "./KeywordTierRules";
-import SemanticKeywordMatching from "./SemanticKeywordMatching";
+import { KeywordTierRule } from "./KeywordTierRules";
 import { type DimensionWeights, type TierBoundaries, type TokenThresholds } from "./heuristic_scoring_knobs";
 import { type CustomDimensionRow } from "./custom_dimensions";
-import CompressionControls from "./CompressionControls";
 import { type AutoRouterCompressionState, DEFAULT_AUTO_ROUTER_COMPRESSION } from "./buildAutoRouterCompression";
-import HeuristicKeywordOverrides from "./HeuristicKeywordOverrides";
-import HousekeepingRoutingControls from "./HousekeepingRoutingControls";
-import ReminderMarkers from "./ReminderMarkers";
 import { type ReminderMarkerPair } from "./build_complexity_router_config";
 
 export type { DimensionWeights, TierBoundaries, TokenThresholds };
@@ -782,167 +768,33 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           </>
         )}
         <div className="rounded-lg border border-border bg-muted">
-          {[
-            ...(!forecast
-              ? [
-                  {
-                    key: "classifier",
-                    label: <strong className="text-foreground font-semibold">Advanced: Classification Method</strong>,
-                    children: (
-                      <ClassificationMethodConfig
-                        value={value}
-                        onChange={onChange}
-                        modelOptions={modelOptions}
-                        effortOptionsByModel={classifierEffortOptionsByModel}
-                        customTechnicalKeywords={customTechnicalKeywords}
-                        onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
-                        showValidationErrors={showValidationErrors}
-                        defaultModel={defaultModel}
-                      />
-                    ),
-                  },
-              ]
-              : []),
-            ...(!forecast
-              ? [
-                  {
-                    key: "keyword-overrides",
-                    label: (
-                      <strong className="text-foreground font-semibold">Advanced: Heuristic Keyword Overrides</strong>
-                    ),
-                    children: <HeuristicKeywordOverrides value={value} onChange={onChange} />,
-                  },
-                ]
-              : []),
-            {
-              key: "adaptive",
-              label: <strong className="text-foreground font-semibold">Advanced: Adaptive Routing</strong>,
-              children: (
-                <Restricted by={restrictedBy(value, "adaptive")}>
-                  <AdaptiveRoutingConfig value={value} onChange={onChange} />
-                </Restricted>
-              ),
-            },
-            {
-              key: "affinity",
-              label: <strong className="text-foreground font-semibold">Advanced: Affinity</strong>,
-              children: <AffinityControls value={value} onChange={onChange} />,
-            },
-            {
-              key: "modality",
-              label: <strong className="text-foreground font-semibold">Advanced: Modality Routing</strong>,
-              children: <ModalityRoutingControls value={value} onChange={onChange} />,
-            },
-            {
-              key: "plan-mode",
-              label: <strong className="text-foreground font-semibold">Advanced: Plan-Mode Override</strong>,
-              children: (
-                <PlanModeOverrideControls value={value} onChange={onChange} planModeTierOptions={planModeTierOptions} />
-              ),
-            },
-            {
-              key: "housekeeping",
-              label: <strong className="text-foreground font-semibold">Advanced: Housekeeping Routing</strong>,
-              children: <HousekeepingRoutingControls value={value} onChange={onChange} />,
-            },
-            {
-              key: "reminder-markers",
-              label: <strong className="text-foreground font-semibold">Advanced: Reminder Markers</strong>,
-              children: <ReminderMarkers value={value} onChange={onChange} showValidationErrors={showValidationErrors} />,
-            },
-            {
-              key: "context-window",
-              label: <strong className="text-foreground font-semibold">Advanced: Context Window Escalation</strong>,
-              children: <ContextWindowEscalationConfig value={value} onChange={onChange} />,
-            },
-            {
-              key: "stall-escalation",
-              label: <strong className="text-foreground font-semibold">Advanced: Stalled Task Escalation</strong>,
-              children: (
-                <Restricted by={restrictedBy(value, "stallEscalation")}>
-                  <StallEscalationConfig value={value} onChange={onChange} />
-                </Restricted>
-              ),
-            },
-            {
-              key: "response",
-              label: <strong className="text-foreground font-semibold">Advanced: Response Format</strong>,
-              children: <ResponseFormatControls value={value} onChange={onChange} />,
-            },
-            ...(onEscalationKeywordsChange
-              ? [
-                  {
-                    key: "escalation",
-                    label: <strong className="text-foreground font-semibold">Advanced: Escalation Keywords</strong>,
-                    children: (
-                      <Restricted by={restrictedBy(value, "escalation")}>
-                        <EscalationKeywords keywords={escalationKeywords} onChange={onEscalationKeywordsChange} />
-                      </Restricted>
-                    ),
-                  },
-                ]
-              : []),
-            ...(onAutoRouterCompressionChange
-              ? [
-                  {
-                    key: "compression",
-                    label: <strong className="text-foreground font-semibold">Advanced: Compression</strong>,
-                    children: (
-                      <CompressionControls value={autoRouterCompression} onChange={onAutoRouterCompressionChange} />
-                    ),
-                  },
-                ]
-              : []),
-            ...(onKeywordTierRulesChange || onSemanticMatchingEnabledChange
-              ? [
-                  {
-                    key: "keyword-semantic",
-                    label: (
-                      <strong className="text-foreground font-semibold">Advanced: Keyword/Semantic Matching</strong>
-                    ),
-                    children: (
-                      <>
-                        {onKeywordTierRulesChange && (
-                          <KeywordTierRules
-                            rules={keywordTierRules}
-                            onChange={onKeywordTierRulesChange}
-                            tierLabels={value.tier_labels}
-                            tierNames={
-                              customTierSet || isForecastClassifier(value.classifier_type)
-                                ? tierRows.map(activeTierName).filter(Boolean)
-                                : undefined
-                            }
-                          />
-                        )}
-                        {onKeywordTierRulesChange && onSemanticMatchingEnabledChange && <Separator className="my-4" />}
-                        {onSemanticMatchingEnabledChange && (
-                          <SemanticKeywordMatching
-                            enabled={semanticMatchingEnabled}
-                            onEnabledChange={onSemanticMatchingEnabledChange}
-                            embeddingModel={embeddingModel}
-                            onEmbeddingModelChange={onEmbeddingModelChange}
-                            matchThreshold={matchThreshold}
-                            onMatchThresholdChange={onMatchThresholdChange}
-                            modelInfo={modelInfo}
-                            showValidationErrors={showValidationErrors}
-                          />
-                        )}
-                      </>
-                    ),
-                  },
-                ]
-              : []),
-          ]
-            .filter(({ key }) => !forecast || !["adaptive", "context-window", "escalation"].includes(key))
-            .map(({ key, label, children }) => (
-              <Collapsible key={key} className="border-b border-border last:border-b-0">
-                <CollapsibleTrigger className="group flex w-full items-center gap-2 px-4 py-3 text-left">
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-panel-open:rotate-90" />
-                  {label}
-                </CollapsibleTrigger>
-                <CollapsibleContent className="px-4 pb-4">{children}</CollapsibleContent>
-              </Collapsible>
-            ))}
+          <ComplexityRouterAdvancedSections
+            value={value}
+            onChange={onChange}
+            forecast={forecast}
+            modelOptions={modelOptions}
+            classifierEffortOptionsByModel={classifierEffortOptionsByModel}
+            customTechnicalKeywords={customTechnicalKeywords}
+            onCustomTechnicalKeywordsChange={onCustomTechnicalKeywordsChange}
+            showValidationErrors={showValidationErrors}
+            defaultModel={defaultModel}
+            planModeTierOptions={planModeTierOptions}
+            keywordTierRules={keywordTierRules}
+            onKeywordTierRulesChange={onKeywordTierRulesChange}
+            semanticMatchingEnabled={semanticMatchingEnabled}
+            onSemanticMatchingEnabledChange={onSemanticMatchingEnabledChange}
+            embeddingModel={embeddingModel}
+            onEmbeddingModelChange={onEmbeddingModelChange}
+            matchThreshold={matchThreshold}
+            onMatchThresholdChange={onMatchThresholdChange}
+            escalationKeywords={escalationKeywords}
+            onEscalationKeywordsChange={onEscalationKeywordsChange}
+            autoRouterCompression={autoRouterCompression}
+            onAutoRouterCompressionChange={onAutoRouterCompressionChange}
+            modelInfo={modelInfo}
+            tierRows={tierRows}
+            customTierSet={customTierSet}
+          />
         </div>
       </RoutingOptions>
     </div>
