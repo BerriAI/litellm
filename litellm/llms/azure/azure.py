@@ -481,7 +481,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 additional_args={"complete_input_dict": data},
                 original_response=str(e),
             )
-            raise AzureOpenAIError(status_code=500, message=str(e))
+            # Cancellation is this request going away, not the deployment failing. Turning it
+            # into a 5xx made the router cool down a healthy deployment, so every caller that
+            # hung up (cancel_on_disconnect, a client timeout) counted against its health.
+            raise
         except Exception as e:
             message: Final = getattr(e, "message", str(e))
             body: Final = getattr(e, "body", None)
