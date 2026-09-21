@@ -479,6 +479,7 @@ async def test_redis_cluster_facade_serves_multi_slot_batches_and_scoped_flush_n
 PARAPHRASE_MARKER: Final = " (paraphrase)"
 SEMANTIC_EMBEDDING_MODEL: Final = "semantic-test/deterministic"
 SEMANTIC_INDEX_PREFIX: Final = "litellm_test_semantic_"
+SEMANTIC_CONTEXT: Final = contextvars.ContextVar("semantic_test_context", default="unset")
 
 
 def _normalized(vector: list[float]) -> list[float]:
@@ -509,6 +510,7 @@ def _semantic_embedding(prompt: str) -> list[float]:
 class DeterministicEmbedding(litellm.CustomLLM):
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.async_calls: list[dict[str, object]] = []
 
     def _respond(
         self,
@@ -553,6 +555,16 @@ class DeterministicEmbedding(litellm.CustomLLM):
         timeout: object = None,
         litellm_params: object = None,
     ) -> EmbeddingResponse:
+        texts: Final = cast(list[object], input if isinstance(input, list) else [input])
+        self.async_calls.append(
+            {
+                "model": model,
+                "input": texts,
+                "task": asyncio.current_task(),
+                "context": SEMANTIC_CONTEXT.get(),
+            }
+        )
+        SEMANTIC_CONTEXT.set("written-in-aembedding")
         return self._respond(model, input, model_response)
 
 
@@ -753,6 +765,50 @@ async def test_redis_semantic_async_paths_and_store_batch_share_one_layout(
         semantic_request("async-python", "python written prompt")
     ) == {"answer": "python"}
     client.close()
+
+
+async def test_native_semantic_async_embedding_runs_inline_in_the_callers_task(
+    redis_stack: tuple[str, str], semantic_embedding: DeterministicEmbedding
+) -> None:
+    url, index = redis_stack
+    facade: Final = semantic_facade(url, index)
+    binding: Final = _CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
+    assert binding.kind == "native"
+    caller: Final = asyncio.current_task()
+    SEMANTIC_CONTEXT.set("caller-sentinel")
+    response: Final = {"choices": [{"text": "paris"}]}
+
+    await binding.async_store(
+        semantic_request("inline", "what is the capital of france"), response
+    )
+    assert (
+        await binding.async_lookup(
+            semantic_request("inline", f"what is the capital of france{PARAPHRASE_MARKER}")
+        )
+        == response
+    )
+    assert await binding.async_lookup(semantic_request("inline", "python written prompt")) is None
+    assert SEMANTIC_CONTEXT.get() == "written-in-aembedding"
+    assert semantic_embedding.async_calls == [
+        {
+            "model": "deterministic",
+            "input": ["what is the capital of france"],
+            "task": caller,
+            "context": "caller-sentinel",
+        },
+        {
+            "model": "deterministic",
+            "input": [f"what is the capital of france{PARAPHRASE_MARKER}"],
+            "task": caller,
+            "context": "written-in-aembedding",
+        },
+        {
+            "model": "deterministic",
+            "input": ["python written prompt"],
+            "task": caller,
+            "context": "written-in-aembedding",
+        },
+    ], semantic_embedding.async_calls
 
 
 def test_redis_semantic_similarity_tag_and_threshold_boundaries(

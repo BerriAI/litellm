@@ -20,6 +20,7 @@ struct RequestInput {
     scope: Option<String>,
 }
 
+#[derive(Clone)]
 pub(super) struct CacheRequest {
     key: CacheKeyInput,
     controls: CacheControls,
