@@ -49,6 +49,49 @@ if TYPE_CHECKING:
     )
 
 
+def _assembled_model_came_from_a_later_chunk(
+    chunks: Sequence[object],
+    assembled_model: object,
+) -> bool:
+    """Report whether stream_chunk_builder picked a model the first chunk did not carry.
+
+    Azure Model Router puts the routed model on the chunks after the first one, and the
+    proxy deliberately leaves those chunks unrestamped so the builder can recover it.
+
+    A stored chunk that carries usage is a pre-restamp copy of the one the proxy saw, so
+    an alias-restamped stream reaches the builder with the same shape: a first chunk that
+    disagrees with the rest. Those two are only told apart by what the client asked for.
+    """
+    first_chunk: Final = chunks[0]
+    first_chunk_model: Final = (
+        first_chunk.get("model") if isinstance(first_chunk, dict) else getattr(first_chunk, "model", None)
+    )
+    return (
+        isinstance(first_chunk_model, str)
+        and isinstance(assembled_model, str)
+        and bool(assembled_model)
+        and assembled_model != first_chunk_model
+    )
+
+
+def _assembled_model_is_the_name_the_client_asked_for(
+    request_data: Mapping[str, object],
+    assembled_model: object,
+) -> bool:
+    """Report whether the assembled model is the public name the proxy stamps onto chunks.
+
+    That stamp is what leaves an unpriced alias on the partial response, so the deployment's
+    own model has to go back on before the row is costed. Pre-call processing rewrites
+    `request_data["model"]` for aliasing and routing, so the client's own name wins when it
+    is there, in the same order the proxy picks the name it stamps.
+    """
+    client_requested_model: Final = request_data.get("_litellm_client_requested_model")
+    stamped_model: Final = (
+        client_requested_model if isinstance(client_requested_model, str) else request_data.get("model")
+    )
+    return isinstance(stamped_model, str) and assembled_model == stamped_model
+
+
 class _ThinkingBlockFragment(TypedDict, total=False):
     type: str | None
     data: str | None

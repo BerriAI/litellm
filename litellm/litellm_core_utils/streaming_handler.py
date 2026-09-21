@@ -24,6 +24,10 @@ from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
+from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
+    _assembled_model_came_from_a_later_chunk,
+    _assembled_model_is_the_name_the_client_asked_for,
+)
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 from litellm.types.router import GenericLiteLLMParams
@@ -1864,6 +1868,18 @@ class CustomStreamWrapper:
                     except Exception:
                         complete_streaming_response = None
 
+                if complete_streaming_response is not None and isinstance(self.model, str) and self.model:
+                    builder_recovered_routed_model = _assembled_model_came_from_a_later_chunk(
+                        self.chunks,
+                        complete_streaming_response.model,
+                    ) and not _assembled_model_is_the_name_the_client_asked_for(
+                        self.logging_obj.model_call_details,
+                        complete_streaming_response.model,
+                    )
+
+                    if not builder_recovered_routed_model:
+                        complete_streaming_response.model = self.model
+
                 response = self.model_response_creator()
                 if complete_streaming_response is not None:
                     self._propagate_usage_cost_to_hidden_params(complete_streaming_response, self.custom_llm_provider)
@@ -2116,22 +2132,12 @@ class CustomStreamWrapper:
                     complete_streaming_response = None
 
             if complete_streaming_response is not None and isinstance(self.model, str) and self.model:
-                litellm_params = self.logging_obj.model_call_details.get("litellm_params")
-                proxy_request = litellm_params.get("proxy_server_request") if isinstance(litellm_params, dict) else None
-                request_body = proxy_request.get("body") if isinstance(proxy_request, dict) else None
-
-                client_requested_model = request_body.get("model") if isinstance(request_body, dict) else None
-
-                assembled_model = complete_streaming_response.model
-                builder_recovered_routed_model = (
-                    isinstance(assembled_model, str)
-                    and bool(assembled_model)
-                    and any(
-                        (chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None))
-                        == assembled_model
-                        for chunk in self.chunks[1:]
-                    )
-                    and assembled_model != client_requested_model
+                builder_recovered_routed_model = _assembled_model_came_from_a_later_chunk(
+                    self.chunks,
+                    complete_streaming_response.model,
+                ) and not _assembled_model_is_the_name_the_client_asked_for(
+                    self.logging_obj.model_call_details,
+                    complete_streaming_response.model,
                 )
 
                 if not builder_recovered_routed_model:

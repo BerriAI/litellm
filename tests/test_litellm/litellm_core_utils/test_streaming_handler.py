@@ -4361,15 +4361,20 @@ async def test_stream_wrapper_anext_keeps_context_active_through_synthesized_fin
 
 
 @pytest.mark.asyncio
-async def test_finalize_completed_stream_uses_routed_model_for_logging(logging_obj):
-    routed_model = "anthropic/claude-haiku-4-5"
-    client_alias = "myalias/haiku"
+async def test_finalize_completed_stream_restores_routed_model_for_key_alias(
+    logging_obj,
+):
+    routed_model = "anthropic/claude-opus-4-20250514"
+    client_alias = "claude"
+    alias_target = "some-deployment"
 
     async def _empty_aiter():
         if False:
             yield None
 
     logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.model_call_details["_litellm_client_requested_model"] = client_alias
+    logging_obj.model_call_details["model"] = alias_target
 
     wrapper = CustomStreamWrapper(
         completion_stream=_empty_aiter(),
@@ -4379,7 +4384,12 @@ async def test_finalize_completed_stream_uses_routed_model_for_logging(logging_o
     )
 
     wrapper.sent_last_chunk = True
-    wrapper.chunks = [MagicMock()]
+    wrapper.chunks = [
+        {"model": routed_model},
+        {"model": client_alias},
+        {"model": client_alias},
+        {"model": routed_model},
+    ]
     wrapper.async_success_handler = AsyncMock()
 
     assembled_response = ModelResponse(
@@ -4461,6 +4471,62 @@ async def test_finalize_completed_stream_preserves_model_recovered_from_later_ch
 
     assert logged_response.model == recovered_routed_model
 
+def test_sync_completed_stream_restores_routed_model_for_key_alias(logging_obj):
+    routed_model = "anthropic/claude-opus-4-20250514"
+    client_alias = "claude"
+    alias_target = "some-deployment"
+
+    logging_obj.success_handler = MagicMock()
+    logging_obj.model_call_details["_litellm_client_requested_model"] = client_alias
+    logging_obj.model_call_details["model"] = alias_target
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter(()),
+        model=routed_model,
+        logging_obj=logging_obj,
+        custom_llm_provider="anthropic",
+    )
+
+    wrapper.sent_last_chunk = True
+    wrapper.send_stream_usage = False
+    wrapper.chunks = [
+        {"model": routed_model},
+        {"model": client_alias},
+        {"model": client_alias},
+        {"model": routed_model},
+    ]
+
+    assembled_response = ModelResponse(
+        model=client_alias,
+        choices=[],
+        usage=Usage(
+            prompt_tokens=27,
+            completion_tokens=1,
+            total_tokens=28,
+        ),
+    )
+
+    with (
+        patch(
+            "litellm.stream_chunk_builder",
+            return_value=assembled_response,
+        ),
+        patch.object(wrapper, "cache_streaming_response") as cache_mock,
+        patch(
+            "litellm.litellm_core_utils.streaming_handler.executor.submit"
+        ) as submit_mock,
+    ):
+        with pytest.raises(StopIteration):
+            next(wrapper)
+
+    submit_mock.assert_called_once()
+
+    logged_response = submit_mock.call_args.args[1]
+    assert logged_response.model == routed_model
+
+    cache_mock.assert_called_once()
+    cached_response = cache_mock.call_args.kwargs["processed_chunk"]
+    assert cached_response.model == routed_model
 
 @pytest.mark.asyncio
 async def test_stream_wrapper_anext_max_duration_timeout_restores_consumer_correlation_context(monkeypatch):
