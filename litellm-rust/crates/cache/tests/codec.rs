@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use litellm_cache::{CacheCodec, CacheEntry, Error, JsonCodec};
+use litellm_cache::{CacheCodec, Error, JsonCodec};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -23,18 +23,6 @@ fn json_codec_round_trips_typed_domain_values() {
         serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
         json!({"deployment": "deployment-a", "cooldown_seconds": 30})
     );
-}
-
-#[test]
-fn response_entries_preserve_the_existing_json_representation() {
-    let codec = JsonCodec::<CacheEntry>::new();
-    let entry = CacheEntry {
-        timestamp: 123.0,
-        response: json!({"choices": [{"text": "cached"}]}),
-    };
-    let bytes = codec.encode(&entry).unwrap();
-    assert_eq!(bytes, serde_json::to_vec(&entry).unwrap());
-    assert_eq!(codec.decode(&bytes).unwrap(), entry);
 }
 
 #[test]

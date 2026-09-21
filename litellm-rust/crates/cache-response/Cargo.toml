@@ -7,13 +7,14 @@ repository.workspace = true
 
 [dependencies]
 litellm-cache.workspace = true
-litellm-cache-memory.workspace = true
-litellm-cache-redis.workspace = true
 py_literal = "0.4.0"
-redis = "1.7.0"
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
+litellm-cache-memory.workspace = true
+litellm-cache-redis.workspace = true
+redis = "1.7.0"
 redis-test = "1.0.4"
 tokio.workspace = true

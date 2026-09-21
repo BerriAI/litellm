@@ -1,9 +1,10 @@
 mod facade;
+mod native;
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use litellm_cache::{CacheControls, CacheKeyInput, Error};
-use litellm_cache_response::{NativeResponseCache, ResponseCacheRequest};
+use litellm_cache::Error;
+use litellm_cache_response::{CacheControls, CacheKeyInput, ResponseCacheRequest};
 use litellm_host_python::{ExecutionStep, from_py, release_gil, run_async, to_py};
 use pyo3::{
     PyTraverseError, PyVisit,
@@ -15,6 +16,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use facade::FacadeGuard;
+use native::NativeResponseCache;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

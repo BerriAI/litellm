@@ -1,33 +1,30 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::{CacheEntry, Error};
+use litellm_cache::{CacheCodec, Error};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::RedisCache;
 use serde_json::Value;
 
-use crate::{ResponseCache, ResponseCacheCodec, ResponseCacheRequest};
+use litellm_cache_response::{CacheEntry, ResponseCache, ResponseCacheCodec, ResponseCacheRequest};
 
-pub enum NativeResponseCache<C = redis::Connection>
-where
-    C: redis::ConnectionLike + Send + 'static,
-{
+#[derive(Clone)]
+pub(super) enum NativeResponseCache {
     Memory(Arc<ResponseCache<InMemoryCache<CacheEntry>>>),
-    Redis(Arc<ResponseCache<RedisCache<ResponseCacheCodec, C>>>),
-}
-
-impl<C: redis::ConnectionLike + Send + 'static> Clone for NativeResponseCache<C> {
-    fn clone(&self) -> Self {
-        match self {
-            Self::Memory(cache) => Self::Memory(Arc::clone(cache)),
-            Self::Redis(cache) => Self::Redis(Arc::clone(cache)),
-        }
-    }
+    Redis(Arc<ResponseCache<RedisCache<ResponseCacheCodec>>>),
 }
 
 impl NativeResponseCache {
     pub fn memory(capacity: usize, ttl: Duration, max_entry_bytes: usize) -> Self {
         Self::Memory(Arc::new(ResponseCache::new(Arc::new(
-            InMemoryCache::response_cache(capacity, ttl, max_entry_bytes),
+            InMemoryCache::with_clock_and_size_measurement(
+                Some(capacity),
+                Some(ttl),
+                Some(max_entry_bytes),
+                Some(Arc::new(|entry| {
+                    ResponseCacheCodec.encode(entry).map(|bytes| bytes.len())
+                })),
+                super::now,
+            ),
         ))))
     }
 
@@ -41,7 +38,7 @@ impl NativeResponseCache {
     }
 }
 
-impl<C: redis::ConnectionLike + Send + 'static> NativeResponseCache<C> {
+impl NativeResponseCache {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Memory(_) => "memory",

@@ -224,8 +224,24 @@ async def test_redis_reads_python_sync_and_async_entries_and_writes_without_hidd
 def test_invalid_duration_and_request_shape_fail_before_storage() -> None:
     binding: Final = _native.CacheResolver(SimpleNamespace(cache=_native.NativeCacheHandle.memory())).resolve()
     for seconds in (-1.0, float("nan"), float("inf")):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="cache durations must be finite and nonnegative"):
             binding.store({**request(), "ttl_seconds": seconds}, {"answer": 1})
     assert binding.lookup(request()) is None
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="cache durations must be finite and nonnegative"):
         _native.NativeCacheHandle.memory(ttl_seconds=-1)
+
+
+async def test_memory_size_policy_is_applied_by_the_native_host() -> None:
+    handle: Final = _native.NativeCacheHandle.memory(capacity=2, max_entry_bytes=128)
+    binding: Final = _native.CacheResolver(SimpleNamespace(cache=handle)).resolve()
+    small: Final = {"answer": "ok"}
+    binding.store(request("small"), small)
+    assert await binding.async_lookup(request("small")) == small
+    await binding.async_store(request("large"), {"answer": "x" * 256})
+    assert binding.lookup(request("large")) is None
+    assert binding.lookup(request("small")) == small
+    disabled: Final = _native.CacheResolver(
+        SimpleNamespace(cache=_native.NativeCacheHandle.memory(capacity=0))
+    ).resolve()
+    await disabled.async_store(request(), small)
+    assert await disabled.async_lookup(request()) is None
