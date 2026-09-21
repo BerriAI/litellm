@@ -601,3 +601,42 @@ async def test_scim_status_write_refreshes_user_cache(
         else:
             assert cached is None
             broadcast.assert_awaited_once_with(cache_key=user_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "delete"])
+async def test_scim_delete_user_evicts_cached_user_row(failure: str | None) -> None:
+    from typing import Final
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    user_id: Final = "scim-deleted-user"
+    saved: Final = LiteLLM_UserTable(user_id=user_id, user_email="x@example.com", teams=[], metadata={})
+    client, db = _build_prisma_with_keys([], mock_user=saved.model_copy(deep=True))
+    if failure == "delete":
+        db.litellm_usertable.delete.side_effect = RuntimeError("user delete failed")
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=user_id, value=saved, model_type=LiteLLM_UserTable)
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", client),  # test-quality-ok: substitute the database dependency
+        patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: exercise a real isolated cache
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: isolate the logging dependency
+        patch(  # test-quality-ok: observe the Redis publication boundary
+            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            new_callable=AsyncMock,
+        ) as broadcast,
+    ):
+        if failure == "delete":
+            with pytest.raises(ProxyException, match="user delete failed"):
+                await delete_user(user_id=user_id)
+        else:
+            response: Final = await delete_user(user_id=user_id)
+            assert response.status_code == 204
+    cached: Final = await cache.async_get_cache(key=user_id, model_type=LiteLLM_UserTable)
+    if failure == "delete":
+        assert cached == saved
+        broadcast.assert_not_awaited()
+    else:
+        assert cached is None
+        broadcast.assert_awaited_once_with(cache_key=user_id)
