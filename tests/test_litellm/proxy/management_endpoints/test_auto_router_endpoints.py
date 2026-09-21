@@ -5,14 +5,19 @@ Unit tests for auto router management endpoints
 from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 import litellm
+import litellm.llms.custom_httpx.http_handler as http_handler
+import litellm.router_strategy.complexity_router.complexity_router as complexity_module
 from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LitellmUserRoles,
@@ -35,9 +40,12 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarksResponse,
     AutoRouterRoutingTestRequest,
 )
+from litellm.types.router import Deployment
 from litellm.types.utils import Choices, Message, ModelResponse
 
-ROUTING_HTTP_REQUEST: Final = Request({"type": "http", "method": "POST", "path": "/auto_router/test_routing", "headers": []})
+ROUTING_HTTP_REQUEST: Final = Request(
+    {"type": "http", "method": "POST", "path": "/auto_router/test_routing", "headers": []}
+)
 
 ADMIN = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test", user_id="admin")
 
@@ -569,7 +577,9 @@ async def test_no_llm_router_on_the_proxy_is_a_500(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(proxy_server, "llm_router", None)
 
     with pytest.raises(HTTPException) as exc_info:
-        await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=_request("what is 2+2"), user_api_key_dict=ADMIN)
+        await preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST, data=_request("what is 2+2"), user_api_key_dict=ADMIN
+        )
 
     assert exc_info.value.status_code == 500
 
@@ -772,16 +782,42 @@ class TestAutoRouterBenchmarks:
         assert _summed_agg_row([complexity, quality]).tier_turns == {}
 
     @pytest.mark.asyncio
-    async def test_non_admin_roles_cannot_read_benchmarks(self):
+    @pytest.mark.parametrize("user_id", [None, "own-user", "other-user"])
+    async def test_non_admin_roles_cannot_read_benchmarks(self, user_id: str | None):
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
         with pytest.raises(HTTPException) as err:
             await get_auto_router_benchmarks(
-                user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-x"),
+                user_api_key_dict=UserAPIKeyAuth(
+                    user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-x", user_id="own-user"
+                ),
                 start_date="2026-08-01",
                 end_date="2026-08-02",
+                user_id=user_id,
             )
         assert err.value.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_an_empty_user_filter_is_rejected_before_querying_deployment_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import httpx
+        from fastapi import FastAPI
+
+        from litellm.proxy import proxy_server
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
+
+        query: Final = AsyncMock(return_value=[])
+        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace(db=SimpleNamespace(query_raw=query)))
+        app: Final = FastAPI()
+        app.get("/auto_router/benchmarks")(get_auto_router_benchmarks)
+        app.dependency_overrides[user_api_key_auth] = lambda: ADMIN
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response: Final = await client.get("/auto_router/benchmarks", params={"user_id": ""})
+
+        assert response.status_code == 422
+        query.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_a_reversed_window_is_rejected(self, monkeypatch: pytest.MonkeyPatch):
@@ -798,7 +834,11 @@ class TestAutoRouterBenchmarks:
         assert err.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_endpoint_returns_groups_and_totals_from_the_rollup(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+    @pytest.mark.parametrize("user_id", [None, "selected-user"])
+    async def test_endpoint_returns_groups_and_totals_from_the_rollup(
+        self, monkeypatch: pytest.MonkeyPatch, role: LitellmUserRoles, user_id: str | None
+    ):
         from litellm.proxy import proxy_server
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_benchmarks
 
@@ -813,12 +853,13 @@ class TestAutoRouterBenchmarks:
         monkeypatch.setattr(proxy_server, "prisma_client", type("P", (), {"db": _DB()})())
 
         response = await get_auto_router_benchmarks(
-            user_api_key_dict=ADMIN,
+            user_api_key_dict=UserAPIKeyAuth(user_role=role, api_key="sk-admin", user_id="viewer"),
             start_date="2026-07-01",
             end_date="2026-08-01",
             api_key="key-hash",
+            user_id=user_id,
         )
-        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash")
+        assert captured["params"] == ("2026-07-01T00:00:00", "2026-08-02T00:00:00", "key-hash", user_id)
         assert response.routers_in_scope == 1
         assert response.groups[0].router_name == "live-auto"
         assert response.groups[0].saved_pct == response.totals.saved_pct == 75.0
@@ -1037,11 +1078,15 @@ class TestAutoRouterSession:
         class _Table:
             async def find_first(self, where: Mapping[str, object], order: Mapping[str, object]):
                 lookups.append((where, order))
-                matching = [r for r in rows if (r["api_key"], r["session_id"]) == (where["api_key"], where["session_id"])]
+                matching = [
+                    r for r in rows if (r["api_key"], r["session_id"]) == (where["api_key"], where["session_id"])
+                ]
                 return max(matching, key=lambda r: r["last_turn_at"], default=None)
 
         monkeypatch.setattr(
-            proxy_server, "prisma_client", type("P", (), {"db": type("D", (), {"litellm_autoroutersession": _Table()})()})()
+            proxy_server,
+            "prisma_client",
+            type("P", (), {"db": type("D", (), {"litellm_autoroutersession": _Table()})()})(),
         )
         return lookups
 
@@ -2423,6 +2468,164 @@ async def test_list_shadow_eval_jobs_collapses_legs_into_jobs_newest_first(monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("denial", ["key", "team", "budget", None])
+async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typesafe(
+    monkeypatch: pytest.MonkeyPatch, denial: str | None
+) -> None:
+    router: Final = RecordingRouter("SIMPLE")
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("TYPESAFE_API_KEY", "test")
+    monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.test")
+    models: Final = ["cheap-model", "typesafe/jev-latest"]
+    actor: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-jev-test",
+        user_id="admin",
+        models=["cheap-model"] if denial == "key" else models,
+        team_id="jev-test-team" if denial == "team" else None,
+        team_models=["cheap-model"] if denial == "team" else models,
+        max_budget=1,
+        spend=1 if denial == "budget" else 0,
+    )
+    with respx.mock(assert_all_called=False) as http:
+        handler: Final = http_handler.AsyncHTTPHandler()
+        handler.client = httpx.AsyncClient(transport=httpx.MockTransport(http.async_handler))
+
+        def http_client(_provider: object) -> http_handler.AsyncHTTPHandler:
+            return handler
+
+        monkeypatch.setattr(complexity_module, "get_async_httpx_client", http_client)
+        evaluation: Final = http.post("https://typesafe.test/v1/systemone").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "answers": {
+                        "tier": {"type": "choice", "choice": "SIMPLE", "confidence": 1, "probabilities": {"SIMPLE": 1}}
+                    }
+                },
+            )
+        )
+        call: Final = preview_auto_router_routing(
+            http_request=ROUTING_HTTP_REQUEST,
+            data=_request("small deterministic ask", classifier_type="jev", jev_classifier_config={}),
+            user_api_key_dict=actor,
+        )
+        if denial is not None:
+            with pytest.raises(ProxyException) as exc:
+                await call
+            assert (
+                exc.value.type
+                == {
+                    "key": ProxyErrorTypes.key_model_access_denied,
+                    "team": ProxyErrorTypes.team_model_access_denied,
+                    "budget": ProxyErrorTypes.budget_exceeded,
+                }[denial]
+            )
+            assert evaluation.call_count == 0
+        else:
+            response: Final = await call
+            assert response.routing_decision["cause"] == "jev_classifier"
+            assert response.routed_model == "cheap-model"
+            assert evaluation.call_count == 1
+        assert router.recorded_calls == []
+        await handler.client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case", ["allowed", "credential-free", "missing", "blocked", "key", "budget", "team", "not-router"]
+)
+async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
+    router: Final = RecordingRouter("SIMPLE")
+    stored_key: Final = "synthetic-server-jev-key"
+    stored_config: Final = {
+        "classifier_type": "jev",
+        "tiers": TIERS,
+        "jev_classifier_config": {"api_key": stored_key, "api_base": "https://saved-jev.test"},
+    }
+    router.add_deployment(
+        Deployment.model_validate(
+            {
+                "model_name": "saved-jev",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini" if case == "not-router" else "auto_router/complexity_router",
+                    "complexity_router_config": stored_config,
+                },
+                "model_info": {
+                    "id": "saved-jev-id",
+                    "blocked": case == "blocked",
+                    "team_id": "owner-team" if case == "team" else None,
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    actor: Final = (
+        _configure_member_preview(monkeypatch)
+        if case == "team"
+        else UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-probe",
+            user_id="admin",
+            models=["typesafe/jev-latest"] if case == "key" else ["saved-jev", "typesafe/jev-latest"],
+            max_budget=1,
+            spend=1 if case == "budget" else 0,
+        )
+    )
+    request: Final = _request_from(
+        {
+            "prompt": "what is 2+2",
+            "saved_model_id": "missing-id" if case == "missing" else "saved-jev-id",
+            "team_id": "member-preview-team" if case == "team" else None,
+        },
+        classifier_type="jev",
+        jev_classifier_config=(
+            {"model": "jev-latest", "timeout_ms": 3000}
+            if case == "credential-free"
+            else {"api_key": "masked-key", "api_base": "https://browser-override.test"}
+        ),
+    )
+    with respx.mock(assert_all_called=False) as http:
+        handler: Final = http_handler.AsyncHTTPHandler()
+        handler.client = httpx.AsyncClient(transport=httpx.MockTransport(http.async_handler))
+
+        def http_client(_provider: object) -> http_handler.AsyncHTTPHandler:
+            return handler
+
+        monkeypatch.setattr(complexity_module, "get_async_httpx_client", http_client)
+        evaluation: Final = http.post("https://saved-jev.test/v1/systemone").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "answers": {
+                        "tier": {"type": "choice", "choice": "SIMPLE", "confidence": 1, "probabilities": {"SIMPLE": 1}}
+                    }
+                },
+            )
+        )
+        operation: Final = preview_auto_router_routing(request, actor, ROUTING_HTTP_REQUEST)
+        if case in ("missing", "blocked", "team", "not-router"):
+            with pytest.raises(HTTPException) as denied:
+                await operation
+            assert denied.value.status_code == {"missing": 404, "blocked": 404, "team": 403, "not-router": 400}[case]
+        elif case in ("key", "budget"):
+            with pytest.raises(ProxyException) as forbidden:
+                await operation
+            assert forbidden.value.type == (
+                ProxyErrorTypes.key_model_access_denied if case == "key" else ProxyErrorTypes.budget_exceeded
+            )
+        else:
+            result: Final = await operation
+            assert result.routing_decision["cause"] == "jev_classifier"
+            assert result.routed_model == "cheap-model"
+            assert evaluation.calls.last.request.headers["authorization"] == f"Bearer {stored_key}"
+            assert stored_key not in result.model_dump_json()
+        assert evaluation.call_count == (1 if case in ("allowed", "credential-free") else 0)
+        assert router.recorded_calls == []
+        await handler.client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_list_shadow_eval_jobs_filters_to_jobs_containing_the_key(monkeypatch: pytest.MonkeyPatch):
     """The filter matches a key anywhere in a job's key set and still returns the whole
     job, sibling keys included."""
@@ -2877,12 +3080,16 @@ async def test_routing_test_never_confirms_models_the_caller_cannot_use(monkeypa
     )
 
     monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-probe", models=["mid-model"]))
-    probing = await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=_request("team-probe"), user_api_key_dict=team_admin)
+    probing = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=_request("team-probe"), user_api_key_dict=team_admin
+    )
     assert probing.routed_model == "cheap-model"
     assert probing.routed_model_configured is False
 
     monkeypatch.setattr(proxy_server, "prisma_client", _team_prisma("team-grant", models=["cheap-model"]))
-    granted = await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=_request("team-grant"), user_api_key_dict=team_admin)
+    granted = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=_request("team-grant"), user_api_key_dict=team_admin
+    )
     assert granted.routed_model == "cheap-model"
     assert granted.routed_model_configured is True
 
@@ -2935,9 +3142,7 @@ async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: py
     assert not_their_team.value.status_code == 403
 
 
-def _configure_member_preview(
-    monkeypatch: pytest.MonkeyPatch, *, allowed: bool = True
-) -> UserAPIKeyAuth:
+def _configure_member_preview(monkeypatch: pytest.MonkeyPatch, *, allowed: bool = True) -> UserAPIKeyAuth:
     from litellm.proxy import proxy_server
     from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTable
 
@@ -2962,16 +3167,17 @@ def _configure_member_preview(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("access", ["allowed", "opt-out", "limited-key"])
-async def test_member_preview_and_validation_follow_team_opt_in(
-    monkeypatch: pytest.MonkeyPatch, access: str
-) -> None:
+async def test_member_preview_and_validation_follow_team_opt_in(monkeypatch: pytest.MonkeyPatch, access: str) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.management_endpoints.auto_router_endpoints import validate_complexity_router_config
     from litellm.types.management_endpoints.auto_router_endpoints import ComplexityRouterConfigValidationRequest
 
-    actor: Final = _configure_member_preview(monkeypatch, allowed=access != "opt-out").model_copy(update={
-        "models": ["member-router"] if access == "limited-key" else [], "config": {"timeout": 60},
-    })
+    actor: Final = _configure_member_preview(monkeypatch, allowed=access != "opt-out").model_copy(
+        update={
+            "models": ["member-router"] if access == "limited-key" else [],
+            "config": {"timeout": 60},
+        }
+    )
     monkeypatch.setattr(proxy_server, "llm_router", _router())
     preview: Final = _request_from({"prompt": "what is 2+2", "team_id": "member-preview-team"})
     validation: Final = ComplexityRouterConfigValidationRequest(
@@ -3022,13 +3228,18 @@ async def test_member_billable_preview_checks_and_charges_destination_team(
 
     checks: Final = AsyncMock(side_effect=check_and_tag)
     monkeypatch.setattr(auth_module, "_run_centralized_common_checks", checks)
-    http_request: Final = Request({
-        "type": "http", "method": "POST", "path": "/auto_router/test_routing",
-        "headers": [(b"x-litellm-tags", b"header-tag")],
-    })
+    http_request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/auto_router/test_routing",
+            "headers": [(b"x-litellm-tags", b"header-tag")],
+        }
+    )
     data: Final = _request_from(
         {"prompt": "hi", "team_id": "member-preview-team"},
-        classifier_type="llm", classifier_llm_config={"model": "cheap-model"},
+        classifier_type="llm",
+        classifier_llm_config={"model": "cheap-model"},
     )
     if over_budget:
         with pytest.raises(litellm.BudgetExceededError):

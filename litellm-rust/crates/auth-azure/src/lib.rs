@@ -4,4 +4,4 @@ mod resolve;
 mod types;
 
 pub use resolve::AzureAuthService;
-pub use types::AzureAuthInputs;
+pub use types::{AzureAuthInputs, ConfigValue};

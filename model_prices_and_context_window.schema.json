@@ -607,6 +607,10 @@
           "type": "number",
           "minimum": 0
         },
+        "output_cost_per_second_2k": {
+          "type": "number",
+          "minimum": 0
+        },
         "output_cost_per_second_480p": {
           "type": "number",
           "minimum": 0
@@ -616,6 +620,10 @@
           "minimum": 0
         },
         "output_cost_per_second_720p": {
+          "type": "number",
+          "minimum": 0
+        },
+        "output_cost_per_second_768p": {
           "type": "number",
           "minimum": 0
         },

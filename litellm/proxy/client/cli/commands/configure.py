@@ -98,13 +98,15 @@ def _preflight(target: str) -> None:
         raise click.ClickException(str(e)) from e
 
 
-def _start(ctx: click.Context, api_key: str | None, target: str = _CLAUDE_TARGET) -> tuple[StaticToken, _Listing]:
+def _start(
+    ctx: click.Context, base_url: str, api_key: str | None, target: str = _CLAUDE_TARGET
+) -> tuple[StaticToken, _Listing]:
     _preflight(target)
     try:
         credential: Final = resolve_credential(ctx, api_key)
     except ClaudeSettingsError as e:
         raise click.ClickException(str(e))
-    return credential, _listed_models(ctx.obj["base_url"], credential.token, target)
+    return credential, _listed_models(base_url, credential.token, target)
 
 
 def _listing_error(base_url: str, error: PiSyncError, target: str) -> str:
@@ -147,9 +149,7 @@ def _validated_model(model: str | None, listing: _Listing, base_url: str) -> str
     return starting
 
 
-def _apply_claude(ctx: click.Context, credential: StaticToken, listing: _Listing, model: str | None) -> None:
-    ctx_obj: Final[CliContextObj] = ctx.obj
-    base_url: Final = ctx_obj["base_url"]
+def _apply_claude(base_url: str, credential: StaticToken, listing: _Listing, model: str | None) -> None:
     listed: Final = listing.ids
     starting: Final = _validated_model(model, listing, base_url)
     settings_path: Final = claude_settings_path(os.environ)
@@ -214,8 +214,7 @@ def _pick_codex_model(listed: Sequence[str]) -> str:
     return str(inquirer.fuzzy(message="Model Codex starts on (type to filter):", choices=choices).execute())
 
 
-def _apply_codex(ctx: click.Context, credential: StaticToken, listing: _Listing, model: str) -> None:
-    base_url: Final[str] = ctx.obj["base_url"]
+def _apply_codex(base_url: str, credential: StaticToken, listing: _Listing, model: str) -> None:
     _validated_model(model, listing, base_url)
     settings_path: Final = codex_config_path(os.environ)
     try:
@@ -237,13 +236,12 @@ class _Setup:
 
 
 def _choose_setup(
-    ctx: click.Context,
+    base_url: str,
     target: str,
     credential: StaticToken,
     pick_model: Callable[[Sequence[str]], str | None],
     pick_codex_model: Callable[[Sequence[str]], str],
 ) -> _Setup:
-    base_url: Final[str] = ctx.obj["base_url"]
     listing: Final = _listed_models(base_url, credential.token, target)
     model: Final = (
         pick_model(tuple(item.source_model or item.id for item in listing.models))
@@ -270,12 +268,15 @@ def interactive_configure(
         credential: Final = resolve_credential(ctx, None)
     except ClaudeSettingsError as e:
         raise click.ClickException(str(e)) from e
-    setups: Final = tuple(_choose_setup(ctx, target, credential, pick_model, pick_codex_model) for target in targets)
+    base_url: Final[str] = ctx.obj["base_url"]
+    setups: Final = tuple(
+        _choose_setup(base_url, target, credential, pick_model, pick_codex_model) for target in targets
+    )
     for setup in setups:
         if setup.target == _CLAUDE_TARGET:
-            _apply_claude(ctx, credential, setup.listing, setup.model)
+            _apply_claude(base_url, credential, setup.listing, setup.model)
         elif setup.model is not None:
-            _apply_codex(ctx, credential, setup.listing, setup.model)
+            _apply_codex(base_url, credential, setup.listing, setup.model)
 
 
 class _ConnectionOptions(BaseModel):
@@ -283,7 +284,8 @@ class _ConnectionOptions(BaseModel):
     gateway_url: str | None = None
 
 
-def _connection_context(ctx: click.Context, api_key: str | None, gateway_url: str | None) -> click.Context:
+def _connection_settings(ctx: click.Context, api_key: str | None, gateway_url: str | None) -> CliContextObj:
+    """The context object a subcommand runs with: its own --api-key / --gateway-url over the group's, over `lite`'s."""
     ctx_obj: Final[CliContextObj] = ctx.obj
     group: Final = (
         _ConnectionOptions.model_validate(ctx.parent.params)
@@ -300,7 +302,11 @@ def _connection_context(ctx: click.Context, api_key: str | None, gateway_url: st
         "api_key": key if key is not None else ctx_obj.get("api_key"),
         "api_key_from_token_file": False if key is not None else ctx_obj.get("api_key_from_token_file", False),
     }
-    return click.Context(ctx.command, parent=ctx.parent, obj=connection)
+    return connection
+
+
+def _connection_context(ctx: click.Context, settings: CliContextObj) -> click.Context:
+    return click.Context(ctx.command, parent=ctx.parent, obj=settings)
 
 
 @click.group(name="configure", invoke_without_command=True)
@@ -316,19 +322,19 @@ def configure_group(ctx: click.Context, api_key: str | None, gateway_url: str | 
     """
     if ctx.invoked_subcommand is not None:
         return
-    connection: Final = _connection_context(ctx, api_key, gateway_url)
+    settings: Final = _connection_settings(ctx, api_key, gateway_url)
+    connection: Final = _connection_context(ctx, settings)
     if not sys.stdin.isatty():
         raise click.ClickException(
             "`lite configure` asks questions, so it needs a terminal. Non-interactively, run "
             "`lite configure claude --api-key <key> --model <model>` or "
             "`lite configure codex --api-key <key> --model <model>`."
         )
-    prompted: Final = (
-        connection
-        if connection.obj.get("base_url_explicit")
-        else _connection_context(connection, None, click.prompt("Gateway URL", default=connection.obj["base_url"]))
-    )
-    interactive_configure(prompted)
+    if settings.get("base_url_explicit"):
+        interactive_configure(connection)
+        return
+    prompted: Final = _connection_settings(connection, None, click.prompt("Gateway URL", default=settings["base_url"]))
+    interactive_configure(_connection_context(connection, prompted))
 
 
 @click.group(name="unconfigure")
@@ -356,9 +362,9 @@ def configure_claude(ctx: click.Context, api_key: str | None, model: str | None,
     setting is kept, and what changed is recorded so `lite unconfigure claude` can put it back.
     Assumes the proxy is already running.
     """
-    connection: Final = _connection_context(ctx, api_key, gateway_url)
-    credential, listing = _start(connection, api_key)
-    _apply_claude(connection, credential, listing, model)
+    settings: Final = _connection_settings(ctx, api_key, gateway_url)
+    credential, listing = _start(_connection_context(ctx, settings), settings["base_url"], api_key)
+    _apply_claude(settings["base_url"], credential, listing, model)
 
 
 @configure_group.command(name="codex")
@@ -368,9 +374,9 @@ def configure_claude(ctx: click.Context, api_key: str | None, model: str | None,
 @click.pass_context
 def configure_codex(ctx: click.Context, api_key: str | None, gateway_url: str | None, model: str) -> None:
     """Route plain `codex` through the gateway until `lite unconfigure codex`."""
-    connection: Final = _connection_context(ctx, api_key, gateway_url)
-    credential, listing = _start(connection, api_key, _CODEX_TARGET)
-    _apply_codex(connection, credential, listing, model)
+    settings: Final = _connection_settings(ctx, api_key, gateway_url)
+    credential, listing = _start(_connection_context(ctx, settings), settings["base_url"], api_key, _CODEX_TARGET)
+    _apply_codex(settings["base_url"], credential, listing, model)
 
 
 @unconfigure_group.command(name="codex")
