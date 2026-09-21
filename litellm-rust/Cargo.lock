@@ -2736,6 +2736,7 @@ dependencies = [
  "litellm-auth-gcp",
  "litellm-cache",
  "litellm-cache-memory",
+ "litellm-cache-qdrant-semantic",
  "litellm-cache-redis",
  "litellm-cache-response",
  "litellm-callbacks-legacy-python",
@@ -2748,12 +2749,14 @@ dependencies = [
  "litellm-types",
  "pyo3",
  "pyo3-async-runtimes",
+ "qdrant-client",
  "rstest",
  "serde",
  "serde_json",
  "serde_with",
  "tokio",
  "tokio-tungstenite",
+ "url",
 ]
 
 [[package]]

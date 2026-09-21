@@ -1,12 +1,15 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::{CacheCodec, CacheConnectionResult, Error};
+use litellm_cache::{CacheCodec, CacheConnectionResult, Error, SemanticCacheContext};
 use litellm_cache_memory::InMemoryCache;
+use litellm_cache_qdrant_semantic::{Embedder, OpenAiEmbedder, QdrantSemanticCache};
 use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_response::{
     CacheEntry, PartialHits, ResponseCache, ResponseCacheCodec, ResponseCacheRequest, WriteBuffer,
 };
 use serde_json::Value;
+
+use super::{config::QdrantSemanticCacheConfig, request::exact};
 
 #[derive(Clone)]
 pub(super) enum NativeResponseCache {
@@ -15,6 +18,7 @@ pub(super) enum NativeResponseCache {
         cache: Arc<ResponseCache<RedisCache<ResponseCacheCodec>>>,
         buffer: Option<Arc<WriteBuffer>>,
     },
+    QdrantSemantic(Arc<ResponseCache<QdrantSemanticCache<OpenAiEmbedder, ResponseCacheCodec>>>),
 }
 
 impl NativeResponseCache {
@@ -45,6 +49,30 @@ impl NativeResponseCache {
             buffer: None,
         })
     }
+
+    pub async fn qdrant_semantic(
+        config: QdrantSemanticCacheConfig,
+        runtime: tokio::runtime::Handle,
+    ) -> Result<Self, Error> {
+        let client = qdrant_client::Qdrant::from_url(&config.grpc_url)
+            .skip_compatibility_check()
+            .api_key(config.api_key.as_deref())
+            .build()
+            .map_err(|_| Error::Unavailable)?;
+        let qdrant_config = config.to_qdrant_config();
+        let embedder = OpenAiEmbedder::new(config.embedding)?;
+        let cache = QdrantSemanticCache::connect(
+            client,
+            embedder,
+            ResponseCacheCodec,
+            qdrant_config,
+            runtime,
+        )
+        .await?;
+        Ok(Self::QdrantSemantic(Arc::new(ResponseCache::new(
+            Arc::new(cache),
+        ))))
+    }
 }
 
 impl NativeResponseCache {
@@ -52,6 +80,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) => "memory",
             Self::Redis { .. } => "redis",
+            Self::QdrantSemantic(_) => "qdrant_semantic",
         }
     }
 
@@ -59,6 +88,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
+            Self::QdrantSemantic(_) => None,
         }
     }
 
@@ -66,6 +96,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) => None,
             Self::Redis { cache, .. } => cache.backend().namespace(),
+            Self::QdrantSemantic(_) => None,
         }
     }
 
@@ -80,6 +111,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
             Self::Redis { .. } => None,
+            Self::QdrantSemantic(_) => None,
         }
     }
 
@@ -87,6 +119,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.backend().max_entry_bytes(),
             Self::Redis { .. } => None,
+            Self::QdrantSemantic(_) => None,
         }
     }
 
@@ -100,89 +133,157 @@ impl NativeResponseCache {
         }
     }
 
+    pub fn collection_name(&self) -> Option<&str> {
+        match self {
+            Self::QdrantSemantic(cache) => Some(cache.backend().collection_name()),
+            _ => None,
+        }
+    }
+
+    pub fn similarity_threshold(&self) -> Option<f64> {
+        match self {
+            Self::QdrantSemantic(cache) => Some(cache.backend().similarity_threshold()),
+            _ => None,
+        }
+    }
+
+    pub fn vector_size(&self) -> Option<u64> {
+        match self {
+            Self::QdrantSemantic(cache) => Some(cache.backend().vector_size()),
+            _ => None,
+        }
+    }
+
+    pub fn embedding_model(&self) -> Option<&str> {
+        match self {
+            Self::QdrantSemantic(cache) => Some(cache.backend().embedder().model()),
+            _ => None,
+        }
+    }
+
     pub fn lookup(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<SemanticCacheContext>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
         match self {
-            Self::Memory(cache) => cache.lookup(request, now),
-            Self::Redis { cache, .. } => cache.lookup(request, now),
+            Self::Memory(cache) => cache.lookup(&exact(request), now),
+            Self::Redis { cache, .. } => cache.lookup(&exact(request), now),
+            Self::QdrantSemantic(cache) => cache.lookup(request, now),
         }
     }
 
     pub fn store(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<SemanticCacheContext>,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
         match self {
-            Self::Memory(cache) => cache.store(request, response, now),
-            Self::Redis { cache, .. } => cache.store(request, response, now),
+            Self::Memory(cache) => cache.store(&exact(request), response, now),
+            Self::Redis { cache, .. } => cache.store(&exact(request), response, now),
+            Self::QdrantSemantic(cache) => cache.store(request, response, now),
         }
     }
 
     pub fn lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest],
+        requests: &[ResponseCacheRequest<SemanticCacheContext>],
         now: Duration,
     ) -> Result<PartialHits, Error> {
         match self {
-            Self::Memory(cache) => cache.lookup_batch(requests, now),
-            Self::Redis { cache, .. } => cache.lookup_batch(requests, now),
+            Self::Memory(cache) => {
+                cache.lookup_batch(&requests.iter().map(exact).collect::<Vec<_>>(), now)
+            }
+            Self::Redis { cache, .. } => {
+                cache.lookup_batch(&requests.iter().map(exact).collect::<Vec<_>>(), now)
+            }
+            Self::QdrantSemantic(_) => Err(Error::UnsupportedOperation),
         }
     }
 
     pub async fn async_lookup(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<SemanticCacheContext>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
         match self {
-            Self::Memory(cache) => cache.async_lookup(request, now).await,
-            Self::Redis { cache, .. } => cache.async_lookup(request, now).await,
+            Self::Memory(cache) => cache.async_lookup(&exact(request), now).await,
+            Self::Redis { cache, .. } => cache.async_lookup(&exact(request), now).await,
+            Self::QdrantSemantic(cache) => cache.async_lookup(request, now).await,
         }
     }
 
     pub async fn async_store(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<SemanticCacheContext>,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
         match self {
-            Self::Memory(cache) => cache.async_store(request, response, now).await,
+            Self::Memory(cache) => cache.async_store(&exact(request), response, now).await,
             Self::Redis {
                 cache,
                 buffer: None,
-            } => cache.async_store(request, response, now).await,
+            } => cache.async_store(&exact(request), response, now).await,
             Self::Redis {
                 cache,
                 buffer: Some(buffer),
-            } => buffer.async_store(cache, request, response, now).await,
+            } => {
+                let request = exact(request);
+                buffer.async_store(cache, &request, response, now).await
+            }
+            Self::QdrantSemantic(cache) => cache.async_store(request, response, now).await,
         }
     }
 
     pub async fn async_lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest],
+        requests: &[ResponseCacheRequest<SemanticCacheContext>],
         now: Duration,
     ) -> Result<PartialHits, Error> {
         match self {
-            Self::Memory(cache) => cache.async_lookup_batch(requests, now).await,
-            Self::Redis { cache, .. } => cache.async_lookup_batch(requests, now).await,
+            Self::Memory(cache) => {
+                let requests = requests.iter().map(exact).collect::<Vec<_>>();
+                cache.async_lookup_batch(&requests, now).await
+            }
+            Self::Redis { cache, .. } => {
+                let requests = requests.iter().map(exact).collect::<Vec<_>>();
+                cache.async_lookup_batch(&requests, now).await
+            }
+            Self::QdrantSemantic(_) => Err(Error::UnsupportedOperation),
         }
     }
 
     pub async fn async_store_batch(
         &self,
-        entries: Vec<(ResponseCacheRequest, Value)>,
+        entries: Vec<(ResponseCacheRequest<SemanticCacheContext>, Value)>,
         now: Duration,
     ) -> Result<(), Error> {
         match self {
-            Self::Memory(cache) => cache.async_store_batch(entries, now).await,
-            Self::Redis { cache, .. } => cache.async_store_batch(entries, now).await,
+            Self::Memory(cache) => {
+                cache
+                    .async_store_batch(
+                        entries
+                            .into_iter()
+                            .map(|(request, value)| (exact(&request), value))
+                            .collect(),
+                        now,
+                    )
+                    .await
+            }
+            Self::Redis { cache, .. } => {
+                cache
+                    .async_store_batch(
+                        entries
+                            .into_iter()
+                            .map(|(request, value)| (exact(&request), value))
+                            .collect(),
+                        now,
+                    )
+                    .await
+            }
+            Self::QdrantSemantic(cache) => cache.async_store_batch(entries, now).await,
         }
     }
 
@@ -195,6 +296,7 @@ impl NativeResponseCache {
                 }
                 cache.async_flush().await
             }
+            Self::QdrantSemantic(_) => Err(Error::UnsupportedOperation),
         }
     }
 
@@ -202,6 +304,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.test_connection().await,
             Self::Redis { cache, .. } => cache.test_connection().await,
+            Self::QdrantSemantic(_) => Err(Error::UnsupportedOperation),
         }
     }
 }

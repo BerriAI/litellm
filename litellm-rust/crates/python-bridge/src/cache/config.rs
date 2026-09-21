@@ -1,6 +1,7 @@
-use std::time::Duration;
+use std::{env, time::Duration};
 
 use litellm_cache::CacheType;
+use litellm_cache_qdrant_semantic::{OpenAiEmbedderConfig, QdrantSemanticConfig, Quantization};
 use litellm_cache_redis::{RedisNode, RedisTopology};
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
@@ -86,9 +87,30 @@ struct RedisClientProjection<'py> {
 
 const REDIS_PY_DEFAULT_MAX_CONNECTIONS: usize = 1 << 31;
 
+pub(super) struct QdrantSemanticCacheConfig {
+    pub(super) grpc_url: String,
+    pub(super) api_key: Option<String>,
+    pub(super) collection_name: String,
+    pub(super) similarity_threshold: f64,
+    pub(super) vector_size: u64,
+    pub(super) embedding: OpenAiEmbedderConfig,
+    pub(super) quantization: Quantization,
+}
+
+impl QdrantSemanticCacheConfig {
+    pub(super) fn to_qdrant_config(&self) -> QdrantSemanticConfig {
+        QdrantSemanticConfig {
+            collection_name: self.collection_name.clone(),
+            similarity_threshold: self.similarity_threshold,
+            vector_size: self.vector_size,
+            quantization: self.quantization.clone(),
+        }
+    }
+}
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
+    QdrantSemantic(Box<QdrantSemanticCacheConfig>),
 }
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
@@ -103,6 +125,8 @@ pub(super) enum UnsupportedCacheConfig {
     RedisCredentials,
     RedisConnection,
     RedisOption,
+    QdrantEndpoint,
+    SemanticEmbedding,
 }
 
 impl UnsupportedCacheConfig {
@@ -113,6 +137,10 @@ impl UnsupportedCacheConfig {
             Self::RedisCredentials => "native Redis credentials require Python",
             Self::RedisConnection => "native Redis connection type is not implemented",
             Self::RedisOption => "native Redis configuration requires Python",
+            Self::QdrantEndpoint => {
+                "native Qdrant requires the default REST port so the gRPC port can be derived"
+            }
+            Self::SemanticEmbedding => "native semantic embedding requires Python",
         }
     }
 }
@@ -155,12 +183,18 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::QdrantSemantic) => match project_qdrant_semantic(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::QdrantSemantic(Box::new(backend)),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
             Some(
                 CacheType::RedisSemantic
                 | CacheType::ValkeySemantic
                 | CacheType::S3
                 | CacheType::Disk
-                | CacheType::QdrantSemantic
                 | CacheType::AzureBlob
                 | CacheType::Gcs,
             )
@@ -171,17 +205,14 @@ impl NativeCacheConfig {
     }
 
     pub(super) fn service_mismatch(&self, service: &NativeResponseCache) -> Option<&'static str> {
-        if service.default_ttl()
-            != Some(match &self.backend {
-                CacheBackendConfig::Memory(config) => config.default_ttl,
-                CacheBackendConfig::Redis(config) => config.default_ttl,
-            })
-        {
-            return Some("facade and native backend default TTLs must match");
-        }
         match &self.backend {
-            CacheBackendConfig::Memory(config) if service.kind() != "memory" => {
+            CacheBackendConfig::Memory(_) if service.kind() != "memory" => {
                 Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::Memory(config)
+                if service.default_ttl() != Some(config.default_ttl) =>
+            {
+                Some("facade and native backend default TTLs must match")
             }
             CacheBackendConfig::Memory(config) if service.capacity() != Some(config.capacity) => {
                 Some("facade and native backend capacities must match")
@@ -192,7 +223,7 @@ impl NativeCacheConfig {
                 Some("facade and native backend item limits must match")
             }
             CacheBackendConfig::Memory(_) => None,
-            CacheBackendConfig::Redis(_) if service.kind() != "redis" => {
+            CacheBackendConfig::Redis(config) if service.kind() != "redis" => {
                 Some("facade and native backend types must match")
             }
             CacheBackendConfig::Redis(config) if service.topology() != Some(&config.topology) => {
@@ -200,8 +231,131 @@ impl NativeCacheConfig {
             }
             CacheBackendConfig::Redis(config) => (service.namespace()
                 != config.namespace.as_deref())
-            .then_some("facade and native backend namespaces must match"),
+            .then_some("facade and native backend namespaces must match")
+            .or_else(|| {
+                (service.default_ttl() != Some(config.default_ttl))
+                    .then_some("facade and native backend default TTLs must match")
+            }),
+            CacheBackendConfig::QdrantSemantic(config) if service.kind() != "qdrant_semantic" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.collection_name() != Some(config.collection_name.as_str()) =>
+            {
+                Some("facade and native backend collections must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.similarity_threshold() != Some(config.similarity_threshold) =>
+            {
+                Some("facade and native backend similarity thresholds must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.vector_size() != Some(config.vector_size) =>
+            {
+                Some("facade and native backend vector sizes must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.embedding_model() != Some(config.embedding.model.as_str()) =>
+            {
+                Some("facade and native backend embedding models must match")
+            }
+            CacheBackendConfig::QdrantSemantic(_) => None,
         }
+    }
+}
+
+#[inline(never)]
+fn project_qdrant_semantic(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<QdrantSemanticCacheConfig, UnsupportedCacheConfig>> {
+    let rest_url = backend.getattr("qdrant_api_base")?.extract::<String>()?;
+    let parsed = match url::Url::parse(&rest_url) {
+        Ok(value) => value,
+        Err(_) => return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint)),
+    };
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.path().is_empty() && parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.host_str().is_none()
+        || parsed.port().is_some_and(|port| port != 6333)
+    {
+        return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint));
+    }
+    let mut grpc_url = parsed;
+    if grpc_url.set_port(Some(6334)).is_err() {
+        return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint));
+    }
+    grpc_url.set_path("");
+    grpc_url.set_query(None);
+
+    let embedding_max_input_tokens = optional_attribute_i64(backend, "embedding_max_input_tokens")?;
+    if embedding_max_input_tokens.is_some() {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    }
+    let configured_model = backend.getattr("embedding_model")?.extract::<String>()?;
+    let embedding_model = configured_model
+        .strip_prefix("openai/")
+        .unwrap_or(&configured_model)
+        .to_owned();
+    if !embedding_model.starts_with("text-embedding-") {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    }
+    let proxy_server = py_sys_module(backend.py())?;
+    if let Some(proxy_server) = proxy_server {
+        let router = proxy_server.getattr("llm_router")?;
+        let model_list = proxy_server.getattr("llm_model_list")?;
+        let embedding_router = backend.py().import("litellm.caching._embedding_router")?;
+        if !embedding_router
+            .getattr("resolve_embedding_router")?
+            .call1((embedding_model.as_str(), router, model_list))?
+            .is_none()
+        {
+            return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+        }
+    }
+    let litellm = backend.py().import("litellm")?;
+    for name in ["api_key", "openai_key", "api_base"] {
+        if !litellm.getattr(name)?.is_none() {
+            return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+        }
+    }
+    let Ok(embedding_api_key) = env::var("OPENAI_API_KEY") else {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    };
+    if embedding_api_key.is_empty() {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    }
+    let embedding_api_base = env::var("OPENAI_BASE_URL")
+        .or_else(|_| env::var("OPENAI_API_BASE"))
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_owned());
+    let timeout = optional_attribute_f64(backend, "embedding_timeout")?
+        .map(duration)
+        .transpose()?;
+    Ok(Ok(QdrantSemanticCacheConfig {
+        grpc_url: grpc_url.to_string().trim_end_matches('/').to_owned(),
+        api_key: optional_string(backend.getattr("qdrant_api_key")?)?,
+        collection_name: backend.getattr("collection_name")?.extract()?,
+        similarity_threshold: backend.getattr("similarity_threshold")?.extract()?,
+        vector_size: backend.getattr("vector_size")?.extract::<u64>()?,
+        embedding: OpenAiEmbedderConfig {
+            api_base: embedding_api_base,
+            api_key: embedding_api_key,
+            model: embedding_model,
+            timeout,
+        },
+        quantization: Quantization::Binary,
+    }))
+}
+
+fn py_sys_module(py: Python<'_>) -> PyResult<Option<Bound<'_, PyAny>>> {
+    match py
+        .import("sys")?
+        .getattr("modules")?
+        .get_item("litellm.proxy.proxy_server")
+    {
+        Ok(module) => Ok(Some(module)),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -515,6 +669,28 @@ fn optional_attribute_string(value: &Bound<'_, PyAny>, name: &str) -> PyResult<O
 }
 
 #[inline(never)]
+fn optional_attribute_i64(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<i64>> {
+    match value.getattr(name) {
+        Ok(attribute) => attribute.extract::<Option<i64>>(),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(value.py()) => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[inline(never)]
+fn optional_attribute_f64(value: &Bound<'_, PyAny>, name: &str) -> PyResult<Option<f64>> {
+    match value.getattr(name) {
+        Ok(attribute) => attribute.extract::<Option<f64>>(),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyAttributeError>(value.py()) => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[inline(never)]
 fn optional_string(value: Bound<'_, PyAny>) -> PyResult<Option<String>> {
     Ok(value
         .extract::<Option<String>>()?
@@ -597,6 +773,11 @@ fn optional_dict_duration(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Opt
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        sync::{Mutex, OnceLock},
+        time::Duration,
+    };
+
     use std::ffi::CString;
 
     use pyo3::{prelude::*, types::PyDict};
@@ -605,7 +786,7 @@ mod tests {
 
     use super::{
         CacheBackendConfig, CacheConfigProjection, CertificateRequirement, NativeCacheConfig,
-        RedisProtocol,
+        RedisProtocol, UnsupportedCacheConfig,
     };
     use crate::cache::native::NativeResponseCache;
 
@@ -620,6 +801,62 @@ mod tests {
                  facade = SimpleNamespace(type='redis', mode='default-on', ttl=None, namespace='team', supported_call_types=None, redis_flush_size=100, semantic_cache_scope='key', cache=backend)"
             ),
         )
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    fn qdrant_facade<'py>(py: Python<'py>, extra: &str) -> Bound<'py, PyAny> {
+        install_fake_litellm(py);
+        facade(
+            py,
+            &format!(
+                "backend = SimpleNamespace(qdrant_api_base='https://qdrant.example:6333', qdrant_api_key='qdrant-key', collection_name='cache', similarity_threshold=0.99, embedding_model='openai/text-embedding-3-small', vector_size=8, embedding_max_input_tokens=None, embedding_timeout=None)\n\
+                 facade = SimpleNamespace(type='qdrant-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)\n\
+                 {extra}"
+            ),
+        )
+    }
+
+    fn install_fake_litellm(py: Python<'_>) {
+        py.run(
+            c"
+import sys
+import types
+litellm = types.ModuleType('litellm')
+litellm.api_key = None
+litellm.openai_key = None
+litellm.api_base = None
+litellm.__path__ = []
+caching = types.ModuleType('litellm.caching')
+caching.__path__ = []
+embedding_router = types.ModuleType('litellm.caching._embedding_router')
+embedding_router.resolve_embedding_router = lambda *_args: None
+caching._embedding_router = embedding_router
+litellm.caching = caching
+sys.modules['litellm'] = litellm
+sys.modules['litellm.caching'] = caching
+sys.modules['litellm.caching._embedding_router'] = embedding_router
+",
+            None,
+            None,
+        )
+        .unwrap();
+    }
+
+    fn configure_embedding_environment<'py>(
+        py: Python<'py>,
+        key: Option<&str>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let environ = py.import("os")?.getattr("environ")?;
+        let prior = environ.call_method1("get", ("OPENAI_API_KEY",))?;
+        match key {
+            Some(key) => environ.set_item("OPENAI_API_KEY", key)?,
+            None => environ.del_item("OPENAI_API_KEY")?,
+        }
+        Ok(prior)
     }
 
     fn facade<'py>(py: Python<'py>, body: &str) -> Bound<'py, PyAny> {
@@ -740,7 +977,6 @@ mod tests {
             assert_eq!(reason.message(), "native Redis credentials require Python");
         });
     }
-
     #[test]
     fn projects_cluster_startup_nodes_as_redis_topology() {
         Python::initialize();
@@ -820,6 +1056,148 @@ mod tests {
                     panic!("{startup_nodes} with {hook} must stay on Python");
                 };
                 assert_eq!(reason.message(), message, "{startup_nodes} with {hook}");
+            }
+        });
+    }
+    #[test]
+    fn projects_qdrant_configuration_from_python() {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+        Python::initialize();
+        Python::attach(|py| {
+            let prior = configure_embedding_environment(py, Some("embedding-key")).unwrap();
+            let facade = qdrant_facade(py, "");
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("Qdrant cache should be supported");
+            };
+            let CacheBackendConfig::QdrantSemantic(config) = config.backend else {
+                panic!("expected Qdrant configuration");
+            };
+            assert_eq!(config.grpc_url, "https://qdrant.example:6334");
+            assert_eq!(config.api_key.as_deref(), Some("qdrant-key"));
+            assert_eq!(config.collection_name, "cache");
+            assert_eq!(config.vector_size, 8);
+            assert_eq!(config.embedding.api_key, "embedding-key");
+            assert_eq!(config.embedding.model, "text-embedding-3-small");
+            let environ = py.import("os").unwrap().getattr("environ").unwrap();
+            if prior.is_none() {
+                environ.del_item("OPENAI_API_KEY").unwrap();
+            } else {
+                environ.set_item("OPENAI_API_KEY", prior).unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn qdrant_projection_rejects_non_default_port() {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+        Python::initialize();
+        Python::attach(|py| {
+            let prior = configure_embedding_environment(py, Some("embedding-key")).unwrap();
+            let facade = qdrant_facade(
+                py,
+                "backend.qdrant_api_base = 'https://qdrant.example:6332'",
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("non-default Qdrant port should stay on Python");
+            };
+            assert!(matches!(reason, UnsupportedCacheConfig::QdrantEndpoint));
+            let environ = py.import("os").unwrap().getattr("environ").unwrap();
+            if prior.is_none() {
+                environ.del_item("OPENAI_API_KEY").unwrap();
+            } else {
+                environ.set_item("OPENAI_API_KEY", prior).unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn qdrant_projection_rejects_python_embedding_features() {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+        Python::initialize();
+        Python::attach(|py| {
+            let prior = configure_embedding_environment(py, Some("embedding-key")).unwrap();
+            let cases = [
+                ("backend.embedding_max_input_tokens = 100", "semantic"),
+                ("backend.embedding_model = 'cohere/embed'", "semantic"),
+            ];
+            for (extra, _) in cases {
+                let facade = qdrant_facade(py, extra);
+                let CacheConfigProjection::Unsupported(reason) =
+                    NativeCacheConfig::project(&facade).unwrap()
+                else {
+                    panic!("unsupported embedding should stay on Python");
+                };
+                assert!(matches!(reason, UnsupportedCacheConfig::SemanticEmbedding));
+            }
+            let environ = py.import("os").unwrap().getattr("environ").unwrap();
+            if prior.is_none() {
+                environ.del_item("OPENAI_API_KEY").unwrap();
+            } else {
+                environ.set_item("OPENAI_API_KEY", prior).unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn qdrant_projection_rejects_configured_litellm_base_or_missing_key() {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+        Python::initialize();
+        Python::attach(|py| {
+            let prior = configure_embedding_environment(py, Some("embedding-key")).unwrap();
+            let facade = qdrant_facade(py, "");
+            let litellm = py.import("litellm").unwrap();
+            litellm
+                .setattr("api_base", "https://proxy.example")
+                .unwrap();
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("configured LiteLLM base should stay on Python");
+            };
+            assert!(matches!(reason, UnsupportedCacheConfig::SemanticEmbedding));
+            litellm.setattr("api_base", py.None()).unwrap();
+            configure_embedding_environment(py, None).unwrap();
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("missing embedding key should stay on Python");
+            };
+            assert!(matches!(reason, UnsupportedCacheConfig::SemanticEmbedding));
+            let environ = py.import("os").unwrap().getattr("environ").unwrap();
+            if prior.is_none() {
+                environ.del_item("OPENAI_API_KEY").unwrap();
+            } else {
+                environ.set_item("OPENAI_API_KEY", prior).unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn qdrant_service_mismatch_reports_type_before_starting_qdrant() {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+        Python::initialize();
+        Python::attach(|py| {
+            let prior = configure_embedding_environment(py, Some("embedding-key")).unwrap();
+            let facade = qdrant_facade(py, "");
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("Qdrant cache should be supported");
+            };
+            let service = NativeResponseCache::memory(1, Duration::from_secs(1), 1024);
+            assert_eq!(
+                config.service_mismatch(&service),
+                Some("facade and native backend types must match")
+            );
+            let environ = py.import("os").unwrap().getattr("environ").unwrap();
+            if prior.is_none() {
+                environ.del_item("OPENAI_API_KEY").unwrap();
+            } else {
+                environ.set_item("OPENAI_API_KEY", prior).unwrap();
             }
         });
     }
