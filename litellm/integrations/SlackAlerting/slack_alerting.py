@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -99,6 +100,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting_args={},
         default_webhook_url: str | None = None,
         alert_type_config: dict[str, dict] | None = None,
+        async_http_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         if alerting_threshold is None:
@@ -107,7 +109,9 @@ class SlackAlerting(CustomBatchLogger):
         self.alerting = alerting
         self.alert_types = alert_types
         self.internal_usage_cache = internal_usage_cache or DualCache()
-        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        self.async_http_handler = async_http_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         self.alert_to_webhook_url = process_slack_alerting_variables(alert_to_webhook_url=alert_to_webhook_url)
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
