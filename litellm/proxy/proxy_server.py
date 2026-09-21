@@ -22,6 +22,7 @@ from collections.abc import (
     Awaitable,
     Callable,
     Collection,
+    Iterable,
     Mapping,
     MutableMapping,
     Sequence,
@@ -111,6 +112,7 @@ from litellm.proxy._types import (
     PassThroughGenericEndpoint,
     ProxyErrorTypes,
     ProxyException,
+    ProxyRuntimeConfig,
     SpecialModelNames,
     SupportedDBObjectType,
     TeamDefaultSettings,
@@ -166,7 +168,9 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
     from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerConfig
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+    from litellm.types.agents import AgentConfig
 
     Span = _Span | Any
 else:
@@ -1322,7 +1326,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     ## which is only reachable once the prisma client exists. Apply it here, before
     ## the coordination Redis is published to its consumers below.
     db_coordination_redis_cache: Final = await ProxyStartupEvent._init_coordination_redis_from_db(
-        litellm_settings=proxy_config.get_config_state().get("litellm_settings") or {},
+        litellm_settings=proxy_config.get_config_state().litellm_settings,
         llm_router=llm_router,
     )
     if db_coordination_redis_cache is not None:
@@ -1387,7 +1391,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         verbose_proxy_logger.debug("About to initialize semantic tool filter")
         _config: Final = proxy_config.get_config_state()
-        _litellm_settings: Final = _config.get("litellm_settings", {})
+        _litellm_settings: Final = dict(_config.litellm_settings)  # mutable-ok: dict copy for a dict-typed callee
         verbose_proxy_logger.debug("litellm_settings keys = %s", list(_litellm_settings.keys()))
         await ProxyStartupEvent._initialize_semantic_tool_filter(
             llm_router=llm_router,
@@ -4923,21 +4927,6 @@ class _EnvironmentVariablesConfigData(TypedDict):
     environment_variables: ReadOnly[object]
 
 
-class _ConfigWithBaseline(dict[str, object]):
-    def __init__(self, config: Mapping[str, object]) -> None:
-        super().__init__(config)
-        self._baseline: Mapping[str, object] = MappingProxyType(
-            {key: copy.deepcopy(value) for key, value in config.items()}
-        )
-
-    @property
-    def baseline(self) -> Mapping[str, object]:
-        return self._baseline
-
-    def update_baseline(self, config: Mapping[str, object]) -> None:
-        self._baseline = MappingProxyType({key: copy.deepcopy(value) for key, value in config.items()})
-
-
 _EMPTY_SETTINGS_MAPPING: Final[Mapping[str, SettingsJsonValue]] = MappingProxyType({})
 _SETTINGS_MAPPING: Final = TypeAdapter(dict[str, SettingsJsonValue])
 
@@ -4946,6 +4935,22 @@ def _as_settings_mapping(value: object) -> Mapping[str, SettingsJsonValue]:
     if not isinstance(value, Mapping):
         return _EMPTY_SETTINGS_MAPPING
     return _SETTINGS_MAPPING.validate_python(value)
+
+
+def _resolve_env_params(params: Mapping[str, object]) -> dict[str, object]:
+    """Resolve `os.environ/` refs in a params mapping via the secret manager."""
+    return {  # mutable-ok: fresh resolved copy so the frozen config is never mutated
+        key: get_secret(value) if isinstance(value, str) and value.startswith("os.environ/") else value
+        for key, value in params.items()
+    }
+
+
+def _resolve_env_params_from_os(params: Mapping[str, object]) -> dict[str, object]:
+    """Resolve `os.environ/` refs in a params mapping via os.getenv (assistant_settings path)."""
+    return {  # mutable-ok: fresh resolved copy so the frozen config is never mutated
+        key: os.getenv(value.removeprefix("os.environ/")) if isinstance(value, str) and value.startswith("os.environ/") else value
+        for key, value in params.items()
+    }
 
 
 def _bind_general_settings_store(settings: SettingsStore) -> None:
@@ -4969,7 +4974,7 @@ class ProxyConfig:
     """
 
     def __init__(self) -> None:
-        self.config: Mapping[str, object] = MappingProxyType({})
+        self.config: ProxyRuntimeConfig = ProxyRuntimeConfig()
         self._last_semantic_filter_config: dict[str, object] | None = None
         self._last_websearch_interception_config: dict[str, object] | None = None
         self._last_hashicorp_vault_config: dict[str, object] | None = None
@@ -5112,26 +5117,25 @@ class ProxyConfig:
 
         return await resolve_includes(config=config, location=config_file_path, resolve=resolve, read=read_included)
 
-    async def save_config(self, new_config: Mapping[str, object], include_env_vars: bool = False) -> None:
+    async def save_config(self, new_config: ProxyRuntimeConfig, include_env_vars: bool = False) -> None:
         global prisma_client, general_settings, user_config_file_path, store_model_in_db
+        baseline: Final[Mapping[str, object]] = new_config.baseline
+        current: Final[Mapping[str, object]] = new_config.to_mapping()
         if prisma_client is not None and (
             general_settings.get("store_model_in_db", False) is True or store_model_in_db
         ):
-            baseline: Final[Mapping[str, object]] = (
-                new_config.baseline if isinstance(new_config, _ConfigWithBaseline) else self.get_config_state()
-            )
             for section_name in _CONFIG_PERSISTED_SECTIONS:
                 await self._save_changed_config_section(
                     section_name=section_name,
                     baseline=baseline,
-                    new_config=new_config,
+                    new_config=current,
                     prisma_client=prisma_client,
                 )
 
             unmanaged_config: Final[Mapping[str, object]] = MappingProxyType(
                 {
                     key: value
-                    for key, value in new_config.items()
+                    for key, value in current.items()
                     if key not in _CONFIG_PERSISTED_SECTIONS
                     and key not in _CONFIG_UNMANAGED_EXCLUSIONS
                     and (key not in baseline or baseline[key] != value)
@@ -5140,7 +5144,7 @@ class ProxyConfig:
             if unmanaged_config:
                 await prisma_client.insert_data(data=unmanaged_config, table_name="config")
 
-            environment_variables: Final = new_config.get("environment_variables")
+            environment_variables: Final = current.get("environment_variables")
             if include_env_vars and environment_variables is not None:
                 encrypted_environment_variables: Final = (
                     self._encrypt_env_variables_for_db(environment_variables=environment_variables)
@@ -5151,15 +5155,12 @@ class ProxyConfig:
                     "environment_variables": encrypted_environment_variables
                 }
                 await prisma_client.insert_data(data=environment_variables_data, table_name="config")
-            next_config: Final[Mapping[str, object]] = MappingProxyType({**baseline, **new_config})
-            self.update_config_state(config=next_config)
-            if isinstance(new_config, _ConfigWithBaseline):
-                new_config.update_baseline(config=next_config)
+            self.update_config_state(config=ProxyRuntimeConfig.from_resolved({**baseline, **current}))
             return
 
         with open(f"{user_config_file_path}", "w") as config_file:
             yaml.dump(
-                dict(new_config), config_file, default_flow_style=False
+                dict(current), config_file, default_flow_style=False
             )  # mutable-ok: YAML must serialize a plain dict
 
     async def _save_changed_config_section(
@@ -5427,14 +5428,14 @@ class ProxyConfig:
         config: Final = self.get_config_state()
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
-        litellm_settings: Final = config.get("litellm_settings", {})
+        litellm_settings: Final = config.litellm_settings
         all_teams_config: Final = litellm_settings.get("default_team_settings", None)
-        if all_teams_config is None:
+        if not isinstance(all_teams_config, list):
             return {}
         team_config: Final = self._get_team_config(team_id=team_id, all_teams_config=all_teams_config)
         return team_config
 
-    def _init_coordination_redis(self, config: dict) -> RedisCache | None:
+    def _init_coordination_redis(self, config: ProxyRuntimeConfig) -> RedisCache | None:
         """
         Builds the coordination Redis from `general_settings.coordination_redis`
         when present, attaching it to the proxy-level caches. Runs before cache
@@ -5442,8 +5443,8 @@ class ProxyConfig:
         response-cache Redis and over the REDIS_* env fallback. Returns the
         built client (None when the block is absent) for the caller to publish.
         """
-        settings: Final = config.get("general_settings") or {}
-        litellm_settings: Final = config.get("litellm_settings") or {}
+        settings: Final = config.general_settings
+        litellm_settings: Final = config.litellm_settings
         raw_params: Final = settings.get("coordination_redis")
         if raw_params is None:
             return None
@@ -5586,7 +5587,7 @@ class ProxyConfig:
             llm_router.cache_responses = True
             verbose_proxy_logger.debug("Set router.cache_responses=True after initializing cache")
 
-    async def get_config(self, config_file_path: str | None = None) -> dict:
+    async def get_config(self, config_file_path: str | None = None) -> ProxyRuntimeConfig:
         """
         Load config file
         Supports reading from:
@@ -5646,58 +5647,44 @@ class ProxyConfig:
         config = self._check_for_os_environ_vars(config=config)
         self._apply_resolved_runtime_settings(config)
 
-        self.update_config_state(config=config)
+        resolved_config: Final = ProxyRuntimeConfig.from_resolved(config)
+        self.update_config_state(config=resolved_config)
 
-        return _ConfigWithBaseline(config)
+        return resolved_config
 
-    def update_config_state(self, config: Mapping[str, object]) -> None:
-        self.config = MappingProxyType({key: copy.deepcopy(value) for key, value in config.items()})
+    def update_config_state(self, config: ProxyRuntimeConfig) -> None:
+        self.config = config
 
-    def get_config_state(self) -> Mapping[str, object]:
-        """
-        Returns a deep copy of the config,
-
-        Do this, to avoid mutating the config state outside of allowed methods
-        """
+    def get_config_state(self) -> ProxyRuntimeConfig:
         try:
-            return MappingProxyType({key: copy.deepcopy(value) for key, value in self.config.items()})
+            return self.config
         except Exception as e:
             verbose_proxy_logger.debug(
-                "ProxyConfig:get_config_state(): Error returning copy of config state. self.config=%s\nError: %s",
+                "ProxyConfig:get_config_state(): Error returning config state. self.config=%s\nError: %s",
                 self.config,
                 e,
             )
-            return MappingProxyType({})
+            return ProxyRuntimeConfig()
 
-    def load_credential_list(self, config: dict) -> list[CredentialItem]:
+    def load_credential_list(self, config: ProxyRuntimeConfig) -> list[CredentialItem]:
         """
-        Load the credential list from the database
+        Load the credential list from the config
         """
-        credential_list_dict: Final = config.get("credential_list")
-        credential_list = []
-        if credential_list_dict:
-            credential_list = [CredentialItem(**cred) for cred in credential_list_dict]
-        return credential_list
+        return [CredentialItem(**cred) for cred in config.credential_list]
 
-    def parse_search_tools(self, config: dict) -> list[SearchToolTypedDict] | None:
+    def parse_search_tools(self, config: ProxyRuntimeConfig) -> list[SearchToolTypedDict] | None:
         """
         Parse and validate search tools from config.
         Loads environment variables and casts to SearchToolTypedDict.
 
         Args:
-            config: Config dictionary containing search_tools
+            config: The loaded proxy config containing search_tools
 
         Returns:
             List of validated SearchToolTypedDict or None if not configured
         """
-        search_tools_raw = config.get("search_tools", None)
-        if not search_tools_raw:
-            # Check in general_settings
-            general_settings = config.get("general_settings", {})
-            if general_settings:
-                search_tools_raw = general_settings.get("search_tools", None)
-
-        if not search_tools_raw:
+        search_tools_raw: Final = config.search_tools or config.general_settings.get("search_tools")
+        if not isinstance(search_tools_raw, Iterable) or isinstance(search_tools_raw, (str, bytes)):
             return None
 
         search_tools_parsed: Final[list[SearchToolTypedDict]] = []
@@ -5707,26 +5694,30 @@ class ProxyConfig:
         )
 
         for search_tool in search_tools_raw:
+            if not isinstance(search_tool, Mapping):
+                continue
             # Display loaded search tool
             search_tool_name = search_tool.get("search_tool_name", "")
-            search_provider = search_tool.get("litellm_params", {}).get("search_provider", "")
+            search_provider = search_tool.get("litellm_params", {})
+            search_provider = (
+                search_provider.get("search_provider", "") if isinstance(search_provider, Mapping) else ""
+            )
             print(  # noqa: T201
                 f"\033[32m    {search_tool_name} ({search_provider})\033[0m"
             )
 
             # Handle os.environ/ variables in litellm_params
             litellm_params = search_tool.get("litellm_params", {})
-            if litellm_params:
-                for k, v in litellm_params.items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
-                        _v = v.replace("os.environ/", "")
-                        v = get_secret(_v)
-                        litellm_params[k] = v
-                search_tool["litellm_params"] = litellm_params
+            resolved_search_tool = search_tool
+            if isinstance(litellm_params, Mapping) and litellm_params:
+                resolved_search_tool = {  # mutable-ok: resolved copy so the frozen config is not mutated
+                    **search_tool,
+                    "litellm_params": _resolve_env_params(litellm_params),
+                }
 
             # Cast to SearchToolTypedDict for type safety
             try:
-                search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(**search_tool)
+                search_tool_typed: SearchToolTypedDict = SearchToolTypedDict(**resolved_search_tool)
                 search_tools_parsed.append(search_tool_typed)
             except Exception as e:
                 verbose_proxy_logger.error("Error parsing search tool %s: %s", search_tool_name, e)
@@ -5753,10 +5744,10 @@ class ProxyConfig:
         "no_proxy",
     }
 
-    def _load_environment_variables(self, config: dict):
+    def _load_environment_variables(self, config: ProxyRuntimeConfig):
         ## ENVIRONMENT VARIABLES
         global premium_user
-        environment_variables: Final = config.get("environment_variables", None)
+        environment_variables: Final = config.environment_variables
         if environment_variables:
             for key, value in environment_variables.items():
                 if key in self._BLOCKED_ENV_KEYS:
@@ -5788,8 +5779,10 @@ class ProxyConfig:
                 _license_check.license_str = os.getenv("LITELLM_LICENSE", None)
                 premium_user = _license_check.is_premium()
 
-    def _warn_on_misplaced_jwt_keys(self, config: dict) -> tuple[str, ...]:
-        misplaced_jwt_keys = tuple(key for key in ("enable_jwt_auth", "litellm_jwtauth") if key in config)
+    def _warn_on_misplaced_jwt_keys(self, config: ProxyRuntimeConfig) -> tuple[str, ...]:
+        misplaced_jwt_keys = tuple(
+            key for key in ("enable_jwt_auth", "litellm_jwtauth") if key in (config.model_extra or {})
+        )
         if not misplaced_jwt_keys:
             return misplaced_jwt_keys
         verbose_proxy_logger.warning(
@@ -5837,7 +5830,7 @@ class ProxyConfig:
             proxy_config_reload_interval_seconds, \
             config_passthrough_endpoints
 
-        config: Final[dict] = await self.get_config(config_file_path=config_file_path)
+        config: Final[ProxyRuntimeConfig] = await self.get_config(config_file_path=config_file_path)
 
         self._warn_on_misplaced_jwt_keys(config=config)
 
@@ -5849,14 +5842,12 @@ class ProxyConfig:
             _set_redis_usage_cache(coordination_redis_cache)
 
         ## Callback settings
-        callback_settings: Final = config.get("callback_settings", {})
+        callback_settings: Final[dict] = dict(config.callback_settings)  # mutable-ok: callback init requires a concrete dict
         if callback_settings:
             litellm.callback_settings = callback_settings
 
         ## LITELLM MODULE SETTINGS (e.g. litellm.drop_params=True,..)
-        litellm_settings = config.get("litellm_settings", None)
-        if litellm_settings is None:
-            litellm_settings = {}
+        litellm_settings: Final[dict] = dict(config.litellm_settings)  # mutable-ok: dict-typed initializers (guardrails, callbacks) require a concrete dict
         if litellm_settings:
             # Prometheus collectors have fixed label schemas. Load and validate this
             # setting before processing callbacks so YAML key order cannot construct
@@ -6162,11 +6153,10 @@ class ProxyConfig:
                     )
                     setattr(litellm, key, value)
                 elif key == "upperbound_key_generate_params":
-                    if value is not None and isinstance(value, dict):
-                        for _k, _v in value.items():
-                            if isinstance(_v, str) and _v.startswith("os.environ/"):
-                                value[_k] = get_secret(_v)
-                        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(**value)
+                    if value is not None and isinstance(value, Mapping):
+                        litellm.upperbound_key_generate_params = LiteLLM_UpperboundKeyGenerateParams(
+                            **_resolve_env_params(value)
+                        )
                     else:
                         raise Exception(f"Invalid value set for upperbound_key_generate_params - value={value}")
                 elif key == "json_logs" and value is True:
@@ -6215,9 +6205,7 @@ class ProxyConfig:
                 _set_redis_usage_cache(env_coordination_redis_cache)
 
         ## GENERAL SERVER SETTINGS (e.g. master key,..) # do this after initializing litellm, to ensure sentry logging works for proxylogging
-        general_settings = config.get("general_settings", {})
-        if general_settings is None:
-            general_settings = {}
+        general_settings: Final[dict] = dict(config.general_settings)  # mutable-ok: boot working copy; the store_model_in_db normalization writes into it
 
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
@@ -6459,7 +6447,12 @@ class ProxyConfig:
         if _bg_hc_model_groups is not None:
             router_params["background_health_check_model_groups"] = sorted(_bg_hc_model_groups)
         ## MODEL LIST
-        model_list: Final = config.get("model_list", None)
+        model_list: Final = [  # mutable-ok: resolved copies so downstream mutation never reaches the frozen config
+            {**model, "litellm_params": _resolve_env_params(model["litellm_params"])}
+            if isinstance(model.get("litellm_params"), Mapping)
+            else dict(model)
+            for model in config.model_list
+        ]
         if model_list:
             router_params["model_list"] = model_list
             validate_auto_router_capability_limits(model_list, limit=_license_check.auto_router_capability_limit())
@@ -6467,36 +6460,36 @@ class ProxyConfig:
                 "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
             )
             for model in model_list:
-                ### LOAD FROM os.environ/ ###
-                for k, v in model["litellm_params"].items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
-                        model["litellm_params"][k] = get_secret(v)
                 validate_deployment_max_agentic_loops(model)
                 validate_deployment_complexity_router_placement(model)
                 pin_complexity_router_model_id(model)
-                complexity_router_config = model["litellm_params"].get("complexity_router_config")
-                if isinstance(complexity_router_config, dict):
-                    resolve_complexity_router_plugins(
-                        model_name=model.get("model_name", ""),
-                        complexity_router_config=complexity_router_config,
-                        config_file_path=config_file_path,
-                    )
+                litellm_model_params = model.get("litellm_params")
+                if isinstance(litellm_model_params, Mapping):
+                    complexity_router_config = litellm_model_params.get("complexity_router_config")
+                    if isinstance(complexity_router_config, dict):
+                        resolve_complexity_router_plugins(
+                            model_name=model.get("model_name", ""),
+                            complexity_router_config=complexity_router_config,
+                            config_file_path=config_file_path,
+                        )
+                    litellm_model_name = litellm_model_params.get("model")
+                    litellm_model_api_base = litellm_model_params.get("api_base")
+                    if isinstance(litellm_model_name, str) and "ollama" in litellm_model_name and litellm_model_api_base is None:
+                        run_ollama_serve()
                 print(f"\033[32m    {model.get('model_name', '')}\033[0m")  # noqa: T201
-                litellm_model_name = model["litellm_params"]["model"]
-                litellm_model_api_base = model["litellm_params"].get("api_base", None)
-                if "ollama" in litellm_model_name and litellm_model_api_base is None:
-                    run_ollama_serve()
 
         ## ASSISTANT SETTINGS
         assistants_config: AssistantsTypedDict | None = None
-        assistant_settings: Final = config.get("assistant_settings", None)
+        assistant_settings: Final = config.assistant_settings
         if assistant_settings:
-            for k, v in assistant_settings["litellm_params"].items():
-                if isinstance(v, str) and v.startswith("os.environ/"):
-                    _v = v.replace("os.environ/", "")
-                    v = os.getenv(_v)
-                    assistant_settings["litellm_params"][k] = v
-            assistants_config = AssistantsTypedDict(**assistant_settings)
+            raw_assistant_params: Final = assistant_settings["litellm_params"]
+            if not isinstance(raw_assistant_params, Mapping):
+                raise ValueError("assistant_settings.litellm_params must be a mapping")
+            resolved_assistant_settings: Final = {  # mutable-ok: resolved copy so the frozen config is not mutated
+                **assistant_settings,
+                "litellm_params": _resolve_env_params_from_os(raw_assistant_params),
+            }
+            assistants_config = AssistantsTypedDict(**resolved_assistant_settings)
 
         ## SEARCH TOOLS SETTINGS
         search_tools: Final[list[SearchToolTypedDict] | None] = self.parse_search_tools(config)
@@ -6504,28 +6497,34 @@ class ProxyConfig:
         ## SANDBOX TOOLS SETTINGS
         from litellm.sandbox.sandbox_tools import register_sandbox_tools
 
-        register_sandbox_tools(config.get("sandbox_tools") or [])
+        register_sandbox_tools(
+            [dict(tool) for tool in config.sandbox_tools]  # mutable-ok: dict copies so registry mutation cannot reach the frozen config
+        )
 
         ## /fine_tuning/jobs endpoints config
-        finetuning_config: Final = config.get("finetune_settings", None)
-        set_fine_tuning_config(config=finetuning_config)
+        finetuning_config: Final = [  # mutable-ok: dict copies so env resolution cannot reach the frozen config
+            dict(element) for element in config.finetune_settings
+        ]
+        set_fine_tuning_config(config=finetuning_config or None)
 
         ## /files endpoint config
-        files_config: Final = config.get("files_settings", None)
-        set_files_config(config=files_config)
+        files_config: Final = [  # mutable-ok: dict copies so env resolution cannot reach the frozen config
+            dict(element) for element in config.files_settings
+        ]
+        set_files_config(config=files_config or None)
 
         ## default config for vertex ai routes
         from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
             passthrough_endpoint_router,
         )
 
-        default_vertex_config: Final = config.get("default_vertex_config", None)
+        default_vertex_config: Final = dict(config.default_vertex_config) or None  # mutable-ok: dict copy for a dict-typed callee
         passthrough_endpoint_router.set_default_vertex_config(config=default_vertex_config)
 
         ## ROUTER SETTINGS (e.g. routing_strategy, ...)
-        router_settings: Final = config.get("router_settings", None)
+        router_settings: Final = config.router_settings
 
-        if router_settings and isinstance(router_settings, dict):
+        if router_settings:
             available_args: Final = [
                 x for x in litellm.Router.get_valid_args() if x not in ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG
             ]
@@ -6564,10 +6563,9 @@ class ProxyConfig:
             router._update_redis_cache(cache=redis_usage_cache)
 
         # Guardrail settings
-        guardrails_v2: list[dict] | None = None
-
-        if config is not None:
-            guardrails_v2 = config.get("guardrails", None)
+        guardrails_v2: Final = [  # mutable-ok: dict copies so guardrail init cannot reach the frozen config
+            dict(guardrail) for guardrail in config.guardrails
+        ]
         if guardrails_v2:
             init_guardrails_v2(
                 all_guardrails=guardrails_v2,
@@ -6583,9 +6581,7 @@ class ProxyConfig:
         )
 
         ## Prompt settings
-        prompts: list[dict] | None = None
-        if config is not None:
-            prompts = config.get("prompts", None)
+        prompts: Final = [dict(prompt) for prompt in config.prompts]  # mutable-ok: dict copies for a list[dict]-typed callee
         if prompts:
             from litellm.proxy.prompts.init_prompts import init_prompts
 
@@ -6601,42 +6597,48 @@ class ProxyConfig:
         _bind_general_settings_store(self.settings)
         return router, router.get_model_list(), self.settings
 
-    async def _init_non_llm_configs(self, config: dict, config_file_path: str | None = None):
+    async def _init_non_llm_configs(self, config: ProxyRuntimeConfig, config_file_path: str | None = None):
         """
         Initialize non-LLM configs eg. MCP tools, vector stores, etc.
         """
         ## MCP TOOLS
-        mcp_tools_config: Final = config.get("mcp_tools", None)
+        mcp_tools_config: Final = config.mcp_tools
         if mcp_tools_config:
             from litellm.proxy._experimental.mcp_server.tool_registry import (
                 global_mcp_tool_registry,
             )
 
-            global_mcp_tool_registry.load_tools_from_config(mcp_tools_config, config_file_path=config_file_path)
+            global_mcp_tool_registry.load_tools_from_config(list(mcp_tools_config), config_file_path=config_file_path)  # mutable-ok: registry iterates a concrete list
 
         ## AGENTS
-        agent_config: Final = config.get("agents", config.get("agent_list", None))
-        if agent_config is not None:
+        agents_present: Final = "agents" in config.model_fields_set
+        agent_config: Final = config.agents if agents_present else config.agent_list
+        if agents_present or agent_config:
             from litellm.proxy.agent_endpoints.agent_registry import (
                 global_agent_registry,
             )
 
-            global_agent_registry.load_agents_from_config(agent_config)
+            global_agent_registry.load_agents_from_config(
+                cast("list[AgentConfig]", [dict(agent) for agent in agent_config])  # mutable-ok: dict copies; cast-ok: entries are AgentConfig-shaped YAML mappings
+            )
 
-        mcp_servers_config: Final = config.get("mcp_servers", None)
+        mcp_servers_config: Final = config.mcp_servers
         if mcp_servers_config:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
 
             # Get mcp_aliases from litellm_settings if available
-            litellm_settings: Final = config.get("litellm_settings", {})
+            litellm_settings: Final = config.litellm_settings
             mcp_aliases: Final = litellm_settings.get("mcp_aliases", None)
 
-            await global_mcp_server_manager.load_servers_from_config(mcp_servers_config, mcp_aliases)
+            await global_mcp_server_manager.load_servers_from_config(
+                cast("dict[str, MCPServerConfig]", dict(mcp_servers_config)),  # mutable-ok: dict copy for a dict-typed callee; cast-ok: values are raw YAML mappings the manager reads via .get
+                cast("dict[str, str]", mcp_aliases) if isinstance(mcp_aliases, dict) else None,  # cast-ok: YAML-provided alias map
+            )
 
         ## VECTOR STORES
-        vector_store_registry_config: Final = config.get("vector_store_registry", None)
+        vector_store_registry_config: Final = config.vector_store_registry
         if vector_store_registry_config:
             from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
@@ -6644,20 +6646,22 @@ class ProxyConfig:
                 litellm.vector_store_registry = VectorStoreRegistry()
 
             # Load vector stores from config
-            litellm.vector_store_registry.load_vector_stores_from_config(vector_store_registry_config)
+            litellm.vector_store_registry.load_vector_stores_from_config(
+                [dict(store) for store in vector_store_registry_config]  # mutable-ok: dict copies so registry mutation cannot reach the frozen config
+            )
 
         ## WORKER REGISTRY (Global Control Plane)
-        worker_registry_config: Final = config.get("worker_registry", None)
+        worker_registry_config: Final = config.worker_registry
         if worker_registry_config:
             if premium_user is not True:
                 raise ValueError("Trying to use `worker_registry`" + CommonProxyErrors.not_premium_user.value)
-            self.worker_registry = [WorkerRegistryEntry(**e) for e in worker_registry_config]
+            self.worker_registry = [WorkerRegistryEntry(**dict(e)) for e in worker_registry_config]  # mutable-ok: dict copies for ** unpacking
         else:
             self.worker_registry = []
 
     async def _init_policy_engine(
         self,
-        config: dict | None,
+        config: ProxyRuntimeConfig | None,
         prisma_client: Optional["PrismaClient"],
         llm_router: Optional["Router"],
     ):
@@ -6665,7 +6669,7 @@ class ProxyConfig:
         Initialize the policy engine from config.
 
         Args:
-            config: The proxy configuration dictionary
+            config: The proxy configuration
             prisma_client: Optional Prisma client for DB validation
             llm_router: Optional LLM router for model validation
         """
@@ -6677,12 +6681,14 @@ class ProxyConfig:
             verbose_proxy_logger.debug("Policy engine: config is None, skipping")
             return
 
-        policies_config: Final = config.get("policies", None)
+        policies_config: Final[dict] = dict(config.policies)  # mutable-ok: init_policies wants a concrete dict
         if not policies_config:
             verbose_proxy_logger.debug("Policy engine: no policies in config, skipping")
             return
 
-        policy_attachments_config: Final = config.get("policy_attachments", None)
+        policy_attachments_config: Final = (  # mutable-ok: dict copies for a list[dict]-typed callee
+            [dict(attachment) for attachment in config.policy_attachments] or None
+        )
 
         verbose_proxy_logger.info("Policy engine: found %s policies in config", len(policies_config))
 
@@ -6868,14 +6874,14 @@ class ProxyConfig:
                 str(e),
             )
             return None
-        model_list: Final = config.get("model_list", None)
+        model_list: Final = [  # mutable-ok: resolved copies so the frozen config is never mutated
+            {**model, "litellm_params": _resolve_env_params(model["litellm_params"])}
+            if isinstance(model.get("litellm_params"), Mapping)
+            else dict(model)
+            for model in config.model_list
+        ]
         if model_list:
             for model in model_list:
-                ### LOAD FROM os.environ/ ###
-                for k, v in model["litellm_params"].items():
-                    if isinstance(v, str) and v.startswith("os.environ/"):
-                        model["litellm_params"][k] = get_secret(v)
-
                 ## check if they have model-id's ##
                 model_id = model.get("model_info", {}).get("id", None)
                 if model_id is None:
@@ -6898,7 +6904,7 @@ class ProxyConfig:
                 if (deployment := llm_router.get_deployment(model_id=model_id)) is not None
                 and deployment.model_info.db_model is False
             )
-            if model_list is None
+            if "model_list" not in config.model_fields_set
             else frozenset()
         )
         if kept_config_ids:
@@ -6992,6 +6998,18 @@ class ProxyConfig:
 
         return _model_list
 
+    async def _load_router_update_config(self) -> tuple[ProxyRuntimeConfig, "list[SearchToolTypedDict] | None"]:
+        try:
+            config_data: Final[ProxyRuntimeConfig] = await proxy_config.get_config()
+            return config_data, self.parse_search_tools(config_data)
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                "Failed to load config in _update_llm_router: %s. "
+                "Proceeding with model loading using cached/empty config.",
+                str(e),
+            )
+            return ProxyRuntimeConfig(), None
+
     async def _update_llm_router(
         self,
         new_models: Json | None,
@@ -7002,17 +7020,7 @@ class ProxyConfig:
         still_desired_ids: frozenset[str] | None = None
 
         # Load config separately so a timeout here doesn't block model loading
-        config_data: dict = {}
-        search_tools = None
-        try:
-            config_data = await proxy_config.get_config()
-            search_tools = self.parse_search_tools(config_data)
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "Failed to load config in _update_llm_router: %s. "
-                "Proceeding with model loading using cached/empty config.",
-                str(e),
-            )
+        config_data, search_tools = await self._load_router_update_config()
 
         try:
             # new_models is None when _get_models_from_db failed (transient DB error).
@@ -7094,11 +7102,11 @@ class ProxyConfig:
             else:  # Both success and failure
                 litellm.logging_callback_manager.add_litellm_callback(callback)
 
-    def _add_callbacks_from_db_config(self, config_data: dict) -> None:
+    def _add_callbacks_from_db_config(self, config_data: ProxyRuntimeConfig) -> None:
         """
         Adds callbacks from DB config to litellm
         """
-        litellm_settings: Final = config_data.get("litellm_settings", {}) or {}
+        litellm_settings: Final = config_data.litellm_settings
         success_callbacks: Final = litellm_settings.get("success_callback", None)
         failure_callbacks: Final = litellm_settings.get("failure_callback", None)
         callbacks: Final = litellm_settings.get("callbacks", None)
@@ -18022,12 +18030,12 @@ async def _persist_general_settings_ui_litellm_field(
     validated: Final = _validate_general_settings_ui_litellm_value(field_name, value)
     proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys={field_name: validated})
     config: Final = await proxy_config.get_config()
-    before_value: Final = config.get("litellm_settings", {}).get(field_name)
+    before_value: Final = config.litellm_settings.get(field_name)
     setattr(litellm, field_name, validated)
-    if "litellm_settings" not in config:
-        config["litellm_settings"] = {}
-    config["litellm_settings"][field_name] = validated
-    await proxy_config.save_config(new_config=config)
+    updated: Final = config.with_section(
+        "litellm_settings", {**config.litellm_settings, field_name: validated}  # mutable-ok: replacement section for save_config
+    )
+    await proxy_config.save_config(new_config=updated)
     asyncio.create_task(create_config_audit_log(field_name, "updated", before_value, validated, user_api_key_dict))
     return {"message": f"Field {field_name} updated", "status": "success"}
 
@@ -18036,11 +18044,13 @@ async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key
     default_value: Final = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name])
     proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys={field_name: default_value})
     config: Final = await proxy_config.get_config()
-    before_value: Final = config.get("litellm_settings", {}).get(field_name)
+    before_value: Final = config.litellm_settings.get(field_name)
     setattr(litellm, field_name, default_value)
-    if "litellm_settings" in config:
-        config["litellm_settings"].pop(field_name, None)
-    await proxy_config.save_config(new_config=config)
+    updated: Final = config.with_section(
+        "litellm_settings",  # mutable-ok: replacement section for save_config
+        {k: v for k, v in config.litellm_settings.items() if k != field_name},
+    )
+    await proxy_config.save_config(new_config=updated)
     asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, default_value, user_api_key_dict))
     return {"message": f"Field {field_name} reset", "status": "success"}
 
@@ -18344,8 +18354,13 @@ async def delete_callback(
         callback_name: Final = data.callback_name.lower()
 
         # Check if callback exists in current configuration
-        litellm_settings: Final = config.get("litellm_settings", {})
-        success_callbacks: Final = litellm_settings.get("success_callback", [])
+        litellm_settings: Final = config.litellm_settings
+        raw_callbacks: Final = litellm_settings.get("success_callback", ())
+        success_callbacks: Final = (
+            tuple(raw_callbacks)
+            if isinstance(raw_callbacks, Iterable) and not isinstance(raw_callbacks, (str, bytes))
+            else ()
+        )
 
         if callback_name not in success_callbacks:
             raise HTTPException(
@@ -18356,18 +18371,23 @@ async def delete_callback(
         before_success_callbacks: Final = list(success_callbacks)
 
         # Remove callback from success_callback list
-        success_callbacks.remove(callback_name)
-        config.setdefault("litellm_settings", {})["success_callback"] = success_callbacks
+        remaining_callbacks: Final = success_callbacks[: success_callbacks.index(callback_name)] + success_callbacks[
+            success_callbacks.index(callback_name) + 1 :
+        ]
+        updated: Final = config.with_section(
+            "litellm_settings",  # mutable-ok: replacement section for save_config
+            {**litellm_settings, "success_callback": list(remaining_callbacks)},
+        )
 
         # Save the updated configuration
-        await proxy_config.save_config(new_config=config)
+        await proxy_config.save_config(new_config=updated)
 
         asyncio.create_task(
             create_config_audit_log(
                 "litellm_settings",
                 "deleted",
                 {"success_callback": before_success_callbacks},
-                {"success_callback": success_callbacks},
+                {"success_callback": list(remaining_callbacks)},
                 user_api_key_dict,
             )
         )
@@ -18378,7 +18398,7 @@ async def delete_callback(
         return {
             "message": f"Successfully deleted callback: {callback_name}",
             "removed_callback": callback_name,
-            "remaining_callbacks": success_callbacks,
+            "remaining_callbacks": list(remaining_callbacks),
             "deleted_at": datetime.now().isoformat(),
         }
 
@@ -18474,9 +18494,9 @@ async def get_config(
         all_available_callbacks: Final = AllCallbacks()
 
         config_data: Final = await proxy_config.get_config()
-        _litellm_settings: Final = config_data.get("litellm_settings", {})
-        _general_settings: Final = config_data.get("general_settings", {})
-        environment_variables: Final = config_data.get("environment_variables", {})
+        _litellm_settings: Final = config_data.litellm_settings
+        _general_settings: Final = config_data.general_settings
+        environment_variables: Final = config_data.environment_variables
 
         is_full_admin: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
 
@@ -18550,7 +18570,7 @@ async def get_config(
         # Check if slack alerting is on
         _alerting: Final = _general_settings.get("alerting", [])
         alerting_data: Final = []
-        if "slack" in _alerting:
+        if isinstance(_alerting, Iterable) and "slack" in _alerting:
             _slack_values, _ = resolve_fields(
                 SLACK_DESCRIPTORS, environment_variables, os.environ, empty_db_is_set=True
             )
