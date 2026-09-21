@@ -287,6 +287,12 @@ healthcheck = [
     "httpx==0.28.1",
     "pyyaml==6.0.3",
 ]
+benchmarks = [
+    "pytest==9.0.3",
+    "pytest-codspeed==4.3.0",
+    "mcp>=2.2.0,<3",
+    "a2a-sdk==1.1.0",
+]
 
 [build-system]
 requires = ["maturin==1.15.0"]

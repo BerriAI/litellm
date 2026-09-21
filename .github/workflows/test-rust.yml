@@ -24,7 +24,9 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - ".github/scripts/verify_installed_wheel_imports.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/test_litellm/rust_bridge/test_verify_installed_wheel_imports.py"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
@@ -54,7 +56,9 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
+      - ".github/scripts/verify_installed_wheel_imports.py"
       - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/test_litellm/rust_bridge/test_verify_installed_wheel_imports.py"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -159,7 +163,7 @@ jobs:
       - run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
 
       - name: Run pytest tests/test_litellm_rust with the compiled extension
-        run: make test-rust-extension
+        run: make test-rust-extension WHEEL="$(echo dist/*.whl)"
 
       - run: >-
           uv build --wheel --out-dir panic-dist
