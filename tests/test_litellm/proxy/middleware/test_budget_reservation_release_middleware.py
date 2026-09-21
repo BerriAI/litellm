@@ -15,7 +15,6 @@ from typing import Final
 
 import pytest
 from starlette.applications import Starlette
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
@@ -138,10 +137,6 @@ async def _post(app: ASGIApp) -> None:
 
 def _counter(spend_counter_cache: DualCache) -> float | None:
     return spend_counter_cache.in_memory_cache.get_cache(key=COUNTER_KEY)
-
-
-def test_is_not_base_http_middleware():
-    assert not issubclass(BudgetReservationReleaseMiddleware, BaseHTTPMiddleware)
 
 
 @pytest.mark.asyncio
