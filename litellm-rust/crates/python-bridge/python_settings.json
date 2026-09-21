@@ -22,5 +22,8 @@
   ],
   "secret_manager": [
     "readable"
+  ],
+  "cache_settings": [
+    "default_redis_ttl"
   ]
 }

@@ -1,5 +1,6 @@
 mod caching;
 mod codec;
+mod embedding;
 mod response;
 
 pub use caching::{
@@ -7,4 +8,5 @@ pub use caching::{
     get_cache_key, should_use_cache,
 };
 pub use codec::ResponseCacheCodec;
+pub use embedding::PartialHits;
 pub use response::{ResponseCache, ResponseCacheRequest};

@@ -4,7 +4,7 @@ mod native;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use litellm_cache::Error;
-use litellm_cache_response::{CacheControls, CacheKeyInput, ResponseCacheRequest};
+use litellm_cache_response::{CacheControls, CacheKeyInput, PartialHits, ResponseCacheRequest};
 use litellm_host_python::{ExecutionStep, from_py, release_gil, run_async, to_py};
 use pyo3::{
     PyTraverseError, PyVisit,
@@ -15,8 +15,25 @@ use pyo3::{
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::python_settings::PythonSettings;
 use facade::FacadeGuard;
 use native::NativeResponseCache;
+
+const PYTHON_REDIS_DEFAULT_TTL: Duration = Duration::from_secs(60);
+
+#[derive(FromPyObject)]
+struct PythonCacheSettings {
+    default_redis_ttl: Option<f64>,
+}
+
+fn redis_default_ttl(py: Python<'_>) -> PyResult<Duration> {
+    let settings: PythonCacheSettings = PythonSettings::Cache.read(py)?.extract()?;
+    settings
+        .default_redis_ttl
+        .map(duration)
+        .transpose()
+        .map(|ttl| ttl.unwrap_or(PYTHON_REDIS_DEFAULT_TTL))
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -29,6 +46,10 @@ struct RequestInput {
 
 fn request(value: &Bound<'_, PyAny>) -> PyResult<ResponseCacheRequest> {
     let input: RequestInput = from_py(value)?;
+    request_input(input)
+}
+
+fn request_input(input: RequestInput) -> PyResult<ResponseCacheRequest> {
     let mut request = ResponseCacheRequest::new(input.key);
     if let Some(controls) = input.controls {
         request.controls = controls;
@@ -36,6 +57,13 @@ fn request(value: &Bound<'_, PyAny>) -> PyResult<ResponseCacheRequest> {
     request.kwargs.ttl = input.ttl_seconds.map(duration).transpose()?;
     request.max_age = input.max_age_seconds.map(duration).transpose()?;
     Ok(request)
+}
+
+fn requests(value: &Bound<'_, PyAny>) -> PyResult<Vec<ResponseCacheRequest>> {
+    from_py::<Vec<RequestInput>>(value)?
+        .into_iter()
+        .map(request_input)
+        .collect()
 }
 
 fn duration(seconds: f64) -> PyResult<Duration> {
@@ -94,7 +122,10 @@ impl NativeCacheHandle {
         ttl_seconds: Option<f64>,
         namespace: Option<String>,
     ) -> PyResult<Self> {
-        let ttl = ttl_seconds.map(duration).transpose()?;
+        let ttl = Some(match ttl_seconds {
+            Some(seconds) => duration(seconds)?,
+            None => redis_default_ttl(py)?,
+        });
         let service = release_gil(py, move || NativeResponseCache::redis(&url, ttl, namespace))
             .map_err(cache_error)?;
         Ok(Self {
@@ -111,7 +142,12 @@ impl NativeCacheHandle {
 
     fn bind_facade(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<()> {
         let service = self.service()?;
-        let guard = FacadeGuard::capture(py, facade, self.backend())?;
+        let guard = FacadeGuard::capture(py, facade, self.backend(), service.default_ttl())?;
+        let service = service.with_redis_flush_size(
+            facade
+                .getattr("redis_flush_size")?
+                .extract::<Option<usize>>()?,
+        );
         let handle = Py::new(
             py,
             Self {
@@ -249,6 +285,37 @@ impl ResolvedCache {
         }
     }
 
+    #[pyo3(signature = (requests, *, callback_kwargs=None))]
+    fn lookup_batch(
+        &self,
+        py: Python<'_>,
+        requests: &Bound<'_, PyAny>,
+        callback_kwargs: Option<&Bound<'_, PyDict>>,
+    ) -> PyResult<Py<PyAny>> {
+        self.check_process()?;
+        match &self.binding {
+            CacheBinding::Disabled => {
+                let requests = self::requests(requests)?;
+                to_py(py, &PartialHits::new(vec![None; requests.len()]))
+            }
+            CacheBinding::Native(service) => {
+                let requests = self::requests(requests)?;
+                let service = service.clone();
+                let response = release_gil(py, move || service.lookup_batch(&requests, now()))
+                    .map_err(cache_error)?;
+                to_py(py, &response)
+            }
+            CacheBinding::PythonCallback(object) => object
+                .bind(py)
+                .call_method(
+                    "batch_get_cache",
+                    (),
+                    Some(self::callback_kwargs(callback_kwargs)?),
+                )
+                .map(Bound::unbind),
+        }
+    }
+
     #[pyo3(signature = (request, *, callback_kwargs=None))]
     fn async_lookup<'py>(
         &self,
@@ -292,6 +359,102 @@ impl ResolvedCache {
         }
     }
 
+    #[pyo3(signature = (requests, *, callback_kwargs=None))]
+    fn async_lookup_batch<'py>(
+        &self,
+        py: Python<'py>,
+        requests: &Bound<'py, PyAny>,
+        callback_kwargs: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.check_process()?;
+        match &self.binding {
+            CacheBinding::Disabled => {
+                let requests = self::requests(requests)?;
+                ready_value(py, &PartialHits::new(vec![None; requests.len()]))
+            }
+            CacheBinding::Native(service) => {
+                let requests = self::requests(requests)?;
+                let service = service.clone();
+                run_async(
+                    py,
+                    async move { service.async_lookup_batch(&requests, now()).await },
+                    cache_error,
+                )
+            }
+            CacheBinding::PythonCallback(object) => object.bind(py).call_method(
+                "async_batch_get_cache",
+                (),
+                Some(self::callback_kwargs(callback_kwargs)?),
+            ),
+        }
+    }
+
+    #[pyo3(signature = (requests, responses, *, callback_kwargs=None))]
+    fn async_store_batch<'py>(
+        &self,
+        py: Python<'py>,
+        requests: &Bound<'py, PyAny>,
+        responses: &Bound<'py, PyAny>,
+        callback_kwargs: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.check_process()?;
+        match &self.binding {
+            CacheBinding::Disabled => ready_none(py),
+            CacheBinding::Native(service) => {
+                let requests = self::requests(requests)?;
+                let responses: Vec<Value> = from_py(responses)?;
+                if requests.len() != responses.len() {
+                    return Err(PyValueError::new_err(
+                        "batch cache requests and responses must have equal lengths",
+                    ));
+                }
+                let entries = requests.into_iter().zip(responses).collect();
+                let service = service.clone();
+                run_async(
+                    py,
+                    async move { service.async_store_batch(entries, now()).await },
+                    cache_error,
+                )
+            }
+            CacheBinding::PythonCallback(object) => object.bind(py).call_method(
+                "async_set_cache_pipeline",
+                (responses,),
+                Some(self::callback_kwargs(callback_kwargs)?),
+            ),
+        }
+    }
+
+    fn async_flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.check_process()?;
+        match &self.binding {
+            CacheBinding::Disabled => ready_none(py),
+            CacheBinding::Native(service) => {
+                let service = service.clone();
+                run_async(py, async move { service.async_flush().await }, cache_error)
+            }
+            CacheBinding::PythonCallback(object) => {
+                object.bind(py).call_method0("flush_cache")?;
+                ready_none(py)
+            }
+        }
+    }
+
+    fn ping<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.check_process()?;
+        match &self.binding {
+            CacheBinding::Disabled => ready_none(py),
+            CacheBinding::Native(service) => {
+                let service = service.clone();
+                run_async(
+                    py,
+                    async move { service.test_connection().await },
+                    cache_error,
+                )
+            }
+            CacheBinding::PythonCallback(object) => object.bind(py).call_method0("test_connection"),
+        }
+    }
+
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         if let CacheBinding::PythonCallback(object) = &self.binding {
             visit.call(object)?;
@@ -309,11 +472,18 @@ fn callback_kwargs<'a, 'py>(
 }
 
 fn ready_none(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    ready_value(py, &())
+}
+
+fn ready_value<'py, T: serde::Serialize>(
+    py: Python<'py>,
+    value: &T,
+) -> PyResult<Bound<'py, PyAny>> {
     let future = py
         .import("asyncio")?
         .call_method0("get_running_loop")?
         .call_method0("create_future")?;
-    future.call_method1("set_result", (py.None(),))?;
+    future.call_method1("set_result", (to_py(py, value)?,))?;
     Ok(future)
 }
 

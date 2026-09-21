@@ -28,17 +28,17 @@ cache.store(&request, json!({"answer": 7}), now)?;
 assert_eq!(cache.async_lookup(&request, now).await?, Some(json!({"answer": 7})));
 ```
 
-For Redis, inject `RedisCache::new(url, ttl, ResponseCacheCodec)` instead. Namespaces are optional and existing namespace prefixes are preserved. Each Redis constructor currently opens its own connection; shared connection pools remain follow-up work
+For Redis, inject `RedisCache::new(url, ttl, ResponseCacheCodec)` instead. Namespaces are optional and existing namespace prefixes are preserved. Sync operations check out independent connections from a bounded pool, while async callers move that blocking work off the executor
 
 Callers supply Unix time for response freshness. Backend TTL uses its own clock. A read can reject an entry through `max_age` even while the backend still retains it
 
 ## Python integration boundary
 
-The extension exposes `NativeCacheHandle`, `CacheResolver`, and captured `CacheBinding` objects for host integration. Memory and Redis handles support synchronous and asynchronous response lookup and storage
+The extension exposes `NativeCacheHandle`, `CacheResolver`, and captured `CacheBinding` objects for host integration. Memory and Redis handles support single and batch response lookup and storage. Batch lookup returns ordered values plus missing indices for embedding partial-hit wiring
 
 The resolver reads the namespace's `cache` attribute each time it resolves. A captured binding retains the selected service for its operation, including background writes. `None` disables caching. Custom Python cache objects keep their original methods, arguments, returned awaitables, exceptions, and caller-task execution
 
-Explicit facade registration checks object identity, method overrides, and configuration changes before selecting native execution. Registration does not migrate entries or replace Python methods. Until activation configures one shared service, a registered facade and its native handle can hold separate data. Existing public cache constructors remain on Python
+Explicit facade registration checks object identity, method overrides, effective TTL, and configuration changes before selecting native execution. Redis defaults come from the Python settings snapshot, including `litellm.default_redis_ttl`, and buffered async writes honor `redis_flush_size`. Registration does not migrate entries or replace Python methods. Until activation configures one shared service, a registered facade and its native handle can hold separate data. Existing public cache constructors remain on Python
 
 Native cache handles must be recreated after fork. The bridge releases the GIL around native operations, and Redis runs blocking connection operations off the async executor. Native errors propagate to the host, which owns the existing fail-open and logging policy
 
@@ -50,6 +50,6 @@ Verify typed values, TTL precedence, missing entries, serialization failures, na
 
 ## Follow-up scope
 
-Public SDK, Router, and proxy activation still need constructor parity, stream replay, embedding partial batches, response reconstruction, callback scheduling, and failure-policy integration. This foundation does not switch those request paths
+Public SDK, Router, and proxy activation still need constructor parity, stream replay, embedding partial-batch integration, response reconstruction, callback scheduling, and failure-policy integration. This foundation does not switch those request paths
 
 Redis cluster, disk, cloud stores, dual caching, and semantic caching remain follow-ups. Atomic counters, affinity claims, reservations, queues, and pubsub need explicit capabilities owned by their consuming features. Adding a cache backend does not establish those guarantees

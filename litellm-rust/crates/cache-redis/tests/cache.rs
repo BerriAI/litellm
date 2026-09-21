@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use litellm_cache::{BaseCache, CacheCodec, CacheKwargs, Error, JsonCodec, get_cache, set_cache};
+use litellm_cache::{
+    BaseCache, BatchEntry, CacheCodec, CacheConnectionStatus, CacheKwargs, Error, JsonCodec,
+    get_cache, set_cache,
+};
 use litellm_cache_redis::RedisCache;
 use redis_test::{MockCmd, MockRedisConnection};
 
@@ -174,7 +177,9 @@ fn flush_requires_a_namespace_and_escapes_glob_metacharacters() {
             redis::cmd("SCAN")
                 .cursor_arg(0)
                 .arg("MATCH")
-                .arg("team\\*:*"),
+                .arg("team\\*:*")
+                .arg("COUNT")
+                .arg(1000),
             Ok(redis_test::redis_value!(["0", ["team*:key"]])),
         ),
         MockCmd::new(redis::cmd("DEL").arg("team*:key"), Ok(1u32)),
@@ -183,4 +188,74 @@ fn flush_requires_a_namespace_and_escapes_glob_metacharacters() {
     let scoped = RedisCache::with_connection(connection, None, JsonCodec::<String>::new())
         .with_namespace(Some("team*".into()));
     scoped.flush_cache().unwrap();
+}
+
+#[tokio::test]
+async fn connection_failures_use_the_python_result_contract() {
+    let error = redis::RedisError::from((redis::ErrorKind::Io, "connection refused"));
+    let connection =
+        MockRedisConnection::new([MockCmd::new(redis::cmd("PING"), Err::<String, _>(error))])
+            .assert_all_commands_consumed();
+    let cache = RedisCache::with_connection(connection, None, JsonCodec::<String>::new());
+
+    let result = cache.test_connection().await.unwrap();
+    assert_eq!(result.status, CacheConnectionStatus::Failed);
+    assert!(result.message.starts_with("Redis connection failed:"));
+    assert!(result.error.is_some());
+}
+
+#[tokio::test]
+async fn batch_reads_keep_order_and_treat_invalid_values_as_invalid_entries() {
+    let connection = MockRedisConnection::new([MockCmd::new(
+        redis::cmd("MGET").arg("hit").arg("miss").arg("invalid"),
+        Ok(vec![
+            redis::Value::BulkString(vec![42, 7]),
+            redis::Value::Nil,
+            redis::Value::BulkString(vec![99, 7]),
+        ]),
+    )])
+    .assert_all_commands_consumed();
+    let cache = RedisCache::with_connection(connection, None, TaggedByteCodec(42));
+
+    assert_eq!(
+        cache
+            .async_get_cache_batch(
+                vec!["hit".into(), "miss".into(), "invalid".into()],
+                CacheKwargs::default(),
+            )
+            .await
+            .unwrap(),
+        vec![BatchEntry::Hit(7), BatchEntry::Miss, BatchEntry::Invalid]
+    );
+}
+
+#[tokio::test]
+async fn async_flush_deletes_each_scan_page_separately() {
+    let connection = MockRedisConnection::new([
+        MockCmd::new(
+            redis::cmd("SCAN")
+                .cursor_arg(0)
+                .arg("MATCH")
+                .arg("team:*")
+                .arg("COUNT")
+                .arg(1000),
+            Ok(redis_test::redis_value!(["7", ["team:a", "team:b"]])),
+        ),
+        MockCmd::new(redis::cmd("DEL").arg("team:a").arg("team:b"), Ok(2u32)),
+        MockCmd::new(
+            redis::cmd("SCAN")
+                .cursor_arg(7)
+                .arg("MATCH")
+                .arg("team:*")
+                .arg("COUNT")
+                .arg(1000),
+            Ok(redis_test::redis_value!(["0", ["team:c"]])),
+        ),
+        MockCmd::new(redis::cmd("DEL").arg("team:c"), Ok(1u32)),
+    ])
+    .assert_all_commands_consumed();
+    let cache = RedisCache::with_connection(connection, None, JsonCodec::<String>::new())
+        .with_namespace(Some("team".into()));
+
+    cache.async_flush_cache().await.unwrap();
 }

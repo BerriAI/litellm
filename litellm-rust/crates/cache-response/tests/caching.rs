@@ -80,4 +80,11 @@ fn cache_controls_honor_default_modes_and_directives() {
         }
         .writes()
     );
+    assert!(
+        !CacheControls {
+            caching: Some(false),
+            ..enabled
+        }
+        .writes()
+    );
 }

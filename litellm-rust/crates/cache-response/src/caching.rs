@@ -120,6 +120,7 @@ impl CacheControls {
     pub fn writes(self) -> bool {
         self.supported_call_type
             && self.configured
+            && self.caching.unwrap_or(true)
             && !self.no_store
             && (self.default_on || self.use_cache)
     }
@@ -131,13 +132,16 @@ pub fn should_use_cache(controls: CacheControls) -> bool {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CacheEntry {
-    pub timestamp: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<f64>,
     pub response: Value,
 }
 
 impl CacheEntry {
     pub fn fresh(&self, now: Duration, max_age: Option<Duration>) -> bool {
-        self.timestamp.is_finite()
-            && max_age.is_none_or(|age| now.as_secs_f64() - self.timestamp <= age.as_secs_f64())
+        self.timestamp.is_none_or(|timestamp| {
+            timestamp.is_finite()
+                && max_age.is_none_or(|age| now.as_secs_f64() - timestamp <= age.as_secs_f64())
+        })
     }
 }

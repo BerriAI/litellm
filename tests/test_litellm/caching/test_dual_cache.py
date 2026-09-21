@@ -6,18 +6,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
-from litellm.caching.dual_cache import DualCache
+from litellm.caching.dual_cache import DualCache, LimitedSizeOrderedDict
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, _redis_circuit_breaker_guard, _redis_circuit_breaker_guard_sync
+from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
 from litellm.types.caching import RedisPipelineIncrementOperation
 
 
 @pytest.mark.asyncio
 async def test_dual_cache_async_batch_get_cache_coalesces_concurrent_redis_reads():
-    dual_cache = DualCache(
-        redis_cache=MagicMock(spec=RedisCache), default_redis_batch_cache_expiry=10
-    )
+    dual_cache = DualCache(redis_cache=MagicMock(spec=RedisCache), default_redis_batch_cache_expiry=10)
     keys = ["shared_a", "shared_b"]
     start_gate = asyncio.Event()
 
@@ -44,9 +42,7 @@ async def test_dual_cache_async_batch_get_cache_coalesces_concurrent_redis_reads
 
 @pytest.mark.asyncio
 async def test_dual_cache_async_batch_get_cache_rolls_back_redis_reservation_on_error():
-    dual_cache = DualCache(
-        redis_cache=MagicMock(spec=RedisCache), default_redis_batch_cache_expiry=10
-    )
+    dual_cache = DualCache(redis_cache=MagicMock(spec=RedisCache), default_redis_batch_cache_expiry=10)
     keys = ["shared_a", "shared_b"]
 
     with patch.object(
@@ -116,9 +112,7 @@ def test_dual_cache_batch_get_cache_only_reads_missing_keys_from_redis():
 
 def test_dual_cache_batch_get_cache_throttles_repeat_redis_reads():
     mock_redis = _redis_mock_for_sync_batch({"absent_key": None})
-    dual_cache = DualCache(
-        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
-    )
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10)
 
     first = dual_cache.batch_get_cache(keys=["absent_key"])
     second = dual_cache.batch_get_cache(keys=["absent_key"])
@@ -131,9 +125,7 @@ def test_dual_cache_batch_get_cache_throttles_repeat_redis_reads():
 def test_dual_cache_batch_get_cache_rolls_back_redis_reservation_on_error():
     mock_redis = MagicMock(spec=RedisCache)
     mock_redis.batch_get_cache.side_effect = RuntimeError("redis unavailable")
-    dual_cache = DualCache(
-        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
-    )
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10)
 
     first_result = dual_cache.batch_get_cache(keys=["shared_a"])
     second_result = dual_cache.batch_get_cache(keys=["shared_a"])
@@ -146,9 +138,7 @@ def test_dual_cache_batch_get_cache_rolls_back_redis_reservation_on_error():
 
 def test_dual_cache_batch_get_cache_returns_memory_only_when_redis_read_is_throttled():
     mock_redis = _redis_mock_for_sync_batch({"throttled_key": "redis_value"})
-    dual_cache = DualCache(
-        in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10
-    )
+    dual_cache = DualCache(in_memory_cache=InMemoryCache(), redis_cache=mock_redis, default_redis_batch_cache_expiry=10)
     dual_cache.last_redis_batch_access_time["throttled_key"] = time.time()
 
     result = dual_cache.batch_get_cache(keys=["throttled_key"])
@@ -257,9 +247,7 @@ async def test_dual_cache_batch_redis_backfill_injects_default_in_memory_ttl():
     default_in_memory_ttl, same as the single-key path."""
     in_memory_cache = InMemoryCache(default_ttl=600)
     mock_redis = MagicMock(spec=RedisCache)
-    mock_redis.async_batch_get_cache = AsyncMock(
-        return_value={"batch_backfill_key": "redis_value"}
-    )
+    mock_redis.async_batch_get_cache = AsyncMock(return_value={"batch_backfill_key": "redis_value"})
     dual_cache = DualCache(
         in_memory_cache=in_memory_cache,
         redis_cache=mock_redis,
@@ -371,9 +359,7 @@ async def test_circuit_breaker_open_skips_redis():
 
     class FakeRedis:
         def __init__(self):
-            self._circuit_breaker = RedisCircuitBreaker(
-                failure_threshold=3, recovery_timeout=60
-            )
+            self._circuit_breaker = RedisCircuitBreaker(failure_threshold=3, recovery_timeout=60)
             self._circuit_breaker._state = "open"
             self._circuit_breaker._opened_at = time.time()
             self.call_count = 0
@@ -426,9 +412,7 @@ def test_circuit_breaker_half_open_concurrent_calls_are_fast_failed():
 
     # All subsequent concurrent callers: HALF_OPEN → fast-fail (return True)
     for _ in range(10):
-        assert (
-            cb.is_open() is True
-        ), "concurrent callers should be fast-failed in HALF_OPEN"
+        assert cb.is_open() is True, "concurrent callers should be fast-failed in HALF_OPEN"
 
 
 def test_circuit_breaker_disabled_never_opens():
@@ -472,9 +456,7 @@ async def test_circuit_breaker_disabled_guard_always_calls_method():
 
     class FakeRedis:
         def __init__(self):
-            self._circuit_breaker = RedisCircuitBreaker(
-                failure_threshold=1, recovery_timeout=60, enabled=False
-            )
+            self._circuit_breaker = RedisCircuitBreaker(failure_threshold=1, recovery_timeout=60, enabled=False)
             self.call_count = 0
 
         @_redis_circuit_breaker_guard
@@ -510,6 +492,30 @@ async def test_async_increment_cache_returns_none_when_no_in_memory_cache_and_re
         f"Expected None when in_memory_cache is absent and Redis fails, got {result!r}. "
         "Returning the delta (1.0) would silently miscalculate rate-limit counters."
     )
+
+
+@pytest.mark.asyncio
+async def test_failed_redis_increment_does_not_change_the_local_counter():
+    memory = InMemoryCache()
+    memory.set_cache("counter", 10)
+    redis_cache = MagicMock(spec=RedisCache)
+    redis_cache.async_increment = AsyncMock(side_effect=RuntimeError("redis down"))
+    cache = DualCache(in_memory_cache=memory, redis_cache=redis_cache)
+
+    assert await cache.async_increment_cache("counter", 2) is None
+    assert memory.get_cache("counter") == 10
+
+
+@pytest.mark.asyncio
+async def test_successful_redis_increment_replaces_the_local_counter_with_the_authoritative_value():
+    memory = InMemoryCache()
+    memory.set_cache("counter", 10)
+    redis_cache = MagicMock(spec=RedisCache)
+    redis_cache.async_increment = AsyncMock(return_value=42.0)
+    cache = DualCache(in_memory_cache=memory, redis_cache=redis_cache)
+
+    assert await cache.async_increment_cache("counter", 2) == 42.0
+    assert memory.get_cache("counter") == 42.0
 
 
 def test_dual_cache_late_attach_redis_wires_writes_and_ttl_sync():
@@ -742,7 +748,7 @@ async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplo
     assert [(r.levelno, r.getMessage()) for r in visible] == [
         (
             logging.WARNING,
-            "Redis async_increment_cache_pipeline failed, falling back to in-memory result:"
+            "Redis async_increment_cache_pipeline failed; local counters unchanged:"
             " Timeout reading from 127.0.0.1:6379",
         )
     ]
@@ -756,7 +762,7 @@ async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplo
     assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
         (
             logging.WARNING,
-            "Redis async_increment_cache failed, falling back to in-memory result: Timeout reading from 127.0.0.1:6379"
+            "Redis async_increment_cache failed; local counter unchanged: Timeout reading from 127.0.0.1:6379"
             " (199 more Redis timeouts since the previous Redis timeout line were logged at DEBUG)",
         )
     ]
@@ -791,3 +797,14 @@ async def test_async_delete_cache_keys_on_empty_list_touches_no_backend():
     await dual_cache.async_delete_cache_keys([])
 
     redis_cache.delete_cache_keys.assert_not_awaited()
+
+
+def test_limited_ordered_dict_refreshes_recency_without_evicting_another_key():
+    tracker = LimitedSizeOrderedDict(max_size=2)
+    tracker["hot"] = 1
+    tracker["cold"] = 2
+
+    tracker["hot"] = 3
+    tracker["new"] = 4
+
+    assert list(tracker.items()) == [("hot", 3), ("new", 4)]

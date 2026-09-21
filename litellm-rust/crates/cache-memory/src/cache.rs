@@ -3,7 +3,10 @@ use std::collections::{BinaryHeap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use litellm_cache::{BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheKwargs, Error};
+use litellm_cache::{
+    BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheKwargs, ClaimCache, CounterCache,
+    Error,
+};
 
 const DEFAULT_MAX_SIZE_IN_MEMORY: usize = 200;
 const DEFAULT_TTL: Duration = Duration::from_secs(600);
@@ -165,6 +168,55 @@ impl<V: Clone> InMemoryCache<V> {
     fn remove(state: &mut CacheState<V>, key: &str) {
         state.values.remove(key);
         state.expirations.remove(key);
+    }
+}
+
+impl<V> ClaimCache for InMemoryCache<V>
+where
+    V: Clone + PartialEq + Send + Sync + 'static,
+{
+    fn claim_cache(
+        &self,
+        key: &str,
+        candidate: V,
+        eligible: &[V],
+        kwargs: CacheKwargs,
+    ) -> Result<V, Error> {
+        let now = (self.now)();
+        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        Self::evict(&mut state, self.max_size_in_memory, now);
+        let winner = match state.values.get(key) {
+            Some(existing) if eligible.is_empty() => existing.clone(),
+            Some(existing) if eligible.contains(existing) => existing.clone(),
+            _ => candidate,
+        };
+        let expiration = now + self.get_ttl(&kwargs);
+        state.values.insert(key.into(), winner.clone());
+        state.expirations.insert(key.into(), expiration);
+        state
+            .expiration_heap
+            .push(Reverse((expiration, key.into())));
+        Ok(winner)
+    }
+}
+
+impl CounterCache for InMemoryCache<f64> {
+    fn increment_cache(&self, key: &str, amount: f64, kwargs: CacheKwargs) -> Result<f64, Error> {
+        let now = (self.now)();
+        let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
+        Self::evict(&mut state, self.max_size_in_memory, now);
+        let value = state.values.get(key).copied().unwrap_or_default() + amount;
+        let expiration = state
+            .expirations
+            .get(key)
+            .copied()
+            .unwrap_or_else(|| now + self.get_ttl(&kwargs));
+        state.values.insert(key.into(), value);
+        state.expirations.insert(key.into(), expiration);
+        state
+            .expiration_heap
+            .push(Reverse((expiration, key.into())));
+        Ok(value)
     }
 }
 

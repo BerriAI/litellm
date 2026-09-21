@@ -8,15 +8,17 @@ pub(crate) enum PythonSettings {
     UrlPolicy,
     ProviderDefaults,
     SecretManager,
+    Cache,
 }
 
 impl PythonSettings {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 5] = [
         Self::Http,
         Self::UrlPolicy,
         Self::ProviderDefaults,
         Self::SecretManager,
+        Self::Cache,
     ];
 
     pub(crate) fn name(self) -> &'static str {
@@ -25,6 +27,7 @@ impl PythonSettings {
             Self::UrlPolicy => "url_policy",
             Self::ProviderDefaults => "provider_defaults",
             Self::SecretManager => "secret_manager",
+            Self::Cache => "cache_settings",
         }
     }
 

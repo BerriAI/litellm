@@ -245,7 +245,7 @@ fn response_codec_accepts_python_literals_without_executing_code() {
     assert_eq!(
         ResponseCacheCodec
             .encode(&CacheEntry {
-                timestamp: f64::NAN,
+                timestamp: Some(f64::NAN),
                 response: json!({})
             })
             .unwrap_err(),
@@ -254,7 +254,7 @@ fn response_codec_accepts_python_literals_without_executing_code() {
 }
 
 #[tokio::test]
-async fn backend_failures_remain_observable_and_disabled_reads_do_not_touch_redis() {
+async fn invalid_entries_are_misses_and_disabled_reads_do_not_touch_redis() {
     let connection = MockRedisConnection::new([MockCmd::new(
         redis::cmd("GET").arg("tenant:key"),
         Ok(b"invalid".to_vec()),
@@ -267,22 +267,19 @@ async fn backend_failures_remain_observable_and_disabled_reads_do_not_touch_redi
     assert_eq!(cache.lookup(&request, Duration::ZERO).unwrap(), None);
     request.controls.no_cache = false;
     assert_eq!(
-        cache
-            .async_lookup(&request, Duration::ZERO)
-            .await
-            .unwrap_err(),
-        Error::InvalidEntry
+        cache.async_lookup(&request, Duration::ZERO).await.unwrap(),
+        None
     );
 }
 
 #[test]
-fn malformed_memory_entries_are_rejected_by_the_response_consumer() {
+fn malformed_memory_entries_are_treated_as_misses() {
     let backend = Arc::new(InMemoryCache::default());
     BaseCache::set_cache(
         backend.as_ref(),
         "tenant:key",
         CacheEntry {
-            timestamp: 100.0,
+            timestamp: Some(100.0),
             response: json!("not a serialized response"),
         },
         Default::default(),
@@ -290,10 +287,8 @@ fn malformed_memory_entries_are_rejected_by_the_response_consumer() {
     .unwrap();
     let cache = ResponseCache::new(backend);
     assert_eq!(
-        cache
-            .lookup(&request(), Duration::from_secs(100))
-            .unwrap_err(),
-        Error::InvalidEntry
+        cache.lookup(&request(), Duration::from_secs(100)).unwrap(),
+        None
     );
 }
 
@@ -301,10 +296,74 @@ fn malformed_memory_entries_are_rejected_by_the_response_consumer() {
 fn response_entries_preserve_the_existing_json_representation() {
     let codec = ResponseCacheCodec;
     let entry = CacheEntry {
-        timestamp: 123.0,
+        timestamp: Some(123.0),
         response: json!({"choices": [{"text": "cached"}]}),
     };
     let bytes = codec.encode(&entry).unwrap();
     assert_eq!(bytes, serde_json::to_vec(&entry).unwrap());
     assert_eq!(codec.decode(&bytes).unwrap(), entry);
+}
+
+#[test]
+fn response_codec_preserves_values_without_timestamps() {
+    let codec = ResponseCacheCodec;
+    let raw = json!({"choices": [{"text": "legacy"}]});
+    let entry = codec.decode(&serde_json::to_vec(&raw).unwrap()).unwrap();
+    assert_eq!(entry.timestamp, None);
+    assert_eq!(entry.response, raw);
+
+    let backend = Arc::new(InMemoryCache::default());
+    BaseCache::set_cache(backend.as_ref(), "tenant:key", entry, Default::default()).unwrap();
+    let cache = ResponseCache::new(backend);
+    assert_eq!(
+        cache.lookup(&request(), Duration::from_secs(100)).unwrap(),
+        Some(json!({"choices": [{"text": "legacy"}]}))
+    );
+}
+
+#[tokio::test]
+async fn batch_lookup_reports_partial_hits_and_batch_store_populates_misses() {
+    let cache = memory();
+    let requests = ["hit", "miss", "disabled"].map(|key| {
+        ResponseCacheRequest::new(CacheKeyInput {
+            preset: Some(key.into()),
+            ..Default::default()
+        })
+    });
+    cache
+        .store(&requests[0], json!({"value": 1}), Duration::from_secs(100))
+        .unwrap();
+    let mut requests = requests.to_vec();
+    requests[2].controls.caching = Some(false);
+
+    let partial = cache
+        .async_lookup_batch(&requests, Duration::from_secs(100))
+        .await
+        .unwrap();
+    assert_eq!(partial.values, vec![Some(json!({"value": 1})), None, None]);
+    assert_eq!(partial.missing_indices, vec![1, 2]);
+
+    cache
+        .async_store_batch(
+            vec![
+                (requests[1].clone(), json!({"value": 2})),
+                (requests[2].clone(), json!({"value": 3})),
+            ],
+            Duration::from_secs(100),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        cache
+            .lookup(&requests[1], Duration::from_secs(100))
+            .unwrap(),
+        Some(json!({"value": 2}))
+    );
+    requests[2].controls.caching = None;
+    assert_eq!(
+        cache
+            .lookup(&requests[2], Duration::from_secs(100))
+            .unwrap(),
+        None
+    );
 }

@@ -8,6 +8,7 @@ import weakref
 from collections.abc import Generator
 from types import SimpleNamespace
 from typing import Final, Protocol, cast
+from urllib.parse import urlparse
 
 import fakeredis
 import pytest
@@ -209,8 +210,12 @@ async def test_redis_reads_python_sync_and_async_entries_and_writes_without_hidd
     envelope: Final = {"timestamp": time.time(), "response": json.dumps(response)}
     client.set("team:sync", str(envelope))
     client.set("team:async", json.dumps({"timestamp": time.time(), "response": response}))
+    client.set("team:raw", json.dumps(response))
+    client.set("team:invalid", "not a cache entry")
     assert binding.lookup(request("sync")) == response
     assert await binding.async_lookup(request("team:async")) == response
+    assert binding.lookup(request("raw")) == response
+    assert await binding.async_lookup(request("invalid")) is None
     await binding.async_store({**request("native"), "ttl_seconds": 12.0}, response)
     stored: Final = client.get("team:native")
     assert isinstance(stored, bytes)
@@ -245,3 +250,63 @@ async def test_memory_size_policy_is_applied_by_the_native_host() -> None:
     ).resolve()
     await disabled.async_store(request(), small)
     assert await disabled.async_lookup(request()) is None
+
+
+async def test_native_batch_lookup_and_store_report_partial_hits() -> None:
+    binding: Final = _native.CacheResolver(SimpleNamespace(cache=_native.NativeCacheHandle.memory())).resolve()
+    requests: Final = [request("hit"), request("miss"), request("disabled")]
+    requests[2]["controls"] = {
+        "supported_call_type": True,
+        "configured": True,
+        "native_backend": True,
+        "default_on": True,
+        "caching": False,
+        "no_cache": False,
+        "no_store": False,
+        "use_cache": False,
+    }
+    await binding.async_store_batch(requests, [{"value": 1}, {"value": 2}, {"value": 3}])
+
+    partial: Final = await binding.async_lookup_batch(requests)
+
+    assert partial == {
+        "values": [{"value": 1}, {"value": 2}, None],
+        "missing_indices": [2],
+    }
+
+
+async def test_redis_handle_reads_the_python_default_ttl(redis_url: str) -> None:
+    client: Final = redis.Redis.from_url(redis_url)
+    with rebound(litellm, "default_redis_ttl", 7):
+        binding: Final = _native.CacheResolver(
+            SimpleNamespace(cache=_native.NativeCacheHandle.redis(redis_url))
+        ).resolve()
+        await binding.async_store(request("native-default"), {"value": 1})
+
+    assert 0 < client.ttl("native-default") <= 7
+    client.close()
+
+
+async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
+    parsed: Final = urlparse(redis_url)
+    with rebound(litellm, "default_redis_ttl", 60):
+        facade: Final = Cache(
+            type=LiteLLMCacheType.REDIS,
+            host=parsed.hostname,
+            port=str(parsed.port),
+            redis_flush_size=2,
+        )
+        with pytest.raises(TypeError, match="default TTLs must match"):
+            _native.NativeCacheHandle.redis(redis_url, ttl_seconds=61).bind_facade(facade)
+        _native.NativeCacheHandle.redis(redis_url).bind_facade(facade)
+    binding: Final = _native.CacheResolver(SimpleNamespace(cache=facade)).resolve()
+    client: Final = redis.Redis.from_url(redis_url)
+
+    await binding.async_store(request("first"), {"value": 1})
+    assert client.get("first") is None
+    await binding.async_store(request("second"), {"value": 2})
+
+    assert client.get("first") is not None
+    assert client.get("second") is not None
+    await facade.cache.disconnect()
+    client.close()

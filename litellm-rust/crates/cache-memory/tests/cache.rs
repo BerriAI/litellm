@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use litellm_cache::{
-    BaseCache, CacheBackend, CacheConnectionStatus, CacheKwargs, Error, get_cache, set_cache,
+    BaseCache, CacheBackend, CacheConnectionStatus, CacheKwargs, ClaimCache, CounterCache, Error,
+    get_cache, set_cache,
 };
 use litellm_cache_memory::{CacheWrite, InMemoryCache};
 use rstest::{fixture, rstest};
@@ -181,5 +182,53 @@ async fn generic_consumers_share_typed_values_and_honor_expiration() {
     assert_eq!(
         reader.async_get_cache("batch", &kwargs).await.unwrap(),
         None
+    );
+}
+
+#[test]
+fn claims_are_atomic_and_refresh_eligible_winners() {
+    let clock = clock();
+    let cache = InMemoryCache::with_clock(Some(4), Some(Duration::from_secs(60)), {
+        let clock = clock.clone();
+        move || Duration::from_secs(clock.load(Ordering::SeqCst))
+    });
+    let kwargs = CacheKwargs {
+        ttl: Some(Duration::from_secs(10)),
+        ..Default::default()
+    };
+    assert_eq!(
+        cache
+            .claim_cache("affinity", "first".to_string(), &[], kwargs.clone())
+            .unwrap(),
+        "first"
+    );
+    clock.store(105, Ordering::SeqCst);
+    assert_eq!(
+        cache
+            .claim_cache(
+                "affinity",
+                "second".to_string(),
+                &["first".to_string(), "second".to_string()],
+                kwargs,
+            )
+            .unwrap(),
+        "first"
+    );
+    assert_eq!(
+        cache.expires_at("affinity").unwrap(),
+        Some(Duration::from_secs(115))
+    );
+}
+
+#[test]
+fn counters_increment_under_one_lock() {
+    let cache = InMemoryCache::<f64>::default();
+    assert_eq!(
+        CounterCache::increment_cache(&cache, "counter", 1.5, CacheKwargs::default()).unwrap(),
+        1.5
+    );
+    assert_eq!(
+        CounterCache::increment_cache(&cache, "counter", 2.0, CacheKwargs::default()).unwrap(),
+        3.5
     );
 }

@@ -6,6 +6,7 @@ use pyo3::{
     types::{PyDict, PyTuple, PyType},
 };
 use serde_json::Value;
+use std::time::Duration;
 
 use super::{NativeCacheHandle, native::NativeResponseCache};
 
@@ -126,7 +127,12 @@ impl ObjectGuard {
 }
 
 impl FacadeGuard {
-    pub(super) fn capture(py: Python<'_>, facade: &Bound<'_, PyAny>, kind: &str) -> PyResult<Self> {
+    pub(super) fn capture(
+        py: Python<'_>,
+        facade: &Bound<'_, PyAny>,
+        kind: &str,
+        native_default_ttl: Duration,
+    ) -> PyResult<Self> {
         let cache_type = py.import("litellm.caching.caching")?.getattr("Cache")?;
         if !facade.get_type().is(&cache_type) {
             return Err(PyTypeError::new_err(
@@ -144,6 +150,12 @@ impl FacadeGuard {
         {
             return Err(PyTypeError::new_err(
                 "facade and native backend types must match",
+            ));
+        }
+        let python_default_ttl = backend.getattr("default_ttl")?.extract::<f64>()?;
+        if python_default_ttl != native_default_ttl.as_secs_f64() {
+            return Err(PyTypeError::new_err(
+                "facade and native backend default TTLs must match",
             ));
         }
         Ok(Self {
