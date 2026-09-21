@@ -373,12 +373,13 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       setRouterConfig(parsedConfig);
 
       // Set form values
-      form.reset({
+      const routerFormValues = {
         auto_router_name: modelData.model_name,
         auto_router_default_model: modelData.litellm_params?.auto_router_default_model || null,
         auto_router_embedding_model: modelData.litellm_params?.auto_router_embedding_model || null,
         model_access_group: modelData.model_info?.access_groups || [],
-      });
+      };
+      form.reset(routerFormValues);
     } catch (error) {
       console.error("Error parsing auto router config:", error);
       toast.fromError("Error loading auto router configuration");
@@ -456,11 +457,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       // Dual write: complexity_router_config.default_model (the pin marker hydratePinnedDefaultModel
       // reads back) and complexity_router_default_model (what the backend routes on) must always be
       // written together from the same value. Same pairing in add_auto_router_tab.tsx.
+      const keywordMatching = { keywordTierRules, escalationKeywords, semanticMatchingEnabled, embeddingModel, matchThreshold };
       const updatedConfig = buildUpdatedComplexityRouterConfig(
         modelData.litellm_params?.complexity_router_config,
         complexityRouterConfig,
         customTechnicalKeywords,
-        { keywordTierRules, escalationKeywords, semanticMatchingEnabled, embeddingModel, matchThreshold },
+        keywordMatching,
       );
       const serverVerdict = await validateAutoRouterConfig(accessToken, updatedConfig, modelData?.model_info?.team_id);
       const dryRunError = dryRunRejection(serverVerdict);
@@ -497,12 +499,13 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       );
 
       toast.success("Auto router configuration updated successfully");
-      onSuccess({
+      const updatedModelData = {
         ...modelData,
         model_name: values.auto_router_name,
         litellm_params: updatedLitellmParams,
         model_info: updatedModelInfo,
-      });
+      };
+      onSuccess(updatedModelData);
       onCancel();
       return;
     }

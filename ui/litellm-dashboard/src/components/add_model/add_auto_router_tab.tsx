@@ -408,6 +408,17 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     matchThreshold,
     escalationKeywords,
   };
+  const jevRequestParams =
+    effectiveClassifierType(complexityRouterConfig) === "jev"
+      ? {
+          prompt: JEV_CONNECTION_TEST_PROMPT,
+          config: buildComplexityRouterConfig(complexityRouterConfigParams),
+          defaultModel: resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model),
+          routerName: watchedName,
+          teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
+        }
+      : undefined;
+  const jevRequest = jevRequestParams ? buildAutoRouterRoutingTestRequest(jevRequestParams) : undefined;
 
   const submitRecommendedRouter = async (name: string) => {
     // The one answer the submit button reads, so a disabled button and a refused submit cannot
@@ -816,20 +827,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         testId={connectionTestId}
         accessToken={accessToken}
         targets={testTargets}
-        jevRequest={
-          effectiveClassifierType(complexityRouterConfig) === "jev"
-            ? buildAutoRouterRoutingTestRequest({
-                prompt: JEV_CONNECTION_TEST_PROMPT,
-                config: buildComplexityRouterConfig(complexityRouterConfigParams),
-                defaultModel: resolveComplexityDefaultModel(
-                  complexityRouterConfig,
-                  complexityRouterConfig.default_model,
-                ),
-                routerName: watchedName,
-                teamId: requiresTeamScope ? watchedTeamId ?? undefined : undefined,
-              })
-            : undefined
-        }
+        jevRequest={jevRequest}
         onTestComplete={() => setIsTestingConnection(false)}
       />
     </TooltipProvider>

@@ -744,16 +744,22 @@ export const buildComplexityRouterConfig = ({
     open: open.trim().toLowerCase(),
     close: close.trim().toLowerCase(),
   }));
+  const cleanedListValues = {
+    code_keywords: cleanList(codeKeywords),
+    reasoning_keywords: cleanList(reasoningKeywords),
+    technical_keywords: cleanList(technicalKeywords),
+    simple_keywords: cleanList(simpleKeywords),
+    plan_mode_patterns: cleanList(planModePatterns),
+    housekeeping_patterns: cleanList(housekeepingPatterns),
+  };
   const cleanedLists = Object.fromEntries(
-    Object.entries({
-      code_keywords: cleanList(codeKeywords),
-      reasoning_keywords: cleanList(reasoningKeywords),
-      technical_keywords: cleanList(technicalKeywords),
-      simple_keywords: cleanList(simpleKeywords),
-      plan_mode_patterns: cleanList(planModePatterns),
-      housekeeping_patterns: cleanList(housekeepingPatterns),
-    }).filter(([, list]) => list !== undefined),
+    Object.entries(cleanedListValues).filter(([, list]) => list !== undefined),
   );
+  const hasValidCustomClassifierTimeout =
+    classifierType === "custom" &&
+    classifierPluginTimeoutMs !== undefined &&
+    Number.isInteger(classifierPluginTimeoutMs) &&
+    classifierPluginTimeoutMs > 0;
 
   const supportsOpeningPrompt = !customTierSet && !forecast && usesLlmClassifier(effectiveType);
   const payload: ComplexityRouterConfigPayload = {
@@ -826,10 +832,7 @@ export const buildComplexityRouterConfig = ({
     ...(routeHousekeepingToCheapestTier === false && { route_housekeeping_to_cheapest_tier: false }),
     ...(cleanedReminderMarkers && cleanedReminderMarkers.length > 0 && { reminder_markers: cleanedReminderMarkers }),
     ...(maxTokensFromTierModel === false && { max_tokens_from_tier_model: false }),
-    ...(classifierType === "custom" &&
-      classifierPluginTimeoutMs !== undefined &&
-      Number.isInteger(classifierPluginTimeoutMs) &&
-      classifierPluginTimeoutMs > 0 && { classifier_plugin_timeout_ms: classifierPluginTimeoutMs }),
+    ...(hasValidCustomClassifierTimeout && { classifier_plugin_timeout_ms: classifierPluginTimeoutMs }),
     ...scorerKnobs,
   };
   if (!customTierSet) return payload;
