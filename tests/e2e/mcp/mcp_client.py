@@ -15,8 +15,9 @@ import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from e2e_config import settle_propagation
 from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
@@ -44,6 +45,19 @@ class McpServerNewBody(BaseModel):
 
 class McpServerNewResponse(BaseModel):
     server_id: str
+
+
+class McpHealthParams(BaseModel):
+    server_ids: list[str] | None = None
+
+
+class McpHealthRow(BaseModel):
+    server_id: str
+    status: Literal["healthy", "unhealthy", "unknown"] | None
+
+
+class McpHealthResponse(RootModel[list[McpHealthRow]]):
+    pass
 
 
 class McpToolMcpInfo(BaseModel):
@@ -187,26 +201,32 @@ class McpClient:
             )
         ).root
 
-    def await_registered(self, server_id: str) -> None:
-        """Poll /v1/mcp/server until `server_id` is listed. Fails at poll_timeout.
+    def list_servers(self, key: str) -> Result[McpServerListResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=NoBody(),
+            response_type=McpServerListResponse,
+        )
 
-        The DB row exists the moment registration returns, but a data-plane pod
-        answers the listing from a registry it refreshes on a periodic DB sync, so a
-        pod that joined the load balancer after the write reports the server as
-        absent until its first sync.
-        """
-        deadline = time.monotonic() + self.proxy.poll_timeout
-        while True:
-            registered = frozenset(row.server_id for row in self.registered_servers())
-            if server_id in registered:
-                return
-            if time.monotonic() >= deadline:
-                raise AssertionError(
-                    f"registered server {server_id} still absent from /v1/mcp/server "
-                    f"{self.proxy.poll_timeout}s after registration (the data plane never synced "
-                    f"the row): {registered}"
-                )
-            time.sleep(self.proxy.poll_interval)
+    def server_health(self, key: str, server_ids: list[str] | None = None) -> Result[McpHealthResponse]:
+        return self.proxy.transport.get(
+            "/v1/mcp/server/health",
+            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            params=McpHealthParams(server_ids=server_ids),
+            response_type=McpHealthResponse,
+        )
+
+    def await_registered(self, server_id: str) -> McpServerRow:
+        """Wait for every configured replica to list the server and return its row."""
+        registered = self.proxy.read_body_back_everywhere(
+            "/v1/mcp/server",
+            McpServerListResponse,
+            settled=lambda response: any(row.server_id == server_id for row in response.root),
+        )
+        return next(
+            row for response in registered.values() for row in response.root if row.server_id == server_id
+        )
 
     def generate_key(
         self,

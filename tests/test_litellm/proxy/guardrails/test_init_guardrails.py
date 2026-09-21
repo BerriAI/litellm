@@ -71,6 +71,52 @@ def test_initialize_bedrock_forwards_chunk_budget_chars():
     assert initialized[-1].chunk_budget_chars == 60_000
 
 
+def test_initialize_bedrock_forwards_contextual_grounding_from_messages():
+    """`contextual_grounding_from_messages: true` in config.yaml must make the post-call
+    payload carry the plain system prompt and user turn as grounding_source and query."""
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    test_guardrail = {
+        "guardrail_name": "test_bedrock_grounding_from_messages",
+        "litellm_params": {
+            "guardrail": SupportedGuardrailIntegrations.BEDROCK.value,
+            "mode": "post_call",
+            "guardrailIdentifier": "test-guardrail",
+            "guardrailVersion": "DRAFT",
+            "contextual_grounding_from_messages": True,
+        },
+    }
+    messages = [
+        {"role": "system", "content": "Returns are accepted for 30 days."},
+        {"role": "user", "content": "How long is the return window?"},
+    ]
+    response = ModelResponse(
+        choices=[Choices(index=0, message=Message(role="assistant", content="30 days."), finish_reason="stop")]
+    )
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [
+            {"text": {"text": "Returns are accepted for 30 days.", "qualifiers": ["grounding_source"]}},
+            {"text": {"text": "How long is the return window?", "qualifiers": ["query"]}},
+            {"text": {"text": "30 days.", "qualifiers": ["guard_content"]}},
+        ],
+    }
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    guardrail_handler.initialize_guardrail(guardrail=test_guardrail)
+
+    initialized = [
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, BedrockGuardrail) and callback.guardrail_name == "test_bedrock_grounding_from_messages"
+    ]
+    assert initialized, "bedrock guardrail was not registered as a callback"
+    actual_request = initialized[-1].convert_to_bedrock_format(source="OUTPUT", response=response, messages=messages)
+    assert json.loads(json.dumps(actual_request)) == expected_request
+
+
 def test_initialize_guardrail_preserves_guardrail_info():
     """
     Regression (LIT-2529): initialize_guardrail must carry guardrail_info into the
@@ -154,6 +200,63 @@ def test_initialize_presidio_forwards_analyze_chunk_size_bytes():
     ]
     assert initialized, "presidio guardrail was not registered as a callback"
     assert initialized[-1].presidio_analyze_chunk_size_bytes == 250_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode, filter_scope, expect_output_scanned",
+    [
+        ("pre_mcp_call", None, False),
+        (["pre_mcp_call", "post_mcp_call"], None, False),
+        ({"tags": {"team:mcp": "pre_mcp_call"}, "default": ["pre_mcp_call", "post_mcp_call"]}, None, False),
+        ({"tags": {"team:mcp": ["pre_mcp_call"]}, "default": "pre_call"}, None, True),
+        ({"tags": {}}, None, True),
+        ("pre_mcp_call", "both", True),
+        ("pre_mcp_call", "output", True),
+        ("pre_call", None, True),
+    ],
+)
+async def test_initialize_presidio_mcp_only_mode_skips_post_call_output_scan(mode, filter_scope, expect_output_scanned):
+    """Regression: an MCP-only Presidio guardrail used to also scan the LLM
+    response on post_call, so a blocked MCP tool call that the model repeated in
+    its answer turned the whole request into an HTTP 400 instead of a 200."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.guardrails import GuardrailEventHooks
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    llm_answer = "Call me at 415-555-2671"
+    litellm_params = {
+        "guardrail": SupportedGuardrailIntegrations.PRESIDIO.value,
+        "mode": mode,
+        "presidio_analyzer_api_base": "https://fakelink.com/v1/presidio/analyze",
+        "presidio_anonymizer_api_base": "https://fakelink.com/v1/presidio/anonymize",
+        "mock_redacted_text": {"text": "Call me at <PHONE_NUMBER>", "items": []},
+        "default_on": True,
+    }
+    if filter_scope is not None:
+        litellm_params["presidio_filter_scope"] = filter_scope
+
+    guardrail_handler = InMemoryGuardrailHandler()
+    result = guardrail_handler.initialize_guardrail(
+        guardrail={"guardrail_name": "test_presidio_mcp_scope", "litellm_params": litellm_params}
+    )
+    guardrail_id = result["guardrail_id"]
+    callbacks = [
+        guardrail_handler.guardrail_id_to_custom_guardrail[guardrail_id],
+        *guardrail_handler.guardrail_id_to_sibling_callbacks[guardrail_id],
+    ]
+
+    request_data = {"metadata": {}}
+    response = ModelResponse(
+        choices=[Choices(message=Message(role="assistant", content=llm_answer), index=0, finish_reason="stop")]
+    )
+    for callback in callbacks:
+        if callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call):
+            await callback.async_post_call_success_hook(
+                data=request_data, user_api_key_dict=UserAPIKeyAuth(), response=response
+            )
+
+    assert (response.choices[0].message.content != llm_answer) is expect_output_scanned
 
 
 @pytest.mark.parametrize(

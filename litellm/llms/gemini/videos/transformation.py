@@ -9,6 +9,7 @@ import litellm
 from litellm.constants import DEFAULT_GOOGLE_VIDEO_DURATION_SECONDS
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.vertex_ai.videos.transformation import veo_video_count_from_parameters
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.gemini import (
     GeminiLongRunningOperationResponse,
@@ -354,6 +355,9 @@ class GeminiVideoConfig(BaseVideoConfig):
             video_resolution: Final = _usage_video_resolution_from_parameters(parameters)
             if video_resolution is not None:
                 usage_data["video_resolution"] = video_resolution
+            video_count: Final = veo_video_count_from_parameters(parameters)
+            if video_count is not None:
+                usage_data["video_count"] = video_count
 
         video_obj.usage = usage_data
         return video_obj

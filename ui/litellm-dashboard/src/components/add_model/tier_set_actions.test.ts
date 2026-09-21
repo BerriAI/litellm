@@ -23,6 +23,35 @@ const apply = (value: ComplexityRouterConfigValue, action: Parameters<typeof app
   applyTierSetAction(value, rules, action);
 
 describe("applyTierSetAction", () => {
+  it.each(["llm", "capability", "llm_v2"] as const)(
+    "clears an emptied plan floor and can repopulate its pool for %s",
+    (classifier_type) => {
+      const initial: ComplexityRouterConfigValue = {
+        ...builtIn,
+        classifier_type,
+        plan_mode_min_tier: "SIMPLE",
+        tier_model_params: { SIMPLE: { "gpt-3.5-turbo": { speed: "fast" } } },
+      };
+      const { value: cleared } = apply(initial, { kind: "models", id: "SIMPLE", models: [] });
+      expect(cleared.plan_mode_min_tier).toBeUndefined();
+      expect(cleared.tier_model_params).toBeUndefined();
+      expect(cleared.tiers.SIMPLE).toEqual([]);
+      const { value: restored } = apply(cleared, { kind: "models", id: "SIMPLE", models: ["gpt-4"] });
+      expect(restored.tiers.SIMPLE).toEqual(["gpt-4"]);
+      expect(restored.plan_mode_min_tier).toBeUndefined();
+      expect(restored.tier_model_params).toBeUndefined();
+    },
+  );
+
+  it("preserves a populated custom plan floor after removing only one model", () => {
+    const initial: ComplexityRouterConfigValue = { ...custom, plan_mode_min_tier: "sec" };
+    const { value: changed } = apply(initial, { kind: "models", id: "sec", models: ["new-model"] });
+    expect(changed.plan_mode_min_tier).toBe("sec");
+    const { value: cleared } = apply(changed, { kind: "models", id: "sec", models: [] });
+    expect(cleared.plan_mode_min_tier).toBeUndefined();
+    expect(cleared.custom_tier_set?.tiers.find((row) => row.id === "sec")?.models).toEqual([]);
+  });
+
   it("adds a row and moves the form into an edited set, which the built-in record never leaves", () => {
     const { value } = apply(builtIn, { kind: "add" });
     expect(value.custom_tier_set?.tiers).toHaveLength(5);

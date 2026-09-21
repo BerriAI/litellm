@@ -1235,7 +1235,7 @@ def test_arize_coerce_response_obj_dumps_pydantic_without_get():
     coerced = _coerce_response_obj_for_attrs(result)
 
     assert isinstance(coerced, dict)
-    assert coerced["isError"] is False
+    assert coerced["is_error"] is False
     assert coerced["content"][0]["text"] == "hi"
 
 

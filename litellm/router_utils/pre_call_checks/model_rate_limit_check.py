@@ -18,6 +18,7 @@ import httpx
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
@@ -136,6 +137,26 @@ class ModelRateLimitingCheck(CustomLogger):
 
         return tpm_key, rpm_key
 
+    def _get_current_tpm(self, tpm_key: str, tpm_limit: int) -> int | None:
+        local_tpm: Final = self.dual_cache.get_cache(key=tpm_key, local_only=True)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
+            return local_tpm
+        try:
+            return redis_cache.get_cache(key=tpm_key)
+        except RedisCircuitBreakerOpenError:
+            return local_tpm
+
+    async def _async_get_current_tpm(self, tpm_key: str, tpm_limit: int, parent_otel_span: Span | None) -> int | None:
+        local_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
+        redis_cache: Final = self.dual_cache.redis_cache
+        if redis_cache is None or (local_tpm is not None and local_tpm >= tpm_limit):
+            return local_tpm
+        try:
+            return await redis_cache.async_get_cache(key=tpm_key, parent_otel_span=parent_otel_span)
+        except RedisCircuitBreakerOpenError:
+            return local_tpm
+
     def pre_call_check(self, deployment: dict) -> dict | None:
         """
         Synchronous pre-call check for model rate limits.
@@ -168,8 +189,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                # First check local cache
-                current_tpm: Final = self.dual_cache.get_cache(key=tpm_key, local_only=True)
+                current_tpm: Final = self._get_current_tpm(tpm_key, tpm_limit)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",
@@ -249,8 +269,7 @@ class ModelRateLimitingCheck(CustomLogger):
 
             # Check TPM limit
             if tpm_limit is not None:
-                # First check local cache
-                current_tpm: Final = await self.dual_cache.async_get_cache(key=tpm_key, local_only=True)
+                current_tpm: Final = await self._async_get_current_tpm(tpm_key, tpm_limit, parent_otel_span)
                 if current_tpm is not None and current_tpm >= tpm_limit:
                     raise litellm.RateLimitError(
                         message=f"Model rate limit exceeded. TPM limit={tpm_limit}, current usage={current_tpm}",

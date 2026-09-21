@@ -1,1 +1,1 @@
-Maps Python profiler frames onto feature-gated Rust span names via an explicit per-case mapping (Rust span name is the identity) and compares steps, order, and nesting of both live traces against a replayed provider response.
+Prints every collected Python call under litellm/ from live traces against replayed HTTP responses. API-key and Vertex credentials scenarios exercise separate authentication paths; credentials scenarios replay the token exchange locally.

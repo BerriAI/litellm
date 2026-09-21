@@ -122,16 +122,19 @@ class AccessControlClient:
         )
         return unwrap(result) if is_ok(result) else None
 
+    def team_models(self, team_id: str) -> list[str] | None:
+        result = self.proxy.transport.get(
+            "/team/info",
+            headers=self.proxy.transport.master,
+            params=TeamInfoParams(team_id=team_id),
+            response_type=TeamInfoResponse,
+        )
+        return unwrap(result).team_info.models if is_ok(result) else None
+
     def _await_team(self, team_id: str) -> None:
         deadline = time.monotonic() + self.proxy.poll_timeout
         while time.monotonic() < deadline:
-            result = self.proxy.transport.get(
-                "/team/info",
-                headers=self.proxy.transport.master,
-                params=TeamInfoParams(team_id=team_id),
-                response_type=TeamInfoResponse,
-            )
-            if is_ok(result):
+            if self.team_models(team_id) is not None:
                 return
             time.sleep(self.proxy.poll_interval)
         raise AssertionError(f"/team/info never resolved team {team_id!r} created by /team/new")

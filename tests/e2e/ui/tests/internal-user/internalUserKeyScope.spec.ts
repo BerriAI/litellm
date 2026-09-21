@@ -1,3 +1,4 @@
+import { expectUnrestrictedDashboard, setInvitedUserPassword } from "../../helpers/userOnboarding";
 import { test, expect, type APIRequestContext } from "@playwright/test";
 import { Page } from "../../fixtures/pages";
 import {
@@ -76,10 +77,7 @@ test.describe("Internal User - own team key model scope", () => {
         user_role: "internal_user",
         auto_create_key: false,
       });
-      await postAsMaster(request, "/user/update", {
-        user_id: userId,
-        password: MEMBER_PASSWORD,
-      });
+      await setInvitedUserPassword(request, userId, MEMBER_PASSWORD);
       await postAsMaster(request, "/team/member_add", {
         team_id: teamId,
         member: { role: "user", user_id: userId },
@@ -99,10 +97,7 @@ test.describe("Internal User - own team key model scope", () => {
           .getByPlaceholder("Enter your password")
           .fill(MEMBER_PASSWORD);
         await page.getByRole("button", { name: "Login", exact: true }).click();
-        await expect(
-          page.locator("a", { hasText: "Virtual Keys" }),
-          `${email} never reached the dashboard`,
-        ).toBeVisible({ timeout: 30_000 });
+        await expectUnrestrictedDashboard(page);
         await dismissFeedbackPopup(page);
 
         await navigateToPage(page, Page.ApiKeys);

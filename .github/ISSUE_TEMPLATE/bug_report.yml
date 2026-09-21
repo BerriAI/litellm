@@ -3,101 +3,77 @@ description: File a bug report
 title: "[Bug]: "
 labels: ["bug"]
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Thanks for taking the time to fill out this bug report!
-        
-        **💡 Tip:** See our [Troubleshooting Guide](https://docs.litellm.ai/docs/troubleshoot) for what information to include.
-  - type: checkboxes
-    id: duplicate-check
-    attributes:
-      label: Check for existing issues
-      description: Please search to see if an issue already exists for the bug you encountered.
-      options:
-        - label: I have searched the existing issues and checked that my issue is not a duplicate.
-          required: true
   - type: textarea
-    id: what-happened
+    id: description
     attributes:
-      label: What happened?
-      description: Also tell us, what did you expect to happen?
-      placeholder: Tell us what you see!
+      label: Description
+      description: What happened, and what did you expect to happen?
     validations:
       required: true
   - type: textarea
-    id: user-flow
+    id: config
     attributes:
-      label: User Flow
-      description: |
-        Two ordered lists, "Before a (hypothetical) fix" and "After a (hypothetical) fix", walking the same end user through the same task, written strictly from that user's seat. Every rule below applies.
-
-        - Describe the real application and the routes its users actually hit, not a generic scenario
-        - Lead each list with one plain sentence saying where the flow fails (before) or would succeed (after), then number the steps
-        - Every step is something the user does or observes: the HTTP method and full URL they hit, what they sent, and what visibly came back (status code, error text, the shape of an ID). UI steps name the page URL and what is on screen
-        - No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. "The upload hands back an ID that looks like OpenAI's own `file-abc123` instead of the scrambled one the gateway returned" is right, "no managed-file row was registered" is wrong
-        - Keep the two lists step-for-step identical until they diverge, so the broken step is obvious
-        - If the bug has a security or authorization consequence, end each list with what another user can do that they shouldn't be able to, and what they could no longer do after a fix
-      placeholder: |
-        Before a (hypothetical) fix: a developer whose app streams chat completions gets no token counts back, so their cost dashboard reads zero
-
-        1. They send POST https://litellm-domain/v1/chat/completions with "stream": true and no stream_options
-        2. The last SSE chunk arrives with "usage": null, so their app records 0 prompt and 0 completion tokens
-        3. They open https://litellm-domain/ui/?page=logs and see the request logged at $0 spend
-
-        After a (hypothetical) fix: the same request comes back with real token counts, so the dashboard shows real spend
-
-        1. The proxy admin sets always_include_stream_usage: true and restarts the proxy
-        2. The developer sends the same POST https://litellm-domain/v1/chat/completions with "stream": true and no stream_options
-        3. The last SSE chunk now carries a usage object with real prompt and completion token counts
-        4. https://litellm-domain/ui/?page=logs shows that request at non-zero spend
-    validations:
-      required: true
-  - type: textarea
-    id: proof-of-bug
-    attributes:
-      label: Proof the bug occurs
-      description: |
-        The commands (e.g., curl) and their full output, screenshots, or a screen recording demonstrating that the bug happens. Every rule below applies.
-
-        - The proof must be completely e2e with no mocks, against a live proxy you ran yourself (e.g., `litellm --config config.yaml --detailed_debug` on localhost:4000), hitting real LLM provider APIs, costing real $ if needed, where the bug involves a provider call. `pytest` commands are not enough
-        - Show exactly what the end user sees or does, matching the User Flow above step for step
-        - Start with the config.yaml (or SDK setup) and any env vars the proxy ran with, then the exact version or commit hash the proof was captured at, so a maintainer can stand up the same proxy before running your commands. Keep the real values for env vars that aren't sensitive, they are often the reason the bug happens, and redact only the secrets: never paste a real API key, virtual key, database URL, or other credential, here or anywhere else in the issue
-        - If the bug applies to more than one of the LLM endpoints (/v1/responses, /v1/chat/completions, /v1/messages), include proof for every one of them, not just one
-        - For UI bugs: include screenshots and the page URLs you were on. Scrub keys and tokens out of screenshots too (for example, the virtual key is briefly shown in the panel right after you create a virtual key)
-      placeholder: |
-        Config / setup the proxy ran with:
-
-        Version or commit:
-
-        Commands and their full output:
-    validations:
-      required: true
-  - type: dropdown
-    id: component
-    attributes:
-      label: What part of LiteLLM is this about?
-      options:
-        - ''
-        - "SDK (litellm Python package)"
-        - "Proxy"
-        - "UI Dashboard"
-        - "Docs"
-        - "Other"
+      label: Config
+      description: What does your config look like? Paste your config.yaml, or the SDK call if you are not running the proxy. Remove sensitive values.
+      render: yaml
     validations:
       required: true
   - type: input
     id: version
     attributes:
-      label: What LiteLLM version are you on ? 
-      placeholder: v1.53.1
+      label: LiteLLM Version
+      placeholder: v1.100.0
     validations:
       required: true
-  - type: input
-    id: contact
+  - type: textarea
+    id: steps-to-repro
     attributes:
-      label: Twitter / LinkedIn details 
-      description: We announce new features on Twitter + LinkedIn. If this issue leads to an announcement, and you'd like a mention, we'll gladly shout you out!
-      placeholder: ex. @krrish_dh / https://www.linkedin.com/in/krish-d/
+      label: Steps to Repro
+      description: The exact request you sent and the full response you got back. For UI bugs, the page URL and a screenshot.
+      placeholder: |
+        1. curl -X POST http://localhost:4000/v1/chat/completions -H "Authorization: Bearer sk-..." -d '{"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]}'
+        2. Response: 500 {"error": {"message": "..."}}
+        3. Expected: 200 with a chat completion
+    validations:
+      required: true
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Which part of LiteLLM is this about?
+      description: Best guess is fine, we will relabel if needed.
+      options:
+        - "Cost map: model prices and context windows"
+        - "LLM translation: a specific provider's request or response"
+        - "Routing: load balancing, fallbacks, retries, cooldowns"
+        - "Caching: response cache, Redis, semantic cache"
+        - "Proxy core: startup, config, health checks, endpoints"
+        - "Proxy auth: virtual keys, JWT, SSO, SCIM, roles"
+        - "Management: creating and editing keys, teams, users, orgs, models"
+        - "Spend tracking: spend logs, cost attribution, usage reports"
+        - "Budgets and rate limits: budgets, tpm/rpm, 429s"
+        - "Database: Prisma, migrations, Postgres"
+        - "Logging: callbacks, Langfuse, Datadog, OTel, Prometheus, alerting"
+        - "Guardrails: moderation, PII masking, policies"
+        - "MCP: servers, tools, OAuth"
+        - "Agents: A2A, agent endpoints, skills"
+        - "Vector stores: knowledge bases, RAG, search"
+        - "Passthrough: raw provider endpoints through the proxy"
+        - "Admin UI"
+        - "Python SDK: the litellm package itself"
+        - "Deploy: Docker, Helm, Terraform"
+        - "Docs"
+        - "Not sure"
+    validations:
+      required: false
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How are you deploying?
+      options:
+        - Docker
+        - Helm chart, monolithic
+        - Helm chart, componentized (recommended)
+        - pip / Python SDK
+        - Other
     validations:
       required: false

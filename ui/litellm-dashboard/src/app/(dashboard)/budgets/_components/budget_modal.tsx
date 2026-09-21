@@ -17,6 +17,7 @@ const budgetShape = {
   budget_id: z.string().min(1, "Please input a human-friendly name for the budget"),
   tpm_limit: z.number().nullish(),
   rpm_limit: z.number().nullish(),
+  tpd_limit: z.number().nullish(),
   max_budget: z.number().nullish(),
   budget_duration: z.string().nullish(),
 };
@@ -100,6 +101,23 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
               name="rpm_limit"
               label="Max Requests per minute"
               description="Leave blank for no LiteLLM limit. Provider rate limits still apply."
+            >
+              {({ ref, value, onChange, ...field }) => (
+                <Input
+                  {...field}
+                  ref={ref}
+                  type="number"
+                  step={1}
+                  value={value ?? ""}
+                  onChange={(event) => onChange(event.target.value === "" ? null : event.target.valueAsNumber)}
+                />
+              )}
+            </FormField>
+            <FormField
+              control={form.control}
+              name="tpd_limit"
+              label="Max Tokens per day (batch)"
+              description="Daily token budget for batch submissions. When set, batches are charged against this instead of TPM/RPM."
             >
               {({ ref, value, onChange, ...field }) => (
                 <Input

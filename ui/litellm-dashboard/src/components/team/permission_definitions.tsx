@@ -9,6 +9,7 @@ export interface PermissionInfo {
  * Map of permission endpoint patterns to their descriptions
  */
 export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
+  "/auto_router/manage": "Member can create auto routers for this team and edit their own router configurations",
   "/key/generate": "Member can generate a virtual key for this team",
   "/key/service-account/generate":
     "Member can generate a service account key (not belonging to any user) for this team",
