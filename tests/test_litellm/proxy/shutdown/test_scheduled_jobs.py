@@ -7,11 +7,11 @@ from datetime import datetime, timedelta
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-import litellm.proxy.shutdown.scheduled_jobs as scheduled_jobs
+from litellm.constants import SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS
 from litellm.proxy.shutdown.scheduled_jobs import (
     AwaitableAsyncIOExecutor,
-    stop_in_flight_scheduler_jobs,
     pause_scheduled_jobs,
+    stop_in_flight_scheduler_jobs,
 )
 
 
@@ -75,9 +75,8 @@ async def test_in_flight_jobs_observe_cancellation_before_shutdown_returns():
 
 
 @pytest.mark.asyncio
-async def test_a_job_that_is_finishing_is_allowed_to_finish_rather_than_cancelled(monkeypatch):
+async def test_a_job_that_is_finishing_is_allowed_to_finish_rather_than_cancelled():
     """A spend write cancelled mid-commit drops the rows it popped, so short jobs get to finish first"""
-    monkeypatch.setattr(scheduled_jobs, "JOB_FINISH_TIMEOUT_SECONDS", 2.0)
     write = _Job(work_seconds=0.2)
     stuck = _Job()
     async with _running_scheduler(write, stuck) as (scheduler, executor):
@@ -99,16 +98,18 @@ async def test_every_in_flight_job_is_cancelled_not_only_the_first():
 
 
 @pytest.mark.asyncio
-async def test_a_job_that_ignores_cancellation_is_abandoned_after_the_timeout(monkeypatch, caplog):
+async def test_a_job_that_ignores_cancellation_is_abandoned_after_the_timeout(caplog):
     """A job that swallows CancelledError must not hold the pod past its termination grace period"""
-    monkeypatch.setattr(scheduled_jobs, "JOB_CANCEL_TIMEOUT_SECONDS", 0.05)
     job = _Job(swallow_cancellation=True)
     async with _running_scheduler(job) as (scheduler, executor):
         with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
             await stop_in_flight_scheduler_jobs(scheduler, executor)
 
         assert job.events == ["cancelled"]
-        assert "1 scheduled job(s) did not finish within 0.05s of cancellation" in caplog.text
+        assert (
+            f"1 scheduled job(s) did not finish within {SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS}s of cancellation"
+            in caplog.text
+        )
 
 
 @pytest.mark.asyncio
