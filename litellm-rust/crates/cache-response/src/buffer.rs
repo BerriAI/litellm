@@ -5,7 +5,6 @@ use serde_json::Value;
 
 use crate::{CacheEntry, ResponseCache, ResponseCacheRequest};
 
-/// Defers async writes until `flush_size` entries are pending, then stores them as one batch.
 pub struct WriteBuffer {
     flush_size: usize,
     entries: Mutex<Vec<(ResponseCacheRequest, Value, Duration)>>,

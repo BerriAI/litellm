@@ -57,8 +57,6 @@ const INCREMENT_SCRIPT: &str = concat!(
     "redis.call('EXPIRE', KEYS[1], ARGV[2]); end; return value"
 );
 
-// Compare-and-set against the exact bytes the claim decision was made on.
-// ARGV: [1] expected payload or "" when absent, [2] ttl, [3] new payload, [4] refresh ttl.
 const CLAIM_SCRIPT: &str = concat!(
     "local current = redis.call('GET', KEYS[1]); ",
     "if ARGV[1] == '' then if current ~= false and current ~= '' then return 0; end; ",
