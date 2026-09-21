@@ -241,9 +241,7 @@ def is_anthropic_api_base(api_base: str | None) -> bool:
     from litellm.secret_managers.main import get_secret_str
 
     configured_base: Final = (
-        get_secret_str("ANTHROPIC_API_BASE")
-        or get_secret_str("ANTHROPIC_BASE_URL")
-        or litellm.api_base
+        get_secret_str("ANTHROPIC_API_BASE") or get_secret_str("ANTHROPIC_BASE_URL") or litellm.api_base
     )
     parsed: Final = urlparse(api_base)
     scheme: Final = parsed.scheme.lower()
@@ -284,9 +282,7 @@ def optionally_handle_anthropic_oauth(
         existing_beta: Final[str | None] = headers.get("anthropic-beta")
         if existing_beta:
             filtered_betas: Final = tuple(
-                b.strip()
-                for b in existing_beta.split(",")
-                if b.strip() and b.strip() != ANTHROPIC_OAUTH_BETA_HEADER
+                b.strip() for b in existing_beta.split(",") if b.strip() and b.strip() != ANTHROPIC_OAUTH_BETA_HEADER
             )
             if filtered_betas:
                 headers["anthropic-beta"] = ",".join(filtered_betas)
