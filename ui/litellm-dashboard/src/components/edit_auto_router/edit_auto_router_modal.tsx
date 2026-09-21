@@ -1,4 +1,6 @@
 import AutoRouterClassifierTabs from "../add_model/AutoRouterClassifierTabs";
+import { usesClassifierContext } from "../add_model/classifier_types";
+import { defaultJevClassifierConfig, jevClassifierConfigSchema } from "../add_model/jev_classifier_config";
 import type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
 export type { StoredComplexityRouterConfig } from "../add_model/build_complexity_router_config";
 import {
@@ -42,6 +44,7 @@ import {
   type BuildComplexityRouterConfigParams,
   buildComplexityRouterConfig,
   getClassifierModelError,
+  getHeuristicV2SuccessThresholdError,
   getClassifierReasoningEffortError,
   getKeywordTierRulesError,
   getMissingTiersError,
@@ -127,9 +130,18 @@ export const hydrateComplexityRouterConfig = (
     plan_mode_min_tier: hydratePlanModeMinTier(parsedConfig.plan_mode_min_tier, custom_tier_set),
     tier_labels: hydrateTierLabels(parsedConfig.tier_labels),
     classifier_type: parsedConfig.classifier_type || "heuristic",
+    heuristic_v2_success_threshold:
+      typeof parsedConfig.heuristic_v2_success_threshold === "number"
+        ? parsedConfig.heuristic_v2_success_threshold
+        : undefined,
     capability_classifier_config: capabilitySettingsSchema.safeParse(parsedConfig.capability_classifier_config).data,
     llm_v2_config: fuseSettingsSchema.safeParse(parsedConfig.llm_v2_config).data,
-    classifier_llm_config: parsedConfig.classifier_llm_config,
+    classifier_llm_config: parsedConfig.classifier_type === "jev" ? undefined : parsedConfig.classifier_llm_config,
+    jev_classifier_config:
+      parsedConfig.classifier_type === "jev"
+        ? jevClassifierConfigSchema.safeParse(parsedConfig.jev_classifier_config ?? {}).data ??
+          defaultJevClassifierConfig()
+        : undefined,
     classifier_context_window_size:
       typeof parsedConfig.classifier_context_window_size === "number"
         ? parsedConfig.classifier_context_window_size
@@ -137,6 +149,10 @@ export const hydrateComplexityRouterConfig = (
     classifier_context_budget_chars:
       typeof parsedConfig.classifier_context_budget_chars === "number"
         ? parsedConfig.classifier_context_budget_chars
+        : undefined,
+    classifier_context_per_turn_chars:
+      typeof parsedConfig.classifier_context_per_turn_chars === "number"
+        ? parsedConfig.classifier_context_per_turn_chars
         : undefined,
     classifier_context_include_assistant_turns:
       typeof parsedConfig.classifier_context_include_assistant_turns === "boolean"
@@ -219,6 +235,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "capability_classifier_config",
   "llm_v2_config",
   "classifier_llm_config",
+  "jev_classifier_config",
   "classifier_context_window_size",
   "classifier_context_budget_chars",
   "classifier_context_include_assistant_turns",
@@ -227,6 +244,7 @@ export const MANAGED_COMPLEXITY_ROUTER_KEYS = new Set([
   "classification_examples",
   "heuristic_first_max_tier",
   "hybrid_boundary_margin",
+  "heuristic_v2_success_threshold",
   "classification_mode",
   "session_affinity",
   "session_affinity_ttl_seconds",
@@ -306,6 +324,9 @@ export const buildUpdatedComplexityRouterConfig = (
   keywordMatching?: KeywordMatchingState,
 ): Record<string, unknown> => {
   const isManaged = (key: string): boolean => {
+    if (key === "classifier_context_per_turn_chars") {
+      return !usesClassifierContext(effectiveClassifierType(value)) || Object.prototype.hasOwnProperty.call(value, key);
+    }
     if (MANAGED_COMPLEXITY_ROUTER_KEYS.has(key)) return true;
     if (key === "escalation_keywords" && isForecastClassifier(effectiveClassifierType(value))) return true;
     if (keywordMatching !== undefined && KEYWORD_MATCHING_KEYS.has(key)) return true;
@@ -329,11 +350,14 @@ export const buildUpdatedComplexityRouterConfig = (
     classificationMode: value.classification_mode,
     tierLabels: value.tier_labels,
     classifierType: value.classifier_type,
+    jevClassifierConfig: value.jev_classifier_config,
+    heuristicV2SuccessThreshold: value.heuristic_v2_success_threshold,
     capabilityClassifierConfig: value.capability_classifier_config,
     llmV2Config: value.llm_v2_config,
     classifierLlmConfig: value.classifier_llm_config,
     classifierContextWindowSize: value.classifier_context_window_size,
     classifierContextBudgetChars: value.classifier_context_budget_chars,
+    classifierContextPerTurnChars: value.classifier_context_per_turn_chars,
     classifierContextIncludeAssistantTurns: value.classifier_context_include_assistant_turns,
     classifierFallback: value.classifier_fallback,
     sessionAffinity: value.session_affinity ?? DEFAULT_SESSION_AFFINITY,
@@ -427,6 +451,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       getPlanModeTierError(complexityRouterConfig.plan_mode_min_tier, activeTierRows(complexityRouterConfig)) ??
       getKeywordTierRulesError(keywordTierRules, activeTierRows(complexityRouterConfig)) ??
       getClassifierModelError(complexityRouterConfig) ??
+      getHeuristicV2SuccessThresholdError(complexityRouterConfig.heuristic_v2_success_threshold) ??
       getForecastConfigError(complexityRouterConfig) ??
       (heuristicScoringRole(complexityRouterConfig) === "decides"
         ? customDimensionsError(complexityRouterConfig.custom_dimensions)
@@ -559,6 +584,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       }
       const classifierError =
         getClassifierModelError(complexityRouterConfig) ??
+        getHeuristicV2SuccessThresholdError(complexityRouterConfig.heuristic_v2_success_threshold) ??
         getForecastConfigError(complexityRouterConfig) ??
         (heuristicScoringRole(complexityRouterConfig) === "decides"
           ? customDimensionsError(complexityRouterConfig.custom_dimensions)

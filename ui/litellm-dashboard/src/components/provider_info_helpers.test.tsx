@@ -133,6 +133,13 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBeTruthy();
     });
 
+    it("should resolve the qwen_ai_platform slug and Qwen_AI_Platform enum key to the Qianwen AI Platform display name", () => {
+      expect(getProviderLogoAndName("qwen_ai_platform").displayName).toBe("Qianwen AI Platform");
+      expect(getProviderLogoAndName("Qwen_AI_Platform").displayName).toBe("Qianwen AI Platform");
+      expect(getProviderLogoAndName("qwencloud").displayName).toBe("QwenCloud");
+      expect(getProviderLogoAndName("qwen_ai_platform").logo).toBe(providerLogoMap[Providers.Qwen_AI_Platform]);
+    });
+
     it("should return provider value as display name when no mapping exists", () => {
       const unknownProvider = "unknown_provider";
       const result = getProviderLogoAndName(unknownProvider);

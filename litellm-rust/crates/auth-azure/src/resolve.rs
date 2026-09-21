@@ -1,5 +1,5 @@
-use litellm_auth::Error;
-use litellm_auth::{
+use litellm_auth_types::Error;
+use litellm_auth_types::{
     CredentialFileRef, CredentialLookup, CredentialRef, InputSource, ResolvedCredential,
     SecretValue, Sourced, TokenProviderHandle,
 };
@@ -451,9 +451,9 @@ mod tests {
     };
     use crate::native::ValidatedAzureRequest;
     use crate::types::AzureAuthInputs;
-    use litellm_auth::Error;
-    use litellm_auth::ResolvedCredential;
-    use litellm_auth::{
+    use litellm_auth_types::Error;
+    use litellm_auth_types::ResolvedCredential;
+    use litellm_auth_types::{
         CredentialFileRef, CredentialLookup, CredentialLookupFuture, CredentialRef,
         CredentialResolver, CredentialResolverHandle, InputSource, SecretValue, Sourced,
     };
@@ -661,8 +661,8 @@ mod tests {
     #[derive(Debug)]
     struct CallerToken(&'static str);
 
-    impl litellm_auth::TokenProvider for CallerToken {
-        fn acquire(&self) -> litellm_auth::TokenFuture<'_> {
+    impl litellm_auth_types::TokenProvider for CallerToken {
+        fn acquire(&self) -> litellm_auth_types::TokenFuture<'_> {
             Box::pin(async move {
                 Ok(ResolvedCredential::AccessToken {
                     token: SecretValue::new(self.0),
@@ -675,7 +675,7 @@ mod tests {
     fn caller_inputs(token: &'static str) -> AzureAuthInputs {
         let params = json!({"azure_ad_token": "static-token"});
         AzureAuthInputs {
-            azure_ad_token_provider: Some(litellm_auth::TokenProviderHandle::new(Arc::new(
+            azure_ad_token_provider: Some(litellm_auth_types::TokenProviderHandle::new(Arc::new(
                 CallerToken(token),
             ))),
             ..AzureAuthInputs::from_optional_params(params.as_object().unwrap()).unwrap()

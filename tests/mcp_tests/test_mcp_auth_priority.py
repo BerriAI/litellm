@@ -44,14 +44,14 @@ async def test_mcp_server_works_without_config_auth_value():
 
 
 @pytest.mark.parametrize("token_key", ["authentication_token", "auth_value"])
-async def test_mcp_server_config_auth_value_header_used(token_key):
+async def test_mcp_server_config_auth_value_header_used(token_key, config_only_mcp_manager_factory):
     """Ensure the configured auth token is emitted as the upstream Authorization header.
 
     The token is resolved through the v2 credential resolver and rides on the client's
     httpx.Auth, so assert the header it writes onto the request rather than the (now
     credential-free) _get_auth_headers() dict.
     """
-    import httpx
+    import httpx2
 
     from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import (
         StaticHeaderAuth,
@@ -66,13 +66,13 @@ async def test_mcp_server_config_auth_value_header_used(token_key):
         }
     }
 
-    manager = MCPServerManager()
+    manager = config_only_mcp_manager_factory()
     await manager.load_servers_from_config(config)
 
     server = next(iter(manager.config_mcp_servers.values()))
     client = await manager._create_mcp_client(server)
 
     assert isinstance(client._resolved_auth, StaticHeaderAuth)
-    emitted = next(client._resolved_auth.auth_flow(httpx.Request("POST", server.url)))
+    emitted = next(client._resolved_auth.auth_flow(httpx2.Request("POST", server.url)))
     assert emitted.headers["Authorization"] == "Bearer example_token"
     assert client.auth_type == MCPAuth.bearer_token
