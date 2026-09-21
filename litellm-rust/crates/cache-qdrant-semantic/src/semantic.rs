@@ -131,7 +131,7 @@ impl<E: Embedder, C: CacheCodec> QdrantSemanticCache<E, C> {
                     vector,
                     payload,
                 )],
-            ))
+            ).wait(true))
             .await
             .map_err(|_| Error::Unavailable)?;
         Ok(())

@@ -12,14 +12,49 @@ use litellm_cache_qdrant_semantic::{
 use litellm_cache_response::{
     CacheEntry, CacheKeyInput, ResponseCache, ResponseCacheCodec, ResponseCacheRequest,
 };
-use qdrant_client::Payload;
 use qdrant_client::{
     Qdrant,
-    qdrant::{self, CompressionRatio, Distance, PointId, QuantizationType, Value, VectorParams},
+    qdrant::{
+        self, CompressionRatio, Distance, PointId, QuantizationType, Struct, Value, VectorParams,
+        value::Kind,
+    },
 };
 use serde_json::{Value as JsonValue, json};
 
 use support::{FakeQdrant, FakeState, StoredPoint};
+
+fn json_to_qdrant(value: JsonValue) -> Value {
+    let kind = match value {
+        JsonValue::Null => Kind::NullValue(0),
+        JsonValue::Bool(value) => Kind::BoolValue(value),
+        JsonValue::Number(value) => value
+            .as_i64()
+            .map(Kind::IntegerValue)
+            .or_else(|| value.as_f64().map(Kind::DoubleValue))
+            .unwrap(),
+        JsonValue::String(value) => Kind::StringValue(value),
+        JsonValue::Array(values) => Kind::ListValue(qdrant::ListValue {
+            values: values.into_iter().map(json_to_qdrant).collect(),
+        }),
+        JsonValue::Object(values) => Kind::StructValue(Struct {
+            fields: values
+                .into_iter()
+                .map(|(key, value)| (key, json_to_qdrant(value)))
+                .collect(),
+        }),
+    };
+    Value { kind: Some(kind) }
+}
+
+fn payload_from_json(value: JsonValue) -> HashMap<String, Value> {
+    value
+        .as_object()
+        .unwrap()
+        .clone()
+        .into_iter()
+        .map(|(key, value)| (key, json_to_qdrant(value)))
+        .collect()
+}
 
 #[derive(Clone)]
 struct FixedEmbedder {
@@ -243,12 +278,10 @@ async fn misses_and_payload_validation_are_safe() {
     server.insert_point(StoredPoint {
         id: Some(PointId::from(99_u64)),
         vector: vec![1.0, 0.0],
-        payload: Payload::try_from(json!({
+        payload: payload_from_json(json!({
             "litellm_cache_key": 99,
             "response": "{}",
-        }))
-        .unwrap()
-        .into(),
+        })),
     });
     assert_eq!(
         cache
@@ -322,6 +355,10 @@ async fn decoding_errors_missing_prompt_pipeline_and_ttl_behave_as_required() {
             .unwrap()
             .is_some()
     );
+    assert_eq!(
+        server.state.lock().unwrap().upsert_waits,
+        vec![Some(true), Some(true), Some(true)]
+    );
     assert_eq!(cache.get_ttl(&context("one")), None);
     assert_eq!(
         cache.test_connection().await,
@@ -347,9 +384,7 @@ async fn response_payloads_decode_and_invalid_entries_fail() {
         server.insert_point(StoredPoint {
             id: Some(PointId::from(key.len() as u64)),
             vector: vec![1.0, 0.0],
-            payload: Payload::try_from(JsonValue::Object(payload))
-                .unwrap()
-                .into(),
+            payload: payload.into_iter().map(|(key, value)| (key, json_to_qdrant(value))).collect(),
         });
     }
     assert_eq!(
