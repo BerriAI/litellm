@@ -222,11 +222,14 @@ def test_block_gate_allows_request_when_reachable_fallback_supplied():
     from litellm.proxy.route_llm_request import _raise_if_model_fully_blocked
 
     router = _blocked_primary_healthy_fallback_router()
-    _raise_if_model_fully_blocked(
-        llm_router=router,
-        model_name="primary",
-        team_id=None,
-        reachable_fallbacks=[{"primary": ["fallback"]}],
+    assert (
+        _raise_if_model_fully_blocked(
+            llm_router=router,
+            model_name="primary",
+            team_id=None,
+            reachable_fallbacks=[{"primary": ["fallback"]}],
+        )
+        is None
     )
 
 

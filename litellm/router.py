@@ -189,6 +189,7 @@ from litellm.router_utils.fallback_event_handlers import (
     clear_pre_routing_selection,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
+    get_fallback_model_group,
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
     record_disable_fallbacks,
@@ -11553,7 +11554,7 @@ class Router:
 
     def _model_group_has_unblocked_deployment(self, model_name: str, team_id: str | None) -> bool:
         deployments: Final = self.get_model_list(model_name=model_name, team_id=team_id) or []
-        return any((deployment.get("model_info") or {}).get("blocked") is not True for deployment in deployments)
+        return bool(deployments) and not self._are_all_deployments_blocked(deployments)
 
     def _has_reachable_fallback(
         self,
@@ -11575,7 +11576,7 @@ class Router:
         fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group=model_name)
         if not fallback_model_group:
             return False
-        next_visited: Final = visited | {model_name}
+        next_visited: Final = visited | frozenset((model_name,))
         return any(
             self._model_group_has_unblocked_deployment(group, team_id)
             or self._has_reachable_fallback(group, fallbacks, team_id, next_visited)
