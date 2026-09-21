@@ -3179,7 +3179,7 @@ class ProxyRuntimeConfig(LiteLLMPydanticObjectBase):
         return self._baseline
 
     def to_mapping(self) -> Mapping[str, object]:
-        return MappingProxyType(self.model_dump(mode="json", exclude_defaults=True))
+        return MappingProxyType(self.model_dump(mode="json", exclude_unset=True))
 
     def with_section(self, name: str, value: ConfigSection | ConfigSectionList) -> "ProxyRuntimeConfig":
         return self.model_copy(update={name: value})
