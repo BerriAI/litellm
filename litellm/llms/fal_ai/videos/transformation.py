@@ -1,7 +1,7 @@
 import math
 import sys
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -189,9 +189,9 @@ def _error_text(response_data: Mapping[str, object]) -> str | None:
     if isinstance(detail, str):
         return detail
     if isinstance(detail, list):
-        detail_items: Final[Sequence[Mapping[str, object]]] = TypeAdapter(
-            Sequence[Mapping[str, object]]
-        ).validate_python(tuple(item for item in detail if isinstance(item, Mapping)))
+        detail_items: Final[tuple[Mapping[str, object], ...]] = tuple(
+            item for item in detail if isinstance(item, Mapping)
+        )
         detail_messages: Final[tuple[str, ...]] = tuple(
             message for item in detail_items if (message := _detail_item_text(item)) is not None
         )
@@ -215,6 +215,26 @@ def _result_error(raw_response: httpx.Response) -> str | None:
 def _response_string(response_data: Mapping[str, object], key: str, default: str = "") -> str:
     value: Final[object] = response_data.get(key)
     return value if isinstance(value, str) else default
+
+
+def _result_request(
+    raw_response: httpx.Response,
+    response_data: Mapping[str, object],
+) -> tuple[str, Mapping[str, str]] | None:
+    if _response_string(response_data, "status", "IN_QUEUE") != "COMPLETED":
+        return None
+    result_url: Final[str] = str(raw_response.request.url).removesuffix("/status")
+    result_headers: Final[Mapping[str, str]] = MappingProxyType(
+        {
+            key: value
+            for key, value in (
+                ("Authorization", raw_response.request.headers.get("Authorization")),
+                ("Content-Type", raw_response.request.headers.get("Content-Type")),
+            )
+            if value is not None
+        }
+    )
+    return result_url, result_headers
 
 
 def _status_video_object(
@@ -434,19 +454,10 @@ class FalAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         response_data: Mapping[str, object],
     ) -> str | None:
-        if _response_string(response_data, "status", "IN_QUEUE") != "COMPLETED":
+        result_request: Final[tuple[str, Mapping[str, str]] | None] = _result_request(raw_response, response_data)
+        if result_request is None:
             return None
-        result_url: Final[str] = str(raw_response.request.url).removesuffix("/status")
-        result_headers: Final[Mapping[str, str]] = MappingProxyType(
-            {
-                key: value
-                for key, value in (
-                    ("Authorization", raw_response.request.headers.get("Authorization")),
-                    ("Content-Type", raw_response.request.headers.get("Content-Type")),
-                )
-                if value is not None
-            }
-        )
+        result_url, result_headers = result_request
         result_response: Final[httpx.Response] = _get_httpx_client().get(
             url=result_url,
             headers=result_headers,
@@ -473,19 +484,10 @@ class FalAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         response_data: Mapping[str, object],
     ) -> str | None:
-        if _response_string(response_data, "status", "IN_QUEUE") != "COMPLETED":
+        result_request: Final[tuple[str, Mapping[str, str]] | None] = _result_request(raw_response, response_data)
+        if result_request is None:
             return None
-        result_url: Final[str] = str(raw_response.request.url).removesuffix("/status")
-        result_headers: Final[Mapping[str, str]] = MappingProxyType(
-            {
-                key: value
-                for key, value in (
-                    ("Authorization", raw_response.request.headers.get("Authorization")),
-                    ("Content-Type", raw_response.request.headers.get("Content-Type")),
-                )
-                if value is not None
-            }
-        )
+        result_url, result_headers = result_request
         async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(llm_provider=LlmProviders.FAL_AI)
         result_response: Final[httpx.Response] = await async_httpx_client.get(
             url=result_url,
