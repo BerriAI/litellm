@@ -5319,6 +5319,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/get/latest_release_info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Release Info
+         * @description Latest stable LiteLLM GitHub release with its PR count split into new features, bug fixes and other updates.
+         *     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+         */
+        get: operations["latest_release_info_get_latest_release_info_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/get/mcp_semantic_filter_settings": {
         parameters: {
             query?: never;
@@ -29831,6 +29852,19 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** LatestReleaseInfo */
+        LatestReleaseInfo: {
+            /** Bug Fixes */
+            bug_fixes: number;
+            /** New Features */
+            new_features: number;
+            /** Other Updates */
+            other_updates: number;
+            /** Release Url */
+            release_url: string;
+            /** Version */
+            version: string;
+        };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
             /** Access Groups */
@@ -31155,12 +31189,16 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 2K */
+            output_cost_per_second_2k?: number | null;
             /** Output Cost Per Second 480P */
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
             /** Output Cost Per Second 720P */
             output_cost_per_second_720p?: number | null;
+            /** Output Cost Per Second 768P */
+            output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -41951,12 +41989,16 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 2K */
+            output_cost_per_second_2k?: number | null;
             /** Output Cost Per Second 480P */
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
             /** Output Cost Per Second 720P */
             output_cost_per_second_720p?: number | null;
+            /** Output Cost Per Second 768P */
+            output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -49902,6 +49944,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InternalUserSettingsResponse"];
+                };
+            };
+        };
+    };
+    latest_release_info_get_latest_release_info_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatestReleaseInfo"] | null;
                 };
             };
         };

@@ -441,6 +441,19 @@ class TestBetaHeadersOnTheWire:
 
     @pytest.mark.asyncio
     @respx.mock
+    async def test_safeguards_reach_mantle_with_the_dangerous_tool_use_beta(self):
+        """Mantle answers 400 "safeguards: Extra inputs are not permitted" when the field
+        arrives without dangerous-tool-use-2026-09-03 (probed 2026-09-21), so the beta
+        has to ride along even when the client never sent the header."""
+        safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+
+        route = await self._send(safeguards=safeguards)
+
+        assert _sent_betas(route) == ["dangerous-tool-use-2026-09-03"]
+        assert _sent_body(route)["safeguards"] == safeguards
+
+    @pytest.mark.asyncio
+    @respx.mock
     async def test_betas_and_version_never_travel_in_the_body(self):
         route = await self._send(
             extra_headers={"anthropic-beta": "context-1m-2025-08-07"},
