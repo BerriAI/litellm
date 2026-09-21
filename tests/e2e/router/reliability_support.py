@@ -17,9 +17,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from pydantic import ValidationError
-
-from proxy_client import ProxyClient
 from e2e_config import CHEAP_OPENAI_MODEL, PROXY_BASE_URL, unique_marker
 from e2e_http import NetworkError, StreamHead, StreamingResponse
 from models import (
@@ -35,6 +32,8 @@ from models import (
     TextContentPart,
     Usage,
 )
+from proxy_client import ProxyClient
+from pydantic import ValidationError
 
 REAL_MODEL = "openai/gpt-5.5"
 REAL_KEY = "os.environ/OPENAI_API_KEY"
@@ -116,6 +115,26 @@ def create_content_filtered_deployment(proxy: ProxyClient, name: str) -> str:
             api_base=AZURE_BASE,
             api_version=AZURE_API_VERSION,
             max_retries=0,
+        ),
+    )
+
+
+def create_azure_benched_on_first_failure_deployment(proxy: ProxyClient, name: str, cooldown_time: float) -> str:
+    """A healthy real Azure deployment benched on its first failure of any kind, so a cancellation the proxy
+    wrongly records as a 500 shows up as the next call landing on the backup."""
+    return proxy.register_model(
+        ModelNewBody(
+            model_name=name,
+            litellm_params=LiteLLMParamsBody(
+                model=CONTENT_FILTERED_MODEL,
+                api_key=AZURE_KEY,
+                api_base=AZURE_BASE,
+                api_version=AZURE_API_VERSION,
+                max_retries=0,
+                weight=1,
+                cooldown_time=cooldown_time,
+            ),
+            model_info=ModelInfoBody(allowed_fails=0),
         ),
     )
 

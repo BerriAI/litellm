@@ -1030,6 +1030,7 @@ class ModelInfoBody(BaseModel):
     mode: ModelMode | None = None
     access_groups: list[str] | None = None
     team_id: str | None = None
+    allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
 
 

@@ -676,6 +676,38 @@ def send(
     return streaming_outcome(resp, stream, sent_at=sent_at)
 
 
+class AbandonedRequest(BaseModel):
+    """A non-streaming request the client walked away from: the socket was closed
+    ``after`` seconds in, before the proxy had answered, so the proxy saw a client
+    disconnect with the upstream call still in flight."""
+
+    kind: Literal["abandoned"] = "abandoned"
+    after: float
+
+
+def abandon(
+    url: URL, *, headers: BaseModel, json: BaseModel, after: float, connect_timeout: float = 10.0
+) -> AbandonedRequest | StreamingResponse:
+    """POST and hang up ``after`` seconds if no response head has arrived by then,
+    closing the connection so the proxy observes the disconnect. Returns the
+    response instead when the proxy answered first, so a test can tell a real
+    disconnect from a generation that finished too fast to be cancelled."""
+    sent_at: Final = time.monotonic()
+    session: Final = requests.Session()
+    try:
+        resp = session.post(
+            str(url),
+            headers=_headers(headers),
+            json=wire_body(json),
+            timeout=(connect_timeout, after),
+        )
+    except requests.exceptions.ReadTimeout:
+        return AbandonedRequest(after=after)
+    finally:
+        session.close()
+    return streaming_outcome(resp, False, sent_at=sent_at)
+
+
 def stream(url: URL, *, headers: BaseModel, json: BaseModel, timeout: float = 60.0) -> StreamingResponse:
     """Streaming (SSE) call: consumes the stream counting events, and captures the
     x-litellm-call-id + content-type headers. Body is elided."""
@@ -877,7 +909,10 @@ class PreparedForward:
 
 
 def prepare_forward(
-    method: str, url: str, headers: dict[str, str], body: bytes | None,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
 ) -> PreparedForward | NetworkError:
     try:
         with requests.Session() as session:
@@ -896,7 +931,8 @@ def forward_prepared_stream(prepared: PreparedForward, timeout: float) -> Stream
     except requests.RequestException as exc:
         return NetworkError(message=str(exc))
     return StreamHead(
-        resp.status_code, {name.lower(): value for name, value in resp.headers.items()},
+        resp.status_code,
+        {name.lower(): value for name, value in resp.headers.items()},
         primed_steps(_stream_steps(resp)),
     )
 
