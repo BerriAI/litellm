@@ -46,6 +46,56 @@ def _request(prompt: str = "semantic cache prompt") -> dict[str, object]:
     }
 
 
+def _field_request(
+    prompt: str,
+    metadata: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "key": {
+            "fields": [
+                {
+                    "name": "model",
+                    "value": "gpt-4.1",
+                    "api_parameter": True,
+                    "internal_parameter": False,
+                },
+                {
+                    "name": "messages",
+                    "value": prompt,
+                    "api_parameter": True,
+                    "internal_parameter": False,
+                },
+            ]
+        },
+        "messages": [{"role": "user", "content": prompt}],
+        "metadata": dict(metadata),
+    }
+
+
+def _facade(
+    url: str,
+    index_name: str,
+    embeddings: Mapping[str, list[float]],
+) -> Cache:
+    facade: Final = Cache(
+        type=LiteLLMCacheType.VALKEY_SEMANTIC,
+        redis_url=url,
+        similarity_threshold=0.8,
+        valkey_semantic_cache_index_name=index_name,
+    )
+    vectors: Final = embeddings
+
+    def embed(prompt: str, metadata: Mapping[str, object] | None = None) -> list[float]:
+        return vectors[prompt]
+
+    async def async_embedding(prompt: str, metadata: dict[str, object] | None = None) -> list[float]:
+        return vectors[prompt]
+
+    facade.cache._get_embedding = embed
+    facade.cache._get_async_embedding = async_embedding
+    return facade
+
+
 def _backend(
     url: str,
     index_name: str,
@@ -264,6 +314,71 @@ def test_subclass_backend_falls_back_to_python(
         valkey_semantic_cache_index_name=index_name,
     )
     facade.cache = Custom(redis_url=valkey_url, similarity_threshold=0.8, index_name=index_name)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    assert resolver.resolve().kind == "python_callback"
+
+
+def test_field_key_matches_python_semantic_scope(
+    valkey_url: str,
+    index_name: str,
+) -> None:
+    facade: Final = _facade(valkey_url, index_name, {"semantic cache prompt": [1.0, 0.0]})
+    metadata: Final = {"user_api_key": "k1"}
+    expected: Final = facade.get_cache_key(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": "semantic cache prompt"}],
+        metadata=metadata,
+    )
+    handle: Final = _native._CacheTestHandle.valkey_semantic(
+        valkey_url,
+        0.8,
+        index_name,
+        facade.cache,
+    )
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding.store(_field_request("semantic cache prompt", metadata), {"answer": "scoped"})
+    client: Final = redis.Redis.from_url(valkey_url)
+    documents: Final = list(client.scan_iter(f"{index_name}:*"))
+    assert len(documents) == 1
+    document_parts: Final = documents[0].decode().split(":")
+    assert document_parts[1] == hashlib.sha256(expected.encode()).hexdigest()
+    client.close()
+
+
+def test_field_key_isolates_tenant_scope(
+    valkey_url: str,
+    index_name: str,
+) -> None:
+    facade: Final = _facade(valkey_url, index_name, {"semantic cache prompt": [1.0, 0.0]})
+    handle: Final = _native._CacheTestHandle.valkey_semantic(
+        valkey_url,
+        0.8,
+        index_name,
+        facade.cache,
+    )
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding.store(
+        _field_request("semantic cache prompt", {"user_api_key": "k1"}),
+        {"answer": "tenant one"},
+    )
+    assert (
+        binding.lookup(_field_request("semantic cache prompt", {"user_api_key": "k2"}))
+        is None
+    )
+    assert binding.lookup(_field_request("semantic cache prompt", {"user_api_key": "k1"})) == {
+        "answer": "tenant one"
+    }
+
+
+def test_tls_valkey_facade_falls_back_to_python(
+    index_name: str,
+) -> None:
+    facade: Final = Cache(
+        type=LiteLLMCacheType.VALKEY_SEMANTIC,
+        redis_url="rediss://127.0.0.1:6390/0",
+        similarity_threshold=0.8,
+        valkey_semantic_cache_index_name=index_name,
+    )
     resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
     assert resolver.resolve().kind == "python_callback"
 

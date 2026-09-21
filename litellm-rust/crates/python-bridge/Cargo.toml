@@ -46,6 +46,7 @@ tokio = { workspace = true, features = ["sync"] }
 criterion.workspace = true
 futures-util.workspace = true
 rstest.workspace = true
+sha2.workspace = true
 tokio-tungstenite.workspace = true
 
 [[bench]]
