@@ -23,12 +23,14 @@ litellm-secrets-types = { path = "crates/secrets-types" }
 litellm-secrets-aws = { path = "crates/secrets-aws" }
 litellm-secrets-google = { path = "crates/secrets-google" }
 litellm-secrets-hashicorp = { path = "crates/secrets-hashicorp" }
+litellm-secrets-azure = { path = "crates/secrets-azure" }
 litellm-secrets-cyberark = { path = "crates/secrets-cyberark" }
 litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
 litellm-types = { path = "crates/types" }
 litellm-core-utils = { path = "crates/core-utils" }
 litellm-cache = { path = "crates/cache" }
+litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
 litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-cache-redis = { path = "crates/cache-redis" }
 litellm-cache-response = { path = "crates/cache-response" }
