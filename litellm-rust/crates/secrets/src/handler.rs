@@ -15,6 +15,8 @@ pub enum SecretManager {
     GoogleSecretManager(crate::google::GoogleSecretManager),
     #[cfg(feature = "hashicorp")]
     HashicorpVault(crate::hashicorp::HashicorpVault),
+    #[cfg(feature = "azure")]
+    AzureKeyVault(crate::azure::AzureKeyVault),
     #[cfg(feature = "cyberark")]
     Cyberark(crate::cyberark::CyberArkSecretManager),
 }
@@ -33,6 +35,8 @@ impl SecretManager {
             Self::GoogleSecretManager(_) => KeyManagementSystem::GoogleSecretManager,
             #[cfg(feature = "hashicorp")]
             Self::HashicorpVault(_) => KeyManagementSystem::HashicorpVault,
+            #[cfg(feature = "azure")]
+            Self::AzureKeyVault(_) => KeyManagementSystem::AzureKeyVault,
             #[cfg(feature = "cyberark")]
             Self::Cyberark(_) => KeyManagementSystem::Cyberark,
         }
@@ -91,6 +95,11 @@ pub async fn get_secret_from_manager(
             .async_read_secret(secret_name)
             .await
             .map(|value| value.map(Secret::String))
+            .map_err(Error::from),
+        #[cfg(feature = "azure")]
+        SecretManager::AzureKeyVault(client) => client
+            .get_secret_from_azure_key_vault(secret_name)
+            .await
             .map_err(Error::from),
         #[cfg(feature = "cyberark")]
         SecretManager::Cyberark(client) => client

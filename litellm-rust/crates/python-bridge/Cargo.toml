@@ -21,6 +21,7 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 [dependencies]
 bytes.workspace = true
 litellm-cache.workspace = true
+litellm-cache-azure-blob.workspace = true
 litellm-cache-memory.workspace = true
 litellm-cache-redis.workspace = true
 litellm-cache-response.workspace = true
