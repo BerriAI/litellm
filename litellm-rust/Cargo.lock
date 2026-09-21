@@ -2821,6 +2821,7 @@ dependencies = [
  "pyo3",
  "pyo3-async-runtimes",
  "qdrant-client",
+ "reqwest 0.12.28",
  "rstest",
  "serde",
  "serde_json",

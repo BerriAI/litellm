@@ -11,6 +11,7 @@ pub struct OpenAiEmbedder {
     api_base: String,
     api_key: String,
     model: String,
+    timeout: Option<Duration>,
 }
 
 pub struct OpenAiEmbedderConfig {
@@ -21,18 +22,14 @@ pub struct OpenAiEmbedderConfig {
 }
 
 impl OpenAiEmbedder {
-    pub fn new(config: OpenAiEmbedderConfig) -> Result<Self, Error> {
-        let mut builder = Client::builder();
-        if let Some(timeout) = config.timeout {
-            builder = builder.timeout(timeout);
-        }
-        let client = builder.build().map_err(|_| Error::Unavailable)?;
-        Ok(Self {
+    pub fn new(client: Client, config: OpenAiEmbedderConfig) -> Self {
+        Self {
             client,
             api_base: config.api_base.trim_end_matches('/').to_owned(),
             api_key: config.api_key,
             model: config.model,
-        })
+            timeout: config.timeout,
+        }
     }
 }
 
@@ -42,7 +39,7 @@ impl Embedder for OpenAiEmbedder {
     }
 
     async fn embed(&self, input: &str) -> Result<Vec<f32>, Error> {
-        let response = self
+        let request = self
             .client
             .post(format!("{}/embeddings", self.api_base))
             .bearer_auth(&self.api_key)
@@ -50,12 +47,17 @@ impl Embedder for OpenAiEmbedder {
                 "model": self.model,
                 "input": input,
                 "encoding_format": "float",
-            }))
-            .send()
-            .await
-            .map_err(|_| Error::Unavailable)?
-            .error_for_status()
-            .map_err(|_| Error::Unavailable)?;
+            }));
+        let response = if let Some(timeout) = self.timeout {
+            request.timeout(timeout)
+        } else {
+            request
+        }
+        .send()
+        .await
+        .map_err(|_| Error::Unavailable)?
+        .error_for_status()
+        .map_err(|_| Error::Unavailable)?;
         let body: Value = response.json().await.map_err(|_| Error::Unavailable)?;
         body.get("data")
             .and_then(Value::as_array)
