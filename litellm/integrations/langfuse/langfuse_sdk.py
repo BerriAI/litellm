@@ -69,6 +69,9 @@ _DEFAULT_FLUSH_AT: Final = 512
 _CHANNEL_RETIRE_GRACE_SECONDS: Final = 60.0
 _DEFAULT_TIMEOUT_SECONDS: Final = 20.0
 _DEFAULT_MAX_RETRIES: Final = 3
+_DEFAULT_PROMPT_CACHE_TTL_SECONDS: Final = 60.0
+_INT64_MIN: Final = -(2**63)
+_INT64_MAX: Final = 2**63 - 1
 _COMMON_RELEASE_ENVS: Final = (
     "RENDER_GIT_COMMIT",
     "CI_COMMIT_SHA",
@@ -158,16 +161,22 @@ def _present(entries: Iterable[tuple[str, AttributeValue | None]]) -> Mapping[st
     return MappingProxyType({key: value for key, value in entries if value is not None})
 
 
+def _metadata_value(value: object) -> AttributeValue | None:
+    """A metadata value as OTLP can carry it: ints past int64 go as strings, as the v2 serializer sent them."""
+    if isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int) and _INT64_MIN <= value <= _INT64_MAX:
+        return value
+    return _serialize(value)
+
+
 def _flattened_metadata(prefix: str, metadata: object) -> Mapping[str, AttributeValue]:
     """Mirror the SDK's wire shape: one ``<prefix>.<key>`` attribute per key, or ``<prefix>`` for a non-dict."""
     if metadata is None:
         return _present(())
     if not isinstance(metadata, Mapping):
         return _present(((prefix, _serialize(metadata)),))
-    return _present(
-        (f"{prefix}.{key}", value if isinstance(value, (str, int)) else _serialize(value))
-        for key, value in metadata.items()
-    )
+    return _present((f"{prefix}.{key}", _metadata_value(value)) for key, value in metadata.items())
 
 
 def trace_attributes(
@@ -424,12 +433,16 @@ class TraceIdHashSampler(Sampler):
         return f"TraceIdHashSampler{{{self.rate}}}"
 
 
-def _parse_sample_rate(raw: str) -> float | None:
+def _parse_float(raw: str) -> float | None:
     try:
-        rate: Final = float(raw)
+        return float(raw)
     except ValueError:
         return None
-    return rate if 0.0 <= rate <= 1.0 else None
+
+
+def _parse_sample_rate(raw: str) -> float | None:
+    rate: Final = _parse_float(raw)
+    return rate if rate is not None and 0.0 <= rate <= 1.0 else None
 
 
 def configured_sample_rate() -> float:
@@ -472,6 +485,22 @@ def configured_release() -> str | None:
     return os.environ.get("LANGFUSE_RELEASE") or next(
         (os.environ[name] for name in _COMMON_RELEASE_ENVS if name in os.environ), None
     )
+
+
+def configured_prompt_cache_ttl() -> float:
+    """``LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS``, the SDK's knob, with its 60 s default when unset or unusable."""
+    raw: Final = os.environ.get("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS")
+    if raw is None:
+        return _DEFAULT_PROMPT_CACHE_TTL_SECONDS
+    parsed: Final = _parse_float(raw)
+    if parsed is None or parsed < 0:
+        verbose_logger.warning(
+            "LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS=%r is not a number of seconds at or above 0; caching prompts for %.0f s",
+            raw,
+            _DEFAULT_PROMPT_CACHE_TTL_SECONDS,
+        )
+        return _DEFAULT_PROMPT_CACHE_TTL_SECONDS
+    return parsed
 
 
 def configured_flush_at() -> int:
@@ -608,7 +637,8 @@ def _build_span_exporter(*, public_key: str, secret_key: str, base_url: str) -> 
 
 
 def _resource(*, environment: str | None, release: str | None) -> Resource:
-    return Resource.create(
+    """Only litellm's own attributes: ``Resource.create`` would merge the host's ``OTEL_RESOURCE_ATTRIBUTES``."""
+    return Resource(
         _present(
             (
                 (LangfuseOtelSpanAttributes.ENVIRONMENT, environment),
@@ -939,5 +969,5 @@ def build_langfuse_client(
             httpx_client=httpx_client,
             timeout=configured_timeout(),
         ),
-        prompt_cache_ttl_seconds=float(os.getenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", "60")),
+        prompt_cache_ttl_seconds=configured_prompt_cache_ttl(),
     )

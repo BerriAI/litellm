@@ -38,6 +38,7 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     build_langfuse_client,
     build_langfuse_tracing,
     configured_flush_at,
+    configured_prompt_cache_ttl,
     configured_sample_rate,
     flush_langfuse_tracing,
     observation_attributes,
@@ -509,6 +510,70 @@ def test_host_otel_span_limits_do_not_truncate_langfuse_observations(
     span = _only_span(exporter, "gen")
     assert span.dropped_attributes == 0
     assert all(span.attributes[key] == "v" * 32 for key in attributes)
+
+
+def test_host_otel_resource_env_does_not_reach_the_langfuse_resource(monkeypatch: pytest.MonkeyPatch):
+    """``OTEL_RESOURCE_ATTRIBUTES`` and ``OTEL_SERVICE_NAME`` belong to the host's tracing; Langfuse files a
+    trace under any ``deployment.environment`` it finds on the resource, and v2 shipped no resource at all."""
+    monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team.secret.note=internal-only,deployment.environment=hijack")
+    monkeypatch.setenv("OTEL_SERVICE_NAME", "the-hosts-own-service")
+    tracing = build_langfuse_tracing(
+        exporter=InMemorySpanExporter(), environment="prod", release="r1", sample_rate=1.0, flush_interval_millis=10
+    )
+
+    assert dict(tracing.provider.resource.attributes) == {A.ENVIRONMENT: "prod", A.RELEASE: "r1"}
+
+
+@pytest.mark.parametrize(
+    ("value", "encoded"),
+    [
+        (2**63 - 1, ("int_value", 2**63 - 1)),
+        (2**63, ("string_value", str(2**63))),
+        (10**20, ("string_value", str(10**20))),
+        (-(2**63) - 1, ("string_value", str(-(2**63) - 1))),
+        (True, ("bool_value", True)),
+    ],
+    ids=["int64-max", "int64-max-plus-one", "huge", "int64-min-minus-one", "bool"],
+)
+def test_metadata_ints_past_int64_reach_the_wire_as_strings(value, encoded):
+    """OTLP carries int64 only and its encoder silently drops any attribute it cannot fit, while the
+    export still succeeds; v2's serializer sent such ints as strings, so the value has to survive."""
+    from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+
+    exporter = InMemorySpanExporter()
+    tracing = build_langfuse_tracing(
+        exporter=exporter, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+    )
+    attributes = observation_attributes(observation_type="generation", metadata={"order_id": value, "sibling": "kept"})
+    _generation(tracing, attributes=attributes).end(CALL_END)
+    tracing.flush()
+
+    (encoded_span,) = encode_spans(exporter.get_finished_spans()).resource_spans[0].scope_spans[0].spans
+    wire = {kv.key: kv.value for kv in encoded_span.attributes}
+    order_id = wire[f"{A.OBSERVATION_METADATA}.order_id"]
+    carried = {
+        "int_value": order_id.int_value,
+        "string_value": order_id.string_value,
+        "bool_value": order_id.bool_value,
+    }
+    assert (order_id.WhichOneof("value"), carried[order_id.WhichOneof("value")]) == encoded
+    assert wire[f"{A.OBSERVATION_METADATA}.sibling"].string_value == "kept"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, 60.0), ("5", 5.0), ("0", 0.0), ("2.5", 2.5), ("-1", 60.0), ("abc", 60.0)],
+    ids=["unset", "whole", "zero", "fraction", "negative", "text"],
+)
+def test_prompt_cache_ttl_env_falls_back_instead_of_raising(monkeypatch: pytest.MonkeyPatch, raw, expected, caplog):
+    """A typo in the SDK's TTL knob used to raise out of logger construction and fail the request."""
+    if raw is None:
+        monkeypatch.delenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS", raw)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert configured_prompt_cache_ttl() == expected
+    assert ("LANGFUSE_PROMPT_CACHE_DEFAULT_TTL_SECONDS" in caplog.text) is (raw in ("-1", "abc"))
 
 
 def test_many_metadata_keys_never_evict_the_generation_input_and_output():

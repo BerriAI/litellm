@@ -1,5 +1,6 @@
 import datetime
 import json
+import logging
 import threading
 import time
 import types
@@ -1934,6 +1935,28 @@ def test_update_trace_keys_input_output_reach_the_trace_even_under_a_parent(monk
     assert "the-output" in str(span.attributes["langfuse.trace.output"])
 
 
+def test_a_fresh_trace_under_a_callers_parent_still_carries_its_own_input_and_output():
+    """Langfuse copies I/O onto a trace only from its root observation; a caller's ``parent_observation_id``
+    makes the generation a child, so the trace-level fields v2 set on ``trace(...)`` must be stamped."""
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"parent_observation_id": "0123456789abcdef"})
+
+    assert span.parent is not None
+    assert "the-input" in str(span.attributes["langfuse.trace.input"])
+    assert "the-output" in str(span.attributes["langfuse.trace.output"])
+
+
+def test_a_fresh_trace_root_leaves_the_duplicate_io_to_langfuse():
+    rig = _steering_logger()
+
+    _, _, span = _emit(rig, metadata={"trace_id": "a" * 32})
+
+    assert span.parent is None
+    assert "langfuse.trace.input" not in (span.attributes or {})
+    assert "the-input" in str(span.attributes["langfuse.observation.input"])
+
+
 def test_existing_trace_id_appends_without_claiming_trace_root():
     """Langfuse copies a root observation's name and I/O onto the trace, so a
     continuation that claimed root would rename the trace after every request;
@@ -2153,6 +2176,40 @@ def test_parse_langfuse_debug_only_enables_on_true_strings():
     assert langfuse_module.parse_langfuse_debug("False") is False
     assert langfuse_module.parse_langfuse_debug("") is False
     assert langfuse_module.parse_langfuse_debug(None) is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(None, 1), ("", 1), ("3", 3), ("0", 1), ("-5", 1), ("abc", 1)],
+    ids=["unset", "empty", "valid", "zero", "negative", "text"],
+)
+def test_flush_interval_env_falls_back_instead_of_failing_the_first_request(monkeypatch, raw, expected, caplog):
+    """The batch scheduler rejects a non-positive delay; v2's consumer thread accepted 0, so the value must
+    not raise out of the lazily built logger and take Langfuse logging down for the worker."""
+    if raw is None:
+        monkeypatch.delenv("LANGFUSE_FLUSH_INTERVAL", raising=False)
+    else:
+        monkeypatch.setenv("LANGFUSE_FLUSH_INTERVAL", raw)
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        assert LangFuseLogger._get_langfuse_flush_interval(1) == expected  # pyright: ignore[reportPrivateUsage]  # the parser under test
+    assert ("LANGFUSE_FLUSH_INTERVAL" in caplog.text) is (raw in ("0", "-5", "abc"))
+
+
+def test_zero_flush_interval_still_builds_a_working_export_channel(monkeypatch):
+    receiver = _OtlpReceiver()
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-flush-zero-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-flush-zero-test")
+    monkeypatch.delenv("LANGFUSE_MOCK", raising=False)
+    monkeypatch.setenv("LANGFUSE_FLUSH_INTERVAL", "0")
+    monkeypatch.setattr(litellm, "initialized_langfuse_clients", litellm.initialized_langfuse_clients)
+
+    try:
+        logger = LangFuseLogger(langfuse_host=receiver.url)
+        _log_one_completion(logger)
+    finally:
+        receiver.close()
+
+    assert receiver.received == ["/api/public/otel/v1/traces"]
 
 
 def test_langfuse_debug_env_string_false_stays_off(monkeypatch):

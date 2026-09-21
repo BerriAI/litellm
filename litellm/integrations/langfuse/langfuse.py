@@ -885,6 +885,7 @@ class LangFuseLogger:
 
             resolved_trace_id: Final = resolve_trace_id(call_trace_id)  # pyright: ignore[reportArgumentType]  # metadata value, str or None at runtime
             continued_trace: Final = existing_trace_id is not None
+            generation_is_trace_root: Final = not continued_trace and parent_observation_id is None
             trace_public: Final = _trace_public_flag(trace_params.get("public"))
             trace_input: Final = trace_params.get("input")
             trace_output: Final = trace_params.get("output")
@@ -897,8 +898,10 @@ class LangFuseLogger:
                 tags=trace_params.get("tags"),
                 metadata=trace_params.get("metadata"),
                 public=trace_public,
-                input=trace_input if continued_trace or trace_input != generation_params["input"] else None,
-                output=trace_output if continued_trace or trace_output != generation_params["output"] else None,
+                input=None if generation_is_trace_root and trace_input == generation_params["input"] else trace_input,
+                output=None
+                if generation_is_trace_root and trace_output == generation_params["output"]
+                else trace_output,
             )
             generation_attributes: Final = observation_attributes(
                 observation_type="generation",
@@ -1060,19 +1063,19 @@ class LangFuseLogger:
 
     @staticmethod
     def _get_langfuse_flush_interval(flush_interval: int) -> int:
-        """
-        Get the langfuse flush interval to initialize the Langfuse client
-
-        Reads `LANGFUSE_FLUSH_INTERVAL` from the environment variable.
-        If not set, uses the flush interval passed in as an argument.
-
-        Args:
-            flush_interval: The flush interval to use if LANGFUSE_FLUSH_INTERVAL is not set
-
-        Returns:
-            [int] The flush interval to use to initialize the Langfuse client
-        """
-        return int(os.getenv("LANGFUSE_FLUSH_INTERVAL") or flush_interval)
+        """``LANGFUSE_FLUSH_INTERVAL`` in whole seconds above 0 (the export scheduler's delay), else ``flush_interval``."""
+        raw: Final = os.getenv("LANGFUSE_FLUSH_INTERVAL")
+        if not raw:
+            return flush_interval
+        parsed: Final = int(raw) if raw.strip().isdigit() else None
+        if parsed is None or parsed <= 0:
+            verbose_logger.warning(
+                "LANGFUSE_FLUSH_INTERVAL=%r is not a whole number of seconds above 0; flushing every %d s",
+                raw,
+                flush_interval,
+            )
+            return flush_interval
+        return parsed
 
     def _log_guardrail_information_as_span(
         self,
