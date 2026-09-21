@@ -1252,8 +1252,6 @@ if MCP_AVAILABLE:
         ```
         """
         user_mcp_management_mode: Final = _get_user_mcp_management_mode()
-        # A named server is the dashboard recheck. The page load omits ids and
-        # must reuse the cached probe.
         force_probe: Final = bool(server_ids)
 
         if user_mcp_management_mode == "view_all":

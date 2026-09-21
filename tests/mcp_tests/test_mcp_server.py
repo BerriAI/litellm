@@ -1238,7 +1238,7 @@ async def test_mcp_server_manager_config_integration_with_database():
     test_manager.get_allowed_mcp_servers = mock_get_allowed_servers
 
     # Mock health_check_server to avoid real network calls that timeout
-    async def mock_health_check(server_id: str, mcp_auth_header=None):
+    async def mock_health_check(server_id: str, mcp_auth_header=None, *, force: bool = False):
         server = test_manager.get_mcp_server_by_id(server_id)
         if not server:
             return None

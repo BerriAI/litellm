@@ -4774,6 +4774,38 @@ class TestMCPServerManager:
         assert forced.status == "healthy"
 
     @pytest.mark.asyncio
+    async def test_health_check_shares_one_probe_across_concurrent_misses(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="shared-probe",
+            name="shared-probe",
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://shared-probe.example",
+        )
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _session(_session):
+            started.set()
+            await release.wait()
+            return "ok"
+
+        mock_client = AsyncMock()
+        mock_client.run_with_session = _session
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        tasks = [asyncio.create_task(manager.health_check_server(server.server_id)) for _ in range(4)]
+        await asyncio.wait_for(started.wait(), timeout=1)
+        release.set()
+        results = await asyncio.gather(*tasks)
+
+        assert manager._create_mcp_client.await_count == 1
+        assert {result.last_health_check for result in results} == {results[0].last_health_check}
+
+    @pytest.mark.asyncio
     async def test_health_check_fanout_holds_at_most_the_concurrency_cap(self):
         """A page of many servers must not open one live session per server at once."""
         from litellm.constants import MCP_HEALTH_CHECK_MAX_CONCURRENCY
