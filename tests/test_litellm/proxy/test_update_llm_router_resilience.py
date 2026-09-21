@@ -153,6 +153,10 @@ class TestDeleteDeploymentResilience:
         mock_router = MagicMock()
         # Router has a model ID that's not in DB or config -> should be deleted
         mock_router.get_model_ids.return_value = ["db-id-1", "stale-id"]
+        # get_deployment returns None when the id is unknown to the router, which must
+        # NOT shield it from eviction - only a deployment declaring model_info.managed_by
+        # is treated as externally owned and spared.
+        mock_router.get_deployment.return_value = None
         mock_router.delete_deployment.return_value = True
         mock_router.generate_model_id = MagicMock(return_value="config-id-1")
 

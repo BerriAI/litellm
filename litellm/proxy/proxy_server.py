@@ -6877,6 +6877,17 @@ class ProxyConfig:
 
         for model_id in router_model_ids:
             if model_id not in combined_id_list:
+                deployment: Final = llm_router.get_deployment(model_id=model_id)
+                if deployment is not None and getattr(deployment.model_info, "managed_by", None):
+                    # A deployment with a declared external owner (e.g. injected at runtime by a
+                    # plugin/callback) is not an orphan of the DB+config reconcile - skip it.
+                    verbose_proxy_logger.info(
+                        "Skipping deployment %s (id=%s): declares external owner %r, not an orphan.",
+                        deployment.model_name,
+                        model_id,
+                        getattr(deployment.model_info, "managed_by", None),
+                    )
+                    continue
                 llm_router.delete_deployment(id=model_id)
         return frozenset(combined_id_list)
 
