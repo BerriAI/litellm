@@ -130,7 +130,7 @@ jobs:
       - name: Test secret manager feature combinations
         run: |
           cargo test -p litellm-auth-gcp --locked --no-default-features
-          for features in '' aws google hashicorp aws,google,hashicorp; do
+          for features in '' aws google hashicorp cyberark aws,google,hashicorp aws,google,cyberark aws,google,hashicorp,cyberark; do
             cargo test -p litellm-secrets --locked --no-default-features --features "$features"
           done
 

@@ -928,6 +928,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc16"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "338089f42c427b86394a5ee60ff321da23a5c89c9d89514c829687b26359fcff"
+
+[[package]]
 name = "crc32fast"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2682,6 +2688,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "serde_with",
  "tokio",
  "tokio-tungstenite",
 ]
@@ -2697,6 +2704,7 @@ dependencies = [
  "jsonwebtoken",
  "litellm-core-utils",
  "litellm-secrets-aws",
+ "litellm-secrets-cyberark",
  "litellm-secrets-google",
  "litellm-secrets-hashicorp",
  "litellm-secrets-types",
@@ -2724,6 +2732,26 @@ dependencies = [
  "litellm-core-utils",
  "litellm-secrets-types",
  "rstest",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "veil",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-secrets-cyberark"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "litellm-core-utils",
+ "litellm-secrets-types",
+ "moka",
+ "percent-encoding",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -3730,9 +3758,11 @@ checksum = "2acbc41a996f7652b2ddd9dfd98cc4ff602cfd742ae35382f07f608405ab50ed"
 dependencies = [
  "arcstr",
  "combine",
+ "crc16",
  "itoa",
  "num-bigint 0.5.1",
  "percent-encoding",
+ "rand 0.10.2",
  "rustls 0.23.42",
  "rustls-native-certs",
  "ryu",

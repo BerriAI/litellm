@@ -33,4 +33,7 @@ pub enum Error {
     #[cfg(feature = "hashicorp")]
     #[error(transparent)]
     Hashicorp(#[from] litellm_secrets_hashicorp::Error),
+    #[cfg(feature = "cyberark")]
+    #[error(transparent)]
+    Cyberark(#[from] litellm_secrets_cyberark::Error),
 }

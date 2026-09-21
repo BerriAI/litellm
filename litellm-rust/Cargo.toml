@@ -23,6 +23,7 @@ litellm-secrets-types = { path = "crates/secrets-types" }
 litellm-secrets-aws = { path = "crates/secrets-aws" }
 litellm-secrets-google = { path = "crates/secrets-google" }
 litellm-secrets-hashicorp = { path = "crates/secrets-hashicorp" }
+litellm-secrets-cyberark = { path = "crates/secrets-cyberark" }
 litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
 litellm-types = { path = "crates/types" }
