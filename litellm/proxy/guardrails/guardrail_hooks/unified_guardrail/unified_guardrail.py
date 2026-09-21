@@ -736,28 +736,14 @@ class UnifiedLLMGuardrails(CustomLogger):
                     async for out in _round(item, is_final=False):
                         yield out
 
-            # v1 does not transform streamed tool calls, but they must still go
-            # through the guardrail's block decision. Run the block_only inspection
-            # over the full assembled response so tool calls cannot bypass it.
-            #
-            # Pass a deep copy of responses_so_far — the block path routes through
-            # ``_process_streaming_block_only`` which mutates ``delta.content``
-            # in-place on the chunk objects it receives. For an n>1 chunk carrying
-            # text on one choice and tool_calls (with finish_reason) on another,
-            # ``has_stream_ended`` reads ``choices[0]`` alone and can miss the
-            # terminal signal, letting the block path rewrite the raw accumulator.
-            # The subsequent final ``_round`` would then re-read the already-mutated
-            # text, producing double-application for a non-idempotent guardrail or a
-            # ``stream_transform_underflow`` 400 from mismatched prefixes. A shallow
-            # list copy wouldn't help — the mutation is on the chunk objects
-            # themselves — so we deepcopy.
             if saw_tool_calls:
-                async for out in self._inspect_full_response_for_block(
+                inspected_responses: Final = copy.deepcopy(responses_so_far)
+                async for out in self._inspect_full_response(
                     endpoint_translation=endpoint_translation,
                     guardrail_to_apply=guardrail_to_apply,
                     request_data=request_data,
                     user_api_key_dict=user_api_key_dict,
-                    responses_so_far=copy.deepcopy(responses_so_far),
+                    responses_so_far=inspected_responses,
                     responses_yielded=responses_yielded,
                 ):
                     yield out
@@ -771,7 +757,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                         finish_reason_per_choice=finish_reason_per_choice,
                         held_choices=_held_choices(held_chars_per_choice),
                     )
-                    for buffered_item in responses_so_far
+                    for buffered_item in inspected_responses
                     if self._chunk_has_tool_calls(buffered_item)
                 )
 
@@ -826,7 +812,7 @@ class UnifiedLLMGuardrails(CustomLogger):
             responses_yielded.append(trailing)
             yield trailing
 
-    async def _inspect_full_response_for_block(
+    async def _inspect_full_response(
         self,
         *,
         endpoint_translation: _EndpointTranslation,
@@ -836,16 +822,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_so_far: Sequence[object],
         responses_yielded: Sequence[object],
     ) -> AsyncGenerator[object, None]:
-        """Run the block-only guardrail inspection over the full assembled
-        response (text + tool calls) so nothing bypasses the block decision.
-
-        The guardrail's returned transforms are discarded here (v1 does not
-        transform tool calls); only its block decision matters. A block is
-        surfaced the same way as elsewhere: ModifyResponseException terminates the
-        stream via the shared block handler; a GenericGuardrailAPI block raises and
-        propagates, matching block_only.
-        """
         from litellm.integrations.custom_guardrail import ModifyResponseException
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
         try:
             await endpoint_translation.process_output_streaming_response(
@@ -855,7 +833,10 @@ class UnifiedLLMGuardrails(CustomLogger):
                 user_api_key_dict=user_api_key_dict,
                 request_data=request_data,
                 stream_transform_sink=None,
+                deliver_ended_stream_rewrites=True,
             )
+        except UndeliverableStreamRewrite as exc:
+            raise HTTPException(status_code=400, detail="Guardrail stream rewrite could not be applied") from exc
         except ModifyResponseException as e:
             if e.original_response is None:
                 e.original_response = responses_so_far

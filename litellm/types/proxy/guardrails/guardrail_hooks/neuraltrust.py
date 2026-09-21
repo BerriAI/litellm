@@ -54,7 +54,7 @@ class NeuralTrustGuardrailConfigModel(GuardrailConfigModel):
         description=(
             "How a `transform` verdict reaches a streaming client. `block_only` (default) streams the raw "
             "model chunks, so `block` and `ask` still end the stream but the redacted text is dropped. "
-            "`incremental_diff` withholds the model chunks and streams TrustGuard's rewritten text instead: "
+            "`incremental_diff` withholds the model chunks and streams TrustGuard's rewritten text and tool arguments: "
             "the reply arrives once the end-of-stream evaluate returns, and a blocking verdict ends the "
             "stream with nothing already sent. OpenAI chat completions streaming only."
         ),

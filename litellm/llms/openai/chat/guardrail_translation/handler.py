@@ -556,7 +556,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         terminate the stream. Text rewrites are not propagated to the client here
         (see ``_process_streaming_transform`` for the incremental_diff path) unless
         ``deliver_ended_stream_rewrites`` opts the ended-stream branch in."""
-        has_stream_ended: Final = self._first_choice_has_finished(responses_so_far)
+        has_stream_ended: Final = deliver_ended_stream_rewrites or self._first_choice_has_finished(responses_so_far)
 
         if has_stream_ended:
             await self._process_ended_stream(
@@ -1132,20 +1132,18 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def _function_tool_call_fragments(
         responses_so_far: Sequence["ModelResponseStream"],
     ) -> tuple[tuple[ChatCompletionDeltaToolCall, ...], ...]:
-        """Group the stream's function tool-call fragments by their tool-call index, in
-        the index order ``stream_chunk_builder`` lists the rebuilt tool calls, keeping
-        only the indices the builder keeps (an id and a name somewhere in the stream)."""
         fragments: Final = tuple(
-            tool_call
+            (choice.index, tool_call)
             for response in responses_so_far
             for choice in response.choices
             for tool_call in choice.delta.tool_calls or ()
             if isinstance(tool_call, ChatCompletionDeltaToolCall)
         )
-        identified: Final = frozenset(fragment.index for fragment in fragments if fragment.id)
-        named: Final = frozenset(fragment.index for fragment in fragments if fragment.function.name)
+        identified: Final = frozenset((choice, fragment.index) for choice, fragment in fragments if fragment.id)
+        named: Final = frozenset((choice, fragment.index) for choice, fragment in fragments if fragment.function.name)
         return tuple(
-            tuple(fragment for fragment in fragments if fragment.index == index) for index in sorted(identified & named)
+            tuple(fragment for choice, fragment in fragments if (choice, fragment.index) == key)
+            for key in sorted(identified & named)
         )
 
     def _write_ended_stream_tool_call_rewrites(
@@ -1155,28 +1153,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         pre_guardrail_tool_calls: tuple[tuple[str | None, str], ...],
         guardrail_name: str,
     ) -> None:
-        """Write ended-stream guardrail tool-call rewrites back across the buffered
-        chunks: the rewritten name and full arguments land in the tool call's first
-        fragment and the arguments of its later fragments are blanked, mirroring the
-        text write-back. A rewrite on a stream carrying more than one distinct choice
-        index, or whose fragments do not line up with the rebuilt tool calls, is
-        reported as undeliverable, so the pipeline executor discards it and releases
-        the original chunks."""
         post_guardrail_tool_calls: Final = self._function_tool_call_shapes(guardrailed_response)
         if post_guardrail_tool_calls == pre_guardrail_tool_calls:
             return
-        stream_choice_indices: Final = frozenset(
-            choice.index for response in responses_so_far for choice in response.choices
-        )
         fragments_by_tool_call: Final = self._function_tool_call_fragments(responses_so_far)
-        if len(stream_choice_indices) != 1:
-            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
-            raise UndeliverableStreamRewrite(
-                guardrail_name,
-                f"the stream carries {len(stream_choice_indices)} choices and tool-call rewrites are only written "
-                "back on single-choice streams",
-            )
         if len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 

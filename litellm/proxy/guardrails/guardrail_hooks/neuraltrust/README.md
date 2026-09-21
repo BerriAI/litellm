@@ -18,7 +18,7 @@ guardrails:
       collector_key: os.environ/TRUSTGUARD_COLLECTOR_KEY  # tgcol_… ; optional if the API key is bound
       unreachable_fallback: fail_closed
       timeout: 5
-      streaming_transform_mode: block_only  # incremental_diff to stream redacted output
+      streaming_transform_mode: incremental_diff
       default_on: true
 ```
 
@@ -62,9 +62,9 @@ Under `incremental_diff` the reply is held until the end-of-stream evaluate retu
 
 `incremental_diff` covers OpenAI chat completions streaming; other surfaces fall back to `block_only`.
 
-Under `incremental_diff`, LiteLLM buffers tool-call deltas until TrustGuard inspects the assembled response. A blocking verdict releases no tool-call arguments or finish signal. Allowed tool calls retain their original deltas and order
+Under `incremental_diff`, LiteLLM buffers tool-call deltas until TrustGuard inspects the assembled response. A blocking verdict releases no tool-call arguments or finish signal. Tool calls retain their IDs and order, with transformed arguments written into the buffered deltas before delivery
 
-The default `block_only` mode still forwards tool-call deltas before inspection. Use `incremental_diff` or non-streaming requests when tool calls must be checked before delivery. Streamed tool-call rewrites are not supported; use non-streaming requests for transformed tool arguments
+The default `block_only` mode still forwards tool-call deltas before inspection. Use `incremental_diff` or non-streaming requests when tool calls must be checked before delivery. The example selects `incremental_diff` for inspected text and tool arguments
 
 ## References
 
