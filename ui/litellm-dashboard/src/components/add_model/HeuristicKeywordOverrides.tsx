@@ -15,8 +15,8 @@ const HeuristicKeywordOverrides: React.FC<{
 }> = ({ value, onChange }) => (
   <div className="space-y-3">
     <p className="text-sm text-muted-foreground">
-      Each list replaces the built-in keyword list of the same name for the heuristic scorer. Leave a list empty to
-      keep the built-in one. To add technical terms without replacing the list, use custom technical keywords under
+      Each list replaces the built-in keyword list of the same name for the heuristic scorer. Leave a list empty to keep
+      the built-in one. To add technical terms without replacing the list, use custom technical keywords under
       Classification Method.
     </p>
     {fields.map(([key, label]) => {

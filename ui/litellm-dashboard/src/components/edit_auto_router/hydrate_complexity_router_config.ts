@@ -24,9 +24,7 @@ import {
   resolveComplexityDefaultModel,
 } from "../add_model/tier_rows";
 
-const isReminderMarkerPair = (
-  input: unknown,
-): input is { open: string; close: string } => {
+const isReminderMarkerPair = (input: unknown): input is { open: string; close: string } => {
   if (typeof input !== "object" || input === null) {
     return false;
   }
@@ -176,9 +174,12 @@ export const hydrateComplexityRouterConfig = (
       ? parsedConfig.reminder_markers.filter(isReminderMarkerPair)
       : undefined,
     max_tokens_from_tier_model:
-      typeof parsedConfig.max_tokens_from_tier_model === "boolean" ? parsedConfig.max_tokens_from_tier_model : undefined,
+      typeof parsedConfig.max_tokens_from_tier_model === "boolean"
+        ? parsedConfig.max_tokens_from_tier_model
+        : undefined,
     classifier_plugin_timeout_ms:
-      typeof parsedConfig.classifier_plugin_timeout_ms === "number" && Number.isFinite(parsedConfig.classifier_plugin_timeout_ms)
+      typeof parsedConfig.classifier_plugin_timeout_ms === "number" &&
+      Number.isFinite(parsedConfig.classifier_plugin_timeout_ms)
         ? parsedConfig.classifier_plugin_timeout_ms
         : undefined,
   };
