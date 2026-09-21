@@ -16,6 +16,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
+    cast,
     overload,
     runtime_checkable,
 )
@@ -1379,32 +1380,76 @@ _RESPONSE_REDACTED_KEYS: Final = frozenset({"keyword", "snippet", "match", "rege
 
 
 def _request_metadata_buckets(request_data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
-    return tuple(bucket for key in _METADATA_BUCKET_KEYS if isinstance(bucket := request_data.get(key), Mapping))
+    return tuple(
+        cast(Mapping[str, object], bucket)  # cast-ok: runtime Mapping check establishes the bucket shape
+        for key in _METADATA_BUCKET_KEYS
+        if isinstance(bucket := request_data.get(key), Mapping)
+    )
 
 
 def include_guardrail_response_requested(request_data: Mapping[str, object]) -> bool:
     return any(bucket.get("include_guardrail_response") is True for bucket in _request_metadata_buckets(request_data))
 
 
+def _redact_guardrail_mapping(value: Mapping[str, object], children: tuple[object, ...]) -> dict[str, object]:
+    items: Final = tuple(value.items())
+    return {  # mutable-ok: fresh redacted mapping
+        key: "[REDACTED]" if key in _RESPONSE_REDACTED_KEYS and isinstance(item, str) else child
+        for (key, item), child in zip(items, children, strict=True)
+    }
+
+
 def _redact_guardrail_entry(value: object) -> object:
-    if isinstance(value, Mapping):
-        return {  # mutable-ok: fresh redacted mapping
-            key: (
-                "[REDACTED]"
-                if key in _RESPONSE_REDACTED_KEYS and isinstance(item, str)
-                else _redact_guardrail_entry(item)
+    pending: Final[list[tuple[object, bool]]] = [(value, False)]  # mutable-ok: iterative traversal worklist
+    results: Final[list[object]] = []  # mutable-ok: iterative traversal results
+    while pending:
+        current, expanded = pending.pop()
+        if expanded:
+            if isinstance(current, Mapping):
+                results.append(
+                    _redact_guardrail_mapping(
+                        cast(  # cast-ok: runtime Mapping check establishes the entry shape
+                            Mapping[str, object], current
+                        ),
+                        tuple(results.pop() for _ in current)[::-1],
+                    )
+                )
+            elif isinstance(current, list | tuple):
+                results.append(
+                    [  # mutable-ok: response list contract
+                        child for child in tuple(results.pop() for _ in current)[::-1]
+                    ]
+                )
+            continue
+        if isinstance(current, Mapping):
+            pending.append((current, True))
+            pending.extend(
+                (item, False)
+                for _, item in reversed(
+                    tuple(
+                        cast(  # cast-ok: runtime Mapping check establishes the entry shape
+                            Mapping[str, object], current
+                        ).items()
+                    )
+                )
             )
-            for key, item in value.items()
-        }
-    if isinstance(value, list | tuple):
-        return [_redact_guardrail_entry(item) for item in value]  # mutable-ok: response list contract
-    return value
+        elif isinstance(current, list | tuple):
+            pending.append((current, True))
+            pending.extend(
+                (item, False)
+                for item in reversed(
+                    cast(Sequence[object], current)  # cast-ok: runtime sequence check establishes the child shape
+                )
+            )
+        else:
+            results.append(current)
+    return results[0]
 
 
 def attach_guardrail_information(response: object, request_data: Mapping[str, object]) -> object:
-    recorded: Final = next(
+    recorded: Final[Sequence[object]] = next(
         (
-            entries
+            cast(list[object], entries)  # cast-ok: runtime list check establishes the recorded entries shape
             for bucket in _request_metadata_buckets(request_data)
             if isinstance(
                 entries := bucket.get("standard_logging_guardrail_information"),
