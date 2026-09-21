@@ -16,6 +16,7 @@ from typing import Any, Final
 import httpx
 import openai
 
+import litellm
 from litellm.types.utils import LiteLLMCommonStrings
 from litellm.types.vector_stores import VectorStoreSearchFailure
 
@@ -1002,7 +1003,7 @@ class BudgetExceededError(Exception):
     ):
         self.current_cost = current_cost
         self.max_budget = max_budget
-        self.status_code = 429
+        self.status_code = litellm.budget_exceeded_status_code
         self.llm_provider = llm_provider or ""
         self.entity_type = entity_type
         self.entity_id = entity_id
