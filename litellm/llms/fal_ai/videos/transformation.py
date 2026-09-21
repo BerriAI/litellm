@@ -543,6 +543,8 @@ class FalAIVideoConfig(BaseVideoConfig):
                 status_code=raw_response.status_code,
                 message=error,
                 headers=dict(raw_response.headers),  # mutable-ok: exception headers require a mutable dictionary
+                request=raw_response.request,
+                response=raw_response,
             )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
         httpx_client: Final[HTTPHandler] = _get_httpx_client()
@@ -559,6 +561,8 @@ class FalAIVideoConfig(BaseVideoConfig):
                 status_code=raw_response.status_code,
                 message=error,
                 headers=dict(raw_response.headers),  # mutable-ok: exception headers require a mutable dictionary
+                request=raw_response.request,
+                response=raw_response,
             )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
         async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(llm_provider=LlmProviders.FAL_AI)

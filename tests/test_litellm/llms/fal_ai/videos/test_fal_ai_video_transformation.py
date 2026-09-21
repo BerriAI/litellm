@@ -435,6 +435,7 @@ class TestFalAIVideoTransformation:
 
         assert error.value.status_code == 422
         assert "input.reference_image_urls: Failed to download the file" in error.value.message
+        assert "Failed to download the file" in error.value.response.text
 
     def test_content_response_surfaces_string_detail_error(self):
         response: Final = httpx.Response(
@@ -448,6 +449,7 @@ class TestFalAIVideoTransformation:
 
         assert error.value.status_code == 400
         assert error.value.message == "Request is still in progress"
+        assert "Request is still in progress" in error.value.response.text
 
     @pytest.mark.asyncio
     async def test_async_content_response_surfaces_list_detail_error(self):
@@ -469,6 +471,7 @@ class TestFalAIVideoTransformation:
 
         assert error.value.status_code == 422
         assert "input.reference_image_urls: Failed to download the file" in error.value.message
+        assert "Failed to download the file" in error.value.response.text
 
     @pytest.mark.asyncio
     async def test_async_content_response_surfaces_string_detail_error(self):
@@ -483,6 +486,7 @@ class TestFalAIVideoTransformation:
 
         assert error.value.status_code == 400
         assert error.value.message == "Request is still in progress"
+        assert "Request is still in progress" in error.value.response.text
 
     def test_extract_video_url_surfaces_list_detail_error(self):
         response: Final = Mock(spec=httpx.Response)
