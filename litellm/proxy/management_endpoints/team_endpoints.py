@@ -5359,7 +5359,7 @@ async def _authorize_and_filter_teams(
 
 
 class TeamAdminStatusResponse(TypedDict):
-    is_team_admin: bool
+    is_team_admin: ReadOnly[bool]
 
 
 @router.get(
@@ -5370,12 +5370,7 @@ class TeamAdminStatusResponse(TypedDict):
 async def is_caller_team_admin(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> TeamAdminStatusResponse:
-    """Whether the caller is in any team's admin list.
-
-    The sidebar only needs this boolean. ``GET /team/list`` loads every team
-    and then every key on those teams, which is what made every dashboard
-    page wait on the team table.
-    """
+    """Whether the caller is in any team's admin list."""
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:

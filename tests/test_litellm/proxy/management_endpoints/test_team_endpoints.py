@@ -9927,7 +9927,6 @@ async def test_list_available_teams_returns_empty_list_when_none_configured():
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_is_caller_team_admin_uses_admins_array_and_skips_team_list():
     """The sidebar boolean must not load teams or keys."""
     from unittest.mock import AsyncMock, Mock

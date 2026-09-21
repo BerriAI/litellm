@@ -15235,6 +15235,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/is_admin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Is Caller Team Admin
+         * @description Whether the caller is in any team's admin list.
+         */
+        get: operations["is_caller_team_admin_team_is_admin_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/list": {
         parameters: {
             query?: never;
@@ -37116,6 +37136,11 @@ export interface components {
             tpm_limit?: number | null;
             /** Updated At */
             updated_at?: string | null;
+        };
+        /** TeamAdminStatusResponse */
+        TeamAdminStatusResponse: {
+            /** Is Team Admin */
+            is_team_admin: boolean;
         };
         /**
          * TeamListResponse
@@ -59148,6 +59173,35 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BulkUpdateKeyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    is_caller_team_admin_team_is_admin_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamAdminStatusResponse"];
                 };
             };
             /** @description Validation Error */
