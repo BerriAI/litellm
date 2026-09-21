@@ -854,9 +854,21 @@ sys.modules['litellm.caching._embedding_router'] = embedding_router
         let prior = environ.call_method1("get", ("OPENAI_API_KEY",))?;
         match key {
             Some(key) => environ.set_item("OPENAI_API_KEY", key)?,
-            None => environ.del_item("OPENAI_API_KEY")?,
+            None => {
+                environ.call_method1("pop", ("OPENAI_API_KEY", py.None()))?;
+            }
         }
         Ok(prior)
+    }
+
+    fn restore_embedding_environment(py: Python<'_>, prior: Bound<'_, PyAny>) -> PyResult<()> {
+        let environ = py.import("os")?.getattr("environ")?;
+        if prior.is_none() {
+            environ.call_method1("pop", ("OPENAI_API_KEY", py.None()))?;
+        } else {
+            environ.set_item("OPENAI_API_KEY", prior)?;
+        }
+        Ok(())
     }
 
     fn facade<'py>(py: Python<'py>, body: &str) -> Bound<'py, PyAny> {
@@ -1080,12 +1092,7 @@ sys.modules['litellm.caching._embedding_router'] = embedding_router
             assert_eq!(config.vector_size, 8);
             assert_eq!(config.embedding.api_key, "embedding-key");
             assert_eq!(config.embedding.model, "text-embedding-3-small");
-            let environ = py.import("os").unwrap().getattr("environ").unwrap();
-            if prior.is_none() {
-                environ.del_item("OPENAI_API_KEY").unwrap();
-            } else {
-                environ.set_item("OPENAI_API_KEY", prior).unwrap();
-            }
+            restore_embedding_environment(py, prior).unwrap();
         });
     }
 
@@ -1105,12 +1112,7 @@ sys.modules['litellm.caching._embedding_router'] = embedding_router
                 panic!("non-default Qdrant port should stay on Python");
             };
             assert!(matches!(reason, UnsupportedCacheConfig::QdrantEndpoint));
-            let environ = py.import("os").unwrap().getattr("environ").unwrap();
-            if prior.is_none() {
-                environ.del_item("OPENAI_API_KEY").unwrap();
-            } else {
-                environ.set_item("OPENAI_API_KEY", prior).unwrap();
-            }
+            restore_embedding_environment(py, prior).unwrap();
         });
     }
 
@@ -1133,12 +1135,7 @@ sys.modules['litellm.caching._embedding_router'] = embedding_router
                 };
                 assert!(matches!(reason, UnsupportedCacheConfig::SemanticEmbedding));
             }
-            let environ = py.import("os").unwrap().getattr("environ").unwrap();
-            if prior.is_none() {
-                environ.del_item("OPENAI_API_KEY").unwrap();
-            } else {
-                environ.set_item("OPENAI_API_KEY", prior).unwrap();
-            }
+            restore_embedding_environment(py, prior).unwrap();
         });
     }
 
@@ -1167,12 +1164,7 @@ sys.modules['litellm.caching._embedding_router'] = embedding_router
                 panic!("missing embedding key should stay on Python");
             };
             assert!(matches!(reason, UnsupportedCacheConfig::SemanticEmbedding));
-            let environ = py.import("os").unwrap().getattr("environ").unwrap();
-            if prior.is_none() {
-                environ.del_item("OPENAI_API_KEY").unwrap();
-            } else {
-                environ.set_item("OPENAI_API_KEY", prior).unwrap();
-            }
+            restore_embedding_environment(py, prior).unwrap();
         });
     }
 
@@ -1193,12 +1185,7 @@ sys.modules['litellm.caching._embedding_router'] = embedding_router
                 config.service_mismatch(&service),
                 Some("facade and native backend types must match")
             );
-            let environ = py.import("os").unwrap().getattr("environ").unwrap();
-            if prior.is_none() {
-                environ.del_item("OPENAI_API_KEY").unwrap();
-            } else {
-                environ.set_item("OPENAI_API_KEY", prior).unwrap();
-            }
+            restore_embedding_environment(py, prior).unwrap();
         });
     }
 }
