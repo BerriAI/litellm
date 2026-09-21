@@ -9037,6 +9037,8 @@ class ProviderConfigManager:
             return VLLMModelInfo()
         elif LlmProviders.LEMONADE == provider:
             return litellm.LemonadeChatConfig()
+        elif LlmProviders.NEBIUS == provider:
+            return litellm.NebiusConfig()
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
         elif LlmProviders.BEDROCK == provider:
