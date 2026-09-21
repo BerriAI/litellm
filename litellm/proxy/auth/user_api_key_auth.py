@@ -907,6 +907,13 @@ _JWT_AUTH_DISABLED_HINT = (
     " with JWTs."
 )
 
+_ANTHROPIC_OAUTH_KEY_HINT: Final = (
+    " This key has the structure of an Anthropic OAuth token rather than a LiteLLM virtual key. To route Claude"
+    " Code through this proxy on a subscription, send the virtual key in the `x-litellm-api-key` header (e.g."
+    ' `ANTHROPIC_CUSTOM_HEADERS="x-litellm-api-key: Bearer sk-..."`) and leave `Authorization` carrying the'
+    " OAuth token so it can be forwarded to Anthropic."
+)
+
 
 class _PendingAutoRegister(NamedTuple):
     """
@@ -2094,11 +2101,15 @@ async def _user_api_key_auth_builder(
 
         ## Check DB
 
+        from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
+        _oauth_key_hint: Final = _ANTHROPIC_OAUTH_KEY_HINT if is_anthropic_oauth_key(api_key) else ""
+
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
             raise ProxyException(
-                message="No connected db.",
+                message=f"No connected db.{_oauth_key_hint}",
                 type=ProxyErrorTypes.no_db_connection,
                 code=400,
                 param=None,
@@ -2142,7 +2153,7 @@ async def _user_api_key_auth_builder(
                     )
             except ProxyException as e:
                 if e.code == 401 or e.code == "401":
-                    e.message = f"Authentication Error, Invalid proxy server token passed. Received API Key = {abbreviated_api_key}, Key Hash (Token) ={api_key}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`"
+                    e.message = f"Authentication Error, Invalid proxy server token passed. Received API Key = {abbreviated_api_key}, Key Hash (Token) ={api_key}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`{_oauth_key_hint}"
                 raise e
             # update end-user params on valid token
             # These can change per request - it's important to update them here

@@ -9043,3 +9043,49 @@ async def test_router_settings_model_group_alias_authorizes_target_for_team(monk
     await authorize()
     assert (await request.json())["model"] == target
     assert get_client_requested_model(request) == "AgentX-LLM"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_oauth_token_as_proxy_credential_explains_the_header_split():
+    """A Claude Code subscription user who sends only the OAuth token gets it treated as a
+    virtual key, so the rejection has to name the header the virtual key belongs in."""
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.headers = {"authorization": "Bearer sk-ant-oat01-subscription-token"}
+    mock_request.query_params = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await user_api_key_auth(
+                request=mock_request,
+                api_key="Bearer sk-ant-oat01-subscription-token",
+            )
+
+    assert "x-litellm-api-key" in str(exc_info.value.message)
+
+
+@pytest.mark.asyncio
+async def test_non_oauth_key_rejection_stays_free_of_the_subscription_hint():
+    """The hint is specific to OAuth-shaped credentials, so an ordinary bad key must not
+    pick up subscription advice that does not apply to it."""
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.headers = {"authorization": "Bearer sk-an-ordinary-wrong-key"}
+    mock_request.query_params = {}
+
+    with (
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await user_api_key_auth(
+                request=mock_request,
+                api_key="Bearer sk-an-ordinary-wrong-key",
+            )
+
+    assert "x-litellm-api-key" not in str(exc_info.value.message)
