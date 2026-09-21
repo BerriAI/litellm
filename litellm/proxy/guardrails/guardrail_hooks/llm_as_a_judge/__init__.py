@@ -3,11 +3,11 @@
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Generic, Literal, Optional, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, Literal, Optional, TypeVar
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, ValidationError
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 import litellm
 from litellm._logging import verbose_logger
@@ -177,6 +177,23 @@ def _build_judge_prompt(
     )
 
 
+class _CustomGuardrailOptions(TypedDict, total=False):
+    """The ``CustomGuardrail`` options this guardrail accepts and forwards untouched."""
+
+    mask_request_content: ReadOnly[bool]
+    mask_response_content: ReadOnly[bool]
+    violation_message_template: ReadOnly[str | None]
+    end_session_after_n_fails: ReadOnly[int | None]
+    on_violation: ReadOnly[str | None]
+    realtime_violation_message: ReadOnly[str | None]
+    on_sensitive_data: ReadOnly[str | None]
+    sensitive_data_route_to_model: ReadOnly[str | None]
+    sticky_session_routing: ReadOnly[bool]
+    run_in_parallel: ReadOnly[bool]
+    scan_raw_request: ReadOnly[bool]
+    only_scan_new_messages: ReadOnly[bool]
+
+
 class LLMAsAJudgeGuardrail(CustomGuardrail):
     """Guardrail that judges request (pre_call/during_call) or response (post_call) quality via an LLM."""
 
@@ -190,7 +207,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         event_hook: JudgeModeParam = None,
         default_on: bool = False,
         router_provider: "Callable[[], Router | None] | None" = None,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         super().__init__(
             guardrail_name=guardrail_name,

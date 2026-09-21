@@ -25,6 +25,7 @@ litellm-cache-azure-blob.workspace = true
 litellm-cache-memory.workspace = true
 litellm-cache-redis.workspace = true
 litellm-cache-s3.workspace = true
+litellm-cache-disk.workspace = true
 litellm-cache-response.workspace = true
 serde.workspace = true
 litellm-auth.workspace = true
