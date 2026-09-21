@@ -321,7 +321,9 @@ _OAuthDiscoveryOutcome: TypeAlias = _OAuthDiscoveryResolved | _OAuthDiscoveryFai
 
 @dataclass(frozen=True, slots=True)
 class _ListHeaders:
-    upstream: dict[str, str] | None
+    upstream: (
+        dict[str, str] | None
+    )  # mutable-ok: relayed into MCPClient.extra_headers (dict[str, str]); built fresh per request, never mutated after hand-off
     signed_for_user: bool
     minted: frozenset[str] = frozenset()
 
@@ -4506,9 +4508,9 @@ class MCPServerManager:
         server: MCPServer,
         *,
         user_api_key_auth: UserAPIKeyAuth | None,
-        mcp_auth_header: str | dict[str, str] | None,
-        extra_headers: dict[str, str] | None,
-        raw_headers: dict[str, str] | None,
+        mcp_auth_header: str | Mapping[str, str] | None,
+        extra_headers: Mapping[str, str] | None,
+        raw_headers: Mapping[str, str] | None,
     ) -> _ListHeaders:
         """Listing stays best-effort on missing per-user env vars, and the JWT signer never overrides an
         Authorization already supplied by static headers, a per-user auth header, or extra_headers."""

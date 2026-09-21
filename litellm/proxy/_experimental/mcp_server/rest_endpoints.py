@@ -226,7 +226,7 @@ if MCP_AVAILABLE:
         component gets a name distinct from the prompt-management ``Prompt`` request model."""
 
     class ListMCPPromptsRestAPIResponse(BaseModel):
-        prompts: list[MCPCatalogPrompt]
+        prompts: Sequence[MCPCatalogPrompt]
 
         @classmethod
         def from_prompts(cls, prompts: Sequence[Prompt]) -> "ListMCPPromptsRestAPIResponse":
@@ -238,16 +238,20 @@ if MCP_AVAILABLE:
             )
 
     class ListMCPResourcesRestAPIResponse(BaseModel):
-        resources: list[Resource]
-        resource_templates: list[ResourceTemplate]
+        resources: Sequence[Resource]
+        resource_templates: Sequence[ResourceTemplate]
 
     @dataclass(frozen=True, slots=True)
     class _CatalogServerContext:
         server: MCPServer
         user_api_key_dict: UserAPIKeyAuth
-        mcp_auth_header: dict[str, str] | str | None
-        extra_headers: dict[str, str] | None
-        raw_headers: dict[str, str]
+        mcp_auth_header: (
+            dict[str, str] | str | None
+        )  # mutable-ok: relayed verbatim into dict-typed auth-resolution params on the manager
+        extra_headers: (
+            dict[str, str] | None
+        )  # mutable-ok: relayed to dict-typed manager params; read-only on this object
+        raw_headers: dict[str, str]  # mutable-ok: relayed to dict-typed manager params; read-only on this object
 
     ########################################################
     ############ MCP Server REST API Routes #################
