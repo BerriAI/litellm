@@ -3460,8 +3460,6 @@ async def test_acompletion_mid_stream_fallback_walks_every_entry_of_the_configur
     from litellm.exceptions import MidStreamFallbackError
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
-    attempted_model_groups: list[str] = []
-
     class FailingStream(CustomStreamWrapper):
         def __init__(self, model: str):
             super().__init__(
@@ -3497,7 +3495,6 @@ async def test_acompletion_mid_stream_fallback_walks_every_entry_of_the_configur
                 raise StopAsyncIteration from None
 
     async def fake_acompletion(**kwargs):
-        attempted_model_groups.append(kwargs["metadata"]["model_group"])
         if "fb2" in kwargs["model"]:
             return OkStream(kwargs["model"])
         return FailingStream(kwargs["model"])
@@ -3512,14 +3509,18 @@ async def test_acompletion_mid_stream_fallback_walks_every_entry_of_the_configur
         num_retries=0,
     )
 
-    with patch("litellm.acompletion", side_effect=fake_acompletion):
+    with patch("litellm.acompletion", side_effect=fake_acompletion) as mock_acompletion:
         response = await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}], stream=True)
         content: Final = "".join(
             [chunk.choices[0].delta.content or "" async for chunk in response if chunk is not None]
         )
 
     assert content == "ok-from-openai/fb2-model"
-    assert attempted_model_groups == ["primary", "fb1", "fb2"]
+    assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == [
+        "primary",
+        "fb1",
+        "fb2",
+    ]
 
 
 def test_refusal_on_the_last_fallback_hop_is_returned_instead_of_raised():
