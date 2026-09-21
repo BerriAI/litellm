@@ -64,9 +64,7 @@ async def stop_in_flight_scheduler_jobs(
             len(in_flight),
         )
     still_running: Final = (
-        (await asyncio.wait(in_flight, timeout=finish_timeout_seconds))[1]
-        if in_flight
-        else frozenset()
+        (await asyncio.wait(in_flight, timeout=finish_timeout_seconds))[1] if in_flight else frozenset()
     )
     scheduler.shutdown(wait=False)
     if not still_running:
