@@ -73,9 +73,18 @@ pub(super) struct RedisCacheConfig {
     pub(super) connection: RedisConnectionConfig,
 }
 
+#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
+pub(super) struct ValkeySemanticCacheConfig {
+    pub(super) similarity_threshold: f64,
+    pub(super) index_name: String,
+    pub(super) embedding_model: String,
+    pub(super) connection: RedisConnectionConfig,
+}
+
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
+    ValkeySemantic(Box<ValkeySemanticCacheConfig>),
 }
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
@@ -142,9 +151,15 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::ValkeySemantic) => match project_valkey_semantic(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::ValkeySemantic(Box::new(backend)),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
             Some(
                 CacheType::RedisSemantic
-                | CacheType::ValkeySemantic
                 | CacheType::S3
                 | CacheType::Disk
                 | CacheType::QdrantSemantic
@@ -158,11 +173,13 @@ impl NativeCacheConfig {
     }
 
     pub(super) fn service_mismatch(&self, service: &NativeResponseCache) -> Option<&'static str> {
-        if service.default_ttl()
-            != Some(match &self.backend {
-                CacheBackendConfig::Memory(config) => config.default_ttl,
-                CacheBackendConfig::Redis(config) => config.default_ttl,
-            })
+        if !matches!(self.backend, CacheBackendConfig::ValkeySemantic(_))
+            && service.default_ttl()
+                != Some(match &self.backend {
+                    CacheBackendConfig::Memory(config) => config.default_ttl,
+                    CacheBackendConfig::Redis(config) => config.default_ttl,
+                    CacheBackendConfig::ValkeySemantic(_) => Duration::ZERO,
+                })
         {
             return Some("facade and native backend default TTLs must match");
         }
@@ -185,6 +202,16 @@ impl NativeCacheConfig {
             CacheBackendConfig::Redis(config) => (service.namespace()
                 != config.namespace.as_deref())
             .then_some("facade and native backend namespaces must match"),
+            CacheBackendConfig::ValkeySemantic(config) => {
+                if service.kind() != "valkey-semantic" {
+                    return Some("facade and native backend types must match");
+                }
+                let Some((threshold, index_name)) = service.semantic_config() else {
+                    return Some("facade and native backend types must match");
+                };
+                (threshold != config.similarity_threshold || index_name != config.index_name)
+                    .then_some("facade and native semantic settings must match")
+            }
         }
     }
 }
@@ -296,6 +323,51 @@ fn project_redis(
             client_name: optional_dict_string(&resolved, "client_name")?,
             tls,
         },
+    }))
+}
+
+#[inline(never)]
+fn project_valkey_semantic(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<ValkeySemanticCacheConfig, UnsupportedCacheConfig>> {
+    let client = backend.getattr("sync_client")?;
+    let pool = client.getattr("connection_pool")?;
+    if !instance_class_is(&pool, "redis.connection", "ConnectionPool")? {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    let resolved = pool.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
+    let connection_class = resolved
+        .get_item("connection_class")?
+        .unwrap_or(pool.getattr("connection_class")?);
+    if !class_is(&connection_class, "redis.connection", "Connection")?
+        && !class_is(&connection_class, "redis.connection", "SSLConnection")?
+    {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    let connection = RedisConnectionConfig {
+        host: required_string(&resolved, "host")?,
+        port: u16::try_from(required_i64(&resolved, "port")?)
+            .map_err(|_| PyValueError::new_err("invalid Redis port"))?,
+        database: optional_i64(&resolved, "db")?.unwrap_or(0),
+        username: optional_dict_string(&resolved, "username")?,
+        password: optional_dict_string(&resolved, "password")?,
+        protocol: RedisProtocol::Resp2,
+        pool_size: pool.getattr("max_connections")?.extract::<usize>()?,
+        read_timeout: None,
+        connect_timeout: None,
+        socket_keepalive: None,
+        health_check_interval: Duration::ZERO,
+        client_name: None,
+        tls: None,
+    };
+    if connection.host.is_empty() {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    Ok(Ok(ValkeySemanticCacheConfig {
+        similarity_threshold: backend.getattr("similarity_threshold")?.extract()?,
+        index_name: backend.getattr("index_name")?.extract()?,
+        embedding_model: backend.getattr("embedding_model")?.extract()?,
+        connection,
     }))
 }
 
