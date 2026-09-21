@@ -1,7 +1,9 @@
 from collections.abc import Mapping
-from typing import Final, assert_never
+from functools import reduce
+from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 from litellm.types.utils import StandardLoggingZeroCostDiagnostic, Usage
 
@@ -13,6 +15,7 @@ _TEXT_OUTPUT_RATE: Final = "output_cost_per_token"
 _AUDIO_OUTPUT_RATE: Final = "output_cost_per_audio_token"
 _RATE_KEY_MARKERS: Final = ("cost", "pricing")
 _NESTED_PRICING: Final = TypeAdapter(Mapping[str, object] | tuple[object, ...])
+_MAX_PRICING_DEPTH: Final = 4
 
 
 def _audio_tokens(details: object) -> int:
@@ -45,26 +48,31 @@ def _nested_pricing(value: object) -> Mapping[str, object] | tuple[object, ...] 
         return None
 
 
-def _is_positive_rate(value: object) -> bool:
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, (int, float)):
-        return value > 0
+def _is_rate_key(key: str) -> bool:
+    return any(marker in key for marker in _RATE_KEY_MARKERS)
+
+
+def _rate_values(value: object) -> tuple[object, ...]:
     match _nested_pricing(value):
         case Mapping() as entry:
-            return _declares_a_rate(entry)
+            return tuple(nested for key, nested in entry.items() if _is_rate_key(key))
         case tuple() as items:
-            return any(_is_positive_rate(item) for item in items)
+            return items
         case None:
-            return False
+            return (value,)
+
+
+def _expand_rate_values(values: tuple[object, ...], _depth: int) -> tuple[object, ...]:
+    return tuple(nested for value in values for nested in _rate_values(value))
+
+
+def _is_positive_number(value: object) -> bool:
+    return not isinstance(value, bool) and isinstance(value, (int, float)) and value > 0
 
 
 def _declares_a_rate(pricing_entry: Mapping[str, object]) -> bool:
-    return any(
-        _is_positive_rate(value)
-        for key, value in pricing_entry.items()
-        if any(marker in key for marker in _RATE_KEY_MARKERS)
-    )
+    leaves: Final = reduce(_expand_rate_values, range(_MAX_PRICING_DEPTH), (pricing_entry,))
+    return any(_is_positive_number(leaf) for leaf in leaves)
 
 
 def _is_explicit_zero(value: object) -> bool:
