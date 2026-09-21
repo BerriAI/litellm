@@ -300,7 +300,7 @@ fn project_qdrant_semantic(
         || !parsed.path().is_empty() && parsed.path() != "/"
         || parsed.query().is_some()
         || parsed.host_str().is_none()
-        || parsed.port().is_some_and(|port| port != 6333)
+        || parsed.port() != Some(6333)
     {
         return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint));
     }
@@ -330,7 +330,7 @@ fn project_qdrant_semantic(
         let embedding_router = backend.py().import("litellm.caching._embedding_router")?;
         if !embedding_router
             .getattr("resolve_embedding_router")?
-            .call1((embedding_model.as_str(), router, model_list))?
+            .call1((configured_model.as_str(), router, model_list))?
             .is_none()
         {
             return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
@@ -1140,16 +1140,70 @@ sys.modules['litellm.caching._embedding_router'] = embedding_router
         Python::initialize();
         Python::attach(|py| {
             let prior = configure_embedding_environment(py, Some("embedding-key")).unwrap();
-            let facade = qdrant_facade(
-                py,
-                "backend.qdrant_api_base = 'https://qdrant.example:6332'",
-            );
+            for endpoint in [
+                "https://qdrant.example:6332",
+                "https://qdrant.example",
+                "http://qdrant.example",
+            ] {
+                let facade = qdrant_facade(py, &format!("backend.qdrant_api_base = '{endpoint}'"));
+                let CacheConfigProjection::Unsupported(reason) =
+                    NativeCacheConfig::project(&facade).unwrap()
+                else {
+                    panic!("unsupported Qdrant endpoint should stay on Python");
+                };
+                assert!(matches!(reason, UnsupportedCacheConfig::QdrantEndpoint));
+            }
+            let facade = qdrant_facade(py, "");
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("default Qdrant endpoint should use native");
+            };
+            let CacheBackendConfig::QdrantSemantic(config) = config.backend else {
+                panic!("expected Qdrant configuration");
+            };
+            assert!(config.grpc_url.ends_with(":6334"));
+            restore_embedding_environment(py, prior).unwrap();
+        });
+    }
+
+    #[test]
+    fn qdrant_projection_passes_configured_embedding_model_to_router() {
+        let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+        Python::initialize();
+        Python::attach(|py| {
+            let prior = configure_embedding_environment(py, Some("embedding-key")).unwrap();
+            let facade = qdrant_facade(py, "");
+            py.run(
+                c"
+import sys
+import types
+proxy_server = types.ModuleType('litellm.proxy.proxy_server')
+proxy_server.llm_router = None
+proxy_server.llm_model_list = None
+sys.modules['litellm.proxy.proxy_server'] = proxy_server
+embedding_router = sys.modules['litellm.caching._embedding_router']
+embedding_router.resolve_embedding_router = lambda model, *_args: object() if model == 'openai/text-embedding-3-small' else None
+",
+                None,
+                None,
+            )
+            .unwrap();
             let CacheConfigProjection::Unsupported(reason) =
                 NativeCacheConfig::project(&facade).unwrap()
             else {
-                panic!("non-default Qdrant port should stay on Python");
+                panic!("router-backed embedding should stay on Python");
             };
-            assert!(matches!(reason, UnsupportedCacheConfig::QdrantEndpoint));
+            assert!(matches!(reason, UnsupportedCacheConfig::SemanticEmbedding));
+            py.run(
+                c"
+import sys
+sys.modules.pop('litellm.proxy.proxy_server', None)
+",
+                None,
+                None,
+            )
+            .unwrap();
             restore_embedding_environment(py, prior).unwrap();
         });
     }

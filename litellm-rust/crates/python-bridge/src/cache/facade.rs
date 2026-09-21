@@ -354,7 +354,7 @@ impl FacadeGuard {
             return Err(PyTypeError::new_err(message));
         }
         let backend_config_names = match kind {
-            "memory" | "redis" => &[
+            "memory" | "redis" | "azure-blob" => &[
                 "namespace",
                 "default_ttl",
                 "max_size_in_memory",
