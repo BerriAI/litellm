@@ -17386,7 +17386,9 @@ export interface paths {
          * Change Password
          * @description Change the calling user's own password.
          *
-         *     Requires the current password. The new password must differ from the
+         *     Only callable with the dashboard session issued by a username/password
+         *     login; SSO sessions and virtual keys are rejected with 403. Requires the
+         *     current password. The new password must differ from the
          *     current one and satisfy the configured password policy
          *     (`general_settings.password_policy_*`: minimum length, character classes,
          *     and, when enabled, breached-password screening via haveibeenpwned.com).

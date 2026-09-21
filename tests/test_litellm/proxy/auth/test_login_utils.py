@@ -2138,7 +2138,7 @@ class TestPasswordResetRequiredSessionMinting:
         result, key_kwargs = await self._login(_prisma_with_user(row))
 
         assert key_kwargs["allowed_routes"] == ["/user/password/change"]
-        assert key_kwargs["metadata"] == {"password_reset_required": True}
+        assert key_kwargs["metadata"] == {"login_method": "username_password", "password_reset_required": True}
         assert result.password_reset_required is True
 
     @pytest.mark.asyncio
@@ -2147,7 +2147,7 @@ class TestPasswordResetRequiredSessionMinting:
         result, key_kwargs = await self._login(_prisma_with_user(row))
 
         assert key_kwargs["allowed_routes"] is None
-        assert not key_kwargs["metadata"]
+        assert key_kwargs["metadata"] == {"login_method": "username_password"}
         assert result.password_reset_required is False
 
     async def _login_with_screen_result(self, mock_prisma_client, breached: bool) -> tuple[LoginResult, dict, dict]:
@@ -2199,7 +2199,7 @@ class TestPasswordResetRequiredSessionMinting:
         result, key_kwargs, _ = await self._login_with_screen_result(mock_prisma_client, breached=True)
 
         assert key_kwargs["allowed_routes"] == ["/user/password/change"]
-        assert key_kwargs["metadata"] == {"password_reset_required": True}
+        assert key_kwargs["metadata"] == {"login_method": "username_password", "password_reset_required": True}
         assert result.password_reset_required is True
 
 
