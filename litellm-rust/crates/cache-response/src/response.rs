@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{BaseCache, BatchEntry, CacheConnectionResult, CacheKwargs, Error};
+use serde_json::Value;
 
 use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
-use serde_json::Value;
 
 #[derive(Clone)]
 pub struct ResponseCacheRequest {
@@ -39,6 +39,10 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         Self { backend }
     }
 
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
     pub fn default_ttl(&self) -> Duration {
         self.backend.default_ttl()
     }
@@ -67,7 +71,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
             Err(Error::InvalidEntry) => None,
             Err(error) => return Err(error),
         };
-        Self::fresh_or_miss(entry, now, request.max_age)
+        Ok(Self::fresh_or_miss(entry, now, request.max_age))
     }
 
     pub async fn async_lookup(
@@ -87,7 +91,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
             Err(Error::InvalidEntry) => None,
             Err(error) => return Err(error),
         };
-        Self::fresh_or_miss(entry, now, request.max_age)
+        Ok(Self::fresh_or_miss(entry, now, request.max_age))
     }
 
     pub fn lookup_batch(
@@ -181,10 +185,25 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         entries: Vec<(ResponseCacheRequest, Value)>,
         now: Duration,
     ) -> Result<(), Error> {
+        self.async_store_entries(
+            entries
+                .into_iter()
+                .map(|(request, response)| (request, response, now))
+                .collect(),
+        )
+        .await
+    }
+
+    /// Stores entries that each carry the time they were produced, so a deferred write keeps
+    /// the freshness of its original response.
+    pub async fn async_store_entries(
+        &self,
+        entries: Vec<(ResponseCacheRequest, Value, Duration)>,
+    ) -> Result<(), Error> {
         let writable = entries
             .into_iter()
-            .filter(|(request, _)| request.controls.writes())
-            .map(|(request, response)| {
+            .filter(|(request, _, _)| request.controls.writes())
+            .map(|(request, response, now)| {
                 (
                     cache_key(&request.key),
                     CacheEntry {
@@ -227,7 +246,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         let mut values = vec![None; requests.len()];
         for ((index, request), entry) in readable.into_iter().zip(entries) {
             let response = match entry {
-                BatchEntry::Hit(entry) => Self::fresh_or_miss(Some(entry), now, request.max_age)?,
+                BatchEntry::Hit(entry) => Self::fresh_or_miss(Some(entry), now, request.max_age),
                 BatchEntry::Miss | BatchEntry::Invalid => None,
             };
             values[index] = response;
@@ -239,24 +258,9 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         entry: Option<CacheEntry>,
         now: Duration,
         max_age: Option<Duration>,
-    ) -> Result<Option<Value>, Error> {
-        match Self::fresh_response(entry, now, max_age) {
-            Err(Error::InvalidEntry) => Ok(None),
-            result => result,
-        }
-    }
-
-    fn fresh_response(
-        entry: Option<CacheEntry>,
-        now: Duration,
-        max_age: Option<Duration>,
-    ) -> Result<Option<Value>, Error> {
+    ) -> Option<Value> {
         entry
             .filter(|entry| entry.fresh(now, max_age))
-            .map(|entry| match (entry.timestamp, entry.response) {
-                (Some(_), Value::String(text)) => crate::codec::decode_value(&text),
-                (_, value) => Ok(value),
-            })
-            .transpose()
+            .map(|entry| entry.response)
     }
 }

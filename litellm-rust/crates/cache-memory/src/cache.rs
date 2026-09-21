@@ -1,7 +1,9 @@
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    cmp::Reverse,
+    collections::{BinaryHeap, HashMap},
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use litellm_cache::{
     BaseCache, CacheConnectionResult, CacheConnectionStatus, CacheKwargs, ClaimCache, CounterCache,
@@ -95,15 +97,13 @@ impl<V: Clone> InMemoryCache<V> {
         }
         let now = (self.now)();
         let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
-        Self::evict(&mut state, self.max_size_in_memory, now);
         let key = key.into();
-        state.values.insert(key.clone(), value);
+        Self::evict(&mut state, self.max_size_in_memory, now, &key);
         let expiration = state.expirations.get(&key).copied();
         if expiration.is_none_or(|expiration| expiration < now) {
-            let expiration = now + ttl.unwrap_or(self.default_ttl);
-            state.expirations.insert(key.clone(), expiration);
-            state.expiration_heap.push(Reverse((expiration, key)));
+            Self::set_expiration(&mut state, &key, now + ttl.unwrap_or(self.default_ttl));
         }
+        state.values.insert(key, value);
         Ok(CacheWrite::Stored)
     }
 
@@ -118,6 +118,10 @@ impl<V: Clone> InMemoryCache<V> {
             Self::remove(&mut state, key);
         }
         Ok(state.values.get(key).cloned())
+    }
+
+    pub fn max_size_in_memory(&self) -> usize {
+        self.max_size_in_memory
     }
 
     pub fn expires_at(&self, key: &str) -> Result<Option<Duration>, Error> {
@@ -144,7 +148,7 @@ impl<V: Clone> InMemoryCache<V> {
         Ok(())
     }
 
-    fn evict(state: &mut CacheState<V>, capacity: usize, now: Duration) {
+    fn evict(state: &mut CacheState<V>, capacity: usize, now: Duration, key: &str) {
         while let Some(Reverse((expiration, key))) = state.expiration_heap.peek().cloned() {
             if state.expirations.get(&key).copied() != Some(expiration) {
                 state.expiration_heap.pop();
@@ -155,6 +159,9 @@ impl<V: Clone> InMemoryCache<V> {
                 break;
             }
         }
+        if state.values.contains_key(key) {
+            return;
+        }
         while state.values.len() >= capacity {
             let Some(Reverse((expiration, key))) = state.expiration_heap.pop() else {
                 break;
@@ -162,6 +169,15 @@ impl<V: Clone> InMemoryCache<V> {
             if state.expirations.get(&key).copied() == Some(expiration) {
                 Self::remove(state, &key);
             }
+        }
+    }
+
+    fn set_expiration(state: &mut CacheState<V>, key: &str, expiration: Duration) {
+        if state.expirations.get(key).copied() != Some(expiration) {
+            state.expirations.insert(key.into(), expiration);
+            state
+                .expiration_heap
+                .push(Reverse((expiration, key.into())));
         }
     }
 
@@ -182,40 +198,44 @@ where
         eligible: &[V],
         kwargs: CacheKwargs,
     ) -> Result<V, Error> {
+        if self.max_size_in_memory == 0 {
+            return Ok(candidate);
+        }
         let now = (self.now)();
         let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
-        Self::evict(&mut state, self.max_size_in_memory, now);
-        let winner = match state.values.get(key) {
-            Some(existing) if eligible.is_empty() => existing.clone(),
-            Some(existing) if eligible.contains(existing) => existing.clone(),
-            _ => candidate,
-        };
-        let expiration = now + self.get_ttl(&kwargs);
+        Self::evict(&mut state, self.max_size_in_memory, now, key);
+        let existing = state
+            .values
+            .get(key)
+            .filter(|existing| eligible.is_empty() || eligible.contains(existing))
+            .cloned();
+        // Matches the Redis claim: an unconditional claim only extends its own winner.
+        if let Some(existing) = &existing
+            && eligible.is_empty()
+            && *existing != candidate
+        {
+            return Ok(existing.clone());
+        }
+        let winner = existing.unwrap_or(candidate);
+        Self::set_expiration(&mut state, key, now + self.get_ttl(&kwargs));
         state.values.insert(key.into(), winner.clone());
-        state.expirations.insert(key.into(), expiration);
-        state
-            .expiration_heap
-            .push(Reverse((expiration, key.into())));
         Ok(winner)
     }
 }
 
 impl CounterCache for InMemoryCache<f64> {
     fn increment_cache(&self, key: &str, amount: f64, kwargs: CacheKwargs) -> Result<f64, Error> {
+        if self.max_size_in_memory == 0 {
+            return Ok(amount);
+        }
         let now = (self.now)();
         let mut state = self.state.lock().map_err(|_| Error::Unavailable)?;
-        Self::evict(&mut state, self.max_size_in_memory, now);
+        Self::evict(&mut state, self.max_size_in_memory, now, key);
         let value = state.values.get(key).copied().unwrap_or_default() + amount;
-        let expiration = state
-            .expirations
-            .get(key)
-            .copied()
-            .unwrap_or_else(|| now + self.get_ttl(&kwargs));
+        if !state.expirations.contains_key(key) {
+            Self::set_expiration(&mut state, key, now + self.get_ttl(&kwargs));
+        }
         state.values.insert(key.into(), value);
-        state.expirations.insert(key.into(), expiration);
-        state
-            .expiration_heap
-            .push(Reverse((expiration, key.into())));
         Ok(value)
     }
 }
@@ -254,5 +274,21 @@ impl<V: Clone + Send + Sync + 'static> BaseCache for InMemoryCache<V> {
             message: "In-memory cache connection test successful".into(),
             error: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_increments_keep_one_heap_entry_per_expiration() {
+        let cache = InMemoryCache::<f64>::new(Some(4), None);
+        for _ in 0..100 {
+            cache
+                .increment_cache("counter", 1.0, CacheKwargs::default())
+                .unwrap();
+        }
+        assert_eq!(cache.state.lock().unwrap().expiration_heap.len(), 1);
     }
 }
