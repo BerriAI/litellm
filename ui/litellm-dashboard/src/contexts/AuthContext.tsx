@@ -24,6 +24,7 @@ type AuthContextValue = {
   premiumUser: boolean;
   disabledPersonalKeyCreation: boolean;
   showSSOBanner: boolean;
+  passwordResetRequired: boolean;
 
   setToken: React.Dispatch<React.SetStateAction<string | null>>;
   setUserID: React.Dispatch<React.SetStateAction<string | null>>;
@@ -46,6 +47,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [premiumUser, setPremiumUser] = useState(false);
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
   const [showSSOBanner, setShowSSOBanner] = useState(true);
+  const [passwordResetRequired, setPasswordResetRequired] = useState(false);
 
   // Load runtime UI config (populates proxyBaseUrl etc.) before clearing
   // authLoading, so any consumer that builds proxy-rooted URLs from authLoading=false
@@ -124,6 +126,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (decoded.user_id) {
       setUserID(decoded.user_id);
     }
+    setPasswordResetRequired(decoded.password_reset_required === true);
   }, [token]);
 
   const value: AuthContextValue = {
@@ -136,6 +139,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     premiumUser,
     disabledPersonalKeyCreation,
     showSSOBanner,
+    passwordResetRequired,
     setToken,
     setUserID,
     setUserRole,
