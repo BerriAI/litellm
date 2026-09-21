@@ -110,6 +110,23 @@ def test_output_tool_calls_use_the_datadog_tool_call_schema(logger: DataDogLLMOb
     assert "function" not in message["tool_calls"][0]
 
 
+def test_tool_call_identifiers_that_are_not_strings_are_blanked_not_stringified(logger: DataDogLLMObsLogger) -> None:
+    payload = build(
+        logger,
+        response_message={
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": {"nested": "call_1"}, "type": 7, "function": {"name": ["get_weather"], "arguments": "{}"}}
+            ],
+        },
+    )
+
+    assert payload["meta"]["output"]["messages"][0]["tool_calls"] == [
+        {"name": "", "arguments": {}, "tool_id": "", "type": ""}
+    ]
+
+
 def test_tool_calls_are_not_duplicated_into_metadata(logger: DataDogLLMObsLogger) -> None:
     """The flat `output_tool_calls.*` keys were a second copy of a fact that now has its own field."""
     payload = build(

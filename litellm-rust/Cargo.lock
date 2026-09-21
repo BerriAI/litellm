@@ -116,6 +116,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-stream"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b5a71a6f37880a80d1d7f19efd781e4b5de42c88f0722cc13bcb6cc2cfe8476"
+dependencies = [
+ "async-stream-impl",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "async-stream-impl"
+version = "0.3.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7c24de15d275a1ecfd47a380fb4d5ec9bfe0933f309ed5e705b775596a3574d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.91"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -600,6 +622,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "azure_storage_blob"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17b10207ecf7d666df6940b50051f433b3cd5d2b9b1dd190613208d7a84e7eed"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "azure_core",
+ "azure_storage_common",
+ "bytes",
+ "futures",
+ "percent-encoding",
+ "pin-project",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+]
+
+[[package]]
+name = "azure_storage_common"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0af2e6aeb8d76b17fc998f453c320913f73787b944e3cc29509d19411fa0321d"
+dependencies = [
+ "azure_core",
+ "serde",
+ "time",
+]
+
+[[package]]
 name = "base64"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -926,6 +979,12 @@ checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
 ]
+
+[[package]]
+name = "crc16"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "338089f42c427b86394a5ee60ff321da23a5c89c9d89514c829687b26359fcff"
 
 [[package]]
 name = "crc32fast"
@@ -1319,6 +1378,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "fallible-iterator"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2acce4a10f12dc2fb14a218589d4f1f62ef011b2d0cc4b3cb1bba8e94da14649"
+
+[[package]]
+name = "fallible-streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7360491ce676a36bf9bb3c56c1aa791658183a54d2744120f27285738d90465a"
+
+[[package]]
 name = "fancy-regex"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1368,6 +1439,12 @@ name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
+name = "foldhash"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "form_urlencoded"
@@ -1835,9 +1912,30 @@ checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 
 [[package]]
 name = "hashbrown"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "foldhash",
+]
+
+[[package]]
+name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+dependencies = [
+ "foldhash",
+]
+
+[[package]]
+name = "hashlink"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
+dependencies = [
+ "hashbrown 0.17.1",
+]
 
 [[package]]
 name = "heck"
@@ -2219,6 +2317,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
 
 [[package]]
+name = "iter-read"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071ed4cc1afd86650602c7b11aa2e1ce30762a1c27193201cb5cee9c6ebb1294"
+
+[[package]]
 name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2377,6 +2481,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
+name = "libsqlite3-sys"
+version = "0.38.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1d20bef17f513b9b3004532233187769cd072d790971f4e4da0e346eb6401e8"
+dependencies = [
+ "cc",
+ "pkg-config",
+ "vcpkg",
+]
+
+[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2461,6 +2576,38 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-cache-azure-blob"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "azure_storage_blob",
+ "futures-util",
+ "litellm-auth-azure",
+ "litellm-auth-types",
+ "litellm-cache",
+ "litellm-cache-response",
+ "serde_json",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "litellm-cache-disk"
+version = "0.1.0"
+dependencies = [
+ "litellm-cache",
+ "py_literal",
+ "rand 0.8.7",
+ "rstest",
+ "rusqlite",
+ "serde-pickle",
+ "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -2666,6 +2813,8 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-gcp",
  "litellm-cache",
+ "litellm-cache-azure-blob",
+ "litellm-cache-disk",
  "litellm-cache-memory",
  "litellm-cache-redis",
  "litellm-cache-response",
@@ -2682,6 +2831,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "serde_with",
  "tokio",
  "tokio-tungstenite",
 ]
@@ -2697,6 +2847,8 @@ dependencies = [
  "jsonwebtoken",
  "litellm-core-utils",
  "litellm-secrets-aws",
+ "litellm-secrets-azure",
+ "litellm-secrets-cyberark",
  "litellm-secrets-google",
  "litellm-secrets-types",
  "moka",
@@ -2723,6 +2875,46 @@ dependencies = [
  "litellm-core-utils",
  "litellm-secrets-types",
  "rstest",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "veil",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-secrets-azure"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth-azure",
+ "litellm-auth-types",
+ "litellm-core-utils",
+ "litellm-secrets-types",
+ "percent-encoding",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.19",
+ "tokio",
+ "veil",
+ "wiremock",
+]
+
+[[package]]
+name = "litellm-secrets-cyberark"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "litellm-core-utils",
+ "litellm-secrets-types",
+ "moka",
+ "percent-encoding",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
@@ -3488,6 +3680,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
+name = "quick-xml"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e660451e55124f798a69a5af3f49ccfbefbd41910eefd25caf2393e1f3473ec1"
+dependencies = [
+ "memchr",
+ "serde",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3709,9 +3911,11 @@ checksum = "2acbc41a996f7652b2ddd9dfd98cc4ff602cfd742ae35382f07f608405ab50ed"
 dependencies = [
  "arcstr",
  "combine",
+ "crc16",
  "itoa",
  "num-bigint 0.5.1",
  "percent-encoding",
+ "rand 0.10.2",
  "rustls 0.23.42",
  "rustls-native-certs",
  "ryu",
@@ -3902,6 +4106,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsqlite-vfs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
+dependencies = [
+ "hashbrown 0.16.1",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "rstest"
 version = "0.26.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3939,6 +4153,21 @@ dependencies = [
  "quote",
  "rand 0.8.7",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "rusqlite"
+version = "0.40.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23f2a97da3e3873c73cb2a2e71b35c40ff95e0b1eefa8d72d8499a6928c3b5b3"
+dependencies = [
+ "bitflags 2.13.1",
+ "fallible-iterator",
+ "fallible-streaming-iterator",
+ "hashlink",
+ "libsqlite3-sys",
+ "smallvec",
+ "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -4199,6 +4428,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-pickle"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b641fdc8bcf2781ee78b30c599700d64ad4f412976143e4c5d0b9df906bb4843"
+dependencies = [
+ "byteorder",
+ "iter-read",
+ "num-bigint 0.4.8",
+ "num-traits",
+ "serde",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4423,6 +4665,18 @@ dependencies = [
  "nom",
  "serde",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "sqlite-wasm-rs"
+version = "0.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
+dependencies = [
+ "cc",
+ "js-sys",
+ "rsqlite-vfs",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -5030,6 +5284,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures",
+ "quick-xml",
  "serde",
  "serde_json",
  "url",
@@ -5169,6 +5424,12 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vcpkg"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "veil"

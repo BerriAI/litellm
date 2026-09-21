@@ -750,6 +750,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "inception",
     "vercel_ai_gateway",
     "wandb",
+    "edenai",
     "ovhcloud",
     "lemonade",
     "docker_model_runner",
@@ -925,6 +926,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
+    "https://api.edenai.run/v3",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
@@ -994,6 +996,7 @@ openai_compatible_providers: Final[list] = [
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
+    "edenai",
     "wandb",
     "cometapi",
     "clarifai",
@@ -2118,3 +2121,6 @@ BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
 EMPTY_MAPPING: Final = MappingProxyType({})
+
+# API endpoint for breached password k-anonymity search
+HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"
