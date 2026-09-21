@@ -763,8 +763,8 @@ async def _prefetch_oauth_creds_for_user(
         )
         creds: Final = await list_user_oauth_credentials(prisma_client, user_id)
         return {c["server_id"]: c for c in creds if "server_id" in c}
-    except Exception as e:
-        verbose_logger.warning("_prefetch_oauth_creds_for_user: failed to prefetch for user=%s: %s", user_id, e)
+    except Exception:
+        verbose_logger.warning("_prefetch_oauth_creds_for_user: failed to prefetch OAuth credentials")
         return {}
 
 
@@ -3099,4 +3099,4 @@ class GatewayOperations:
             case ReadResourceRequest(params=params):
                 return await _execute_read_resource(context, params, self._host_progress_callback)
             case _:
-                assert_never(operation)
+                return assert_never(operation)
