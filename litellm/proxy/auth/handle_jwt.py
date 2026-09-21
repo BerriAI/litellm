@@ -16,7 +16,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
 import httpx
 import jwt
@@ -83,6 +83,9 @@ from .auth_checks import (
     get_team_object_by_alias,
     get_user_object,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 
 class NoMatchingJWTPublicKeyError(Exception):
@@ -155,6 +158,45 @@ class AgentLookup(Protocol):
 
     def get_agent_by_name(self, agent_name: str) -> AgentResponse | None:
         """The agent registered under ``agent_name``, if any."""
+
+
+class TeamLookup(Protocol):
+    """The team lookup used by JWT team selection."""
+
+    def __call__(
+        self,
+        *,
+        team_id: str,
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: UserApiKeyCache,
+        parent_otel_span: Span | None,
+        proxy_logging_obj: ProxyLogging,
+    ) -> Awaitable[LiteLLM_TeamTable | None]: ...
+
+
+class TeamModelAccessCheck(Protocol):
+    """The model access check used by JWT team selection."""
+
+    def __call__(
+        self,
+        *,
+        model: str,
+        team_object: LiteLLM_TeamTable,
+        llm_router: Router | None,
+        team_model_aliases: dict[str, str] | None,
+    ) -> Awaitable[bool]: ...
+
+
+class RouteCheck(Protocol):
+    """The route access check used by JWT team selection."""
+
+    def __call__(
+        self,
+        *,
+        user_role: LitellmUserRoles,
+        user_route: str,
+        litellm_proxy_roles: LiteLLM_JWTAuth,
+    ) -> bool: ...
 
 
 class _NoRegisteredAgents:
@@ -1589,13 +1631,11 @@ class JWTAuthManager:
         return individual_team_id, team_object
 
     @staticmethod
-    def get_all_team_ids(jwt_handler: JWTHandler, jwt_valid_token: dict) -> set[str]:
+    def get_all_team_ids(jwt_handler: JWTHandler, jwt_valid_token: dict) -> tuple[str, ...]:
         """Get combined team IDs from groups and individual team_id"""
         team_ids_from_groups: Final = jwt_handler.get_team_ids_from_jwt(token=jwt_valid_token)
 
-        all_team_ids: Final = set(team_ids_from_groups)
-
-        return all_team_ids
+        return tuple(dict.fromkeys(team_ids_from_groups))
 
     @staticmethod
     def _team_has_passthrough_route_access(
@@ -1629,7 +1669,7 @@ class JWTAuthManager:
 
     @staticmethod
     async def find_team_with_model_access(
-        team_ids: set[str],
+        team_ids: Sequence[str],
         requested_model: str | None,
         route: str,
         jwt_handler: JWTHandler,
@@ -1638,10 +1678,17 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         request_method: str | None = None,
+        *,
+        team_lookup: TeamLookup | None = None,
+        model_access_check: TeamModelAccessCheck | None = None,
+        route_check: RouteCheck | None = None,
     ) -> tuple[str | None, LiteLLM_TeamTable | None]:
         """Find first team with access to the requested model"""
         from litellm.proxy.proxy_server import llm_router
 
+        lookup_team: Final[TeamLookup] = team_lookup or get_team_object
+        check_model_access: Final[TeamModelAccessCheck] = model_access_check or can_team_access_model
+        check_route: Final[RouteCheck] = route_check or allowed_routes_check
         denied_auth_enforced_pass_through_route = False
 
         if not team_ids:
@@ -1658,7 +1705,7 @@ class JWTAuthManager:
         any_claim_team_resolved = False
         for team_id in team_ids:
             try:
-                team_object = await get_team_object(
+                team_object = await lookup_team(
                     team_id=team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
@@ -1671,16 +1718,17 @@ class JWTAuthManager:
 
                 if team_object and team_object.models is not None:
                     team_models = team_object.models
+                    aliases = team_model_aliases(team_object)
                     if isinstance(team_models, list) and (
                         not requested_model
-                        or await can_team_access_model(
+                        or await check_model_access(
                             model=requested_model,
                             team_object=team_object,
                             llm_router=llm_router,
-                            team_model_aliases=team_model_aliases(team_object),
+                            team_model_aliases=dict(aliases) if aliases is not None else None,
                         )
                     ):
-                        is_allowed = allowed_routes_check(
+                        is_allowed = check_route(
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
                             litellm_proxy_roles=jwt_handler.litellm_jwtauth,
@@ -1868,7 +1916,7 @@ class JWTAuthManager:
     @staticmethod
     def get_team_id_from_header(
         request_headers: Mapping[str, str] | None,
-        allowed_team_ids: set[str],
+        allowed_team_ids: Sequence[str],
         fallback_to_db_teams: bool = False,
     ) -> str | None:
         """
@@ -1877,7 +1925,7 @@ class JWTAuthManager:
 
         Args:
             request_headers: Dictionary of request headers
-            allowed_team_ids: Set of team IDs the user is allowed to access (from JWT)
+            allowed_team_ids: Sequence of team IDs the user is allowed to access (from JWT)
             fallback_to_db_teams: When True and the JWT carries no team claims
                 (allowed_team_ids is empty), the header value is returned
                 provisionally and validated against DB memberships later in
@@ -2487,7 +2535,7 @@ class JWTAuthManager:
 
         # Get team with model access
         ## Check if team_id is specified via x-litellm-team-id header
-        all_team_ids: Final = JWTAuthManager.get_all_team_ids(handler, jwt_valid_token)
+        claim_team_ids: Final = JWTAuthManager.get_all_team_ids(handler, jwt_valid_token)
         specific_team_id: Final = handler.get_team_id(token=jwt_valid_token, default_value=None)
 
         # The DB fallback only applies when the token carries no team identity at
@@ -2503,8 +2551,11 @@ class JWTAuthManager:
             and not handler.get_team_alias(token=jwt_valid_token, default_value=None)
             and team_id is None
         )
-        if specific_team_id and not db_team_fallback:
-            all_team_ids.add(specific_team_id)
+        all_team_ids: Final[tuple[str, ...]] = tuple(
+            dict.fromkeys(
+                (*claim_team_ids, specific_team_id) if specific_team_id and not db_team_fallback else claim_team_ids
+            )
+        )
 
         header_team_id: Final = JWTAuthManager.get_team_id_from_header(
             request_headers=request_headers,
