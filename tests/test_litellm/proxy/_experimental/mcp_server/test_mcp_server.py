@@ -1859,14 +1859,12 @@ async def test_concurrent_initialize_session_managers():
     original_initialized = mcp_server._SESSION_MANAGERS_INITIALIZED
     original_session_cm = mcp_server._session_manager_cm
     original_stateful_cm = mcp_server._session_manager_stateful_cm
-    original_sse_cm = mcp_server._sse_session_manager_cm
     original_cleanup_task = mcp_server._stateful_auth_context_cleanup_task
 
     try:
         mcp_server._SESSION_MANAGERS_INITIALIZED = False
         mcp_server._session_manager_cm = None
         mcp_server._session_manager_stateful_cm = None
-        mcp_server._sse_session_manager_cm = None
 
         # Create mock context managers for all three session managers
         mock_cm_stateless = AsyncMock()
@@ -1876,10 +1874,6 @@ async def test_concurrent_initialize_session_managers():
         mock_cm_stateful = AsyncMock()
         mock_cm_stateful.__aenter__ = AsyncMock()
         mock_cm_stateful.__aexit__ = AsyncMock()
-
-        mock_cm_sse = AsyncMock()
-        mock_cm_sse.__aenter__ = AsyncMock()
-        mock_cm_sse.__aexit__ = AsyncMock()
 
         with (
             patch.object(
@@ -1892,11 +1886,6 @@ async def test_concurrent_initialize_session_managers():
                 "run",
                 return_value=mock_cm_stateful,
             ) as mock_stateful_run,
-            patch.object(
-                mcp_server.sse_session_manager,
-                "run",
-                return_value=mock_cm_sse,
-            ) as mock_sse_run,
             patch("litellm.proxy._experimental.mcp_server.operations.verbose_logger"),
         ):
             # Create multiple concurrent tasks that call initialize_session_managers
@@ -1918,10 +1907,6 @@ async def test_concurrent_initialize_session_managers():
             assert mock_stateful_run.call_count == 1, (
                 f"Expected 1 call to session_manager_stateful.run(), got {mock_stateful_run.call_count}"
             )
-            assert mock_sse_run.call_count == 1, (
-                f"Expected 1 call to sse_session_manager.run(), got {mock_sse_run.call_count}"
-            )
-
             # The context managers should only be entered once each
             assert mock_cm_stateless.__aenter__.call_count == 1, (
                 f"Expected 1 call to stateless __aenter__, got {mock_cm_stateless.__aenter__.call_count}"
@@ -1929,10 +1914,6 @@ async def test_concurrent_initialize_session_managers():
             assert mock_cm_stateful.__aenter__.call_count == 1, (
                 f"Expected 1 call to stateful __aenter__, got {mock_cm_stateful.__aenter__.call_count}"
             )
-            assert mock_cm_sse.__aenter__.call_count == 1, (
-                f"Expected 1 call to sse __aenter__, got {mock_cm_sse.__aenter__.call_count}"
-            )
-
             # State should be properly set
             assert mcp_server._SESSION_MANAGERS_INITIALIZED is True
 
@@ -1948,7 +1929,6 @@ async def test_concurrent_initialize_session_managers():
         mcp_server._SESSION_MANAGERS_INITIALIZED = original_initialized
         mcp_server._session_manager_cm = original_session_cm
         mcp_server._session_manager_stateful_cm = original_stateful_cm
-        mcp_server._sse_session_manager_cm = original_sse_cm
         mcp_server._stateful_auth_context_cleanup_task = original_cleanup_task
 
 
@@ -2263,7 +2243,7 @@ async def test_sse_endpoint_applies_the_same_client_allowlist(
             new_callable=AsyncMock,
         ),
         patch.object(  # test-quality-ok: SSE manager is a module singleton; the downstream call is the observable
-            mcp_module.sse_session_manager, "handle_request", side_effect=handle_request
+            mcp_module.sse, "handle_post_message", side_effect=handle_request
         ),
     ):
         if admitted:
@@ -6651,17 +6631,22 @@ class TestGatewayCreateInitializationOptions:
         )
         captured = {}
 
-        async def record_request(scope, receive, send):
+        @contextlib.asynccontextmanager
+        async def connect_sse(scope, receive, send):
+            yield (None, None)
+
+        async def record_request(read_stream, write_stream, options):
             captured["server_name"] = server.create_initialization_options().server_name
 
         scope = {
             "type": "http",
-            "method": "POST",
+            "method": "GET",
             "path": "/mcp/grafana",
             "headers": [],
         }
 
         with (
+            patch.object(mcp_server.sse, "connect_sse", connect_sse),
             patch(
                 "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
                 new_callable=AsyncMock,
@@ -6697,8 +6682,8 @@ class TestGatewayCreateInitializationOptions:
                 True,
             ),
             patch.object(
-                mcp_server.sse_session_manager,
-                "handle_request",
+                mcp_server.server,
+                "run",
                 side_effect=record_request,
             ),
         ):
@@ -10260,7 +10245,10 @@ async def test_active_request_ctx_var_feeds_auth_resolution_recording(_mcp_reque
         ("1999-01-01", True),
     ],
 )
-async def test_streamable_http_rejects_modern_protocol_version(header_value: str, expected_rejected: bool) -> None:
+@pytest.mark.parametrize("handler", ("handle_streamable_http_mcp", "handle_sse_mcp"))
+async def test_streamable_http_rejects_modern_protocol_version(
+    header_value: str, expected_rejected: bool, handler: str
+) -> None:
     from litellm.proxy._experimental.mcp_server import server as mcp_module
     from litellm.proxy._experimental.mcp_server.server import unsupported_protocol_version
 
@@ -10283,7 +10271,7 @@ async def test_streamable_http_rejects_modern_protocol_version(header_value: str
     async def send(message: Message) -> None:
         sent.append(message)
 
-    await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+    await getattr(mcp_module, handler)(scope, receive, send)
 
     start = next(m for m in sent if m["type"] == "http.response.start")
     assert start["status"] == 400
@@ -10333,3 +10321,122 @@ async def test_tool_listing_preserves_permission_denial_when_failure_logging_fai
     logger.post_call_failure_hook.assert_awaited_once()
     assert logger.post_call_failure_hook.await_args.kwargs["original_exception"] is denial
     assert logger.post_call_failure_hook.await_args.kwargs["user_api_key_dict"] == auth
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix,suffix", (("", ""), ("/gateway", "/")))
+async def test_legacy_sse_mount_emits_message_endpoint(prefix: str, suffix: str) -> None:
+    from starlette.applications import Starlette
+    from starlette.routing import Mount
+    from litellm.proxy._experimental.mcp_server import server as mcp_server
+
+    app: Final = Starlette(routes=[Mount("/mcp", app=mcp_server.app)])
+    incoming: Final[asyncio.Queue[Message]] = asyncio.Queue()
+    outgoing: Final[asyncio.Queue[Message]] = asyncio.Queue()
+    await incoming.put({"type": "http.request", "body": b"", "more_body": False})
+    path: Final = f"{prefix}/mcp/sse{suffix}"
+    scope: Final[Scope] = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "root_path": prefix,
+        "server": ("localhost", 80),
+        "client": ("127.0.0.1", 1234),
+        "headers": [(b"accept", b"text/event-stream")],
+    }
+    auth: Final = UserAPIKeyAuth(api_key="test-owner")
+    with (
+        patch.object(
+            mcp_server, "extract_mcp_auth_context", AsyncMock(return_value=(auth, None, None, None, None, None))
+        ),
+        patch.object(mcp_server, "_raise_preemptive_401_for_unauthenticated_servers", AsyncMock()),
+        patch.object(mcp_server, "_check_passthrough_upstream_auth", AsyncMock()),
+        patch.object(mcp_server.operations, "_raise_if_initialize_grants_no_mcp_servers", AsyncMock()),
+        patch.object(mcp_server, "_SESSION_MANAGERS_INITIALIZED", True),
+    ):
+        task: Final = asyncio.create_task(app(scope, incoming.get, outgoing.put))
+        try:
+            start: Final = await asyncio.wait_for(outgoing.get(), 2)
+            assert start["type"] == "http.response.start"
+            assert start["status"] == 200
+            endpoint_frame: Final = await asyncio.wait_for(outgoing.get(), 2)
+            frame: Final = endpoint_frame["body"].decode()
+            assert "event: endpoint" in frame
+            endpoint: Final = frame.split("data: ", 1)[1].splitlines()[0]
+            assert endpoint.startswith(f"{prefix}/mcp/sse/messages?session_id=")
+            message_path, query = endpoint.split("?", 1)
+
+            async def post(body: bytes) -> int:
+                messages: Final[asyncio.Queue[Message]] = asyncio.Queue()
+                requests: Final[asyncio.Queue[Message]] = asyncio.Queue()
+                await requests.put({"type": "http.request", "body": body, "more_body": False})
+                post_scope: Final[Scope] = {
+                    **scope,
+                    "method": "POST",
+                    "path": message_path + suffix,
+                    "raw_path": (message_path + suffix).encode(),
+                    "query_string": query.encode(),
+                    "root_path": prefix,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+                await asyncio.wait_for(app(post_scope, requests.get, messages.put), 2)
+                return (await messages.get())["status"]
+
+            initialization: Final = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {"name": "legacy-client", "version": "1"},
+                    },
+                }
+            ).encode()
+            assert await post(initialization) == 202
+            reply: Final = (await asyncio.wait_for(outgoing.get(), 2))["body"].decode()
+            initialized: Final = json.loads(reply.split("data: ", 1)[1].splitlines()[0])
+            assert initialized["id"] == 1
+            assert initialized["result"]["serverInfo"]["name"] == "litellm-mcp-server"
+
+            from mcp.types import ListToolsResult
+
+            assert await post(b'{"jsonrpc":"2.0","method":"notifications/initialized"}') == 202
+            for request_id, marker in ((2, "first-post"), (3, "second-post")):
+                post_auth: Final = UserAPIKeyAuth(api_key="test-owner", user_id=marker)
+                listing: Final = AsyncMock(return_value=ListToolsResult(tools=[]))
+                with (
+                    patch.object(
+                        mcp_server,
+                        "extract_mcp_auth_context",
+                        AsyncMock(return_value=(post_auth, None, None, None, None, {"x-request-marker": marker})),
+                    ),
+                    patch.object(mcp_server.operations, "_get_tools_from_mcp_servers", listing),
+                ):
+                    assert (
+                        await post(json.dumps({"jsonrpc": "2.0", "id": request_id, "method": "tools/list"}).encode())
+                        == 202
+                    )
+                    listed_frame: Final = (await asyncio.wait_for(outgoing.get(), 2))["body"].decode()
+                    listed: Final = json.loads(listed_frame.split("data: ", 1)[1].splitlines()[0])
+                    assert listed["id"] == request_id
+                    assert listed["result"]["tools"] == []
+                    listing.assert_awaited_once()
+                    assert listing.await_args.kwargs["user_api_key_auth"].user_id == marker
+                    assert listing.await_args.kwargs["raw_headers"] == {"x-request-marker": marker}
+
+            stranger: Final = UserAPIKeyAuth(api_key="different-owner")
+            with patch.object(
+                mcp_server, "extract_mcp_auth_context", AsyncMock(return_value=(stranger, None, None, None, None, None))
+            ):
+                assert await post(initialization) == 404
+        finally:
+            await incoming.put({"type": "http.disconnect"})
+            await asyncio.wait_for(task, 2)
+        assert await post(initialization) == 404

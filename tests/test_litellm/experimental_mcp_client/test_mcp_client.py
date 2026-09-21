@@ -568,6 +568,78 @@ class TestExecuteSessionOperationSurfacesTransportError:
         assert result == "done"
 
 
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_session_entry_failure_still_closes_transport(self, session_class):
+        failure: Final = RuntimeError("session dispatcher did not start")
+        session_class.return_value.__aenter__ = AsyncMock(side_effect=failure)
+        closed: Final = asyncio.Event()
+
+        async def close_transport(*args):
+            await anyio.lowlevel.checkpoint()
+            closed.set()
+
+        transport: Final = self._make_transport(close_transport)
+        client: Final = MCPClient(server_url="https://example.com/mcp")
+        with pytest.raises(RuntimeError) as caught:
+            await client._execute_session_operation(transport, AsyncMock())
+        assert caught.value is failure
+        assert closed.is_set()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("original_error", (False, True))
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_session_exit_cancellation_preserves_original_failure(self, session_class, original_error):
+        self._make_session(session_class, AsyncMock(return_value=None))
+        cancelled: Final = asyncio.CancelledError("cancelled while closing session")
+        session_class.return_value.__aexit__ = AsyncMock(side_effect=cancelled)
+        original: Final = RuntimeError("operation failed")
+        transport: Final = self._make_transport(None)
+        client: Final = MCPClient(server_url="https://example.com/mcp")
+
+        async def operation(session):
+            if original_error:
+                raise original
+            return "done"
+
+        with pytest.raises(RuntimeError if original_error else asyncio.CancelledError) as caught:
+            await client._execute_session_operation(transport, operation)
+        assert caught.value is (original if original_error else cancelled)
+        transport.__aexit__.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_session_and_termination_share_one_cleanup_deadline(self, session_class):
+        self._make_session(session_class, AsyncMock(return_value=None))
+        deleting: Final = asyncio.Event()
+
+        async def close_session(*args):
+            await anyio.sleep(1)
+
+        async def respond(request: httpx2.Request) -> httpx2.Response:
+            deleting.set()
+            await anyio.sleep_forever()
+            raise AssertionError("termination unexpectedly resumed")
+
+        client: Final = MCPClient(server_url="https://example.com/mcp")
+        http_client: Final = client._create_httpx_client_factory(transport=httpx2.MockTransport(respond))()
+        session_class.return_value.__aexit__ = AsyncMock(side_effect=close_session)
+
+        async def close_transport(*args):
+            await http_client.delete(client.server_url)
+
+        before: Final = anyio.current_time()
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await client._execute_session_operation(
+                    self._make_transport(close_transport), AsyncMock(return_value="completed"), http_client=http_client
+                )
+            assert deleting.is_set()
+            assert 4.8 <= anyio.current_time() - before < 5.8
+        finally:
+            await http_client.aclose()
+
+
 class TestMCPClientResolvedAuth:
     """A pre-resolved httpx2.Auth is attached to the upstream client's auth= slot."""
 
@@ -736,7 +808,7 @@ async def test_run_with_session_quiet_on_error_demotes_warning_to_debug():
     async def _op(_session):
         raise boom
 
-    async def _fake_exec(_transport_ctx, _operation):
+    async def _fake_exec(_transport_ctx, _operation, http_client=None):
         raise boom
 
     with patch.object(client, "_create_transport_context", return_value=(object(), None)):
@@ -1906,7 +1978,7 @@ async def test_optional_discovery_capabilities_and_errors(
                     "jsonrpc": "2.0",
                     "id": payload.id,
                     "result": {
-                        "protocolVersion": payload.params["protocolVersion"],
+                        "protocolVersion": (payload.params or {})["protocolVersion"],
                         "capabilities": {}
                         if outcome == "absent"
                         else {advertised if outcome == "other_capability" else capability: {}},
@@ -1985,7 +2057,7 @@ async def test_optional_discovery_uses_each_sessions_capabilities(supports_first
             return httpx2.Response(202)
         result: Final = (
             {
-                "protocolVersion": payload.params["protocolVersion"],
+                "protocolVersion": (payload.params or {})["protocolVersion"],
                 "capabilities": next(capabilities),
                 "serverInfo": {"name": "changing", "version": "1"},
             }
@@ -2030,7 +2102,7 @@ async def test_optional_discovery_preserves_cancellation(method: str) -> None:
                     "jsonrpc": "2.0",
                     "id": payload.id,
                     "result": {
-                        "protocolVersion": payload.params["protocolVersion"],
+                        "protocolVersion": (payload.params or {})["protocolVersion"],
                         "capabilities": {"resources": {}, "prompts": {}},
                         "serverInfo": {"name": "pending", "version": "1"},
                     },
@@ -2112,7 +2184,7 @@ async def test_optional_discovery_collects_all_pages(method: str, session_id: st
                     "jsonrpc": "2.0",
                     "id": payload.id,
                     "result": {
-                        "protocolVersion": payload.params["protocolVersion"],
+                        "protocolVersion": (payload.params or {})["protocolVersion"],
                         "capabilities": {"prompts": {}, "resources": {}},
                         "serverInfo": {"name": "paged", "version": "1"},
                     },
@@ -2200,7 +2272,7 @@ async def test_optional_discovery_rejects_incomplete_walks(
                     "jsonrpc": "2.0",
                     "id": payload.id,
                     "result": {
-                        "protocolVersion": payload.params["protocolVersion"],
+                        "protocolVersion": (payload.params or {})["protocolVersion"],
                         "capabilities": {"prompts": {}, "resources": {}},
                         "serverInfo": {"name": "interrupted", "version": "1"},
                     },
@@ -2281,7 +2353,7 @@ async def test_optional_discovery_allows_exhaustion_at_page_cap(method: str, mon
             return httpx2.Response(202)
         if payload.method == "initialize":
             result: Final = {
-                "protocolVersion": payload.params["protocolVersion"],
+                "protocolVersion": (payload.params or {})["protocolVersion"],
                 "capabilities": {"prompts": {}, "resources": {}},
                 "serverInfo": {"name": "empty-pages", "version": "1"},
             }
@@ -2455,3 +2527,141 @@ def test_public_mcp_import_preserves_incompatible_sdk_error() -> None:
     assert not isinstance(caught.value, ModuleNotFoundError)
     assert caught.value.__cause__ is None
     assert "litellm[mcp]" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("termination", ("ok", "failure", "hang"))
+async def test_outer_deadline_delivers_session_termination(termination: str) -> None:
+    deleted: Final = asyncio.Event()
+    started: Final = asyncio.Event()
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        await anyio.lowlevel.checkpoint()
+        if request.method == "DELETE":
+            first_termination: Final = not deleted.is_set()
+            deleted.set()
+            if termination == "hang" and first_termination:
+                await anyio.sleep_forever()
+            return httpx2.Response(500 if termination == "failure" else 200)
+        if request.method == "GET":
+            return httpx2.Response(405)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                headers={"mcp-session-id": "cancel-owned-session"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": (payload.params or {})["protocolVersion"],
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "cancellation-peer", "version": "1"},
+                    },
+                },
+            )
+        if payload.method == "tools/list":
+            return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {"tools": []}})
+        started.set()
+        await anyio.sleep_forever()
+        raise AssertionError("cancelled request resumed")
+
+    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
+    before: Final = anyio.current_time()
+    with pytest.raises(TimeoutError):
+        with anyio.fail_after(0.2):
+            await client.call_tool(CallToolRequestParams(name="slow", arguments={}), raise_on_error=True)
+    assert started.is_set()
+    assert deleted.is_set(), "Cancellation must deliver DELETE before returning to the caller"
+
+    assert anyio.current_time() - before < 6.5
+    assert await client.list_tools(raise_on_error=True) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("original_error", (False, True))
+async def test_task_cancellation_during_cleanup_preserves_failure(original_error: bool) -> None:
+    deleting: Final = asyncio.Event()
+    original: Final = RuntimeError("operation failed before teardown")
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            deleting.set()
+            await anyio.sleep_forever()
+        if request.method == "GET":
+            return httpx2.Response(405)
+        payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        return httpx2.Response(
+            200,
+            headers={"mcp-session-id": "cleanup-session"},
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {
+                    "protocolVersion": (payload.params or {})["protocolVersion"],
+                    "capabilities": {},
+                    "serverInfo": {"name": "cleanup-peer", "version": "1"},
+                },
+            },
+        )
+
+    async def operation(session: mcp_client_module.ClientSession) -> str:
+        if original_error:
+            raise original
+        return "completed"
+
+    client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
+    task: Final = asyncio.create_task(client.run_with_session(operation))
+    await asyncio.wait_for(deleting.wait(), 2)
+    task.cancel()
+    with pytest.raises(RuntimeError if original_error else asyncio.CancelledError) as caught:
+        await task
+    if original_error:
+        assert caught.value is original
+    else:
+        assert task.cancelled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("original_error", (False, True))
+@pytest.mark.parametrize("cancel_mode", ("task", "scope"))
+async def test_http_close_cancellation_cannot_turn_into_success(original_error: bool, cancel_mode: str) -> None:
+    closing: Final = asyncio.Event()
+    original: Final = RuntimeError("failed before HTTP close")
+
+    class ClosingHTTPClient(httpx2.AsyncClient):
+        async def aclose(self) -> None:
+            closing.set()
+            await anyio.sleep_forever()
+
+    class ClosingMCPClient(MCPClient):
+        def _create_transport_context(self):
+            http_client: Final = ClosingHTTPClient(transport=httpx2.MockTransport(lambda _: httpx2.Response(200)))
+            return streamable_http_client(self.server_url, http_client=http_client), http_client
+
+        async def _execute_session_operation(self, transport_ctx, operation, http_client=None):
+            if original_error:
+                raise original
+            return "completed"
+
+    client: Final = ClosingMCPClient(server_url="https://example.com/mcp")
+
+    async def invoke() -> str:
+        with anyio.fail_after(0.05 if cancel_mode == "scope" else None):
+            return await client.run_with_session(AsyncMock())
+
+    task: Final = asyncio.create_task(invoke())
+    await asyncio.wait_for(closing.wait(), 2)
+    if cancel_mode == "task":
+        task.cancel()
+    cancellation_type: Final = asyncio.CancelledError if cancel_mode == "task" else TimeoutError
+    with pytest.raises(RuntimeError if original_error else cancellation_type) as caught:
+        await task
+    if original_error:
+        assert caught.value is original
+    elif cancel_mode == "task":
+        assert task.cancelled()

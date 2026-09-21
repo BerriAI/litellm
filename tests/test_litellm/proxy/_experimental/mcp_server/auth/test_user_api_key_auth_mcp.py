@@ -3055,6 +3055,11 @@ class TestMCPDelegateAuthToUpstream:
         )
 
         cases = [
+            ("/mcp/sse", []),
+            ("/mcp/sse/", []),
+            ("/mcp/sse/messages", []),
+            ("/mcp/sse/messages/", []),
+            ("/sse/mcp", ["sse"]),
             # Single server, single segment.
             ("/mcp/foo", ["foo"]),
             # Server name with one embedded slash (two segments).
