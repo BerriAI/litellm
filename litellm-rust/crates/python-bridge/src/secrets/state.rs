@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, LazyLock, Mutex},
-};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_secrets::{SecretManager, SecretManagerState};
@@ -10,8 +7,9 @@ use pyo3::prelude::*;
 use super::config::SecretManagerSnapshot;
 use crate::coercion::ProjectionError;
 
-static STATES: LazyLock<Mutex<HashMap<SecretManagerSnapshot, Arc<SecretManagerState>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+#[allow(clippy::type_complexity)]
+static STATE: LazyLock<Mutex<Option<(SecretManagerSnapshot, Arc<SecretManagerState>)>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 pub(crate) fn secret_manager_state(
     py: Python<'_>,
@@ -20,11 +18,11 @@ pub(crate) fn secret_manager_state(
     let Some(system) = snapshot.system else {
         return Ok(Arc::new(SecretManagerState::default()));
     };
-    if let Some(state) = STATES
+    if let Some(state) = STATE
         .lock()
         .expect("secret manager state cache is not poisoned")
-        .get(&snapshot)
-        .cloned()
+        .as_ref()
+        .and_then(|(cached_snapshot, state)| (cached_snapshot == &snapshot).then(|| state.clone()))
     {
         return Ok(state);
     }
@@ -76,10 +74,10 @@ pub(crate) fn secret_manager_state(
         }
     };
     let state = Arc::new(SecretManagerState::new(backend, snapshot.settings.clone()));
-    STATES
+    STATE
         .lock()
         .expect("secret manager state cache is not poisoned")
-        .insert(snapshot, state.clone());
+        .replace((snapshot, state.clone()));
     Ok(state)
 }
 
@@ -154,6 +152,35 @@ mod tests {
             };
             let third = secret_manager_state(py, different).unwrap();
             assert!(!Arc::ptr_eq(&first, &third));
+        });
+    }
+
+    #[test]
+    fn switching_snapshots_replaces_the_cached_state() {
+        Python::initialize();
+        Python::attach(|py| {
+            let first_snapshot = SecretManagerSnapshot {
+                system: Some(KeyManagementSystem::Local),
+                settings: KeyManagementSettings {
+                    access_mode: AccessMode::ReadOnly,
+                    ..Default::default()
+                },
+            };
+            let second_snapshot = SecretManagerSnapshot {
+                system: Some(KeyManagementSystem::Local),
+                settings: KeyManagementSettings {
+                    hosted_keys: Some(vec!["different".into()]),
+                    ..Default::default()
+                },
+            };
+
+            let first = secret_manager_state(py, first_snapshot.clone()).unwrap();
+            let second = secret_manager_state(py, second_snapshot).unwrap();
+            let third = secret_manager_state(py, first_snapshot).unwrap();
+
+            assert!(!Arc::ptr_eq(&first, &second));
+            assert!(!Arc::ptr_eq(&first, &third));
+            assert!(!Arc::ptr_eq(&second, &third));
         });
     }
 }
