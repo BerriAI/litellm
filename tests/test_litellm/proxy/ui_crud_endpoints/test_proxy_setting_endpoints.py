@@ -1352,6 +1352,7 @@ class TestProxySettingEndpoints:
         mock_db_record = MagicMock()
         mock_db_record.ui_settings = {
             "disable_model_add_for_internal_users": True,
+            "require_auth_for_public_ai_hub": True,
         }
         mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
             return_value=mock_db_record
@@ -1376,10 +1377,12 @@ class TestProxySettingEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["values"]["disable_model_add_for_internal_users"] is True
+        assert data["values"]["disable_model_add_for_internal_users"] is False
         assert data["values"]["forward_client_headers_to_llm_api"] is True
-        assert data["source"]["disable_model_add_for_internal_users"] == "db"
+        assert data["values"]["require_auth_for_public_ai_hub"] is True
+        assert data["source"]["disable_model_add_for_internal_users"] == "config"
         assert data["source"]["forward_client_headers_to_llm_api"] == "config"
+        assert data["source"]["require_auth_for_public_ai_hub"] == "db"
 
     def test_get_ui_settings_schema_description_preserved_with_extensions(
         self, mock_auth, monkeypatch
