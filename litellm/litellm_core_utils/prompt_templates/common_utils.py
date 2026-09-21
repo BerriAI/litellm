@@ -95,9 +95,19 @@ def handle_messages_with_content_list_to_str_conversion(
     """
     for message in messages:
         texts = convert_content_list_to_str(message=message)
-        if texts:
+        if texts or _content_is_text_only_list(message.get("content")):
             message["content"] = texts
     return messages
+
+
+def _content_is_text_only_list(content: object) -> bool:
+    """True when ``content`` is a list made only of ``{"type": "text"}`` blocks
+    (an empty list counts: providers like Moonshot reject ``[]`` but accept ``""``)."""
+    if not isinstance(content, list):
+        return False
+    return all(
+        isinstance(block, dict) and block.get("type") == "text" for block in content
+    )
 
 
 def strip_name_from_message(message: AllMessageValues, allowed_name_roles: list[str] = ["user"]) -> AllMessageValues:

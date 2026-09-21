@@ -1846,3 +1846,89 @@ class TestEncryptedReasoningReplay:
         strip_encrypted_reasoning_from_messages(messages)
 
         assert messages == before
+
+
+def test_content_list_to_str_conversion_flattens_empty_text_block_to_empty_string():
+    """
+    A text-only content list holding an empty text part must be flattened to "".
+    Providers like Moonshot reject [{"type": "text", "text": ""}] with
+    "text content is empty" but accept content = "" (gh-42186).
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        handle_messages_with_content_list_to_str_conversion,
+    )
+
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
+            "content": [{"type": "text", "text": ""}],
+        },
+    ]
+    out = handle_messages_with_content_list_to_str_conversion(messages)
+    assert out[0]["content"] == ""
+
+
+def test_content_list_to_str_conversion_empty_list_becomes_empty_string():
+    """
+    An empty content list is also flattened to "" (Moonshot rejects [] with
+    "must not be empty" but accepts "").
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        handle_messages_with_content_list_to_str_conversion,
+    )
+
+    messages = [{"role": "assistant", "content": []}]
+    out = handle_messages_with_content_list_to_str_conversion(messages)
+    assert out[0]["content"] == ""
+
+
+def test_content_list_to_str_conversion_keeps_non_empty_text():
+    """
+    Non-empty text-only lists still flatten into the joined text string
+    (existing behaviour must not regress).
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        handle_messages_with_content_list_to_str_conversion,
+    )
+
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "hello"}, {"type": "text", "text": " world"}]},
+    ]
+    out = handle_messages_with_content_list_to_str_conversion(messages)
+    assert out[0]["content"] == "hello world"
+
+
+def test_content_is_text_only_list_rejects_multimodal_parts():
+    """
+    The text-only guard must reject content lists holding non-text blocks
+    (e.g. image_url), so providers that support multimodal payloads keep them.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        _content_is_text_only_list,
+    )
+
+    multimodal = [
+        {"type": "text", "text": "what is this?"},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+    ]
+    assert _content_is_text_only_list(multimodal) is False
+
+
+def test_content_list_to_str_conversion_keeps_tool_calls_on_empty_text_flatten():
+    """
+    Flattening an empty assistant text block to "" must keep the tool_calls field,
+    so the tool-call-only turn survives provider validation.
+    """
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        handle_messages_with_content_list_to_str_conversion,
+    )
+
+    message = {
+        "role": "assistant",
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "foo", "arguments": "{}"}}],
+        "content": [{"type": "text", "text": ""}],
+    }
+    out = handle_messages_with_content_list_to_str_conversion([message])
+    assert out[0]["content"] == ""
+    assert out[0]["tool_calls"] == message["tool_calls"]
