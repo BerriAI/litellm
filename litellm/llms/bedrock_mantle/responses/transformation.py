@@ -16,8 +16,8 @@ BaseAWSLLM._sign_request after the request body is finalized.
 """
 
 import json
-from collections.abc import Mapping
-from typing import Any, Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
+from collections.abc import Mapping, Sequence
+from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
@@ -142,9 +142,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return False
 
     @staticmethod
-    def _filter_unsupported_tools(tools: list[Any]) -> list[Any]:
+    def _filter_unsupported_tools(tools: "Sequence[object]") -> "list[object]":
         """Keep only tool types Mantle's Responses API accepts."""
-        kept: Final[list[Any]] = []
+        kept: Final[list[object]] = []
         dropped_types: Final[list[str]] = []
         for tool in tools:
             if not isinstance(tool, dict):

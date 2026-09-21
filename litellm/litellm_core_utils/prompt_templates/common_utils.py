@@ -13,14 +13,6 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
 
-from openai.types.chat.chat_completion_custom_tool_param import (
-    CustomFormatGrammar,
-    CustomFormatGrammarGrammar,
-)
-from openai.types.shared_params.custom_tool_input_format import (
-    Grammar as ResponsesGrammarFormat,
-)
-
 import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
@@ -59,7 +51,7 @@ if TYPE_CHECKING:
 
 
 def handle_any_messages_to_chat_completion_str_messages_conversion(
-    messages: Any,
+    messages: object,
 ) -> list[dict[str, str]]:
     """
     Handles any messages to chat completion str messages conversion
@@ -804,7 +796,7 @@ def extract_file_metadata(file_data: FileTypes) -> tuple[str | None, str | None]
     """
     filename: str | None = None
     content_type: str | None = None
-    file_content: Any = None
+    file_content: object = None
 
     if isinstance(file_data, tuple):
         if len(file_data) == 2:
@@ -1002,7 +994,7 @@ def unpack_defs(
 
     # Use iterative approach with queue to avoid recursion
     # Each item in queue is (node, parent_container, key/index, active_defs, ref_chain)
-    queue: Final[deque[tuple[Any, dict | list | None, str | int | None, dict, set]]] = deque(
+    queue: Final[deque[tuple[object, dict | list | None, str | int | None, dict, set]]] = deque(
         [(schema, None, None, root_defs, set())]
     )
     inlined_bytes = 0
@@ -1624,7 +1616,10 @@ def is_function_call(optional_params: dict) -> bool:
     return False
 
 
-def convert_custom_tool_format_to_chat_shape(format_obj: Mapping[str, Any]) -> Mapping[str, Any]:
+_CUSTOM_GRAMMAR_FIELDS: Final = ("definition", "syntax")
+
+
+def convert_custom_tool_format_to_chat_shape(format_obj: Mapping[str, object]) -> Mapping[str, object]:
     """
     Responses API grammar formats are flat ({"type": "grammar", "definition", "syntax"});
     Chat Completions wraps the same fields in a "grammar" object. Text formats are
@@ -1632,15 +1627,11 @@ def convert_custom_tool_format_to_chat_shape(format_obj: Mapping[str, Any]) -> M
     """
     if format_obj.get("type") != "grammar" or "grammar" in format_obj:
         return format_obj
-    grammar: Final = CustomFormatGrammarGrammar()
-    if "definition" in format_obj:
-        grammar["definition"] = format_obj["definition"]
-    if "syntax" in format_obj:
-        grammar["syntax"] = format_obj["syntax"]
-    return CustomFormatGrammar(type="grammar", grammar=grammar)
+    grammar: Final[Mapping[str, object]] = {key: format_obj[key] for key in _CUSTOM_GRAMMAR_FIELDS if key in format_obj}
+    return {"type": "grammar", "grammar": grammar}
 
 
-def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, Any]) -> Mapping[str, Any]:
+def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, object]) -> Mapping[str, object]:
     """
     Inverse of convert_custom_tool_format_to_chat_shape: unwrap the Chat Completions
     "grammar" object into the flat Responses API grammar shape.
@@ -1648,12 +1639,10 @@ def convert_custom_tool_format_to_responses_shape(format_obj: Mapping[str, Any])
     grammar: Final = format_obj.get("grammar")
     if format_obj.get("type") != "grammar" or not isinstance(grammar, dict):
         return format_obj
-    flat: Final = ResponsesGrammarFormat(type="grammar")
-    if "definition" in grammar:
-        flat["definition"] = grammar["definition"]
-    if "syntax" in grammar:
-        flat["syntax"] = grammar["syntax"]
-    return flat
+    return {
+        "type": "grammar",
+        **{key: grammar[key] for key in _CUSTOM_GRAMMAR_FIELDS if key in grammar},
+    }
 
 
 def get_file_ids_from_messages(messages: list[AllMessageValues]) -> list[str]:
