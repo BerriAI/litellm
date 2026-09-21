@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -131,6 +132,7 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
     (
         (("tests/e2e/logging/test_datadog_e2e.py", "litellm/router.py"), ("tests/e2e/logging/test_datadog_e2e.py",)),
         (("tests/e2e/ui/test_keys.py", "tests/e2e/claude_code/test_cli.py", "tests/e2e/load/test_burst.py"), ()),
+        (("tests/e2e/migrations/test_startup.py", "tests/e2e/migrations/test_recovery.py"), ()),
         (("tests/e2e/batches/test_managed_files_enforcement_e2e.py",), ()),
         (("tests/e2e/guardrails/test_presidio_masking_e2e.py",), ()),
         (("tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e.py",), ()),
@@ -180,6 +182,10 @@ def test_a_changed_canary_file_is_selected_once_alongside_a_harness_change() -> 
     assert select_tests((CANARY[1], "tests/e2e/proxy_client.py")) == CANARY
 
 
+def test_dedicated_migration_tests_do_not_suppress_shared_harness_canaries() -> None:
+    assert select_tests(("tests/e2e/migrations/test_startup.py", "tests/e2e/conftest.py")) == CANARY
+
+
 def test_the_canary_joins_directly_selected_files_in_sorted_order() -> None:
     assert select_tests(("tests/e2e/logging/test_datadog_e2e.py", ".github/e2e-stack/up.sh")) == (
         *CANARY,
@@ -226,3 +232,61 @@ def test_an_unusable_secret_is_named_without_printing_its_value(
     assert unprintable not in result.stderr
     assert result.stdout == ""
     assert not env_path.exists()
+
+
+@pytest.mark.parametrize("phase", ("setup", "call", "teardown"))
+@pytest.mark.parametrize("required_count", ("1", "4"))
+def test_oauth_failure_diagnostics_do_not_publish_private_payloads(
+    tmp_path: Path, phase: str, required_count: str
+) -> None:
+    suite: Final = ET.Element("testsuite")
+    case: Final = ET.SubElement(suite, "testcase", file=SELECTED[0])
+    private: Final = "private-token-in-exception-message"
+    failure: Final = ET.SubElement(case, "failure", message=private)
+    failure.text = private
+    properties: Final = ET.SubElement(case, "properties")
+    for name, value in (
+        ("oauth_failure_phase", phase),
+        ("oauth_exception_type", "AssertionError"),
+        ("oauth_frame", "oauth_gateway.py:120:start"),
+        ("oauth_frame", f"injected\\n{private}"),
+        ("unrelated_property", private),
+    ):
+        _ = ET.SubElement(properties, "property", name=name, value=value)
+    report: Final = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+    result: Final = subprocess.run(
+        [sys.executable, "-I", str(GATE), str(report), SELECTED[0]],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "E2E_REQUIRED_TEST_COUNT": required_count},
+    )
+    assert result.returncode == 1
+    assert f"oauth_failure_phase: {phase}" in result.stdout
+    assert "oauth_exception_type: AssertionError" in result.stdout
+    assert "oauth_frame: oauth_gateway.py:120:start" in result.stdout
+    assert private not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("count", "skip", "expected"), ((0, False, 1), (3, False, 1), (4, False, 0), (5, False, 1), (4, True, 1))
+)
+def test_required_count_reports_cases_before_rejecting(tmp_path: Path, count: int, skip: bool, expected: int) -> None:
+    suite = ET.Element("testsuite")
+    for index in range(count):
+        case = ET.SubElement(suite, "testcase", file=SELECTED[0], classname="OAuth", name=f"variant{index}")
+        if skip and index == 0:
+            ET.SubElement(case, "skipped", message="private-skip-reason")
+    report = tmp_path / "report.xml"
+    ET.ElementTree(suite).write(report)
+    result = subprocess.run(
+        [sys.executable, "-I", str(GATE), str(report), SELECTED[0]],
+        env={**os.environ, "E2E_REQUIRED_TEST_COUNT": "4"},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == expected
+    assert f"{count} collected, {int(skip)} skipped" in result.stdout
+    if skip:
+        assert "skipped: OAuth::variant0" in result.stdout
+    assert "private-skip-reason" not in result.stdout + result.stderr

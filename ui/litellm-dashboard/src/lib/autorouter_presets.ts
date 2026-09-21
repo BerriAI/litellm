@@ -284,6 +284,7 @@ export const buildPresetPrefill = (
       tier_model_params: resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs)),
       tier_labels: hydrateTierLabels(config.tier_labels),
       classifier_type: config.classifier_type,
+      heuristic_v2_success_threshold: config.heuristic_v2_success_threshold,
       classifier_llm_config: config.classifier_llm_config && {
         ...config.classifier_llm_config,
         model: resolve(config.classifier_llm_config.model),
