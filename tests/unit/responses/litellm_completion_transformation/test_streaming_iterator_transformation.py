@@ -742,6 +742,81 @@ async def test_streaming_response_id_falls_back_when_upstream_yields_nothing():
     assert response_ids[0].startswith("resp_")
 
 
+def _named_tool_call_chunk(
+    call_id: str, name: str, arguments: str, finish_reason: str | None = None
+) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    tool_calls=[
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": name, "arguments": arguments},
+                        }
+                    ],
+                ),
+                finish_reason=finish_reason,
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_sequence_numbers_are_monotonic_when_text_precedes_a_tool_call():
+    """
+    A response that opens with a text message and then calls a tool must emit
+    strictly increasing `sequence_number` values across every event, including
+    the final `response.output_item.done` for the text message. A client that
+    orders events by `sequence_number` must never see the message's done event
+    reordered before events that were actually sent earlier, or it re-renders
+    the message text a second time.
+    """
+    iterator = _build_iterator(
+        [
+            _chunk("Found it."),
+            _named_tool_call_chunk("call_1", "list_files", '{"path":"/tmp"}', finish_reason="tool_calls"),
+        ]
+    )
+
+    events = [event async for event in iterator]
+
+    sequence_numbers = [
+        event.sequence_number for event in events if getattr(event, "sequence_number", None) is not None
+    ]
+
+    assert len(sequence_numbers) == len(set(sequence_numbers)), (
+        f"sequence_number values must be unique, got {sequence_numbers}"
+    )
+    assert sequence_numbers == sorted(sequence_numbers), (
+        f"sequence_number values must be monotonically increasing, got {sequence_numbers}"
+    )
+
+    message_done_events = [
+        event
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+        and getattr(event.item, "type", None) == "message"
+    ]
+    assert len(message_done_events) == 1
+    message_done_index = events.index(message_done_events[0])
+    for earlier_event in events[:message_done_index]:
+        earlier_seq = getattr(earlier_event, "sequence_number", None)
+        if earlier_seq is None:
+            continue
+        assert earlier_seq < message_done_events[0].sequence_number, (
+            "an event emitted before response.output_item.done for the message "
+            "must carry a smaller sequence_number than that done event"
+        )
+
+
 def test_completed_event_restores_usage_hidden_by_stream_options_none():
     final_chunk = _chunk("", finish_reason="stop")
     final_chunk._hidden_params = {"usage": Usage(prompt_tokens=117, completion_tokens=5, total_tokens=122)}

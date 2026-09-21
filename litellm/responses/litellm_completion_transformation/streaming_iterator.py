@@ -951,10 +951,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 annotations=annotations
             )
         )
+        self._sequence_number += 1
         return OutputItemDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
             output_index=self._message_index(),
-            sequence_number=1,
+            sequence_number=self._sequence_number,
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
                     "id": self._cached_item_id,
