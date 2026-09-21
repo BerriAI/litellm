@@ -33,7 +33,7 @@ def create_sampling_callback(
 ) -> SamplingCallback:
     from litellm.proxy._experimental.mcp_server.server import get_active_auth_context
 
-    auth: Final = get_active_auth_context() if operation_context is None else None
+    auth: Final = get_active_auth_context() if operation_context is None and user_api_key_auth is None else None
     captured: Final = (
         operation_context
         if operation_context is not None
