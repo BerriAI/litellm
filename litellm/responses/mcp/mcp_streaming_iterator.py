@@ -341,11 +341,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self._error_event_emitted = False
         self._last_sequence_number = 0
 
-        # Every auto-execute round is a distinct upstream response, but the
-        # client is reading one stream. Fold the rounds into one public
-        # lifecycle: one response.created, one response.completed whose
-        # output holds every round's items, and output indexes that are
-        # never reused for a different item.
         self._round_index = 0
         self._output_index_offset = 0
         self._round_max_output_index = -1
@@ -438,8 +433,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         chunk: Final = await self._anext_impl()
         sequence_number: Final = getattr(chunk, "sequence_number", None)
         if isinstance(sequence_number, int):
-            # Follow-up rounds and gateway events restart their numbering.
-            # Keep the public stream strictly increasing.
             if sequence_number <= self._last_sequence_number and self._last_sequence_number > 0:
                 self._last_sequence_number += 1
                 _set_event_field(chunk, "sequence_number", self._last_sequence_number)
@@ -560,8 +553,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                             self.phase = "mcp_discovery"
                             return await self._compose_round_chunk(chunk)
 
-                    # None means the chunk was folded into the single public
-                    # lifecycle; fall through so phase 4 runs the follow-up.
                     return await self._compose_round_chunk(chunk)
                 except StopAsyncIteration:
                     if self.should_auto_execute and self.collected_response:
@@ -683,7 +674,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         composed: Final = await self._compose_round_chunk(chunk)
         if composed is None:
-            # The chunk stays internal; hand the next public event back instead.
             return await self._anext_impl()
         return composed
 
@@ -749,10 +739,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 return
             self.tool_call_round += 1
 
-            # Each executed tool is one mcp_call output item of the single
-            # public response. Announce it at an output_index past the items
-            # this round already streamed, and keep that item id for the
-            # completion events below.
             from litellm.types.llms.openai import OutputItemAddedEvent
 
             next_output_index = self._output_index_offset + self._round_output_width(  # rebind-ok: advances per item
@@ -870,7 +856,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     item=mcp_call_item,
                 )
                 self.tool_execution_events.append(output_item_done_event)
-                # The response model accepts output items as dicts, not as the generic event object.
                 self._pending_mcp_call_items.append(mcp_call_item.model_dump())
 
             # Store tool results for follow-up call
