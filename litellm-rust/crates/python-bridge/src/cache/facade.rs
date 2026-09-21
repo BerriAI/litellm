@@ -227,6 +227,11 @@ impl FacadeGuard {
                 "RedisClusterCache",
                 "redis",
             ),
+            "qdrant_semantic" => (
+                "litellm.caching.qdrant_semantic_cache",
+                "QdrantSemanticCache",
+                "qdrant-semantic",
+            ),
             _ => unreachable!(),
         };
         let backend = facade.getattr("cache")?;
@@ -246,6 +251,26 @@ impl FacadeGuard {
         if let Some(message) = config.service_mismatch(service) {
             return Err(PyTypeError::new_err(message));
         }
+        let backend_config_names = match kind {
+            "memory" | "redis" => &[
+                "namespace",
+                "default_ttl",
+                "max_size_in_memory",
+                "max_size_per_item",
+                "redis_kwargs",
+                "redis_flush_size",
+            ][..],
+            "qdrant_semantic" => &[
+                "qdrant_api_base",
+                "collection_name",
+                "similarity_threshold",
+                "embedding_model",
+                "vector_size",
+                "embedding_max_input_tokens",
+                "embedding_timeout",
+            ][..],
+            _ => unreachable!(),
+        };
         Ok(Self {
             outer: ObjectGuard::capture(
                 py,
@@ -260,18 +285,7 @@ impl FacadeGuard {
                     "semantic_cache_scope",
                 ],
             )?,
-            backend: ObjectGuard::capture(
-                py,
-                &backend,
-                &[
-                    "namespace",
-                    "default_ttl",
-                    "max_size_in_memory",
-                    "max_size_per_item",
-                    "redis_kwargs",
-                    "redis_flush_size",
-                ],
-            )?,
+            backend: ObjectGuard::capture(py, &backend, backend_config_names)?,
             redis_pool: match (kind, cluster) {
                 ("redis", false) => Some(RedisPoolGuard::capture(&backend, STANDALONE_POOL)?),
                 ("redis", true) => Some(RedisPoolGuard::capture(&backend, CLUSTER_POOL)?),

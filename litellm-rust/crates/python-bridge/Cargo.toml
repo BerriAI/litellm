@@ -24,6 +24,8 @@ litellm-cache.workspace = true
 litellm-cache-memory.workspace = true
 litellm-cache-redis.workspace = true
 litellm-cache-response.workspace = true
+litellm-cache-qdrant-semantic.workspace = true
+qdrant-client.workspace = true
 serde.workspace = true
 litellm-auth.workspace = true
 litellm-callbacks-legacy-python.workspace = true
@@ -38,6 +40,7 @@ litellm-token-counter = { path = "../token-counter", default-features = false }
 pyo3.workspace = true
 pyo3-async-runtimes.workspace = true
 serde_json.workspace = true
+url.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]

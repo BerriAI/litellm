@@ -90,7 +90,10 @@ async fn connect(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[allow(deprecated)]
+#[expect(
+    deprecated,
+    reason = "the test verifies Qdrant's legacy always_ram quantization contract"
+)]
 async fn connect_sets_collection_quantization_and_index() {
     for (quantization, expected) in [
         (Quantization::Binary, 0),
