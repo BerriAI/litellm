@@ -167,6 +167,130 @@ describe("MCPServers", () => {
     const myConnections = await screen.findByRole("link", { name: "My Connections" });
     expect(myConnections).toBeVisible();
     expect(myConnections).toHaveAttribute("href", "/ui/connect");
+    for (const name of ["Semantic Filter", "Tool Search", "Network Settings", "Submitted MCPs"]) {
+      const tab = screen.queryByRole("tab", { name });
+      if (userRole === "Admin") {
+        expect(tab).toBeVisible();
+      } else {
+        expect(tab).not.toBeInTheDocument();
+      }
+    }
+    expect(
+      screen.getByRole("button", {
+        name: userRole === "Admin" ? "+ Add New MCP Server" : "+ Submit MCP Server",
+      }),
+    ).toBeVisible();
+  });
+
+  it.each(["cancel", "success", "failure", "unnamed"])("preserves delete confirmation on %s", async (outcome) => {
+    const server: MCPServer = {
+      server_id: "delete-server",
+      server_name: outcome === "unnamed" ? null : "Delete fixture",
+      alias: "delete-alias",
+      url: outcome === "unnamed" ? null : "https://example.com/mcp",
+      created_by: "user",
+      updated_by: "user",
+    };
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([server]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+    let finishDelete: () => void = () => {};
+    vi.mocked(networking.deleteMCPServer).mockImplementation(
+      () =>
+        new Promise((resolve, reject) => {
+          finishDelete = () => (outcome === "failure" ? reject(new Error("Delete failed")) : resolve(undefined));
+        }),
+    );
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Server actions" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "Delete" }));
+    const dialog = await screen.findByRole("alertdialog", { name: "Delete MCP Server?" });
+    expect(within(dialog).getByText("delete-server")).toBeVisible();
+    if (outcome === "unnamed") {
+      expect(within(dialog).queryByText("Name")).not.toBeInTheDocument();
+      expect(within(dialog).queryByText("URL")).not.toBeInTheDocument();
+    } else {
+      expect(within(dialog).getByText("Delete fixture")).toBeVisible();
+      expect(within(dialog).getByText("https://example.com/mcp")).toBeVisible();
+    }
+    if (outcome === "cancel") {
+      await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+      expect(networking.deleteMCPServer).not.toHaveBeenCalled();
+    } else {
+      await userEvent.click(within(dialog).getByRole("button", { name: "Delete", exact: true }));
+      expect(within(dialog).getByRole("button", { name: "Deleting..." })).toBeDisabled();
+      expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+      expect(networking.deleteMCPServer).toHaveBeenCalledWith("123", "delete-server");
+      await act(async () => finishDelete());
+    }
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+  });
+
+  it("filters servers by access group", async () => {
+    const server = { created_by: "user", updated_by: "user" };
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        ...server,
+        server_id: "string-group",
+        server_name: "String group",
+        alias: "string-alias",
+        mcp_access_groups: ["shared"],
+      },
+      {
+        ...server,
+        server_id: "legacy-group",
+        server_name: "Legacy group",
+        alias: "legacy-alias",
+        mcp_access_groups: ["shared"],
+      },
+      {
+        ...server,
+        server_id: "other-group",
+        server_name: "Other group",
+        alias: "other-alias",
+        mcp_access_groups: ["different"],
+      },
+    ]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("String group");
+    await userEvent.click(screen.getByRole("combobox", { name: "Access Group" }));
+    await userEvent.click(await screen.findByRole("option", { name: "shared", exact: true }));
+    expect(screen.getByText("String group")).toBeVisible();
+    expect(screen.getByText("Legacy group")).toBeVisible();
+    expect(screen.queryByText("Other group")).not.toBeInTheDocument();
+  });
+
+  it.each(["server_name", "alias", "url", "server_id"] as const)("searches by %s case-insensitively", async (field) => {
+    const server: MCPServer = {
+      server_id: "search-server",
+      server_name: "Search fixture",
+      created_by: "user",
+      updated_by: "user",
+      [field]: "Needle",
+    };
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([server]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+    await screen.findByTestId("mcp-servers-grid");
+    const search = screen.getByPlaceholderText("Search by name, alias, URL, or ID");
+    await userEvent.type(search, "  NEEDLE  ");
+    expect(screen.getByTestId("mcp-servers-grid")).toBeVisible();
+    await userEvent.clear(search);
+    await userEvent.type(search, "no-match");
+    expect(screen.queryByTestId("mcp-servers-grid")).not.toBeInTheDocument();
+    expect(screen.getByText("No servers match the current filters or search.")).toBeVisible();
   });
 
   it("should render mocked MCP servers data in the table", async () => {
@@ -409,9 +533,7 @@ describe("MCPServers", () => {
     expect(screen.getByText("Team B Server")).toBeInTheDocument();
     expect(screen.getByText("Team A Server 2")).toBeInTheDocument();
 
-    // Find the team select by its "Team" label, then the combobox it labels
-    const teamLabel = screen.getByText("Team");
-    const teamSelect = within(teamLabel.parentElement!).getByRole("combobox");
+    const teamSelect = screen.getByRole("combobox", { name: "Team" });
 
     await userEvent.click(teamSelect);
 
