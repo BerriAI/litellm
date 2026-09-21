@@ -1552,7 +1552,7 @@ async def test_anthropic_post_uses_prebuilt_body_without_redumping():
     provider_config = Mock()
     provider_config.max_retry_on_anthropic_messages_http_error = 2
 
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     out = await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -1592,7 +1592,7 @@ async def test_anthropic_post_falls_back_to_json_dumps_when_unsigned_none():
 
     provider_config = Mock()
     provider_config.max_retry_on_anthropic_messages_http_error = 1
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -1640,7 +1640,7 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     # Re-sign returns no signed body (native anthropic path) -> must re-dump.
     provider_config.sign_request = Mock(return_value=({}, None))
 
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     await handler._async_post_anthropic_messages_with_http_error_retry(
@@ -2579,7 +2579,7 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
             posts.append({"headers": dict(headers), "data": data})
             return invalid_signature_response if len(posts) == 1 else ok_response
 
-    logging_obj = Mock()
+    logging_obj: Final = Mock(baseline_cache_context=None)
     logging_obj.model_call_details = {}
 
     response = await handler._async_post_anthropic_messages_with_http_error_retry(

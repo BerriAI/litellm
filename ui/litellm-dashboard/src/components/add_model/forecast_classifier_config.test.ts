@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ComplexityRouterConfigValue } from "./ComplexityRouterConfig";
-import { getForecastConfigError, prepareForecastClassifier } from "./forecast_classifier_config";
+import {
+  fuseProfileFields,
+  fuseSettingsSchema,
+  getForecastConfigError,
+  prepareForecastClassifier,
+  selectFuseProfile,
+  type FuseSettings,
+} from "./forecast_classifier_config";
 import { getKeywordTierRulesError } from "./build_complexity_router_config";
 import { activeTierRows } from "./tier_rows";
 import {
@@ -31,6 +38,62 @@ const fuse: ComplexityRouterConfigValue = {
     max_quality_gap: 0.05,
   },
 };
+
+describe("Fuse profile presets", () => {
+  const refs: FuseSettings = {
+    efficient_profile_preset: "efficient-v1",
+    capable_profile_preset: "capable-v1",
+    harness_preset: "runtime-v1",
+    max_quality_gap: 0.05,
+    max_output_tokens: 1024,
+    response_format: "json_object",
+    calibration: {
+      version: "fitted-pair",
+      prompt_version: "llm-v2-1",
+      efficient: { slope: 1.1, intercept: -0.1 },
+      capable: { slope: 0.9, intercept: 0.2 },
+    },
+  };
+
+  it.each(fuseProfileFields)("validates both sources of %s without needing catalog availability", (field) => {
+    const presetField = `${field}_preset` as const;
+    expect(fuseSettingsSchema.safeParse(refs).success).toBe(true);
+    expect(fuseSettingsSchema.safeParse({ ...refs, [presetField]: undefined }).success).toBe(false);
+    expect(fuseSettingsSchema.safeParse({ ...refs, [field]: null, [presetField]: null }).success).toBe(false);
+    expect(fuseSettingsSchema.safeParse({ ...refs, [field]: " \n " }).success).toBe(false);
+    expect(fuseSettingsSchema.safeParse({ ...refs, [field]: "a".repeat(4001) }).success).toBe(false);
+    expect(fuseSettingsSchema.safeParse({ ...refs, [field]: "a".repeat(4000) }).success).toBe(true);
+    expect(fuseSettingsSchema.safeParse({ ...refs, [field]: "Override", [presetField]: "" }).success).toBe(false);
+  });
+
+  it.each([
+    { ...fuse.llm_v2_config!, efficient_profile: "  Custom solver\n" },
+    refs,
+    { ...refs, efficient_profile: null, capable_profile: null, harness: null },
+    { ...fuse.llm_v2_config!, efficient_profile_preset: null, capable_profile_preset: null, harness_preset: null },
+    { ...refs, efficient_profile: "  Explicit override\n", capable_profile: "More budget", harness: "No shell" },
+  ])("preserves references, literal overrides and calibration across hydration and unchanged saves: %j", (settings) => {
+    const stored = { ...fuse, llm_v2_config: settings };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(hydrated.llm_v2_config).toEqual(settings);
+    expect(getForecastConfigError(hydrated)).toBeNull();
+    const saved = buildUpdatedComplexityRouterConfig(stored, {
+      ...hydrated,
+      tiers: { ...hydrated.tiers, SIMPLE: ["arbitrary-new-group"] },
+    });
+    expect(saved.llm_v2_config).toEqual(settings);
+  });
+
+  it.each(fuseProfileFields)("changes only %s ownership on explicit selection", (field) => {
+    const overridden = { ...refs, [field]: "Override" };
+    const selected = selectFuseProfile(overridden, field, "replacement-v2", "Override");
+    expect(selected).toEqual({ ...refs, [field]: undefined, [`${field}_preset`]: "replacement-v2" });
+    expect(JSON.parse(JSON.stringify(selected))).not.toHaveProperty(field);
+    const custom = selectFuseProfile(selected, field, undefined, "Effective preset text");
+    expect(custom).toEqual({ ...refs, [field]: "Effective preset text", [`${field}_preset`]: undefined });
+    expect(JSON.parse(JSON.stringify(custom))).not.toHaveProperty(`${field}_preset`);
+  });
+});
 
 describe("forecast classifier configuration", () => {
   it.each([

@@ -1,5 +1,5 @@
 import ssl
-from collections.abc import Callable
+from collections.abc import AsyncIterable, Callable, Iterable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
@@ -212,7 +212,7 @@ class BaseLLMAIOHTTPHandler:
         litellm_params: dict,
         stream: bool = False,
         files: dict | None = None,
-        content: Any = None,
+        content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
         params: dict | None = None,
     ) -> httpx.Response:
         max_retry_on_unprocessable_entity_error: Final = provider_config.max_retry_on_unprocessable_entity_error

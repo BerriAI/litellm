@@ -334,7 +334,7 @@ def update_headers_with_filtered_beta(
         Updated headers dict
     """
     existing_beta: Final = headers.get("anthropic-beta")
-    if not existing_beta:
+    if existing_beta is None:
         return headers
 
     # Parse existing beta headers

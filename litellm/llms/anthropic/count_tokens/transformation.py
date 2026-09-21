@@ -4,9 +4,16 @@ Anthropic CountTokens API transformation logic.
 This module handles the transformation of requests to Anthropic's CountTokens API format.
 """
 
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
+from typing import Final
+
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+
+_COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
+COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 
 
 class AnthropicCountTokensConfig:
@@ -31,27 +38,31 @@ class AnthropicCountTokensConfig:
     def transform_request_to_count_tokens(
         self,
         model: str,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        system: Any | None = None,
-    ) -> dict[str, Any]:
+        messages: list[dict[str, JsonValue]],
+        tools: list[dict[str, JsonValue]] | None = None,
+        system: JsonValue = None,
+        optional_params: Mapping[str, JsonValue] | None = None,
+    ) -> dict[str, JsonValue]:  # mutable-ok: provider transport requires JSON dictionaries
         """
         Transform request to Anthropic CountTokens format.
 
         Includes optional system and tools fields for accurate token counting.
         """
-        request: Final[dict[str, Any]] = {
-            "model": model,
-            "messages": messages,
-        }
-
-        if system is not None:
-            request["system"] = system
-
-        if tools is not None:
-            request["tools"] = tools
-
-        return request
+        options: Final[Mapping[str, JsonValue]] = optional_params or MappingProxyType({})
+        return _COUNT_REQUEST.validate_python(
+            MappingProxyType(
+                {
+                    "model": model,
+                    "messages": messages,
+                    **MappingProxyType(
+                        {key: value for key, value in (("system", system), ("tools", tools)) if value is not None}
+                    ),
+                    **MappingProxyType(
+                        {key: value for key, value in options.items() if key in COUNT_TOKEN_OPTION_NAMES}
+                    ),
+                }
+            )
+        )
 
     def get_required_headers(self, api_key: str) -> dict[str, str]:
         """
@@ -76,7 +87,14 @@ class AnthropicCountTokensConfig:
         headers, _ = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         return headers
 
-    def validate_request(self, model: str, messages: list[dict[str, Any]]) -> None:
+    def validate_request(
+        self,
+        model: str,
+        messages: Sequence[Mapping[str, JsonValue]],
+        *,
+        system: JsonValue = None,
+        tools: list[dict[str, JsonValue]] | None = None,
+    ) -> None:
         """
         Validate the incoming count tokens request.
 
@@ -90,7 +108,7 @@ class AnthropicCountTokensConfig:
         if not model:
             raise ValueError("model parameter is required")
 
-        if not messages:
+        if not messages and not system and not tools:
             raise ValueError("messages parameter is required")
 
         if not isinstance(messages, list):
