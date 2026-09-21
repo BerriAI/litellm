@@ -508,6 +508,30 @@ class TestZeroCostDiagnostic:
             litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
             litellm.model_cost.pop(priced_id, None)
 
+    def test_one_request_evaluated_against_two_cost_map_entries_warns_once(self, caplog):
+        dated_model: Final = "lit7898-nano-2026-03-17"
+        requested_model: Final = "lit7898-nano"
+        usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        cost_map_entry: Final = {"litellm_provider": "openai", "mode": "chat", **self.PER_SECOND_PRICING}
+        litellm.register_model(
+            model_cost={dated_model: cost_map_entry, requested_model: cost_map_entry}, persist_across_reloads=False
+        )
+        try:
+            logging_obj: Final = self._logging_obj(
+                {}, model=f"openai/{requested_model}", deployment_id="lit7898-cost-map-deployment"
+            )
+            with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+                assert logging_obj._response_cost_calculator(result=self._response(usage, model=dated_model)) == 0.0
+                assert logging_obj._response_cost_calculator(result=self._response(usage, model=requested_model)) == 0.0
+
+            assert logging_obj.model_call_details["zero_cost_diagnostic"]["pricing_model"] == requested_model
+            warnings: Final = self._zero_cost_warnings(caplog)
+            assert len(warnings) == 1
+            assert f"pricing entry '{dated_model}' has no input_cost_per_token, output_cost_per_token" in warnings[0]
+        finally:
+            litellm.model_cost.pop(dated_model, None)
+            litellm.model_cost.pop(requested_model, None)
+
 
 class TestGetRouterModelId:
     """Tests for the get_router_model_id helper method."""

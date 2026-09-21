@@ -1905,9 +1905,9 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:  # noqa: BLE001  # the pricing helpers raise plain Exception and a diagnostic must never break cost tracking
             verbose_logger.debug("zero_cost_diagnostic skipped: %s", e)
             return
-        previous: Final = self.model_call_details.get("zero_cost_diagnostic")
+        already_warned: Final = self.model_call_details.get("zero_cost_diagnostic") is not None
         self.model_call_details["zero_cost_diagnostic"] = finding[0] if finding is not None else None
-        if finding is not None and finding[0] != previous:
+        if finding is not None and not already_warned:
             verbose_logger.warning(finding[1])
 
     def _zero_cost_finding(
