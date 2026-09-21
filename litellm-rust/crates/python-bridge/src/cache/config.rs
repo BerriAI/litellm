@@ -80,6 +80,13 @@ pub(super) struct RedisCacheConfig {
     pub(super) connection: RedisConnectionConfig,
 }
 
+#[derive(Debug, PartialEq)]
+pub(super) struct GcsCacheConfig {
+    pub(super) bucket_name: String,
+    pub(super) key_prefix: String,
+    pub(super) path_service_account: Option<String>,
+}
+
 pub(super) struct AzureBlobCacheConfig {
     pub(super) account_url: String,
     pub(super) container: String,
@@ -119,6 +126,7 @@ impl QdrantSemanticCacheConfig {
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
+    Gcs(GcsCacheConfig),
     Disk(DiskCacheConfig),
     QdrantSemantic(Box<QdrantSemanticCacheConfig>),
     AzureBlob(AzureBlobCacheConfig),
@@ -136,6 +144,7 @@ pub(super) enum UnsupportedCacheConfig {
     RedisCredentials,
     RedisConnection,
     RedisOption,
+    GcsBucket,
     DiskStore,
     QdrantEndpoint,
     SemanticEmbedding,
@@ -149,6 +158,7 @@ impl UnsupportedCacheConfig {
             Self::RedisCredentials => "native Redis credentials require Python",
             Self::RedisConnection => "native Redis connection type is not implemented",
             Self::RedisOption => "native Redis configuration requires Python",
+            Self::GcsBucket => "native GCS cache requires a configured bucket name",
             Self::DiskStore => "native disk cache requires the built-in diskcache store",
             Self::QdrantEndpoint => {
                 "native Qdrant requires the default REST port so the gRPC port can be derived"
@@ -196,6 +206,13 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::Gcs) => match project_gcs(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::Gcs(backend),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
             Some(CacheType::Disk) => match project_disk(&backend)? {
                 Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
                     policy,
@@ -216,20 +233,41 @@ impl NativeCacheConfig {
                     backend: CacheBackendConfig::AzureBlob(backend),
                 }))
             }),
-            Some(
-                CacheType::RedisSemantic
-                | CacheType::ValkeySemantic
-                | CacheType::S3
-                | CacheType::Gcs,
-            )
-            | None => Ok(CacheConfigProjection::Unsupported(
-                UnsupportedCacheConfig::Backend,
-            )),
+            Some(CacheType::RedisSemantic | CacheType::ValkeySemantic | CacheType::S3) | None => {
+                Ok(CacheConfigProjection::Unsupported(
+                    UnsupportedCacheConfig::Backend,
+                ))
+            }
         }
     }
 
     pub(super) fn service_mismatch(&self, service: &NativeResponseCache) -> Option<&'static str> {
         match &self.backend {
+            CacheBackendConfig::Gcs(_) if service.kind() != "gcs" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::Gcs(config)
+                if service
+                    .gcs_backend()
+                    .is_none_or(|backend| backend.bucket_name() != config.bucket_name) =>
+            {
+                Some("facade and native backend buckets must match")
+            }
+            CacheBackendConfig::Gcs(config)
+                if service
+                    .gcs_backend()
+                    .is_none_or(|backend| backend.key_prefix() != config.key_prefix) =>
+            {
+                Some("facade and native backend key prefixes must match")
+            }
+            CacheBackendConfig::Gcs(config)
+                if service.gcs_backend().is_none_or(|backend| {
+                    backend.path_service_account() != config.path_service_account.as_deref()
+                }) =>
+            {
+                Some("facade and native backend credentials must match")
+            }
+            CacheBackendConfig::Gcs(_) => None,
             CacheBackendConfig::Memory(_) if service.kind() != "memory" => {
                 Some("facade and native backend types must match")
             }
@@ -419,6 +457,23 @@ fn project_azure_blob(backend: &Bound<'_, PyAny>) -> PyResult<AzureBlobCacheConf
         account_url: account_url.to_string(),
         container,
     })
+}
+
+#[inline(never)]
+fn project_gcs(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<GcsCacheConfig, UnsupportedCacheConfig>> {
+    let bucket_name = match backend.getattr("bucket_name")?.extract::<Option<String>>() {
+        Ok(Some(bucket_name)) if !bucket_name.is_empty() => bucket_name,
+        _ => return Ok(Err(UnsupportedCacheConfig::GcsBucket)),
+    };
+    Ok(Ok(GcsCacheConfig {
+        bucket_name,
+        key_prefix: backend.getattr("key_prefix")?.extract::<String>()?,
+        path_service_account: backend
+            .getattr("path_service_account")?
+            .extract::<Option<String>>()?,
+    }))
 }
 
 #[inline(never)]
@@ -863,7 +918,7 @@ mod tests {
 
     use super::{
         CacheBackendConfig, CacheConfigProjection, CachePolicy, CertificateRequirement,
-        DiskCacheConfig, NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
+        DiskCacheConfig, GcsCacheConfig, NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
     };
     use crate::cache::native::NativeResponseCache;
 
@@ -1064,6 +1119,56 @@ sys.modules['litellm.caching._embedding_router'] = embedding_router
                 panic!("dynamic authentication must stay on Python");
             };
             assert_eq!(reason.message(), "native Redis credentials require Python");
+        });
+    }
+
+    #[test]
+    fn projects_gcs_configuration() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "backend = SimpleNamespace(bucket_name='bucket', key_prefix='cache/', path_service_account='credentials.json')\n\
+                 facade = SimpleNamespace(type='gcs', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("GCS cache should be supported");
+            };
+            let CacheBackendConfig::Gcs(gcs) = config.backend else {
+                panic!("expected GCS configuration");
+            };
+            assert_eq!(
+                gcs,
+                GcsCacheConfig {
+                    bucket_name: "bucket".into(),
+                    key_prefix: "cache/".into(),
+                    path_service_account: Some("credentials.json".into()),
+                }
+            );
+        });
+    }
+
+    #[test]
+    fn rejects_gcs_without_a_bucket_name() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "backend = SimpleNamespace(bucket_name=None, key_prefix='', path_service_account=None)\n\
+                 facade = SimpleNamespace(type='gcs', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("GCS cache without a bucket should be unsupported");
+            };
+            assert!(matches!(&reason, UnsupportedCacheConfig::GcsBucket));
+            assert_eq!(
+                reason.message(),
+                "native GCS cache requires a configured bucket name"
+            );
         });
     }
 

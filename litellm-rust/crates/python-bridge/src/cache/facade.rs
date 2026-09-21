@@ -355,6 +355,7 @@ impl FacadeGuard {
                 "QdrantSemanticCache",
                 "qdrant-semantic",
             ),
+            ("gcs", _) => ("litellm.caching.gcs_cache", "GCSCache", "gcs"),
             ("disk", _) => ("litellm.caching.disk_cache", "DiskCache", "disk"),
             ("azure-blob", _) => (
                 "litellm.caching.azure_blob_cache",
@@ -381,13 +382,16 @@ impl FacadeGuard {
             return Err(PyTypeError::new_err(message));
         }
         let backend_config_names = match kind {
-            "memory" | "redis" | "azure-blob" | "disk" => &[
+            "memory" | "redis" | "azure-blob" | "disk" | "gcs" => &[
                 "namespace",
                 "default_ttl",
                 "max_size_in_memory",
                 "max_size_per_item",
                 "redis_kwargs",
                 "redis_flush_size",
+                "bucket_name",
+                "key_prefix",
+                "path_service_account",
             ][..],
             "qdrant_semantic" => &[
                 "qdrant_api_base",
