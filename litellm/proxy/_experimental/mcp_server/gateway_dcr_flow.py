@@ -1716,7 +1716,7 @@ async def authorize_connection(
                 **TOKEN_NO_CACHE_HEADERS,
                 "Referrer-Policy": "no-referrer",
                 "X-Frame-Options": "DENY",
-                "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'",
+                "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
             }
         ),
     )

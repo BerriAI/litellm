@@ -1014,7 +1014,7 @@ async def authorize_with_server(
     existing_params: Final = dict(parse_qsl(parsed_auth_url.query))
     existing_params.update(params)
     final_url: Final = urlunparse(parsed_auth_url._replace(query=urlencode(existing_params)))
-    response: Final = RedirectResponse(final_url)
+    response: Final = RedirectResponse(final_url, status_code=303 if connection is not None else 307)
     _set_oauth_state_cookie(response, request, relay_state, encoded_state)
     if connection is not None and len(response.headers["set-cookie"]) > 4096:
         return _oauth_error(400, "invalid_request", "Connection authorization metadata is too large")

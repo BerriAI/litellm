@@ -12474,7 +12474,7 @@ def _complete_keyed_oauth(harness):
 
     client_id, verifier, handle = _start_keyed_oauth(harness)
     consent = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
-    assert consent.status_code == 307, consent.text
+    assert consent.status_code == 303, consent.text
     upstream = urlparse(consent.headers["location"])
     assert upstream.netloc == "provider.example"
     params = parse_qs(upstream.query)
@@ -12601,7 +12601,7 @@ def test_keyed_connection_cookie_sizes_are_browser_safe(keyed_oauth_client, stat
         assert approved.json()["error"] == "invalid_request"
         assert state_length == 1024
     else:
-        assert approved.status_code == 307
+        assert approved.status_code == 303
         assert all(len(value) <= 4096 for value in approved.headers.get_list("set-cookie"))
     harness.upstream.post.assert_not_called()
 
@@ -12893,7 +12893,7 @@ def test_keyed_connection_callback_cancellation_and_replay(keyed_oauth_client, c
     harness = keyed_oauth_client
     _, _, handle = _start_keyed_oauth(harness)
     approved = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
-    assert approved.status_code == 307
+    assert approved.status_code == 303
     state = parse_qs(urlparse(approved.headers["location"]).query)["state"][0]
     cookies = dict(harness.client.cookies.items())
     response = harness.client.get(
@@ -12919,7 +12919,7 @@ def test_keyed_connection_replayed_approved_consent_does_not_redirect_twice(keye
     _, _, handle = _start_keyed_oauth(harness)
     cookies = dict(harness.client.cookies.items())
     approved = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
-    assert approved.status_code == 307
+    assert approved.status_code == 303
     harness.client.cookies.update(cookies)
     repeated = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
     assert repeated.status_code == 400
@@ -12935,7 +12935,7 @@ def test_keyed_connection_expired_callback_never_issues_code(keyed_oauth_client,
     harness = keyed_oauth_client
     _, _, handle = _start_keyed_oauth(harness)
     approved = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
-    assert approved.status_code == 307
+    assert approved.status_code == 303
     state = parse_qs(urlparse(approved.headers["location"]).query)["state"][0]
     clock = MagicMock()
     clock.now.return_value = datetime.now(timezone.utc) + timedelta(days=1)
