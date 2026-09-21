@@ -169,6 +169,9 @@
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_row": [
       "other.provider_wire.fal_ai.gpt_image_generation_quality_size_wire_and_keyed_pricing"
     ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_charges_the_size_fal_returned_not_the_requested_size": [
+      "other.provider_wire.fal_ai.image_pricing_uses_response_dimensions"
+    ],
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image": [
       "other.provider_wire.fal_ai.flux_dev_endpoint_and_per_image_pricing"
     ],

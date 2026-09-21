@@ -3,7 +3,7 @@ from types import MappingProxyType
 from typing import Final
 
 import litellm
-from litellm.types.utils import ImageResponse
+from litellm.types.utils import ImageObject, ImageResponse
 
 FAL_KEYED_PRICING_DEFAULT_QUALITY: Final[str] = "high"
 FAL_TEXT_TO_IMAGE_DEFAULT_SIZE: Final[str] = "1024-x-768"
@@ -34,16 +34,22 @@ def _keyed_size(optional_params: Mapping[str, object]) -> str | None:
     return None
 
 
-def _keyed_cost_per_image(model: str, optional_params: Mapping[str, object] | None) -> float | None:
-    if optional_params is None:
-        return None
-    size: Final = _keyed_size(optional_params)
+def _response_size(image: ImageObject) -> str | None:
+    fields = image.provider_specific_fields or {}  # mutable-ok: empty fallback is never mutated
+    width, height = fields.get("width"), fields.get("height")
+    if (
+        isinstance(width, int)
+        and isinstance(height, int)
+        and not isinstance(width, bool)
+        and not isinstance(height, bool)
+    ):
+        return f"{width}-x-{height}"
+    return None
+
+
+def _keyed_cost_per_image(model: str, quality: str, size: str | None) -> float | None:
     if size is None:
         return None
-    raw_quality: Final = optional_params.get("quality")
-    quality: Final = (
-        raw_quality if isinstance(raw_quality, str) and raw_quality != "auto" else FAL_KEYED_PRICING_DEFAULT_QUALITY
-    )
     keyed_entry: Final = litellm.model_cost.get(f"fal_ai/{quality}/{size}/{model}")
     if keyed_entry is None:
         return None
@@ -64,9 +70,22 @@ def cost_calculator(
     # the proxy cost path passes the provider-prefixed model name
     model = model.removeprefix(f"{litellm.LlmProviders.FAL_AI.value}/")
     num_images: Final[int] = len(image_response.data) if image_response.data else 0
-    keyed_cost_per_image: Final = _keyed_cost_per_image(model=model, optional_params=optional_params)
-    if keyed_cost_per_image is not None:
-        return keyed_cost_per_image * num_images
+    params: Final[Mapping[str, object]] = optional_params or {}  # mutable-ok: empty fallback is never mutated
+    raw_quality: Final = params.get("quality")
+    quality: Final = (
+        raw_quality if isinstance(raw_quality, str) and raw_quality != "auto" else FAL_KEYED_PRICING_DEFAULT_QUALITY
+    )
+    request_size: Final = _keyed_size(params)
+    keyed_costs: Final = tuple(
+        _keyed_cost_per_image(
+            model=model,
+            quality=quality,
+            size=(_response_size(image) if isinstance(image, ImageObject) else None) or request_size,
+        )
+        for image in image_response.data or ()
+    )
+    if all(cost is not None for cost in keyed_costs):
+        return sum(cost for cost in keyed_costs if cost is not None)
     _model_info: Final = litellm.get_model_info(
         model=model,
         custom_llm_provider=litellm.LlmProviders.FAL_AI.value,

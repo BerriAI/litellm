@@ -1,7 +1,5 @@
 import pytest
 
-import litellm
-from litellm.llms.fal_ai.cost_calculator import cost_calculator
 from litellm.llms.fal_ai.image_generation import (
     FalAIGPTImage2Config,
     FalAINanoBananaConfig,
@@ -11,7 +9,7 @@ from litellm.llms.fal_ai.image_generation.gpt_image_2_transformation import (
     map_gpt_image_quality,
     supported_gpt_image_qualities,
 )
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.llms.fal_ai.image_generation.transformation import fal_images_to_image_objects
 
 
 @pytest.mark.parametrize(
@@ -185,3 +183,17 @@ def test_supported_qualities_derived_from_pricing_rows(model):
 
 def test_map_gpt_image_quality_passes_through_when_no_pricing_rows():
     assert map_gpt_image_quality("xhigh", "some-new-model", {}) == "xhigh"
+
+
+def test_fal_images_to_image_objects_keeps_response_dimensions():
+    image_objects = fal_images_to_image_objects(
+        [
+            {"url": "https://example.com/dimensions.png", "width": 1024, "height": 1536},
+            "https://example.com/url.png",
+            {"url": "https://example.com/no-dimensions.png"},
+        ]
+    )
+
+    assert image_objects[0].provider_specific_fields == {"width": 1024, "height": 1536}
+    assert image_objects[1].provider_specific_fields is None
+    assert image_objects[2].provider_specific_fields is None

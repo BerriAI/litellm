@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -22,15 +23,38 @@ else:
     LiteLLMLoggingObj = Any
 
 
+def _fal_image_to_image_object(image_data: Mapping[str, object] | str) -> ImageObject:
+    if isinstance(image_data, str):
+        return ImageObject(url=image_data, b64_json=None)
+    url: Final = image_data.get("url")
+    b64_json: Final = image_data.get("b64_json")
+    width: Final = image_data.get("width")
+    height: Final = image_data.get("height")
+    if (
+        isinstance(width, int)
+        and not isinstance(width, bool)
+        and isinstance(height, int)
+        and not isinstance(height, bool)
+    ):
+        return ImageObject(
+            url=url if isinstance(url, str) else None,
+            b64_json=b64_json if isinstance(b64_json, str) else None,
+            provider_specific_fields={  # mutable-ok: provider metadata is constructed once
+                "width": width,
+                "height": height,
+            },
+        )
+    return ImageObject(
+        url=url if isinstance(url, str) else None,
+        b64_json=b64_json if isinstance(b64_json, str) else None,
+    )
+
+
 def fal_images_to_image_objects(images: object) -> tuple[ImageObject, ...]:
     if not isinstance(images, list):
         return ()
     return tuple(
-        ImageObject(url=image_data.get("url", None), b64_json=image_data.get("b64_json", None))
-        if isinstance(image_data, dict)
-        else ImageObject(url=image_data, b64_json=None)
-        for image_data in images
-        if isinstance(image_data, (dict, str))
+        _fal_image_to_image_object(image_data) for image_data in images if isinstance(image_data, (Mapping, str))
     )
 
 

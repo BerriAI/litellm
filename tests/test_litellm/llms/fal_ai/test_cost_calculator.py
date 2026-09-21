@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 import litellm
@@ -15,8 +17,20 @@ def _use_local_model_cost_map(monkeypatch):
     litellm.get_model_info.cache_clear()
 
 
-def _image_response(num_images: int = 1) -> ImageResponse:
-    return ImageResponse(data=[ImageObject(url="https://example.com/img.png") for _ in range(num_images)])
+def _image_response(
+    num_images: int = 1,
+    width: int | None = None,
+    height: int | None = None,
+) -> ImageResponse:
+    provider_specific_fields: Final[dict[str, int] | None] = (
+        {"width": width, "height": height} if width is not None and height is not None else None
+    )
+    return ImageResponse(
+        data=[
+            ImageObject(url="https://example.com/img.png", provider_specific_fields=provider_specific_fields)
+            for _ in range(num_images)
+        ]
+    )
 
 
 GPT_IMAGE_25_MODELS = (
@@ -42,6 +56,89 @@ def test_gpt_image_25_quality_and_size_pick_keyed_row(model):
         optional_params={"quality": "max", "image_size": {"width": 3840, "height": 2160}},
     )
     assert cost == 2 * litellm.model_cost[f"fal_ai/max/3840-x-2160/{model}"]["output_cost_per_image"] > 0
+
+
+def test_gpt_image_25_response_size_wins_over_request_size():
+    model = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
+    cost = cost_calculator(
+        model=model,
+        image_response=_image_response(width=1024, height=1536),
+        optional_params={"quality": "low", "image_size": {"width": 1024, "height": 1024}},
+    )
+    response_size_cost = litellm.model_cost["fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"][
+        "output_cost_per_image"
+    ]
+    request_size_cost = litellm.model_cost["fal_ai/low/1024-x-1024/openai/gpt-image-2.5/flare/text-to-image"][
+        "output_cost_per_image"
+    ]
+    assert cost == response_size_cost > 0
+    assert cost != request_size_cost
+
+
+def test_gpt_image_25_auto_size_uses_response_size():
+    model = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
+    cost = cost_calculator(
+        model=model,
+        image_response=_image_response(width=1920, height=1080),
+        optional_params={"quality": "low", "image_size": "auto"},
+    )
+    response_size_cost = litellm.model_cost["fal_ai/low/1920-x-1080/openai/gpt-image-2.5/flare/text-to-image"][
+        "output_cost_per_image"
+    ]
+    default_size_cost = litellm.model_cost["fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/text-to-image"][
+        "output_cost_per_image"
+    ]
+    assert cost == response_size_cost > 0
+    assert cost != default_size_cost
+
+
+def test_gpt_image_25_images_sum_response_size_keyed_rows():
+    model = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
+    cost = cost_calculator(
+        model=model,
+        image_response=ImageResponse(
+            data=[
+                ImageObject(
+                    url="https://example.com/one.png", provider_specific_fields={"width": 1024, "height": 1024}
+                ),
+                ImageObject(
+                    url="https://example.com/two.png", provider_specific_fields={"width": 1024, "height": 1536}
+                ),
+            ]
+        ),
+        optional_params={"quality": "medium"},
+    )
+    expected = sum(
+        litellm.model_cost[f"fal_ai/medium/{size}/{model.removeprefix('fal_ai/')}"]["output_cost_per_image"]
+        for size in ("1024-x-1024", "1024-x-1536")
+    )
+    assert cost == expected
+
+
+def test_gpt_image_25_missing_response_size_uses_request_size_and_none_params_uses_response_size():
+    model = "fal_ai/openai/gpt-image-2.5/flare/text-to-image"
+    request_size_cost = cost_calculator(
+        model=model,
+        image_response=_image_response(),
+        optional_params={"quality": "low", "image_size": {"width": 1024, "height": 1024}},
+    )
+    response_size_cost = cost_calculator(
+        model=model,
+        image_response=_image_response(width=1024, height=1536),
+        optional_params=None,
+    )
+    assert (
+        request_size_cost
+        == litellm.model_cost["fal_ai/low/1024-x-1024/openai/gpt-image-2.5/flare/text-to-image"][
+            "output_cost_per_image"
+        ]
+    )
+    assert (
+        response_size_cost
+        == litellm.model_cost["fal_ai/high/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"][
+            "output_cost_per_image"
+        ]
+    )
 
 
 def test_gpt_image_25_edit_auto_size_still_honors_quality():

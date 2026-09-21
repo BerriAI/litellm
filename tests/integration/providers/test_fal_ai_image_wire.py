@@ -30,7 +30,7 @@ def _catalog_cost(key: str) -> float:
     return float(cost_value)
 
 
-def _image_response(urls: tuple[str, ...], prompt: str) -> bytes:
+def _image_response(urls: tuple[str, ...], prompt: str, width: int = 1024, height: int = 768) -> bytes:
     return json.dumps(
         {
             "images": [
@@ -39,8 +39,8 @@ def _image_response(urls: tuple[str, ...], prompt: str) -> bytes:
                     "content_type": "image/png",
                     "file_name": url.rsplit("/", 1)[-1],
                     "file_size": 123456,
-                    "width": 1024,
-                    "height": 768,
+                    "width": width,
+                    "height": height,
                 }
                 for url in urls
             ],
@@ -69,7 +69,7 @@ def test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_ro
         body: Final = _JSON_OBJECT.validate_json(request.body)
         if body.get("quality") == "high":
             assert body == {"prompt": _PROMPT, "quality": "high", "image_size": {"width": 1024, "height": 1536}}
-            return Reply(body=_image_response((f"{wire_url}/files/high.png",), _PROMPT))
+            return Reply(body=_image_response((f"{wire_url}/files/high.png",), _PROMPT, width=1024, height=1536))
         assert body == {"prompt": _PROMPT, "quality": "low"}
         return Reply(body=_image_response((f"{wire_url}/files/low.png",), _PROMPT))
 
@@ -100,6 +100,53 @@ def test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_ro
         low_cost: Final = _response_cost(low_response)
         assert low_cost == _approx(_catalog_cost("fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/text-to-image"))
         assert high_cost != low_cost
+        assert [(request.method, request.target) for request in wire.drain()] == [
+            ("POST", "/openai/gpt-image-2.5/flare/text-to-image"),
+            ("POST", "/openai/gpt-image-2.5/flare/text-to-image"),
+        ]
+
+
+@pytest.mark.covers("other.provider_wire.fal_ai.image_pricing_uses_response_dimensions")
+def test_fal_gpt_image_25_charges_the_size_fal_returned_not_the_requested_size(gateway: Gateway) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.headers["authorization"] == "Key synthetic-fal-key"
+        assert request.target == "/openai/gpt-image-2.5/flare/text-to-image"
+        body: Final = _JSON_OBJECT.validate_json(request.body)
+        if body.get("image_size") is not None:
+            assert body == {"prompt": _PROMPT, "quality": "low", "image_size": {"width": 1024, "height": 1024}}
+            return Reply(body=_image_response((f"{wire_url}/files/rounded.png",), _PROMPT, width=1024, height=1536))
+        assert body == {"prompt": _PROMPT, "quality": "low"}
+        return Reply(body=_image_response((f"{wire_url}/files/default.png",), _PROMPT, width=1920, height=1080))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        wire_url: Final = wire.url
+        model: Final = scenario.model(
+            model=f"fal_ai/{_GPT_IMAGE_MODEL}", api_base=wire.url, api_key="synthetic-fal-key"
+        )
+        requested_size_response: Final = gateway.request(
+            "POST",
+            "/v1/images/generations",
+            {"model": model, "prompt": _PROMPT, "quality": "low", "size": "1024x1024"},
+        )
+        assert requested_size_response.status_code == 200, requested_size_response.text
+        requested_size_cost: Final = _response_cost(requested_size_response)
+        assert requested_size_cost == _approx(
+            _catalog_cost("fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image")
+        )
+        assert requested_size_cost != _catalog_cost("fal_ai/low/1024-x-1024/openai/gpt-image-2.5/flare/text-to-image")
+
+        default_size_response: Final = gateway.request(
+            "POST",
+            "/v1/images/generations",
+            {"model": model, "prompt": _PROMPT, "quality": "low"},
+        )
+        assert default_size_response.status_code == 200, default_size_response.text
+        default_size_cost: Final = _response_cost(default_size_response)
+        assert default_size_cost == _approx(
+            _catalog_cost("fal_ai/low/1920-x-1080/openai/gpt-image-2.5/flare/text-to-image")
+        )
+        assert default_size_cost != _catalog_cost("fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/text-to-image")
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/openai/gpt-image-2.5/flare/text-to-image"),
             ("POST", "/openai/gpt-image-2.5/flare/text-to-image"),
