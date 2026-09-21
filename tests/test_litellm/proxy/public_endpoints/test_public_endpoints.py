@@ -357,6 +357,9 @@ def test_qwen_mainland_provider_fields_carry_the_qianwen_brand():
     assert mainland_fields["api_key"]["label"] == "Qianwen AI Platform API Key"
     assert "Qianwen AI Platform" in mainland_fields["api_base"]["tooltip"]
     assert "Qwen AI Platform" not in json.dumps(mainland)
+
+
+def test_chatgpt_provider_fields():
     app_instance = FastAPI()
     app_instance.include_router(router)
     test_client = TestClient(app_instance)

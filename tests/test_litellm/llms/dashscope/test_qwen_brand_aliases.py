@@ -95,6 +95,13 @@ BRAND_CASES = [
 def clear_dashscope_family_env(monkeypatch):
     for env_var in DASHSCOPE_FAMILY_ENV_VARS:
         monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+
+
+@pytest.fixture
+def no_provider_traffic(respx_mock, monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    return respx_mock
 
 
 class TestQwenBrandProviderResolution:
@@ -267,22 +274,25 @@ class TestQwenBrandUserFacingNames:
         assert self.RETIRED_MAINLAND_NAME not in message
 
     @pytest.mark.parametrize("brand", BRAND_CASES)
-    def test_embedding_without_key_names_brand(self, brand):
+    def test_embedding_without_key_names_brand(self, brand, no_provider_traffic):
         with pytest.raises(litellm.APIConnectionError, match=re.escape(brand["display_name"])) as exc_info:
             litellm.embedding(model=f"{brand['provider']}/text-embedding-v4", input=["hello"])
         assert self.RETIRED_MAINLAND_NAME not in str(exc_info.value)
+        assert no_provider_traffic.calls.call_count == 0
 
     @pytest.mark.parametrize("brand", BRAND_CASES)
-    def test_rerank_without_key_names_brand(self, brand):
+    def test_rerank_without_key_names_brand(self, brand, no_provider_traffic):
         with pytest.raises(litellm.APIConnectionError, match=re.escape(brand["display_name"])) as exc_info:
             litellm.rerank(model=f"{brand['provider']}/gte-rerank-v2", query="q", documents=["a", "b"])
         assert self.RETIRED_MAINLAND_NAME not in str(exc_info.value)
+        assert no_provider_traffic.calls.call_count == 0
 
     @pytest.mark.parametrize("brand", BRAND_CASES)
-    def test_image_generation_without_key_names_brand(self, brand):
+    def test_image_generation_without_key_names_brand(self, brand, no_provider_traffic):
         with pytest.raises(litellm.APIConnectionError, match=re.escape(brand["display_name"])) as exc_info:
             litellm.image_generation(model=f"{brand['provider']}/qwen-image", prompt="a cup of coffee")
         assert self.RETIRED_MAINLAND_NAME not in str(exc_info.value)
+        assert no_provider_traffic.calls.call_count == 0
 
     @pytest.mark.parametrize("brand", BRAND_CASES)
     @pytest.mark.parametrize(
