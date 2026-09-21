@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{CacheCodec, CacheConnectionResult, Error, ExactCacheContext};
+use litellm_cache_azure_blob::AzureBlobCache;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_redis_semantic::{RedisSemanticCache, RedisSemanticConfig};
@@ -19,6 +20,7 @@ pub(super) enum NativeResponseCache {
         cache: Arc<ResponseCache<RedisCache<ResponseCacheCodec>>>,
         buffer: Option<Arc<WriteBuffer>>,
     },
+    AzureBlob(Arc<ResponseCache<AzureBlobCache<ResponseCacheCodec>>>),
     RedisSemantic(Arc<ResponseCache<RedisSemanticCache<PythonEmbedder>>>),
 }
 
@@ -50,7 +52,6 @@ impl NativeResponseCache {
             buffer: None,
         })
     }
-
     pub fn redis_semantic(
         url: &str,
         embedder: PythonEmbedder,
@@ -61,6 +62,29 @@ impl NativeResponseCache {
             backend,
         )))))
     }
+
+    pub async fn azure_blob(account_url: &str, container: &str) -> Result<Self, Error> {
+        let backend = AzureBlobCache::connect(
+            account_url,
+            container,
+            ResponseCacheCodec,
+            tokio::runtime::Handle::current(),
+        )
+        .await?;
+        Ok(Self::AzureBlob(Arc::new(ResponseCache::new(Arc::new(
+            backend,
+        )))))
+    }
+
+    pub fn azure_blob_identity(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::AzureBlob(cache) => Some((
+                cache.backend().account_url(),
+                cache.backend().container_name(),
+            )),
+            Self::Memory(_) | Self::Redis { .. } | Self::RedisSemantic(_) => None,
+        }
+    }
 }
 
 impl NativeResponseCache {
@@ -69,6 +93,7 @@ impl NativeResponseCache {
             Self::Memory(_) => "memory",
             Self::Redis { .. } => "redis",
             Self::RedisSemantic(_) => "redis_semantic",
+            Self::AzureBlob(_) => "azure-blob",
         }
     }
 
@@ -77,19 +102,20 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
             Self::RedisSemantic(cache) => cache.default_ttl(),
+            Self::AzureBlob(cache) => cache.default_ttl(),
         }
     }
 
     pub fn namespace(&self) -> Option<&str> {
         match self {
-            Self::Memory(_) | Self::RedisSemantic(_) => None,
+            Self::Memory(_) | Self::AzureBlob(_) | Self::RedisSemantic(_) => None,
             Self::Redis { cache, .. } => cache.backend().namespace(),
         }
     }
 
     pub fn topology(&self) -> Option<&RedisTopology> {
         match self {
-            Self::Memory(_) | Self::RedisSemantic(_) => None,
+            Self::Memory(_) | Self::AzureBlob(_) | Self::RedisSemantic(_) => None,
             Self::Redis { cache, .. } => Some(cache.backend().topology()),
         }
     }
@@ -97,42 +123,42 @@ impl NativeResponseCache {
     pub fn capacity(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
-            Self::Redis { .. } | Self::RedisSemantic(_) => None,
+            Self::Redis { .. } | Self::AzureBlob(_) | Self::RedisSemantic(_) => None,
         }
     }
 
     pub fn max_entry_bytes(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => cache.backend().max_entry_bytes(),
-            Self::Redis { .. } | Self::RedisSemantic(_) => None,
+            Self::Redis { .. } | Self::AzureBlob(_) | Self::RedisSemantic(_) => None,
         }
     }
 
     pub fn index_name(&self) -> Option<&str> {
         match self {
             Self::RedisSemantic(cache) => Some(cache.backend().index_name()),
-            Self::Memory(_) | Self::Redis { .. } => None,
+            Self::Memory(_) | Self::Redis { .. } | Self::AzureBlob(_) => None,
         }
     }
 
     pub fn similarity_threshold(&self) -> Option<f32> {
         match self {
             Self::RedisSemantic(cache) => Some(cache.backend().similarity_threshold()),
-            Self::Memory(_) | Self::Redis { .. } => None,
+            Self::Memory(_) | Self::Redis { .. } | Self::AzureBlob(_) => None,
         }
     }
 
     pub fn semantic_embedder(&self) -> Option<&PythonEmbedder> {
         match self {
             Self::RedisSemantic(cache) => Some(cache.backend().embedder()),
-            Self::Memory(_) | Self::Redis { .. } => None,
+            Self::Memory(_) | Self::Redis { .. } | Self::AzureBlob(_) => None,
         }
     }
 
     pub fn embedder_object(&self) -> Option<&Py<PyAny>> {
         match self {
             Self::RedisSemantic(cache) => Some(cache.backend().embedder().object()),
-            Self::Memory(_) | Self::Redis { .. } => None,
+            Self::Memory(_) | Self::Redis { .. } | Self::AzureBlob(_) => None,
         }
     }
 
@@ -162,6 +188,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.lookup(&request.exact(), now),
             Self::Redis { cache, .. } => cache.lookup(&request.exact(), now),
             Self::RedisSemantic(cache) => cache.lookup(&request.semantic(), now),
+            Self::AzureBlob(cache) => cache.lookup(&request.exact(), now),
         }
     }
 
@@ -175,6 +202,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.store(&request.exact(), response, now),
             Self::Redis { cache, .. } => cache.store(&request.exact(), response, now),
             Self::RedisSemantic(cache) => cache.store(&request.semantic(), response, now),
+            Self::AzureBlob(cache) => cache.store(&request.exact(), response, now),
         }
     }
 
@@ -187,6 +215,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.lookup_batch(&Self::exact_requests(requests), now),
             Self::Redis { cache, .. } => cache.lookup_batch(&Self::exact_requests(requests), now),
             Self::RedisSemantic(_) => Err(Error::UnsupportedOperation),
+            Self::AzureBlob(cache) => cache.lookup_batch(&Self::exact_requests(requests), now),
         }
     }
 
@@ -199,6 +228,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.async_lookup(&request.exact(), now).await,
             Self::Redis { cache, .. } => cache.async_lookup(&request.exact(), now).await,
             Self::RedisSemantic(cache) => cache.async_lookup(&request.semantic(), now).await,
+            Self::AzureBlob(cache) => cache.async_lookup(&request.exact(), now).await,
         }
     }
 
@@ -225,6 +255,7 @@ impl NativeResponseCache {
             Self::RedisSemantic(cache) => {
                 cache.async_store(&request.semantic(), response, now).await
             }
+            Self::AzureBlob(cache) => cache.async_store(&request.exact(), response, now).await,
         }
     }
 
@@ -245,6 +276,11 @@ impl NativeResponseCache {
                     .await
             }
             Self::RedisSemantic(_) => Err(Error::UnsupportedOperation),
+            Self::AzureBlob(cache) => {
+                cache
+                    .async_lookup_batch(&Self::exact_requests(requests), now)
+                    .await
+            }
         }
     }
 
@@ -287,6 +323,17 @@ impl NativeResponseCache {
                     )
                     .await
             }
+            Self::AzureBlob(cache) => {
+                cache
+                    .async_store_batch(
+                        entries
+                            .into_iter()
+                            .map(|(request, value)| (request.exact(), value))
+                            .collect(),
+                        now,
+                    )
+                    .await
+            }
         }
     }
 
@@ -300,6 +347,7 @@ impl NativeResponseCache {
                 cache.async_flush().await
             }
             Self::RedisSemantic(_) => Err(Error::UnsupportedOperation),
+            Self::AzureBlob(cache) => cache.async_flush().await,
         }
     }
 
@@ -308,6 +356,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.test_connection().await,
             Self::Redis { cache, .. } => cache.test_connection().await,
             Self::RedisSemantic(_) => Err(Error::UnsupportedOperation),
+            Self::AzureBlob(cache) => cache.test_connection().await,
         }
     }
 }
