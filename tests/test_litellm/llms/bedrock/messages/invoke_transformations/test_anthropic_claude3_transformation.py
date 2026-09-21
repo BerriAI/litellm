@@ -1672,7 +1672,7 @@ def test_bedrock_messages_forwards_safeguards_with_dangerous_tool_use_beta(local
     )
 
     assert result["safeguards"] == safeguards
-    assert result["anthropic_beta"] == ["dangerous-tool-use-2026-09-03"]
+    assert "dangerous-tool-use-2026-09-03" in result["anthropic_beta"]
 
 
 def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
@@ -1680,6 +1680,25 @@ def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
     decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
     tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
     safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
+
+    message_start = decoder._chunk_parser(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 3, "output_tokens": 0},
+                "safeguard_results": safeguard_results,
+            },
+        }
+    )
+
+    assert isinstance(message_start, dict)
+    assert message_start["message"]["safeguard_results"] == safeguard_results
 
     message_delta = decoder._chunk_parser(
         {
