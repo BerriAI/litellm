@@ -58,6 +58,7 @@ if TYPE_CHECKING:
 
 BREACH_RECHECK_INTERVAL: Final = timedelta(hours=24)
 PASSWORD_RESET_ALLOWED_ROUTES: Final = ("/user/password/change",)
+PASSWORD_SESSION_METADATA: Final = MappingProxyType({"login_method": "username_password"})
 
 
 def _breach_recheck_due(last_breach_check_at: datetime | None) -> bool:
@@ -431,7 +432,10 @@ async def _sign_in(
                     user_id=user_id,
                     team_id="litellm-dashboard",
                     allowed_routes=list(PASSWORD_RESET_ALLOWED_ROUTES) if password_reset_required else None,
-                    metadata={"password_reset_required": True} if password_reset_required else {},
+                    metadata={
+                        **PASSWORD_SESSION_METADATA,
+                        **({"password_reset_required": True} if password_reset_required else {}),
+                    },
                 )
             else:
                 raise ProxyException(
