@@ -43037,21 +43037,21 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4-pro": {
-        "input_cost_per_token": 8.92272e-07,
+        "input_cost_per_token": 8.87226e-07,
         "input_cost_per_token_cache_hit": 4.4e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.784544e-06,
+        "output_cost_per_token": 1.774452e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "cache_read_input_token_cost": 7.4356e-08,
+        "cache_read_input_token_cost": 7.39355e-08,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_vision": false,
@@ -73794,6 +73794,7 @@
         "supports_web_search": false
     },
     "openrouter/bytedance-seed/seed-1.6": {
+        "deprecation_date": "2026-11-11",
         "input_cost_per_token": 2.5e-07,
         "input_cost_per_token_above_128k_tokens": 5e-07,
         "litellm_provider": "openrouter",
@@ -73815,6 +73816,7 @@
         "supports_web_search": false
     },
     "openrouter/bytedance-seed/seed-1.6-flash": {
+        "deprecation_date": "2026-11-11",
         "input_cost_per_token": 7.5e-08,
         "input_cost_per_token_above_128k_tokens": 1e-07,
         "litellm_provider": "openrouter",
@@ -73855,6 +73857,7 @@
         "supports_web_search": false
     },
     "openrouter/bytedance-seed/seed-2.0-code": {
+        "deprecation_date": "2026-11-11",
         "input_cost_per_token": 5e-07,
         "input_cost_per_token_above_128k_tokens": 1e-06,
         "litellm_provider": "openrouter",
