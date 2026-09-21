@@ -1402,6 +1402,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for masked_chunk in await self._mask_buffered_model_response_stream(all_chunks, request_data):
                 yield masked_chunk
 
+        except BlockedPiiEntityError:
+            raise
         except Exception as e:
             if not all_chunks:
                 raise
@@ -1424,6 +1426,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         original_text: Final = model_response_text(assembled)
         try:
             await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
+        except BlockedPiiEntityError:
+            raise
         except Exception as e:
             verbose_proxy_logger.error("Error masking streaming PII output: %s", e)
             return chunks

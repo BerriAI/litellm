@@ -2494,6 +2494,55 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_are_replayed_when_p
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_block_action_raises_instead_of_replaying():
+    """
+    A BLOCK on generated PII must refuse the streaming /v1/messages response the
+    same way it refuses the non streaming one, not replay the raw frames.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        apply_to_output=True,
+        mock_testing=False,
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.BLOCK},
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    analyzer_hit = [{"entity_type": "CREDIT_CARD", "score": 0.99, "start": 0, "end": 19}]
+    collected = []
+    with patch.object(guardrail, "_get_session_iterator", _make_mock_session_iterator(analyzer_hit)):
+        with pytest.raises(BlockedPiiEntityError):
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                response=mock_stream(),
+                request_data={},
+            ):
+                collected.append(chunk)
+
+    assert collected == []
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_streaming_propagates_upstream_error_when_nothing_was_buffered():
     """
     An upstream guardrail that rejects the stream before the first chunk must
