@@ -1,4 +1,5 @@
 mod cache;
+mod coercion;
 mod credentials;
 mod diagnostics;
 mod errors;
