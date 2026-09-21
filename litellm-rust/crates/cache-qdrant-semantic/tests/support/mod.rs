@@ -11,9 +11,7 @@ use qdrant_client::qdrant::{
     PointsOperationResponse, ScoredPoint, SearchPoints, SearchResponse, Value, Vector, Vectors,
     collections_server::Collections,
     points_server::{Points, PointsServer},
-    value::Kind,
 };
-use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{Request, Response, Status, transport::Server};
@@ -23,26 +21,6 @@ pub struct StoredPoint {
     pub id: Option<PointId>,
     pub vector: Vec<f32>,
     pub payload: HashMap<String, Value>,
-}
-
-fn qdrant_value_to_json(value: Value) -> JsonValue {
-    match value.kind {
-        Some(Kind::NullValue(_)) | None => JsonValue::Null,
-        Some(Kind::DoubleValue(value)) => serde_json::json!(value),
-        Some(Kind::IntegerValue(value)) => serde_json::json!(value),
-        Some(Kind::StringValue(value)) => JsonValue::String(value),
-        Some(Kind::BoolValue(value)) => JsonValue::Bool(value),
-        Some(Kind::StructValue(value)) => JsonValue::Object(
-            value
-                .fields
-                .into_iter()
-                .map(|(key, value)| (key, qdrant_value_to_json(value)))
-                .collect(),
-        ),
-        Some(Kind::ListValue(value)) => {
-            JsonValue::Array(value.values.into_iter().map(qdrant_value_to_json).collect())
-        }
-    }
 }
 
 #[derive(Default)]
@@ -266,7 +244,7 @@ impl Points for FakeService {
                         .payload
                         .get(field)
                         .and_then(|value| {
-                            let value = qdrant_value_to_json(value.clone());
+                            let value: serde_json::Value = value.clone().into();
                             value
                                 .as_str()
                                 .map(str::to_owned)
