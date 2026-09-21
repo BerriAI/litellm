@@ -9,12 +9,12 @@
 
 
 import asyncio
+import json
+import threading
 from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from functools import reduce
-import json
-import threading
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
 
@@ -1628,7 +1628,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if not getattr(assembled_model_response, "usage", None) and chunks:
             last_chunk_usage: Final = getattr(chunks[-1], "usage", None)
             if last_chunk_usage:
-                setattr(assembled_model_response, "usage", last_chunk_usage)
+                assembled_model_response.usage = last_chunk_usage
 
     def get_presidio_settings_from_request_data(self, data: dict) -> PresidioPerRequestConfig | None:
         if "metadata" in data:
