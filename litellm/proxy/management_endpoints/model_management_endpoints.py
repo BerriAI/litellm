@@ -1133,6 +1133,7 @@ async def patch_model(
             litellm_params=patch_data.litellm_params,
             user_api_key_dict=user_api_key_dict,
             existing_litellm_params=db_model.litellm_params,
+            null_detaches=True,
         )
         _raise_on_invalid_credential_name(patch_data.litellm_params)
 
@@ -1944,10 +1945,14 @@ class ModelManagementAuthChecks:
         litellm_params: GenericLiteLLMParams | None,
         user_api_key_dict: UserAPIKeyAuth,
         existing_litellm_params: GenericLiteLLMParams | None = None,
+        *,
+        null_detaches: bool = False,
     ) -> Literal[True]:
         if litellm_params is None:
             return True
         if "litellm_credential_name" not in litellm_params.model_fields_set:
+            return True
+        if litellm_params.litellm_credential_name is None and not null_detaches:
             return True
         existing_credential_name: Final = (
             decrypt_value_helper(
