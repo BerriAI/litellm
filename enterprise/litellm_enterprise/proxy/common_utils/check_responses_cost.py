@@ -29,8 +29,6 @@ TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "inc
 
 
 class _ManagedObjectRow(Protocol):
-    """The managed-object row fields this poller reads off whatever the DB hands back."""
-
     @property
     def id(self) -> str: ...
 
@@ -45,7 +43,6 @@ class _ManagedObjectRow(Protocol):
 
 
 def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
-    """The managed-object table's prisma actions, typed to the row fields this poller reads."""
     table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
     return table
 

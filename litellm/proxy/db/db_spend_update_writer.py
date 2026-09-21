@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, Type
 from urllib.parse import quote, unquote
 
 from pydantic import TypeAdapter
-from typing_extensions import LiteralString, ReadOnly, TypedDict
+from typing_extensions import LiteralString, ReadOnly, TypedDict, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -142,7 +142,6 @@ _EntitySpendTable: TypeAlias = Literal[
 
 
 def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable) -> BatchTable:
-    """The batch table an entity type's spend increments are written to."""
     match table_accessor:
         case "litellm_tagtable":
             return batcher.litellm_tagtable
@@ -152,6 +151,8 @@ def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable)
             return batcher.litellm_modelaccessgroupbudgettable
         case "litellm_projecttable":
             return batcher.litellm_projecttable
+        case _ as unreachable:
+            assert_never(unreachable)
 
 
 class _SpendBatchManager(Protocol):

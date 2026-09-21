@@ -43,8 +43,6 @@ TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
 
 
 class _ManagedObjectRow(Protocol):
-    """The managed-object row fields this poller reads off whatever the DB hands back."""
-
     @property
     def id(self) -> str: ...
 
@@ -59,19 +57,16 @@ class _ManagedObjectRow(Protocol):
 
 
 def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
-    """The managed-object table's prisma actions, typed to the row fields this module reads."""
     table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
     return table
 
 
 def _user_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_UserTable]":
-    """The user table's prisma actions."""
     table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = prisma_client.db.litellm_usertable
     return table
 
 
 def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
-    """The virtual-key table's prisma actions."""
     table: Final[TableActions[prisma_models.LiteLLM_VerificationToken]] = (
         prisma_client.db.litellm_verificationtoken
     )
@@ -79,7 +74,6 @@ def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.L
 
 
 def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
-    """The team table's prisma actions."""
     table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = prisma_client.db.litellm_teamtable
     return table
 
