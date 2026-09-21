@@ -4748,6 +4748,173 @@ class TestMCPServerManager:
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
+    async def test_health_check_reuses_cached_probe_until_forced(self):
+        """A second page load must not open another upstream session."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="cached-server",
+            name="cached-server",
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://cached-server.example",
+        )
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        first = await manager.health_check_server(server.server_id)
+        second = await manager.health_check_server(server.server_id)
+        forced = await manager.health_check_server(server.server_id, force=True)
+
+        assert first.status == "healthy"
+        assert second.last_health_check == first.last_health_check
+        assert manager._create_mcp_client.await_count == 2
+        assert forced.status == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_registry_replacement_drops_cached_health(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="replaced-server",
+            name="replaced-server",
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://replaced-server.example",
+        )
+        replacement = MCPServer(
+            server_id=server.server_id,
+            name=server.name,
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://replaced-server.example/v2",
+        )
+        manager.registry[server.server_id] = server
+        manager.get_mcp_server_by_id = MagicMock(side_effect=lambda _server_id: manager.registry.get(_server_id))
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock(run_with_session=AsyncMock(return_value="ok")))
+
+        cached = await manager.health_check_server(server.server_id)
+        await manager.update_server(
+            LiteLLM_MCPServerTable(
+                server_id=server.server_id,
+                server_name=server.name,
+                url=replacement.url,
+                transport=MCPTransport.http,
+                approval_status="active",
+            )
+        )
+        after_update = await manager.health_check_server(server.server_id)
+
+        manager.remove_server(
+            LiteLLM_MCPServerTable(
+                server_id=server.server_id,
+                server_name=server.name,
+                url=replacement.url,
+                transport=MCPTransport.http,
+            )
+        )
+        manager.registry[server.server_id] = server
+        after_remove = await manager.health_check_server(server.server_id)
+
+        with (
+            patch(  # test-quality-ok: reload constructs its repository internally and this test has no database
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=MagicMock(table=MagicMock(find_many=AsyncMock(return_value=[]))),
+            ),
+            patch(  # test-quality-ok: reload fetches prisma internally and this test has no database
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+        ):
+            await manager.reload_servers_from_database()
+        manager.registry[server.server_id] = server
+        after_reload = await manager.health_check_server(server.server_id)
+
+        assert cached.status == "healthy"
+        assert after_update.last_health_check != cached.last_health_check
+        assert after_remove.last_health_check != after_update.last_health_check
+        assert after_reload.last_health_check != after_remove.last_health_check
+        assert manager._create_mcp_client.await_count == 4
+
+    @pytest.mark.asyncio
+    async def test_health_check_shares_one_probe_across_concurrent_misses(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="shared-probe",
+            name="shared-probe",
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://shared-probe.example",
+        )
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def _session(_session):
+            started.set()
+            await release.wait()
+            return "ok"
+
+        mock_client = AsyncMock()
+        mock_client.run_with_session = _session
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        tasks = [asyncio.create_task(manager.health_check_server(server.server_id)) for _ in range(4)]
+        await asyncio.wait_for(started.wait(), timeout=1)
+        release.set()
+        results = await asyncio.gather(*tasks)
+
+        assert manager._create_mcp_client.await_count == 1
+        assert {result.last_health_check for result in results} == {results[0].last_health_check}
+
+    @pytest.mark.asyncio
+    async def test_health_check_fanout_holds_at_most_the_concurrency_cap(self):
+        """A page of many servers must not open one live session per server at once."""
+        from litellm.constants import MCP_HEALTH_CHECK_MAX_CONCURRENCY
+
+        manager = MCPServerManager()
+        server_ids = [f"server-{index}" for index in range(MCP_HEALTH_CHECK_MAX_CONCURRENCY + 4)]
+        servers = {
+            server_id: MCPServer(
+                server_id=server_id,
+                name=server_id,
+                transport=MCPTransport.http,
+                auth_type=None,
+                authentication_token="test-token",
+                url=f"http://{server_id}.example",
+            )
+            for server_id in server_ids
+        }
+        manager.get_mcp_server_by_id = MagicMock(side_effect=servers.get)
+        in_flight = 0
+        peak = 0
+        release = asyncio.Event()
+
+        async def _session(_session):
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await release.wait()
+            in_flight -= 1
+            return "ok"
+
+        mock_client = AsyncMock()
+        mock_client.run_with_session = _session
+        manager._create_mcp_client = AsyncMock(return_value=mock_client)
+
+        task = asyncio.create_task(manager._run_health_checks(server_ids))
+        await asyncio.sleep(0.05)
+        assert peak == MCP_HEALTH_CHECK_MAX_CONCURRENCY
+        release.set()
+        results = await task
+        assert len(results) == len(server_ids)
+        assert peak == MCP_HEALTH_CHECK_MAX_CONCURRENCY
+
+    @pytest.mark.asyncio
     async def test_health_check_server_oauth2_skips_check(self):
         """Test that health check is skipped for OAuth2 servers and returns unknown status"""
         manager = MCPServerManager()

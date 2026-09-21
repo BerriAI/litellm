@@ -20,8 +20,7 @@ export const useMCPServerHealth = () => {
     queryKey: mcpServerHealthKeys.lists(),
     queryFn: async () => await fetchMCPServerHealth(accessToken!),
     enabled: !!accessToken,
-    // Refetch health status every 30 seconds to keep it up to date
-    refetchInterval: 30000,
+    staleTime: 60_000,
   });
 
   const recheckServerHealth = useCallback(

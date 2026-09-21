@@ -58,6 +58,25 @@ describe("useMCPServerHealth", () => {
     expect(result.current.data).toEqual(mockHealthStatuses);
   });
 
+  it("should not poll health in the background", async () => {
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    const { result } = renderHook(() => useMCPServerHealth(), {
+      wrapper: ({ children }: { children: React.ReactNode }) =>
+        React.createElement(QueryClientProvider, { client: queryClient }, children),
+    });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    const query = queryClient.getQueryCache().find({ queryKey: ["mcpServerHealth", "list"] });
+    expect(query).toBeDefined();
+    expect(query?.options.refetchInterval).toBeFalsy();
+    expect(query?.options.staleTime).toBe(60_000);
+  });
+
   it("should handle errors when fetching health status", async () => {
     const mockError = new Error("Failed to fetch health status");
     vi.mocked(networking.fetchMCPServerHealth).mockRejectedValue(mockError);

@@ -54,6 +54,8 @@ from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
     MCP_CLIENT_TIMEOUT,
+    MCP_HEALTH_CHECK_CACHE_TTL,
+    MCP_HEALTH_CHECK_MAX_CONCURRENCY,
     MCP_HEALTH_CHECK_TIMEOUT,
     MCP_METADATA_TIMEOUT,
     MCP_NPM_CACHE_DIR,
@@ -925,11 +927,9 @@ class _OpenAPIHealthProbe:
             try:
                 status, error = await _openapi_spec_health(self.spec_path, timeout=MCP_HEALTH_CHECK_TIMEOUT)
             except asyncio.CancelledError:
-                return (
-                    "unknown",
-                    "OpenAPI specification check was cancelled",
-                    datetime.datetime.now(datetime.timezone.utc),
-                )
+                if self.result is None or self.clock() - self.checked_at >= 30.0:
+                    self.checked_at = float("-inf")
+                raise
             self.result = (status, error, datetime.datetime.now(datetime.timezone.utc))
             self.checked_at = self.clock()
             return self.result
@@ -1916,6 +1916,9 @@ class MCPServerManager:
         self.registry: dict[str, MCPServer] = {}
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
+        self._health_check_cache: dict[str, tuple[float, LiteLLM_MCPServerTable]] = {}
+        self._health_check_inflight: dict[str, asyncio.Task[LiteLLM_MCPServerTable]] = {}
+        self._health_check_semaphore = asyncio.Semaphore(max(1, MCP_HEALTH_CHECK_MAX_CONCURRENCY))
         """
         eg.
         [
@@ -2883,6 +2886,7 @@ class MCPServerManager:
             verbose_logger.debug("Removed MCP Server: %s", mcp_server.server_id or mcp_server.server_name)
             self._cleanup_server_tool_routing_artifacts(evicted)
             self._invalidate_oauth_discovery_state(evicted.server_id)
+            self._health_check_cache.pop(evicted.server_id, None)
         else:
             verbose_logger.warning("Server ID %s not found in registry", mcp_server.server_id)
 
@@ -3240,6 +3244,7 @@ class MCPServerManager:
             if evicted is not None:
                 self._cleanup_server_tool_routing_artifacts(evicted)
                 self._invalidate_oauth_discovery_state(evicted.server_id)
+                self._health_check_cache.pop(evicted.server_id, None)
             return
         try:
             if mcp_server.server_id in self.registry:
@@ -3258,6 +3263,7 @@ class MCPServerManager:
                 self._assign_unique_short_prefix(new_server)
                 self._invalidate_discovery_lists(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
+                self._health_check_cache.pop(mcp_server.server_id, None)
                 await self._maybe_register_openapi_tools(new_server)
                 self.prime_oauth_metadata_discovery(new_server)
                 verbose_logger.debug("Updated MCP Server: %s", new_server.name)
@@ -6594,6 +6600,7 @@ class MCPServerManager:
         for server_id in previous_registry.keys() | registered_registry.keys():
             if previous_registry.get(server_id) != registered_registry.get(server_id):
                 self._invalidate_discovery_lists(server_id)
+                self._health_check_cache.pop(server_id, None)
         self.registry = registered_registry
         # A discovery task may have published into ``previous_registry`` while
         # this replacement was being staged. Reconcile every published entry
@@ -6865,17 +6872,59 @@ class MCPServerManager:
         # Take first 32 characters and format as UUID-like string
         return hash_hex[:32]
 
-    async def health_check_server(self, server_id: str, mcp_auth_header: str | None = None) -> LiteLLM_MCPServerTable:
-        """
-        Perform a health check on a specific MCP server.
+    def _cached_health(self, server_id: str) -> LiteLLM_MCPServerTable | None:
+        cached: Final = self._health_check_cache.get(server_id)
+        if cached is None:
+            return None
+        checked_at, result = cached
+        if time.monotonic() - checked_at >= MCP_HEALTH_CHECK_CACHE_TTL:
+            return None
+        return result
 
-        Args:
-            server_id: The ID of the server to health check
-            mcp_auth_header: Optional authentication header for the MCP server
+    async def health_check_server(
+        self,
+        server_id: str,
+        mcp_auth_header: str | None = None,
+        *,
+        force: bool = False,
+    ) -> LiteLLM_MCPServerTable:
+        """Perform a health check on a specific MCP server."""
+        if not force:
+            cached: Final = self._cached_health(server_id)
+            if cached is not None:
+                return cached
+        inflight: Final = self._health_check_inflight.get(server_id)
+        if inflight is not None:
+            try:
+                return await asyncio.shield(inflight)
+            except asyncio.CancelledError:
+                if not inflight.cancelled():
+                    raise
+        probe: Final = asyncio.create_task(self._probe_server_health(server_id, mcp_auth_header))
+        self._health_check_inflight[server_id] = probe
+        try:
+            result: Final = await probe
+        except asyncio.CancelledError:
+            if self._health_check_inflight.get(server_id) is probe:
+                self._health_check_inflight.pop(server_id, None)
+            server: Final = self.get_mcp_server_by_id(server_id)
+            if server is None or not server.spec_path:
+                raise
+            return LiteLLM_MCPServerTable(
+                server_id=server_id,
+                server_name=server.server_name,
+                transport=server.transport,
+                status="unknown",
+                health_check_error="OpenAPI specification check was cancelled",
+                last_health_check=datetime.datetime.now(datetime.timezone.utc),
+            )
+        finally:
+            self._health_check_inflight.pop(server_id, None)
+        if result.health_check_error != "Server not found":
+            self._health_check_cache[server_id] = (time.monotonic(), result)
+        return result
 
-        Returns:
-            Dict containing health check results
-        """
+    async def _probe_server_health(self, server_id: str, mcp_auth_header: str | None = None) -> LiteLLM_MCPServerTable:
         from datetime import datetime
 
         server: Final = self.get_mcp_server_by_id(server_id)
@@ -6939,8 +6988,8 @@ class MCPServerManager:
                 async def _noop(session):
                     return "ok"
 
-                # Add timeout wrapper to prevent hanging
-                await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
+                async with self._health_check_semaphore:
+                    await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
                 self._remember_upstream_initialize_instructions(server, client)
                 status = "healthy"
             except asyncio.TimeoutError:
@@ -6997,6 +7046,7 @@ class MCPServerManager:
         self,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         server_ids: list[str] | None = None,
+        force: bool = False,
     ) -> list[LiteLLM_MCPServerTable]:
         """
         Get all MCP servers that the user has access to, with health status and team information.
@@ -7021,7 +7071,7 @@ class MCPServerManager:
             # Check all accessible servers
             target_server_ids = allowed_server_ids
 
-        return await self._run_health_checks(target_server_ids)
+        return await self._run_health_checks(target_server_ids, force=force)
 
     async def get_all_allowed_mcp_servers(
         self,
@@ -7124,7 +7174,7 @@ class MCPServerManager:
         return servers
 
     async def get_all_mcp_servers_with_health_unfiltered(
-        self, server_ids: list[str] | None = None
+        self, server_ids: list[str] | None = None, force: bool = False
     ) -> list[LiteLLM_MCPServerTable]:
         """Return health info for all servers in registry regardless of user access."""
 
@@ -7140,13 +7190,15 @@ class MCPServerManager:
         if not target_server_ids:
             return []
 
-        return await self._run_health_checks(target_server_ids)
+        return await self._run_health_checks(target_server_ids, force=force)
 
-    async def _run_health_checks(self, target_server_ids: list[str]) -> list[LiteLLM_MCPServerTable]:
+    async def _run_health_checks(
+        self, target_server_ids: list[str], force: bool = False
+    ) -> list[LiteLLM_MCPServerTable]:
         if not target_server_ids:
             return []
 
-        tasks: Final = [self.health_check_server(server_id) for server_id in target_server_ids]
+        tasks: Final = [self.health_check_server(server_id, force=force) for server_id in target_server_ids]
         results: Final = await asyncio.gather(*tasks)
         return [server for server in results if server is not None]
 
