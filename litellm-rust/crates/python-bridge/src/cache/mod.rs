@@ -1,5 +1,6 @@
 mod binding;
 mod callback;
+mod config;
 mod facade;
 mod future;
 mod handle;

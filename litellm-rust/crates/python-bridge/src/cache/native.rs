@@ -74,6 +74,13 @@ impl NativeResponseCache {
         }
     }
 
+    pub fn max_entry_bytes(&self) -> Option<usize> {
+        match self {
+            Self::Memory(cache) => cache.backend().max_entry_bytes(),
+            Self::Redis { .. } => None,
+        }
+    }
+
     pub fn with_redis_flush_size(self, flush_size: Option<usize>) -> Self {
         match self {
             Self::Redis { cache, .. } => Self::Redis {

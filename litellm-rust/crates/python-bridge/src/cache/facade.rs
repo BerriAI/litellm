@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use litellm_host_python::from_py;
 use pyo3::{
     PyTraverseError, PyVisit,
@@ -9,7 +7,11 @@ use pyo3::{
 };
 use serde_json::Value;
 
-use super::{handle::CacheTestHandle, native::NativeResponseCache};
+use super::{
+    config::{CacheConfigProjection, NativeCacheConfig},
+    handle::CacheTestHandle,
+    native::NativeResponseCache,
+};
 
 struct ClassGuard {
     class: Py<PyType>,
@@ -26,6 +28,7 @@ struct ObjectGuard {
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
+    config: NativeCacheConfig,
 }
 
 impl ObjectGuard {
@@ -134,7 +137,6 @@ impl FacadeGuard {
         service: &NativeResponseCache,
     ) -> PyResult<Self> {
         let kind = service.kind();
-        let native_default_ttl: Duration = service.default_ttl();
         let cache_type = py.import("litellm.caching.caching")?.getattr("Cache")?;
         if !facade.get_type().is(&cache_type) {
             return Err(PyTypeError::new_err(
@@ -154,28 +156,14 @@ impl FacadeGuard {
                 "facade and native backend types must match",
             ));
         }
-        let python_default_ttl = backend.getattr("default_ttl")?.extract::<f64>()?;
-        if python_default_ttl != native_default_ttl.as_secs_f64() {
-            return Err(PyTypeError::new_err(
-                "facade and native backend default TTLs must match",
-            ));
-        }
-        let namespace = match backend.getattr_opt("namespace")? {
-            Some(namespace) => namespace.extract::<Option<String>>()?,
-            None => None,
-        }
-        .filter(|namespace| !namespace.is_empty());
-        if kind == "redis" && namespace.as_deref() != service.namespace() {
-            return Err(PyTypeError::new_err(
-                "facade and native backend namespaces must match",
-            ));
-        }
-        if let Some(capacity) = service.capacity()
-            && backend.getattr("max_size_in_memory")?.extract::<usize>()? != capacity
-        {
-            return Err(PyTypeError::new_err(
-                "facade and native backend capacities must match",
-            ));
+        let config = match NativeCacheConfig::project(facade)? {
+            CacheConfigProjection::Native(config) => *config,
+            CacheConfigProjection::Unsupported(reason) => {
+                return Err(PyTypeError::new_err(reason.message()));
+            }
+        };
+        if let Some(message) = config.service_mismatch(service) {
+            return Err(PyTypeError::new_err(message));
         }
         Ok(Self {
             outer: ObjectGuard::capture(
@@ -203,12 +191,15 @@ impl FacadeGuard {
                     "redis_flush_size",
                 ],
             )?,
+            config,
         })
     }
 
     fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let projected = NativeCacheConfig::project(facade)?;
         Ok(self.outer.matches(py, facade)?
-            && self.backend.matches(py, &facade.getattr("cache")?)?)
+            && self.backend.matches(py, &facade.getattr("cache")?)?
+            && matches!(projected, CacheConfigProjection::Native(config) if *config == self.config))
     }
 
     pub(super) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {

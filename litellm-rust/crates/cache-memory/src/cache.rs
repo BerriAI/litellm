@@ -124,6 +124,10 @@ impl<V: Clone> InMemoryCache<V> {
         self.max_size_in_memory
     }
 
+    pub fn max_entry_bytes(&self) -> Option<usize> {
+        self.max_entry_bytes
+    }
+
     pub fn expires_at(&self, key: &str) -> Result<Option<Duration>, Error> {
         Ok(self
             .state
