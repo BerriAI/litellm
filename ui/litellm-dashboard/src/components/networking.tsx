@@ -431,6 +431,10 @@ registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
 registerAuthTokenGetter(() => decodeToken(getCookie("token"))?.key ?? null);
 registerErrorHandler(handleError);
 
+export const fetchIsTeamAdmin = async (accessToken: string): Promise<{ is_team_admin: boolean }> => {
+  return await apiClient.get(`/team/is_admin`, { accessToken });
+};
+
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
   const response = await fetch(url, {

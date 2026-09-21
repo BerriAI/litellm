@@ -72,6 +72,7 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UpdateTeamRequest,
     UserAPIKeyAuth,
+    user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.auth_checks import (
     OrganizationNotFoundError,
@@ -5117,6 +5118,44 @@ async def _authorize_and_filter_teams(
     else:
         # Proxy admin: all teams
         return list(await _raw_team_db(TeamRepository(prisma_client)).find_many(include={"litellm_model_table": True}))
+
+
+class TeamAdminStatusResponse(TypedDict):
+    is_team_admin: bool
+
+
+@router.get(
+    "/team/is_admin",
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def is_caller_team_admin(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> TeamAdminStatusResponse:
+    """Whether the caller is in any team's admin list.
+
+    The sidebar only needs this boolean. ``GET /team/list`` loads every team
+    and then every key on those teams, which is what made every dashboard
+    page wait on the team table.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+    if user_api_key_has_admin_view(user_api_key_dict):
+        return TeamAdminStatusResponse(is_team_admin=True)
+    user_id: Final = user_api_key_dict.user_id
+    if not user_id:
+        return TeamAdminStatusResponse(is_team_admin=False)
+
+    rows: Final[Sequence[Mapping[str, object]]] = await prisma_client.db.query_raw(
+        'SELECT 1 FROM "LiteLLM_TeamTable" WHERE $1 = ANY(admins) LIMIT 1',
+        user_id,
+    )
+    return TeamAdminStatusResponse(is_team_admin=bool(rows))
 
 
 @router.get("/team/list", tags=["team management"], dependencies=[Depends(user_api_key_auth)])

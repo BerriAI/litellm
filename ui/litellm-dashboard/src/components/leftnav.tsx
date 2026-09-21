@@ -1,4 +1,4 @@
-import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useIsTeamAdmin } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
@@ -69,7 +69,6 @@ import {
   all_admin_roles,
   internalUserRoles,
   isAdminRole,
-  isUserTeamAdminForAnyTeam,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
 } from "../utils/roles";
@@ -432,9 +431,9 @@ const Sidebar_: React.FC<SidebarProps> = ({
   disableVectorStoresForInternalUsers,
   allowVectorStoresForTeamAdmins,
 }) => {
-  const { userId, accessToken, userRole, isViewOnly } = useAuthorized();
+  const { accessToken, userRole, isViewOnly } = useAuthorized();
   const isOrgAdmin = useIsOrgAdmin();
-  const { data: teams } = useTeams();
+  const isTeamAdmin = useIsTeamAdmin();
   const { logoUrl, logoUrlDark } = useTheme();
   const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
   const { data: healthData } = useHealthReadinessDetails(accessToken);
@@ -460,8 +459,6 @@ const Sidebar_: React.FC<SidebarProps> = ({
       setOpenGroups((prev) => new Set(prev).add(parent));
     }
   }
-
-  const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
     const isAdmin = isAdminRole(userRole);

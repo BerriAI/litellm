@@ -3,7 +3,7 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchTeams } from "@/app/(dashboard)/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
-import { teamInfoCall } from "@/components/networking";
+import { fetchIsTeamAdmin, teamInfoCall } from "@/components/networking";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { teamListScopeUserId } from "@/utils/roles";
 
@@ -106,6 +106,18 @@ export const useTeamsTable = (
 };
 
 const teamKeys = createQueryKeys("teams");
+
+export const useIsTeamAdmin = (): boolean => {
+  const { accessToken } = useAuthorized();
+  const query = useQuery<{ is_team_admin: boolean }>({
+    queryKey: teamKeys.list({ filters: { scope: "is-admin" } }),
+    queryFn: async () => await fetchIsTeamAdmin(accessToken!),
+    enabled: Boolean(accessToken),
+    staleTime: 60_000,
+  });
+  return query.data?.is_team_admin ?? false;
+};
+
 export const useTeams = (): UseQueryResult<Team[]> => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<Team[]>({

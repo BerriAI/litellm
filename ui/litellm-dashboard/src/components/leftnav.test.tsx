@@ -49,6 +49,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => ({ data: [], isLoading: false, error: null }),
+  useIsTeamAdmin: () => false,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
