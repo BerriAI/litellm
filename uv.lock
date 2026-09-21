@@ -4719,6 +4719,7 @@ dev = [
     { name = "vcrpy" },
 ]
 e2e-dev = [
+    { name = "anthropic" },
     { name = "locust" },
     { name = "mcp" },
     { name = "playwright" },
@@ -4920,6 +4921,7 @@ dev = [
     { name = "vcrpy", specifier = "==8.2.1" },
 ]
 e2e-dev = [
+    { name = "anthropic", specifier = "==0.84.0" },
     { name = "locust", specifier = "==2.45.0" },
     { name = "mcp", specifier = ">=2.2.0,<3" },
     { name = "playwright", specifier = "==1.61.0" },
