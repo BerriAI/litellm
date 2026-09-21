@@ -14,6 +14,7 @@ import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
 
 
 # Import LangfuseUsageDetails directly from the module where it's defined
@@ -313,6 +314,70 @@ class TestLangfuseUsageDetails(unittest.TestCase):
             assert usage_details["cache_read_input_tokens"] == 0
 
             mock_add_prompt_params.assert_called_once()
+
+    def test_log_langfuse_v2_responses_api_usage(self):
+        """
+        Regression test: a /v1/responses response carries ResponseAPIUsage
+        (input_tokens/output_tokens), which must be normalized to a chat Usage
+        before Langfuse usage_details are read, or generations log 0 tokens.
+        """
+        self.use_real_langfuse_client()
+
+        with patch(
+            "litellm.integrations.langfuse.langfuse._add_prompt_to_generation_params",
+            side_effect=lambda generation_params, **kwargs: generation_params,
+            create=True,
+        ):
+            response_obj = ResponsesAPIResponse(
+                id="resp_123",
+                created_at=0,
+                output=[],
+                usage=ResponseAPIUsage(
+                    input_tokens=16,
+                    output_tokens=21,
+                    total_tokens=37,
+                    input_tokens_details=InputTokensDetails(cached_tokens=4),
+                ),
+            )
+
+            kwargs = {
+                "model": "gpt-5.5",
+                "messages": [{"role": "user", "content": "Test"}],
+                "litellm_params": {"metadata": {}},
+                "optional_params": {},
+                "litellm_call_id": "test-call-id-responses-api-usage",
+                "standard_logging_object": self._build_standard_logging_payload(),
+                "response_cost": 0.0,
+            }
+
+            fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+
+            try:
+                self.logger._log_langfuse_v2(
+                    user_id="test-user",
+                    metadata={},
+                    litellm_params=kwargs["litellm_params"],
+                    output={"role": "assistant", "content": "Response"},
+                    start_time=fixed_time,
+                    end_time=fixed_time + datetime.timedelta(seconds=1),
+                    kwargs=kwargs,
+                    optional_params=kwargs["optional_params"],
+                    input={"messages": kwargs["messages"]},
+                    response_obj=response_obj,
+                    level="DEFAULT",
+                    litellm_call_id=kwargs["litellm_call_id"],
+                )
+            except Exception as e:
+                self.fail(f"_log_langfuse_v2 raised an exception: {e}")
+
+            usage_details = json.loads(
+                self.exported_generation().attributes["langfuse.observation.usage_details"]
+            )
+            # input is reduced by cache_read_input_tokens per Langfuse docs
+            assert usage_details["input"] == 12
+            assert usage_details["output"] == 21
+            assert usage_details["total"] == 37
+            assert usage_details["cache_read_input_tokens"] == 4
 
     def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
         payload = {
