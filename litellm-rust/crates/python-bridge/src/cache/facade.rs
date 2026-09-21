@@ -38,6 +38,19 @@ struct S3ClientGuard {
     reference: Py<PyAny>,
 }
 
+struct AzureBlobClientGuard {
+    sync_client: Py<PyAny>,
+    async_client: Py<PyAny>,
+    url: String,
+    container_name: String,
+}
+
+enum ConnectionGuard {
+    None,
+    RedisPool(RedisPoolGuard),
+    AzureBlob(AzureBlobClientGuard),
+    S3(S3ClientGuard),
+}
 struct RedisPoolAttributes {
     pool: &'static str,
     connection_class: &'static str,
@@ -58,8 +71,7 @@ const CLUSTER_POOL: RedisPoolAttributes = RedisPoolAttributes {
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
-    redis_pool: Option<RedisPoolGuard>,
-    s3_client: Option<S3ClientGuard>,
+    connection: ConnectionGuard,
 }
 
 impl ObjectGuard {
@@ -225,6 +237,63 @@ impl S3ClientGuard {
     }
 }
 
+impl AzureBlobClientGuard {
+    fn capture(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let sync_client = backend.getattr("container_client")?;
+        Ok(Self {
+            url: sync_client.getattr("url")?.extract::<String>()?,
+            container_name: sync_client.getattr("container_name")?.extract::<String>()?,
+            sync_client: sync_client.unbind(),
+            async_client: backend.getattr("async_container_client")?.unbind(),
+        })
+    }
+
+    fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let sync_client = backend.getattr("container_client")?;
+        Ok(self.sync_client.bind(py).is(&sync_client)
+            && self
+                .async_client
+                .bind(py)
+                .is(&backend.getattr("async_container_client")?)
+            && self.url == sync_client.getattr("url")?.extract::<String>()?
+            && self.container_name == sync_client.getattr("container_name")?.extract::<String>()?)
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.sync_client)?;
+        visit.call(&self.async_client)
+    }
+}
+
+impl ConnectionGuard {
+    fn capture(kind: &str, cluster: bool, backend: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(match (kind, cluster) {
+            ("redis", false) => Self::RedisPool(RedisPoolGuard::capture(backend, STANDALONE_POOL)?),
+            ("redis", true) => Self::RedisPool(RedisPoolGuard::capture(backend, CLUSTER_POOL)?),
+            ("azure-blob", _) => Self::AzureBlob(AzureBlobClientGuard::capture(backend)?),
+            ("s3", _) => Self::S3(S3ClientGuard::capture(backend)?),
+            _ => Self::None,
+        })
+    }
+
+    fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
+        match self {
+            Self::None => Ok(true),
+            Self::RedisPool(guard) => guard.matches(py, backend),
+            Self::AzureBlob(guard) => guard.matches(py, backend),
+            Self::S3(guard) => guard.matches(py, backend),
+        }
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        match self {
+            Self::None => Ok(()),
+            Self::RedisPool(guard) => guard.traverse(visit),
+            Self::AzureBlob(guard) => guard.traverse(visit),
+            Self::S3(guard) => guard.traverse(visit),
+        }
+    }
+}
 impl FacadeGuard {
     pub(super) fn capture(
         py: Python<'_>,
@@ -248,6 +317,11 @@ impl FacadeGuard {
                 "redis",
             ),
             ("s3", _) => ("litellm.caching.s3_cache", "S3Cache", "s3"),
+            ("azure-blob", _) => (
+                "litellm.caching.azure_blob_cache",
+                "AzureBlobCache",
+                "azure-blob",
+            ),
             _ => unreachable!(),
         };
         let backend = facade.getattr("cache")?;
@@ -295,14 +369,7 @@ impl FacadeGuard {
                     "key_prefix",
                 ],
             )?,
-            redis_pool: match (kind, cluster) {
-                ("redis", false) => Some(RedisPoolGuard::capture(&backend, STANDALONE_POOL)?),
-                ("redis", true) => Some(RedisPoolGuard::capture(&backend, CLUSTER_POOL)?),
-                _ => None,
-            },
-            s3_client: (kind == "s3")
-                .then(|| S3ClientGuard::capture(&backend))
-                .transpose()?,
+            connection: ConnectionGuard::capture(kind, cluster, &backend)?,
         })
     }
 
@@ -314,27 +381,13 @@ impl FacadeGuard {
         if !self.backend.matches(py, &backend)? {
             return Ok(false);
         }
-        match &self.redis_pool {
-            Some(guard) if !guard.matches(py, &backend)? => return Ok(false),
-            _ => {}
-        }
-        match &self.s3_client {
-            Some(guard) if !guard.matches(py, &backend)? => return Ok(false),
-            _ => {}
-        }
-        Ok(true)
+        self.connection.matches(py, &backend)
     }
 
     pub(super) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.outer.traverse(&visit)?;
         self.backend.traverse(&visit)?;
-        if let Some(guard) = &self.redis_pool {
-            guard.traverse(&visit)?;
-        }
-        if let Some(guard) = &self.s3_client {
-            guard.traverse(&visit)?;
-        }
-        Ok(())
+        self.connection.traverse(&visit)
     }
 }
 
