@@ -3,6 +3,7 @@ import os
 import subprocess
 import time
 import traceback
+from typing import Final
 
 import pytest
 
@@ -253,6 +254,7 @@ def _run_proxy_server_smoke_test(extra_proxy_args=None):
             raise
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
+        proxy_env: Final = {**os.environ, "LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY": "true"}
         server_process = subprocess.Popen(
             [
                 "uv",
@@ -266,6 +268,7 @@ def _run_proxy_server_smoke_test(extra_proxy_args=None):
                 *extra_proxy_args,
             ],
             cwd=PROJECT_ROOT,
+            env=proxy_env,
         )
 
         # Allow some time for the server to start (increased for CI environments)
