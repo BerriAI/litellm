@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     set_callbacks,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseAPIUsage, ResponseCompletedEvent, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
     LiteLLMRealtimeStreamLoggingObject,
@@ -3033,7 +3033,7 @@ def test_get_error_information_budget_exceeded_structured_fields():
     assert result["error_budget_entity_id"] == "repro-user"
     assert result["error_budget_limit"] == 1e-06
     assert result["error_budget_spend"] == 3.4e-05
-    assert result["error_code"] == "429"
+    assert result["error_code"] == "422"
     assert result["error_class"] == "BudgetExceededError"
     assert result["error_rate_limit_type"] == "budget"
 
@@ -6407,7 +6407,7 @@ def test_get_error_information_keeps_traceback_for_unmapped_provider_4xx():
 
 
 def test_get_error_information_skips_traceback_for_budget_rejection_with_provider():
-    """A key-over-budget 429 is the proxy's own rejection even after the auth
+    """A key-over-budget 422 is the proxy's own rejection even after the auth
     handler stamps the requested model's provider onto it, so it stays cheap."""
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -6416,7 +6416,7 @@ def test_get_error_information_skips_traceback_for_budget_rejection_with_provide
         litellm.BudgetExceededError(current_cost=0.01, max_budget=0.0, llm_provider="anthropic")
     )
     result = StandardLoggingPayloadSetup.get_error_information(over_budget)
-    assert result["error_code"] == "429"
+    assert result["error_code"] == "422"
     assert result["llm_provider"] == "anthropic"
     assert result["traceback"] == ""
 
@@ -7415,3 +7415,55 @@ class TestAzurePTUSpilloverCost:
         finally:
             litellm.model_cost.pop(custom_model_id, None)
             self._unregister_models()
+
+
+def _completed_responses_event(usage: ResponseAPIUsage) -> ResponseCompletedEvent:
+    return ResponseCompletedEvent(
+        type="response.completed",
+        response=ResponsesAPIResponse(
+            id="resp-1", created_at=1, object="response", status="completed", model="codex-mini-latest", output=[], usage=usage
+        ),
+    )
+
+
+def _responses_stream_logging_obj() -> LitellmLogging:
+    logging_obj = _make_logging_obj(stream=True)
+    logging_obj.update_environment_variables(
+        model="openai/codex-mini-latest", user="", optional_params={}, litellm_params={"api_base": ""}
+    )
+    return logging_obj
+
+
+def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost():
+    """A Responses stream whose completed event carries ``usage.cost`` is billed that number,
+    the way an assembled chat stream already is, instead of a price-map estimate."""
+    logging_obj = _responses_stream_logging_obj()
+    now = datetime.datetime.now()
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=_completed_responses_event(ResponseAPIUsage(input_tokens=12, output_tokens=2, total_tokens=14, cost=0.0042)),
+        start_time=now,
+        end_time=now,
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert assembled._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.0042
+    assert logging_obj._response_cost_calculator(result=assembled) == 0.0042
+
+
+def test_get_assembled_streaming_response_without_usage_cost_leaves_pricing_to_the_price_map():
+    logging_obj = _responses_stream_logging_obj()
+    now = datetime.datetime.now()
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=_completed_responses_event(ResponseAPIUsage(input_tokens=12, output_tokens=2, total_tokens=14)),
+        start_time=now,
+        end_time=now,
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert "additional_headers" not in assembled._hidden_params
+    price_map_cost = logging_obj._response_cost_calculator(result=assembled)
+    assert price_map_cost is not None and 0 < price_map_cost != 0.0042

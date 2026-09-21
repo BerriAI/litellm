@@ -3865,7 +3865,7 @@ if MCP_AVAILABLE:
         try:
             data: Final = json.loads(body)
             return isinstance(data, dict) and data.get("method") == "initialize"
-        except (json.JSONDecodeError, TypeError):
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
             return False
 
     def _extract_initialize_client_info(body: bytes) -> Implementation | None:
@@ -4791,7 +4791,7 @@ if MCP_AVAILABLE:
                             "MCP: detected JSON-RPC response POST (id=%s), skipping session lock to avoid deadlock",
                             _peeked.get("id"),
                         )
-                except (json.JSONDecodeError, TypeError):
+                except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
                     # Peek cap truncated the body, so it can't be fully parsed.
                     # Scan the top-level keys (depth-aware) instead of a flat
                     # substring search: a response's result payload may nest a

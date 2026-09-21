@@ -25,6 +25,14 @@ class ProviderSpecificEntry(BaseModel):
     us: float | None = None
 
 
+class TieredPrice(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    range: tuple[float, float]
+    input_cost_per_token: float
+    output_cost_per_token: float
+
+
 class CostMapEntry(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -35,19 +43,33 @@ class CostMapEntry(BaseModel):
     max_output_tokens: int | None = None
     supports_function_calling: bool | None = None
     input_cost_per_token: float | None = None
+    input_cost_per_query: float | None = None
     output_cost_per_token: float | None = None
+    input_cost_per_token_above_128k_tokens: float | None = None
+    output_cost_per_token_above_128k_tokens: float | None = None
+    output_vector_size: int | None = None
+    input_cost_per_token_batches: float | None = None
     cache_read_input_token_cost: float | None = None
     cache_creation_input_token_cost: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_1hr_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
-    output_cost_per_reasoning_token: float | None = None
-    input_cost_per_audio_token: float | None = None
-    output_cost_per_audio_token: float | None = None
-    input_cost_per_image_token: float | None = None
-    input_cost_per_video_token: float | None = None
     input_cost_per_token_above_200k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
+    tiered_pricing: tuple[TieredPrice, ...] | None = None
+    output_cost_per_reasoning_token: float | None = None
+    input_cost_per_audio_token: float | None = None
+    input_cost_per_second: float | None = None
+    output_cost_per_second: float | None = None
+    input_cost_per_character: float | None = None
+    output_cost_per_character: float | None = None
+    input_cost_per_image: float | None = None
+    output_cost_per_image: float | None = None
+    output_cost_per_audio_token: float | None = None
+    input_cost_per_image_token: float | None = None
+    output_cost_per_image_token: float | None = None
+    input_cost_per_video_token: float | None = None
     input_cost_per_token_flex: float | None = None
     output_cost_per_token_flex: float | None = None
     input_cost_per_token_priority: float | None = None
@@ -66,11 +88,28 @@ class Deployment(BaseModel):
     base_model: str | None = None
 
 
+class WavUpload(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["wav"]
+    seconds: float
+
+
+class PngUpload(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["png"]
+
+
+Upload: TypeAlias = Annotated[WavUpload | PngUpload, Field(discriminator="kind")]
+
+
 class JsonResponse(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     content_type: Literal["application/json"]
     body: dict[str, JsonValue]
+    status: int = 200
 
 
 class SseResponse(BaseModel):
@@ -94,8 +133,15 @@ class EventStreamResponse(BaseModel):
     events: tuple[EventStreamEvent, ...]
 
 
+class BinaryResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    content_type: Literal["audio/mpeg"]
+    length: int
+
+
 StoredResponse: TypeAlias = Annotated[
-    JsonResponse | SseResponse | EventStreamResponse,
+    JsonResponse | SseResponse | EventStreamResponse | BinaryResponse,
     Field(discriminator="content_type"),
 ]
 
@@ -108,6 +154,12 @@ class ExactExpected(BaseModel):
     output_cost: float
     prompt_tokens: int
     completion_tokens: int
+    cache_read_cost: float | None = None
+    cache_creation_cost: float | None = None
+    reasoning_cost: float | None = None
+    tool_usage_cost: float | None = None
+    breakdown_persisted: bool = True
+    cost_header: bool = True
 
 
 class RecountRates(BaseModel):
@@ -123,7 +175,19 @@ class RecountExpected(BaseModel):
     recount: RecountRates
 
 
-Expected: TypeAlias = ExactExpected | RecountExpected
+class FailureDetails(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: int
+
+
+class FailureExpected(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    failure: FailureDetails
+
+
+Expected: TypeAlias = ExactExpected | RecountExpected | FailureExpected
 
 
 class CostTrackingTestCase(BaseModel):
@@ -132,7 +196,24 @@ class CostTrackingTestCase(BaseModel):
     name: str
     covers: str
     model: str
+    endpoint: (
+        Literal[
+            "/v1/chat/completions",
+            "/v1/responses",
+            "/v1/messages",
+            "/v1/embeddings",
+            "/v1/rerank",
+            "/v1/completions",
+            "/v1/moderations",
+            "/v1/audio/transcriptions",
+            "/v1/audio/speech",
+            "/v1/images/generations",
+            "/v1/images/edits",
+        ]
+        | Annotated[str, Field(pattern=r"^/(gemini|anthropic|bedrock)/")]
+    ) = "/v1/chat/completions"
     deployment: Deployment | None = None
+    upload: Upload | None = None
     request: dict[str, JsonValue]
     response: StoredResponse
     expected: Expected
@@ -146,7 +227,12 @@ class CostTrackingTestCase(BaseModel):
         provider: Final = self.rates.litellm_provider
         prefix: Final = (
             "openai"
-            if provider == "openai" and self.rates.mode == "chat"
+            if provider == "openai"
+            and (
+                self.endpoint == "/v1/responses"
+                or self.rates.mode
+                in {"chat", "embedding", "moderation", "audio_transcription", "audio_speech", "image_generation"}
+            )
             else "openai/responses"
             if provider == "openai"
             else _PROVIDER_PREFIXES.get(provider)
@@ -169,6 +255,24 @@ class CostTrackingTestCase(BaseModel):
     def base_model(self) -> str | None:
         return self.deployment.base_model if self.deployment else None
 
+    @property
+    def passthrough_provider(self) -> Literal["gemini", "anthropic", "bedrock"] | None:
+        provider: Final = self.endpoint.removeprefix("/").split("/", 1)[0]
+        if provider == "gemini":
+            return "gemini"
+        if provider == "anthropic":
+            return "anthropic"
+        if provider == "bedrock":
+            return "bedrock"
+        return None
+
+    @property
+    def reports_provider_cost(self) -> bool:
+        if not isinstance(self.response, JsonResponse):
+            return False
+        usage: Final = self.response.body.get("usage")
+        return isinstance(usage, dict) and isinstance(usage.get("cost"), (int, float))
+
 
 class _CasesFile(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -180,17 +284,35 @@ class _CasesFile(BaseModel):
 _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "anthropic": "anthropic",
+        "bedrock": "bedrock",
         "bedrock_converse": "bedrock/converse",
+        "deepgram": "deepgram",
+        "text-completion-openai": "text-completion-openai",
+        "cohere": "cohere",
         "vertex_ai-language-models": "vertex_ai",
+        "vertex_ai-image-models": "vertex_ai",
+        "vertex_ai-embedding-models": "vertex_ai",
         "gemini": "",
         "together_ai": "",
         "fireworks_ai": "",
         "azure": "",
+        "dashscope": "",
+        "openrouter": "",
+        "perplexity": "",
+        "deepseek": "",
+        "xai": "",
     }
 )
 _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     {
         "anthropic": MappingProxyType({}),
+        "bedrock": MappingProxyType(
+            {
+                "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
+                "aws_secret_access_key": "scripted-secret",
+                "aws_region_name": "us-east-1",
+            }
+        ),
         "bedrock_converse": MappingProxyType(
             {
                 "aws_access_key_id": "AKIASCRIPTEDPROVIDER",
@@ -198,7 +320,16 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "aws_region_name": "us-east-1",
             }
         ),
+        "deepgram": MappingProxyType({}),
+        "text-completion-openai": MappingProxyType({}),
+        "cohere": MappingProxyType({}),
         "vertex_ai-language-models": MappingProxyType(
+            {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
+        ),
+        "vertex_ai-image-models": MappingProxyType(
+            {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
+        ),
+        "vertex_ai-embedding-models": MappingProxyType(
             {"vertex_project": "cc-scripted-project", "vertex_location": "us-central1"}
         ),
         "gemini": MappingProxyType({}),
@@ -206,6 +337,11 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "fireworks_ai": MappingProxyType({}),
         "azure": MappingProxyType({"api_version": "2025-04-01-preview"}),
         "openai": MappingProxyType({}),
+        "dashscope": MappingProxyType({}),
+        "openrouter": MappingProxyType({}),
+        "perplexity": MappingProxyType({}),
+        "deepseek": MappingProxyType({}),
+        "xai": MappingProxyType({}),
     }
 )
 
@@ -240,6 +376,62 @@ def data_errors() -> tuple[str, ...]:
             or case.expected.recount.output_cost_per_token != (COST_MAP[case.model].output_cost_per_token or 0.0)
         )
     )
+    component_mismatches: Final = sorted(
+        case.name
+        for case in CASES
+        if isinstance(case.expected, ExactExpected)
+        and any(
+            component is not None
+            for component in (
+                case.expected.cache_read_cost,
+                case.expected.cache_creation_cost,
+                case.expected.reasoning_cost,
+                case.expected.tool_usage_cost,
+            )
+        )
+        and (
+            (case.expected.cache_read_cost or 0.0) + (case.expected.cache_creation_cost or 0.0)
+            > case.expected.input_cost
+            or (case.expected.reasoning_cost or 0.0) > case.expected.output_cost
+            or not _approx_equal(
+                case.expected.input_cost
+                + case.expected.output_cost
+                + (case.expected.tool_usage_cost or 0.0),
+                case.expected.spend,
+            )
+        )
+    )
+    failure_response_mismatches: Final = sorted(
+        case.name
+        for case in CASES
+        if (
+            isinstance(case.expected, FailureExpected)
+            and (
+                not isinstance(case.response, JsonResponse)
+                or not 400 <= case.response.status <= 599
+                or not 400 <= case.expected.failure.status <= 599
+            )
+        )
+        or (
+            not isinstance(case.expected, FailureExpected)
+            and isinstance(case.response, JsonResponse)
+            and case.response.status != 200
+        )
+    )
+    invalid_opt_outs: Final = sorted(
+        case.name
+        for case in CASES
+        if isinstance(case.expected, ExactExpected)
+        and (
+            (
+                not case.expected.breakdown_persisted
+                and case.passthrough_provider is None
+                and case.rates.mode != "image_generation"
+                and not case.reports_provider_cost
+            )
+            or (not case.expected.cost_header and case.passthrough_provider is None)
+        )
+    )
     return tuple(
         message
         for message in (
@@ -248,6 +440,15 @@ def data_errors() -> tuple[str, ...]:
             f"duplicate case names: {duplicate_names}" if duplicate_names else None,
             f"cost-map entries share input_cost_per_token: {shared_input_rates}" if shared_input_rates else None,
             f"recount rates differ from cost-map rates: {recount_mismatches}" if recount_mismatches else None,
+            f"breakdown components are inconsistent: {component_mismatches}" if component_mismatches else None,
+            f"failure response statuses are inconsistent: {failure_response_mismatches}"
+            if failure_response_mismatches
+            else None,
+            f"invalid passthrough opt-outs: {invalid_opt_outs}" if invalid_opt_outs else None,
         )
         if message is not None
     )
+
+
+def _approx_equal(actual: float, expected: float) -> bool:
+    return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)

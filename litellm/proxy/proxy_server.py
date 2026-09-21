@@ -601,6 +601,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.prompt_caching_requests import (
+    router as prompt_caching_requests_router,
+)
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -727,6 +730,9 @@ from litellm.proxy.spend_tracking.spend_management_endpoints import (
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.types_utils.utils import get_instance_fn
+from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
+    router as latest_release_endpoints_router,
+)
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
 )
@@ -3541,6 +3547,16 @@ async def increment_spend_counter(counter_key: str, increment: float):
     shadow eval's per-leg spend), sharing the primitive the entity counters use so
     invalidation and read semantics can never drift."""
     return await _increment_spend_counter_cache(counter_key=counter_key, increment=increment)
+
+
+async def refresh_spend_counter_ttl(counter_key: str) -> bool:
+    if spend_counter_cache.redis_cache is None:
+        return False
+    try:
+        return await spend_counter_cache.redis_cache.async_refresh_ttl(key=counter_key)
+    except Exception as e:
+        verbose_proxy_logger.debug("spend counter TTL refresh skipped for %s: %s", counter_key, e)
+        return False
 
 
 async def _increment_spend_counter_cache(counter_key: str, increment: float):
@@ -13476,6 +13492,48 @@ async def supported_openai_params(model: str):
         raise HTTPException(status_code=400, detail={"error": f"Could not map model={model}"})
 
 
+class _ModelInfoLookupResponse(TypedDict):
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str]
+    model_info: ReadOnly[Mapping[str, object]]
+
+
+@router.get(
+    "/utils/model_info",
+    tags=["llm utils"],  # mutable-ok: FastAPI tags kwarg is list-typed
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI dependencies kwarg is list-typed
+)
+async def model_info_lookup(model: str, custom_llm_provider: str | None = None):
+    """
+    Returns the model cost map entry (token limits, pricing, supports_* capabilities) for any model
+    in the cost map, whether or not it is registered on this proxy. `model_info` carries every
+    field of the raw cost map entry plus the typed fields `litellm.get_model_info` derives from it
+    (`key`, `supported_openai_params`).
+
+    Example curl:
+    ```
+    curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    detail: Final = {  # mutable-ok: FastAPI serializes detail as a plain dict
+        "error": f"model={model}, custom_llm_provider={custom_llm_provider} is not in the model cost map"
+    }
+    try:
+        typed_model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        raise HTTPException(status_code=404, detail=detail)
+    cost_map_entry: Final = litellm.model_cost.get(typed_model_info["key"])
+    if cost_map_entry is None:
+        raise HTTPException(status_code=404, detail=detail)
+    response: Final[_ModelInfoLookupResponse] = {
+        "model": model,
+        "custom_llm_provider": typed_model_info["litellm_provider"],
+        "model_info": {**typed_model_info, **cost_map_entry},
+    }
+    return response
+
+
 @router.post(
     "/utils/transform_request",
     tags=["llm utils"],
@@ -19222,6 +19280,7 @@ app.include_router(debugging_endpoints_router)
 app.include_router(rust_control_plane_router)
 app.include_router(ui_crud_endpoints_router)
 app.include_router(user_banner_endpoints_router)
+app.include_router(latest_release_endpoints_router)
 app.include_router(team_callback_router)
 app.include_router(budget_management_router)
 app.include_router(model_management_router)
@@ -19232,6 +19291,7 @@ app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
+app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)
