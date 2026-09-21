@@ -448,7 +448,7 @@ async def test_handle_authentication_error_budget_exceeded():
         )
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-    assert int(exc_info.value.code) == status.HTTP_429_TOO_MANY_REQUESTS
+    assert int(exc_info.value.code) == status.HTTP_422_UNPROCESSABLE_CONTENT
 
 
 @pytest.mark.asyncio
@@ -687,7 +687,7 @@ def _http_request(client_host: str | None = "10.1.2.3", headers: dict[str, str] 
             {"allow_requests_on_db_unavailable": False},
             {},
             "10.1.2.3",
-            id="429_budget_exceeded",
+            id="422_budget_exceeded",
         ),
     ],
 )
@@ -697,7 +697,7 @@ async def test_auth_failure_logs_requester_ip_address(
     request_kwargs: dict[str, dict[str, str]],
     expected_ip: str,
 ) -> None:
-    """401s and budget 429s are rejected before `add_litellm_data_to_request` stamps
+    """401s and budget 422s are rejected before `add_litellm_data_to_request` stamps
     the caller IP, so without this the failure logs (spend logs, prometheus client_ip)
     had no IP, and a 401 rarely carries a key or user identity either."""
     with (

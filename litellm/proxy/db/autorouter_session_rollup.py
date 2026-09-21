@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Final, NamedTuple
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
+from litellm.proxy.db.create_views import SupportsExecuteRaw
 
 if TYPE_CHECKING:
     from litellm.proxy._types import SpendLogsPayload
@@ -75,6 +76,9 @@ SELECT
     COALESCE(SUM(total_tokens), 0)::bigint AS total_tokens,
     COALESCE(SUM(spend), 0)::float8 AS spend,
     COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
+    COALESCE(SUM(savings_estimated_turns), 0)::int AS savings_estimated_turns,
+    COALESCE(SUM(savings_estimated_actual_spend), 0)::float8 AS savings_estimated_actual_spend,
+    COALESCE(SUM(savings_estimated_saved_spend), 0)::float8 AS savings_estimated_saved_spend,
     COALESCE(SUM(classifier_cost), 0)::float8 AS classifier_cost,
     COALESCE(SUM(classifier_cost_recorded_turns), 0)::int AS classifier_cost_recorded_turns,
     COALESCE(SUM(EXTRACT(EPOCH FROM (last_turn_at - first_turn_at))), 0)::float8 AS session_seconds
@@ -104,6 +108,9 @@ class AutoRouterTurnTransaction:
     cache_touched: bool
     tier: str | None = None
     baseline_model: str | None = None
+    savings_estimated_turns: int = 0
+    savings_estimated_actual_spend: float = 0.0
+    savings_estimated_saved_spend: float = 0.0
 
 
 class TurnCacheFacts(NamedTuple):
@@ -215,13 +222,18 @@ def build_autorouter_turn_transaction(
     turn_at: Final = _turn_time_utc(str(payload.get("startTime") or ""))
     if turn_at is None:
         return None
-    from litellm.proxy.spend_tracking.savings import classifier_cost_from_decision
+    from litellm.proxy.spend_tracking.savings import (
+        classifier_cost_from_decision,
+        recorded_estimated_autorouter_savings,
+    )
 
     usage_object_raw: Final = metadata.get("usage_object")
     cache: Final = turn_cache_facts(usage_object_raw if isinstance(usage_object_raw, Mapping) else None)
     tier_raw: Final = routing_decision.get("tier")
     baseline_raw: Final = routing_decision.get("savings_baseline_model")
     classifier_cost: Final = classifier_cost_from_decision(routing_decision)
+    actual_spend: Final = float(payload.get("spend") or 0.0) + (classifier_cost or 0.0)
+    estimated_savings: Final = recorded_estimated_autorouter_savings(metadata)
     return AutoRouterTurnTransaction(
         api_key=api_key,
         session_id=bounded_session_id(session_id),
@@ -232,13 +244,16 @@ def build_autorouter_turn_transaction(
         model=model,
         turn_at=turn_at,
         total_tokens=int(payload.get("prompt_tokens") or 0) + int(payload.get("completion_tokens") or 0),
-        spend=float(payload.get("spend") or 0.0) + (classifier_cost or 0.0),
+        spend=actual_spend,
         saved_spend=saved_spend,
         classifier_cost=classifier_cost or 0.0,
         covered=cache.covered,
         cache_hit=cache.read_tokens > 0,
         cache_ttl_seconds=cache.write_ttl_seconds,
         cache_touched=cache.touched,
+        savings_estimated_turns=int(estimated_savings is not None),
+        savings_estimated_actual_spend=actual_spend if estimated_savings is not None else 0.0,
+        savings_estimated_saved_spend=estimated_savings if estimated_savings is not None else 0.0,
     )
 
 
@@ -263,6 +278,10 @@ _BASELINE: Final = f"{_p('baseline_model')}::text"
 _BASELINE_DELTA: Final = (
     f"(CASE WHEN {_BASELINE} IS NULL THEN '{{}}'::jsonb ELSE jsonb_build_object({_BASELINE}, 1) END)"
 )
+_ESTIMATED_BASELINE: Final = f"{_p('savings_estimated_turns')}::int = 1 AND {_BASELINE} IS NOT NULL"
+_ESTIMATED_BASELINE_DELTA: Final = (
+    f"(CASE WHEN {_ESTIMATED_BASELINE} THEN jsonb_build_object({_BASELINE}, 1) ELSE '{{}}'::jsonb END)"
+)
 
 _IN_ORDER: Final = f"{_TURN_AT}::timestamp >= t.last_turn_at"
 _SAME: Final = f"{_IN_ORDER} AND t.last_model = {_MODEL}"
@@ -281,7 +300,8 @@ INSERT INTO "LiteLLM_AutoRouterSession" AS t (
     same_model_turns, same_model_hits, first_visit_turns, first_visit_hits,
     return_turns, return_hits, return_expired_misses, return_within_ttl_misses,
     ttl_5m_turns, ttl_1h_turns, total_tokens, spend, saved_spend, classifier_cost, classifier_cost_recorded_turns, tier_turns,
-    baseline_models
+    baseline_models, savings_estimated_turns, savings_estimated_actual_spend, savings_estimated_saved_spend,
+    savings_estimated_baseline_models
 )
 VALUES (
     {_p("api_key")}, {_p("session_id")}, {_p("router_name")}, {_p("router_type")}, {_TURN_AT}::timestamp, {_TURN_AT}::timestamp,
@@ -292,13 +312,18 @@ VALUES (
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_5M_SECONDS} THEN 1 ELSE 0 END),
     (CASE WHEN {_CACHE_TTL}::int = {CACHE_TTL_1H_SECONDS} THEN 1 ELSE 0 END),
     {_p("total_tokens")}::bigint, {_p("spend")}::float8, {_p("saved_spend")}::float8,
-    {_p("classifier_cost")}::float8, 1, {_TIER_DELTA}, {_BASELINE_DELTA}
+    {_p("classifier_cost")}::float8, 1, {_TIER_DELTA}, {_BASELINE_DELTA},
+    {_p("savings_estimated_turns")}::int, {_p("savings_estimated_actual_spend")}::float8,
+    {_p("savings_estimated_saved_spend")}::float8, {_ESTIMATED_BASELINE_DELTA}
 )
 ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
     turns = t.turns + 1,
     total_tokens = t.total_tokens + EXCLUDED.total_tokens,
     spend = t.spend + EXCLUDED.spend,
     saved_spend = t.saved_spend + EXCLUDED.saved_spend,
+    savings_estimated_turns = t.savings_estimated_turns + EXCLUDED.savings_estimated_turns,
+    savings_estimated_actual_spend = t.savings_estimated_actual_spend + EXCLUDED.savings_estimated_actual_spend,
+    savings_estimated_saved_spend = t.savings_estimated_saved_spend + EXCLUDED.savings_estimated_saved_spend,
     classifier_cost = t.classifier_cost + EXCLUDED.classifier_cost,
     classifier_cost_recorded_turns = t.classifier_cost_recorded_turns + 1,
     covered_turns = t.covered_turns + EXCLUDED.covered_turns,
@@ -331,6 +356,10 @@ ON CONFLICT (api_key, session_id, router_name) DO UPDATE SET
     baseline_models = (CASE WHEN {_BASELINE} IS NOT NULL
         THEN t.baseline_models || jsonb_build_object({_BASELINE}, COALESCE((t.baseline_models ->> {_BASELINE})::int, 0) + 1)
         ELSE t.baseline_models END),
+    savings_estimated_baseline_models = (CASE WHEN {_ESTIMATED_BASELINE}
+        THEN t.savings_estimated_baseline_models || jsonb_build_object(
+            {_BASELINE}, COALESCE((t.savings_estimated_baseline_models ->> {_BASELINE})::int, 0) + 1)
+        ELSE t.savings_estimated_baseline_models END),
     first_turn_at = LEAST(t.first_turn_at, EXCLUDED.first_turn_at),
     last_turn_at = GREATEST(t.last_turn_at, EXCLUDED.last_turn_at)
 """
@@ -348,6 +377,10 @@ def _upsert_params(transaction: AutoRouterTurnTransaction) -> tuple[str | float 
     return tuple(_as_sql_param(getattr(transaction, name)) for name in _UPSERT_PARAM_FIELDS)
 
 
+async def write_autorouter_turn(db: SupportsExecuteRaw, transaction: AutoRouterTurnTransaction) -> None:
+    await db.execute_raw(UPSERT_AUTOROUTER_SESSION_SQL, *_upsert_params(transaction))
+
+
 async def _upsert_turn_with_retry(
     prisma_client: PrismaClient,
     transaction: AutoRouterTurnTransaction,
@@ -355,7 +388,7 @@ async def _upsert_turn_with_retry(
 ) -> None:
     for attempt in range(n_retry_times + 1):
         try:
-            await prisma_client.db.execute_raw(UPSERT_AUTOROUTER_SESSION_SQL, *_upsert_params(transaction))
+            await write_autorouter_turn(prisma_client.db, transaction)
         except DB_RETRY_SAFE_ERROR_TYPES:
             if attempt >= n_retry_times:
                 raise

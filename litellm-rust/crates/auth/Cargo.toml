@@ -5,11 +5,14 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[dependencies]
-serde.workspace = true
-subtle.workspace = true
-thiserror.workspace = true
-veil.workspace = true
+[features]
+default = []
+aws = ["dep:litellm-auth-aws"]
+azure = ["dep:litellm-auth-azure"]
+gcp = ["dep:litellm-auth-gcp"]
 
-[dev-dependencies]
-tokio.workspace = true
+[dependencies]
+litellm-auth-types.workspace = true
+litellm-auth-aws = { workspace = true, optional = true }
+litellm-auth-azure = { workspace = true, optional = true }
+litellm-auth-gcp = { workspace = true, optional = true }

@@ -8,7 +8,7 @@ import {
   chooseSelectOption,
 } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
-import { vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AddAutoRouterTab from "./add_auto_router_tab";
 import { toast } from "@/lib/toast";
 import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
@@ -667,6 +667,81 @@ describe("AddAutoRouterTab", () => {
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
       session_affinity: false,
     });
+  });
+
+  it("blocks invalid success thresholds and creates a heuristic v2 router with explicit zero", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "threshold-router" } });
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(screen.getByRole("radio", { name: /^Heuristic v2/ }));
+
+    const threshold = screen.getByRole("textbox", { name: "Success threshold" });
+    expect(threshold).toHaveValue("");
+    fireEvent.change(threshold, { target: { value: "invalid" } });
+    fireEvent.blur(threshold);
+    expect(threshold).toHaveValue("invalid");
+    expect(threshold).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    expect(screen.getByTestId("auto-router-test-routing-btn")).toBeDisabled();
+
+    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    await user.click(screen.getByRole("radio", { name: /^Heuristic v2/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.01" } });
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      classifier_type: "heuristic_v2",
+      heuristic_v2_success_threshold: 0,
+    });
+  });
+
+  it("clears an invalid threshold draft when automatic setup replaces the configuration", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    const automaticSetup = await screen.findByRole("button", { name: "Configure automatically" });
+    await waitFor(() => expect(automaticSetup).toBeEnabled());
+    await user.click(automaticSetup);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "reset-threshold-router" } });
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.1" } });
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+
+    await user.click(automaticSetup);
+    expect(screen.getByRole("textbox", { name: "Success threshold" })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: "Success threshold" })).toHaveAttribute("aria-invalid", "false");
+    await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
+      "heuristic_v2_success_threshold",
+    );
+  });
+
+  it("clears an invalid inactive threshold before creating the router", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "clear-threshold-router" } });
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(screen.getByRole("radio", { name: /^Heuristic v2/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "invalid" } });
+    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Clear Heuristic v2 threshold" }));
+    expect(screen.queryByRole("region", { name: "Inactive Heuristic v2 threshold" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
+      "heuristic_v2_success_threshold",
+    );
   });
 
   it("carries a context-window escalation opt-out through to the create payload", async () => {
@@ -1534,6 +1609,40 @@ describe("getSubmitBlockedReason", () => {
 
 describe("preset catalog fetch states", () => {
   afterEach(() => vi.mocked(useAutoRouterPresets).mockReturnValue(LOADED_PRESETS_QUERY));
+
+  it("preserves a JEV preset's per-turn bound in the create request", async () => {
+    vi.clearAllMocks();
+    testQueryClient.clear();
+    vi.mocked(handleAddAutoRouterSubmit).mockReset();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    vi.mocked(useAutoRouterPresets).mockReturnValue({
+      ...LOADED_PRESETS_QUERY,
+      data: [
+        {
+          ...ANTHROPIC_PRESET,
+          key: "bounded_jev",
+          label: "Bounded JEV",
+          complexity_router_config: {
+            ...ANTHROPIC_PRESET.complexity_router_config,
+            classifier_type: "jev",
+            jev_classifier_config: { model: "jev-test", timeout_ms: 3000 },
+            classifier_context_per_turn_chars: 450,
+          },
+        },
+      ],
+    });
+    renderWithProviders(<Harness />);
+    await waitForPresetEnabled("Bounded JEV");
+    await selectTemplate("Bounded JEV");
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "bounded-router" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject({
+      classifier_type: "jev",
+      classifier_context_per_turn_chars: 450,
+    });
+  });
 
   it("keeps showing cached presets without the error banner when only a refetch fails", () => {
     vi.mocked(useAutoRouterPresets).mockReturnValue({

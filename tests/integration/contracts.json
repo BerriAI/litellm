@@ -163,6 +163,21 @@
       "other.provider_wire.anthropic.tool_history_system_cache_and_internal_fields",
       "quota_management.spend_tracking.cache_tokens.disjoint_classes_use_explicit_rates"
     ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_video_create_status_and_content_follow_queue_wire_contract": [
+      "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_row": [
+      "other.provider_wire.fal_ai.gpt_image_generation_quality_size_wire_and_keyed_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image": [
+      "other.provider_wire.fal_ai.flux_dev_endpoint_and_per_image_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row": [
+      "other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_h3_video_create_uses_canonical_body_and_status_path": [
+      "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
+    ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit": [
       "mcp.call_tool.saved_headers.reach_actual_transport"
     ],
@@ -1581,6 +1596,27 @@
     ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-client_disconnect_mid_stream]": [
       "quota_management.spend_tracking.scripted_wire.client_disconnect"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_health_intersects_route_restricted_key_grants_in_both_management_modes": [
+      "other.mcp.health.restricted_keys_intersect_grants_in_both_modes"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_warm_credential_removal_rejects_without_upstream_traffic": [
+      "other.mcp.credentials.warm_removal_fails_closed_without_upstream_traffic"
+    ],
+    "tests/integration/observability/test_guardrail_effects.py::test_request_selected_mcp_guardrail_blocks_direct_and_virtual_calls": [
+      "other.mcp.guardrails.request_selection_blocks_resolved_tool_without_execution"
+    ],
+    "tests/integration/mcp/test_oauth_configuration.py::test_same_url_oauth_credentials_and_revocation_are_isolated_by_user_and_server[revoke]": [
+      "other.mcp.oauth.same_url_credentials_are_isolated_by_user_and_server"
+    ],
+    "tests/integration/mcp/test_oauth_configuration.py::test_same_url_oauth_credentials_and_revocation_are_isolated_by_user_and_server[expire]": [
+      "other.mcp.oauth.same_url_credentials_are_isolated_by_user_and_server"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[anonymous]": [
+      "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
+    ],
+    "tests/integration/mcp/test_mcp_lifecycle.py::test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution[bearer]": [
+      "other.mcp.permissions.same_url_servers_enforce_discovery_and_execution"
     ]
   },
   "browser": {
