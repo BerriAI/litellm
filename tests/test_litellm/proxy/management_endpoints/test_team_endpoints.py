@@ -9927,6 +9927,51 @@ async def test_list_available_teams_returns_empty_list_when_none_configured():
 
 
 @pytest.mark.asyncio
+async def test_is_caller_team_admin_uses_admins_array_and_skips_team_list():
+    """The sidebar boolean must not load teams or keys."""
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import is_caller_team_admin
+
+    prisma = Mock()
+    prisma.db.query_raw = AsyncMock(return_value=[{"?column?": 1}])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        admin = await is_caller_team_admin(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+        member = await is_caller_team_admin(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-1"),
+        )
+
+    assert admin == {"is_team_admin": True}
+    assert member == {"is_team_admin": True}
+    prisma.db.query_raw.assert_awaited_once()
+    sql, user_id = prisma.db.query_raw.await_args.args
+    assert "admins" in sql
+    assert "LiteLLM_VerificationToken" not in sql
+    assert user_id == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_is_caller_team_admin_is_false_when_user_is_on_no_team():
+    from unittest.mock import AsyncMock, Mock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import is_caller_team_admin
+
+    prisma = Mock()
+    prisma.db.query_raw = AsyncMock(return_value=[])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+        result = await is_caller_team_admin(
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user-2"),
+        )
+
+    assert result == {"is_team_admin": False}
+
+
 async def test_list_team_v1_batches_key_queries():
     """
     Test that list_team fetches all keys in a single batched query

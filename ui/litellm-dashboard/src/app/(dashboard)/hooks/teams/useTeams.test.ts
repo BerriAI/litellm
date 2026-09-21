@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useTeams, useTeam, useAllTeams, useDeletedTeams, DeletedTeam, teamListCall } from "./useTeams";
+import { useIsTeamAdmin, useTeams, useTeam, useAllTeams, useDeletedTeams, DeletedTeam, teamListCall } from "./useTeams";
 import { fetchTeams } from "@/app/(dashboard)/networking";
-import { teamInfoCall } from "@/components/networking";
+import { fetchIsTeamAdmin, teamInfoCall } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 vi.mock("@/app/(dashboard)/networking", () => ({
@@ -13,6 +13,7 @@ vi.mock("@/app/(dashboard)/networking", () => ({
 
 vi.mock("@/components/networking", () => ({
   teamInfoCall: vi.fn(),
+  fetchIsTeamAdmin: vi.fn(),
   getProxyBaseUrl: vi.fn(() => ""),
   getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
   deriveErrorMessage: vi.fn((data) => data?.error || "Error"),
@@ -114,6 +115,18 @@ describe("useTeams", () => {
     expect(result.current.error).toBeNull();
     expect(fetchTeams).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", null);
     expect(fetchTeams).toHaveBeenCalledTimes(1);
+  });
+
+  it("should read team-admin status without listing teams", async () => {
+    vi.mocked(fetchIsTeamAdmin).mockResolvedValue({ is_team_admin: true });
+
+    const { result } = renderHook(() => useIsTeamAdmin(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current).toBe(true);
+    });
+    expect(fetchIsTeamAdmin).toHaveBeenCalledWith("test-access-token");
+    expect(fetchTeams).not.toHaveBeenCalled();
   });
 
   it("should handle error when fetchTeams fails", async () => {
