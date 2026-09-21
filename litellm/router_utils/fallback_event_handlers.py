@@ -2,7 +2,9 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -20,6 +22,7 @@ from litellm.router_utils.cooldown_handlers import (
     _set_cooldown_deployments,  # pyright: ignore[reportPrivateUsage] - shared helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_timeout_408,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
@@ -36,12 +39,14 @@ else:
 # Status codes a generic API call's caller-supplied resource id can trigger on its own
 # (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
 _REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
+_NO_MODEL_CALL_DETAILS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _trigger_cooldown_for_failed_deployment(
     litellm_router: LitellmRouter,
     kwargs: Mapping[str, object],
     exception: Exception,
+    model_call_details: Mapping[str, object] = _NO_MODEL_CALL_DETAILS,
 ) -> None:
     """
     Trigger cooldown for a failed fallback deployment.
@@ -80,7 +85,11 @@ def _trigger_cooldown_for_failed_deployment(
         # timeout, which litellm.Timeout reports as status 408 regardless of the deployment's
         # actual health. Left unguarded, a caller could force a 408 on every deployment in
         # the fallback chain from a single request with a near-zero timeout.
-        if kwargs.get("client_side_timeout") and cast_exception_status_to_int(exception_status) == 408:
+        if is_caller_timeout_408(
+            model_call_details,
+            exception_status,
+            ended=datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline's api_call_start_time
+        ):
             verbose_router_logger.debug(
                 "Not triggering cooldown for fallback deployment: a caller-supplied "
                 "x-litellm-timeout caused this 408, not deployment health."
@@ -412,6 +421,25 @@ async def _is_fallback_target_authorized(
     return False
 
 
+async def _is_fallback_target_within_budget(
+    litellm_router: LitellmRouter,
+    fallback_entry: str | Mapping[str, object],
+    original_model_group: str,
+    kwargs: Mapping[str, object],
+) -> bool:
+    budget_check: Final = litellm_router.fallback_budget_check
+    target: Final = _get_fallback_target_model_group(fallback_entry)
+    if budget_check is None or target is None or target == original_model_group:
+        return True
+    if await budget_check(model=target, request_kwargs=kwargs, llm_router=litellm_router):
+        return True
+    verbose_router_logger.info(
+        "Skipping fallback to model_group = %s: caller is over budget",
+        mask_sensitive_structure(fallback_entry),
+    )
+    return False
+
+
 def references_provider_scoped_resource(kwargs: Mapping[str, object]) -> bool:
     """
     True when a file, batch, or fine-tuning job operation names an id that only exists
@@ -519,6 +547,8 @@ async def run_async_fallback(
             continue
         if not await _is_fallback_target_authorized(litellm_router, mg, original_model_group, kwargs):
             continue
+        if not await _is_fallback_target_within_budget(litellm_router, mg, original_model_group, kwargs):
+            continue
         attempt_key = fallback_attempt_key(mg)
         if attempt_key is not None:
             if attempt_key in attempted:
@@ -579,6 +609,7 @@ async def run_async_fallback(
                     litellm_router=litellm_router,
                     kwargs=kwargs,
                     exception=e,
+                    model_call_details=logging_obj.model_call_details,
                 )
     raise error_from_fallbacks
 

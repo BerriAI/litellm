@@ -176,6 +176,25 @@ def test_handle_exception_on_proxy_error_path_none_input_wraps_as_500():
     }
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        HTTPException(status_code=401, detail="bad key"),
+        ValueError("provider boom"),
+        ProxyException(message="already wrapped", type=ProxyErrorTypes.budget_exceeded.value, param="key", code=402),
+    ],
+    ids=["http_exception", "generic_exception", "already_proxy_exception"],
+)
+def test_handle_exception_on_proxy_returns_the_litellm_call_id_header(exc: Exception):
+    result = handle_exception_on_proxy(exc, "call-7836")
+
+    assert result.headers == {"x-litellm-call-id": "call-7836"}
+
+
+def test_handle_exception_on_proxy_sends_no_call_id_header_when_the_request_has_none():
+    assert handle_exception_on_proxy(ValueError("provider boom")).headers == {}
+
+
 @pytest.mark.asyncio
 async def test_handle_exception_on_proxy_read_only_transaction_forces_writer_recreate(
     monkeypatch: pytest.MonkeyPatch,

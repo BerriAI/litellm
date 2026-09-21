@@ -4,6 +4,8 @@ import { Page } from "../../fixtures/pages";
 import { navigateToPage, dismissFeedbackPopup } from "../../helpers/navigation";
 import { masterKey } from "../../helpers/traffic";
 
+const BUDGET_LIST_PATH = "/management/v1/budgets";
+
 interface StoredBudget {
   budget_id: string;
   max_budget: number | null;
@@ -30,7 +32,17 @@ async function createBudgetViaApi(page: PlaywrightPage, budget: Partial<StoredBu
 }
 
 async function searchForBudget(page: PlaywrightPage, budgetId: string): Promise<void> {
+  const searched = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return (
+      response.request().method() === "GET" &&
+      url.pathname === BUDGET_LIST_PATH &&
+      url.searchParams.get("q") === budgetId
+    );
+  });
   await page.getByPlaceholder("Search by budget ID").fill(budgetId);
+  const response = await searched;
+  expect(response.ok(), `GET ${BUDGET_LIST_PATH}?q=${budgetId} (${response.status()})`).toBe(true);
 }
 
 test.describe("Budgets", () => {

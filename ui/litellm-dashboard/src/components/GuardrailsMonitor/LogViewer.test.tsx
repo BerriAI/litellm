@@ -2,7 +2,7 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { renderWithProviders, screen, testQueryClient, waitFor } from "../../../tests/test-utils";
+import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
 import type { LogEntry as SpendLogEntry } from "@/components/view_logs/columns";
 import { LogViewer } from "./LogViewer";
 
@@ -93,5 +93,18 @@ describe("GuardrailsMonitor LogViewer drawer", () => {
     await waitFor(() => {
       expect(screen.getByTestId("log-details-drawer")).toHaveAttribute("data-log-id", "provider-other");
     });
+  });
+});
+
+describe("GuardrailsMonitor LogViewer not_run rows", () => {
+  it("renders a not_run log as a neutral Not run badge instead of a pass or failure", () => {
+    renderWithProviders(
+      <LogViewer logs={[{ ...guardrailLog, action: "not_run", input_snippet: "system prompt only" }]} />,
+    );
+
+    const row = screen.getByRole("button", { name: /system prompt only/ });
+    expect(within(row).getByText("Not run")).toHaveClass("text-muted-foreground");
+    expect(within(row).queryByText("Passed")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Blocked")).not.toBeInTheDocument();
   });
 });

@@ -36,6 +36,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: () => ({ acce
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([{ model_group: "gpt-4o-mini" }]),
+  fetchAutoRouterModels: vi.fn().mockResolvedValue([{ model_group: "gpt-4o-mini" }]),
 }));
 
 const STORED_CONFIG = {
@@ -57,7 +58,7 @@ const MODEL_DATA = {
   model_info: { id: "auto-1", access_groups: [] },
 };
 
-const renderModal = () =>
+const renderModal = (props: Partial<React.ComponentProps<typeof EditAutoRouterModal>> = {}) =>
   renderWithProviders(
     <EditAutoRouterModal
       isVisible
@@ -66,6 +67,7 @@ const renderModal = () =>
       modelData={MODEL_DATA}
       accessToken="token"
       userRole="Admin"
+      {...props}
     />,
   );
 
@@ -79,11 +81,123 @@ describe("EditAutoRouterModal keyword matching", () => {
     modelPatchUpdateCall.mockClear();
   });
 
+  it("saves a member's changed routing config without resending administrator settings", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      userRole: "Internal User",
+      isMemberManaged: true,
+      modelData: {
+        ...MODEL_DATA,
+        model_info: {
+          ...MODEL_DATA.model_info,
+          team_id: "team-1",
+          access_groups: ["restricted"],
+        },
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          auto_router_routing_compression: "admin-compression",
+          complexity_router_config: { ...STORED_CONFIG, deployment_affinity: true },
+        },
+      },
+    });
+
+    expect(await screen.findByRole("textbox", { name: "Auto Router Name" })).toHaveAttribute("readonly");
+    expect(screen.queryByText("Advanced: Compression")).not.toBeInTheDocument();
+    expect(screen.queryByText("Model Access Groups")).not.toBeInTheDocument();
+    await user.click(screen.getByText("Advanced: Affinity"));
+    await user.click(await screen.findByRole("switch", { name: "Pin one model deployment per tier" }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalled());
+    expect(modelPatchUpdateCall).toHaveBeenLastCalledWith(
+      "token",
+      {
+        litellm_params: {
+          complexity_router_config: expect.objectContaining({ deployment_affinity: false, tiers: STORED_CONFIG.tiers }),
+          complexity_router_default_model: "gpt-4o-mini",
+        },
+      },
+      "auto-1",
+    );
+    expect(validateAutoRouterConfig).toHaveBeenLastCalledWith(
+      "token",
+      expect.objectContaining({ deployment_affinity: false }),
+      "team-1",
+    );
+  });
+
   it("renders the advanced sections the create form offers", async () => {
     renderModal();
 
     expect(await screen.findByText(/Escalation Keywords/i)).toBeInTheDocument();
     expect(await screen.findByText(/Keyword\/Semantic Matching/i)).toBeInTheDocument();
+  });
+
+  it.each(["0", ""])("hydrates the saved threshold and saves an edit to '%s'", async (raw) => {
+    const user = userEvent.setup();
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: {
+            ...STORED_CONFIG,
+            classifier_type: "heuristic_v2",
+            heuristic_v2_success_threshold: 0.91,
+          },
+        },
+      },
+    });
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    const threshold = screen.getByRole("textbox", { name: "Success threshold" });
+    expect(threshold).toHaveValue("0.91");
+    fireEvent.change(threshold, { target: { value: raw } });
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    if (raw === "") expect(savedConfig()).not.toHaveProperty("heuristic_v2_success_threshold");
+    else expect(savedConfig().heuristic_v2_success_threshold).toBe(0);
+  });
+
+  it("blocks an invalid threshold edit and retains a corrected value when switching classifiers", async () => {
+    const user = userEvent.setup();
+    renderModal({
+      modelData: {
+        ...MODEL_DATA,
+        litellm_params: {
+          ...MODEL_DATA.litellm_params,
+          complexity_router_config: {
+            ...STORED_CONFIG,
+            classifier_type: "heuristic_v2",
+            heuristic_v2_success_threshold: 0.91,
+          },
+        },
+      },
+    });
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "-0.1" } });
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    expect(modelPatchUpdateCall).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0.88" } });
+    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    expect(screen.queryByRole("textbox", { name: "Success threshold" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig()).toMatchObject({ classifier_type: "heuristic", heuristic_v2_success_threshold: 0.88 });
+  });
+
+  it("clears an invalid inactive threshold before saving the router", async () => {
+    const user = userEvent.setup();
+    renderModal();
+    await user.click(await screen.findByText("Advanced: Classification Method"));
+    await user.click(screen.getByRole("radio", { name: /^Heuristic v2/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.1" } });
+    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Clear Heuristic v2 threshold" }));
+    expect(screen.queryByRole("region", { name: "Inactive Heuristic v2 threshold" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
+    expect(savedConfig()).not.toHaveProperty("heuristic_v2_success_threshold");
   });
 
   // These keys are rewritten from form state on save, so if the modal renders the controls
@@ -519,9 +633,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     renderWithStoredConfig(STORED_CONFIG);
 
     await user.click(await screen.findByText("Advanced: Affinity"));
-    expect(
-      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
-    ).toBeChecked();
+    expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -534,9 +646,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     renderWithStoredConfig({ ...STORED_CONFIG, deployment_affinity: false });
 
     await user.click(await screen.findByText("Advanced: Affinity"));
-    expect(
-      await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }),
-    ).not.toBeChecked();
+    expect(await screen.findByRole("switch", { name: "Pin one model deployment per tier" })).not.toBeChecked();
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -549,7 +659,7 @@ describe("EditAutoRouterModal deployment affinity", () => {
     renderWithStoredConfig(STORED_CONFIG);
 
     await user.click(await screen.findByText("Advanced: Affinity"));
-    await user.click(await screen.findByRole("switch", { name: "Pin a session to one deployment per model group" }));
+    await user.click(await screen.findByRole("switch", { name: "Pin one model deployment per tier" }));
 
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
@@ -1072,7 +1182,7 @@ describe("EditAutoRouterModal prompt compression", () => {
     });
 
     await user.click(await screen.findByText("Advanced: Compression"));
-    await user.click(screen.getAllByRole("button", { name: "Clear", exact: true })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() =>
@@ -1096,15 +1206,15 @@ describe("EditAutoRouterModal prompt compression", () => {
     const view = renderWithStoredCompression(stored);
 
     await user.click(await screen.findByText("Advanced: Compression"));
-    await user.click(screen.getAllByRole("button", { name: "Clear", exact: true })[0]);
-    await user.click(screen.getByRole("button", { name: "Cancel", exact: true }));
+    await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(modelPatchUpdateCall).not.toHaveBeenCalled();
     view.unmount();
 
     renderWithStoredCompression(stored);
     await user.click(await screen.findByText("Advanced: Compression"));
     expect(screen.getByRole("combobox", { name: "Routing decision compression" })).toHaveValue("None (no compression)");
-    await user.click(screen.getAllByRole("button", { name: "Clear", exact: true })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Clear" })[0]);
     await user.click(screen.getByRole("combobox", { name: "Routing decision compression" }));
     await user.click(screen.getByRole("option", { name: "None (no compression)" }));
     await user.click(screen.getByRole("button", { name: /save changes/i }));

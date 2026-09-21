@@ -262,6 +262,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_user_budget_metric",
     "litellm_user_max_budget_metric",
     "litellm_user_budget_remaining_hours_metric",
+    "litellm_remaining_customer_budget_metric",
+    "litellm_customer_max_budget_metric",
+    "litellm_customer_budget_remaining_hours_metric",
     "litellm_deployment_state",
     "litellm_deployment_failure_responses",
     "litellm_deployment_total_requests",
@@ -732,6 +735,12 @@ class PrometheusMetricLabels:
     litellm_user_max_budget_metric = litellm_remaining_user_budget_metric
 
     litellm_user_budget_remaining_hours_metric = litellm_remaining_user_budget_metric
+
+    litellm_remaining_customer_budget_metric = (UserAPIKeyLabelNames.END_USER.value,)
+
+    litellm_customer_max_budget_metric = litellm_remaining_customer_budget_metric
+
+    litellm_customer_budget_remaining_hours_metric = litellm_remaining_customer_budget_metric
 
     litellm_remaining_api_key_requests_for_model = [
         UserAPIKeyLabelNames.API_KEY_HASH.value,

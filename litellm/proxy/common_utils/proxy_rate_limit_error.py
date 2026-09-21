@@ -11,7 +11,7 @@ exception types:
   an upstream LLM provider returns 429.
 * :class:`fastapi.HTTPException` (status 429) — raised directly by proxy hooks
   such as ``parallel_request_limiter``, ``dynamic_rate_limiter``,
-  ``batch_rate_limiter``, ``max_budget_limiter``, ``max_iterations_limiter``,
+  ``batch_rate_limiter``, ``max_iterations_limiter``,
   etc.
 * :class:`litellm.llms.base_llm.chat.transformation.BaseLLMException` (status
   429) — raised by some provider transports.

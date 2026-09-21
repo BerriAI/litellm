@@ -104,8 +104,8 @@ export function AutoRoutersPanel({
           <DialogHeader>
             <DialogTitle>Add Auto Router</DialogTitle>
             <DialogDescription>
-              Routes each request to a model by classifying its complexity. Called like any other model, so clients keep
-              using a single model name.
+              Choose a classifier to route each request to a model. Called like any other model, so clients keep using a
+              single model name.
             </DialogDescription>
           </DialogHeader>
           <AddAutoRouterTab
@@ -114,6 +114,7 @@ export function AutoRoutersPanel({
             userRole={userRole}
             userId={userID}
             createScope={createScope}
+            teams={teams}
           />
         </DialogContent>
       </Dialog>

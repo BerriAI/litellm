@@ -1,11 +1,13 @@
 import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
@@ -586,6 +588,7 @@ async def test_update_database_and_spend_counters_updates_counters_after_db_upda
         tags=["tag-a"],
         request_started_at=start_time,
         model_access_groups=("premium",),
+        project_id=None,
     )
 
 
@@ -676,6 +679,149 @@ async def test_update_database_and_spend_counters_preserves_counter_exception_wh
         assert budget_reservation["finalized"] is True
 
     proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_update_database_and_spend_counters_reconciles_reservation_before_db_update():
+    call_order: list[str] = []
+    proxy_logging_obj = MagicMock()
+
+    async def _update_database(**kwargs):
+        call_order.append("update_database")
+        return True
+
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=_update_database)
+    increment_spend_counters = AsyncMock()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+
+    async def _reconcile(**kwargs):
+        call_order.append("reconcile")
+
+    with patch(  # test-quality-ok: the helper imports reconcile_budget_reservation in its body, no injection seam
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new_callable=AsyncMock,
+        side_effect=_reconcile,
+    ) as mock_reconcile_budget_reservation:
+        charged = await _update_database_and_spend_counters(
+            proxy_logging_obj=proxy_logging_obj,
+            increment_spend_counters=increment_spend_counters,
+            user_api_key="test_api_key",
+            user_id="test_user_id",
+            end_user_id=None,
+            team_id="test_team_id",
+            org_id="test_org_id",
+            kwargs={},
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.2,
+            budget_reservation=budget_reservation,
+        )
+
+    assert charged is True
+    assert call_order == ["reconcile", "update_database"]
+    mock_reconcile_budget_reservation.assert_awaited_once_with(
+        budget_reservation=budget_reservation,
+        actual_cost=0.2,
+        finalize=False,
+    )
+    increment_spend_counters.assert_awaited_once()
+    assert increment_spend_counters.await_args.kwargs["budget_reservation"] is budget_reservation
+
+
+@pytest.mark.asyncio
+async def test_update_database_and_spend_counters_releases_reservation_when_db_update_fails_after_early_reconcile():
+    proxy_logging_obj = MagicMock()
+    db_exception = RuntimeError("db unavailable")
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(side_effect=db_exception)
+    increment_spend_counters = AsyncMock()
+    budget_reservation = {"reserved_cost": 0.5, "entries": []}
+
+    with (
+        patch(  # test-quality-ok: the helper imports reconcile_budget_reservation in its body, no injection seam
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_reconcile_budget_reservation,
+        patch(  # test-quality-ok: _release_budget_reservation imports the release in its body, no injection seam
+            "litellm.proxy.spend_tracking.budget_reservation.release_budget_reservation",
+            new_callable=AsyncMock,
+        ) as mock_release_budget_reservation,
+    ):
+        with pytest.raises(RuntimeError) as exc_info:
+            await _update_database_and_spend_counters(
+                proxy_logging_obj=proxy_logging_obj,
+                increment_spend_counters=increment_spend_counters,
+                user_api_key="test_api_key",
+                user_id="test_user_id",
+                end_user_id=None,
+                team_id="test_team_id",
+                org_id="test_org_id",
+                kwargs={},
+                completion_response=None,
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+                response_cost=0.2,
+                budget_reservation=budget_reservation,
+            )
+
+        assert exc_info.value is db_exception
+        mock_reconcile_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+            actual_cost=0.2,
+            finalize=False,
+        )
+        mock_release_budget_reservation.assert_awaited_once_with(
+            budget_reservation=budget_reservation,
+        )
+
+    increment_spend_counters.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_database_and_spend_counters_invalidates_reservation_when_early_reconcile_fails():
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+    increment_spend_counters = AsyncMock()
+    budget_reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:test_api_key"}],
+    }
+
+    with (
+        patch(  # test-quality-ok: the helper imports reconcile_budget_reservation in its body, no injection seam
+            "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("redis unavailable"),
+        ) as mock_reconcile_budget_reservation,
+        patch(  # test-quality-ok: _invalidate_budget_reservation_counters imports it in its body, no injection seam
+            "litellm.proxy.spend_tracking.budget_reservation.invalidate_budget_reservation_counters",
+            new_callable=AsyncMock,
+        ) as mock_invalidate_budget_reservation_counters,
+    ):
+        charged = await _update_database_and_spend_counters(
+            proxy_logging_obj=proxy_logging_obj,
+            increment_spend_counters=increment_spend_counters,
+            user_api_key="test_api_key",
+            user_id="test_user_id",
+            end_user_id=None,
+            team_id="test_team_id",
+            org_id="test_org_id",
+            kwargs={},
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            response_cost=0.2,
+            budget_reservation=budget_reservation,
+        )
+
+    assert charged is True
+    mock_reconcile_budget_reservation.assert_awaited_once()
+    mock_invalidate_budget_reservation_counters.assert_awaited_once_with(
+        budget_reservation=budget_reservation,
+    )
+    assert budget_reservation["finalized"] is True
+    proxy_logging_obj.db_spend_update_writer.update_database.assert_awaited_once()
+    increment_spend_counters.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1228,6 +1374,7 @@ async def test_enrich_failure_metadata_with_full_key_lookup():
     mock_key_obj.user_id = "fetched-user-id"
     mock_key_obj.team_id = "fetched-team-id"
     mock_key_obj.org_id = "fetched-org-id"
+    mock_key_obj.project_id = "fetched-project-id"
 
     mock_team_obj = MagicMock()
     mock_team_obj.team_alias = "fetched-team-alias"
@@ -1251,12 +1398,14 @@ async def test_enrich_failure_metadata_with_full_key_lookup():
             "user_api_key_team_id": None,
             "user_api_key_team_alias": None,
             "user_api_key_org_id": None,
+            "user_api_key_project_id": None,
         }
         result = await _ProxyDBLogger._enrich_failure_metadata_with_key_info(metadata)
         assert result["user_api_key_alias"] == "fetched-key-alias"
         assert result["user_api_key_user_id"] == "fetched-user-id"
         assert result["user_api_key_team_id"] == "fetched-team-id"
         assert result["user_api_key_org_id"] == "fetched-org-id"
+        assert result["user_api_key_project_id"] == "fetched-project-id"
         assert result["user_api_key_team_alias"] == "fetched-team-alias"
 
 
@@ -2393,3 +2542,79 @@ async def test_async_post_call_failure_hook_persists_no_raw_model_on_an_unknown_
         == "/chat/completions: Invalid model name passed in. Call `/v1/models` to view available models for your key."
     )
     assert error_information["error_class"] == "ProxyModelNotFoundError"
+
+
+class _NeverStringifiedMetadataValue:
+    def __repr__(self) -> str:
+        raise AssertionError("a request metadata value was stringified by the cost tracking failure path")
+
+    __str__ = __repr__
+
+
+def _spend_write_kwargs_with_metadata_value(metadata_value: object) -> dict:
+    return {
+        "call_type": "acompletion",
+        "model": "gpt-5.4-mini",
+        "litellm_call_id": "test-call-id",
+        "stream": False,
+        "response_cost": 4.725e-05,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "user-1",
+                "user_context": metadata_value,
+                "headers": {"user-agent": metadata_value},
+            },
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("log_level", [logging.WARNING, logging.DEBUG])
+async def test_track_cost_callback_failure_alert_never_carries_request_metadata_values(log_level):
+    logger: Final = _ProxyDBLogger()
+    records: list[logging.LogRecord] = []
+    handler: Final = logging.Handler()
+    handler.emit = records.append
+    previous_level: Final = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(log_level)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        with patch(  # test-quality-ok: callback imports proxy_logging_obj off proxy_server in its body, no seam
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging:
+            mock_proxy_logging.failed_tracking_alert = AsyncMock()
+            mock_proxy_logging.db_spend_update_writer = MagicMock()
+            mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock(
+                side_effect=Exception("READONLY You can't write against a read only replica.")
+            )
+
+            await logger._PROXY_track_cost_callback(
+                kwargs=_spend_write_kwargs_with_metadata_value(_NeverStringifiedMetadataValue()),
+                completion_response=ModelResponse(),
+                start_time=datetime.now(),
+                end_time=datetime.now(),
+            )
+            await asyncio.sleep(0)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(previous_level)
+
+    mock_proxy_logging.failed_tracking_alert.assert_awaited_once()
+    alert: Final = mock_proxy_logging.failed_tracking_alert.await_args.kwargs
+    assert alert["failing_model"] == "gpt-5.4-mini"
+    assert "READONLY You can't write against a read only replica." in alert["error_message"]
+    assert "model: gpt-5.4-mini" in alert["error_message"]
+    assert "call_type: acompletion" in alert["error_message"]
+
+    failure_debug_lines: Final = [
+        record.getMessage()
+        for record in records
+        if record.levelno == logging.DEBUG and "Cost tracking callback failed" in record.getMessage()
+    ]
+    if log_level == logging.DEBUG:
+        assert len(failure_debug_lines) == 1
+        assert "user_context" in failure_debug_lines[0]
+        assert "headers" in failure_debug_lines[0]
+    else:
+        assert failure_debug_lines == []
