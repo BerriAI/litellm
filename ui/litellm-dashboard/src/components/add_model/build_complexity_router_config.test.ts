@@ -6,6 +6,8 @@ import {
   getKeywordTierRulesError,
   getClassifierModelError,
   getHeuristicV2SuccessThresholdError,
+  getReminderMarkersError,
+  getClassifierPluginTimeoutError,
   getClassifierReasoningEffortError,
   getMissingTiersError,
   hydrateCustomTierSet,
@@ -1480,5 +1482,61 @@ describe("classifier vision wire payload", () => {
     });
 
     expect(payload.classifier_llm_config).not.toHaveProperty("vision");
+  });
+});
+
+describe("advanced complexity router fields", () => {
+  it("normalizes lists, reminder markers, and explicit false values", () => {
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      codeKeywords: [" async ", "  "],
+      reasoningKeywords: ["prove"],
+      technicalKeywords: ["api"],
+      simpleKeywords: ["hello"],
+      planModePatterns: [" plan "],
+      routeHousekeepingToCheapestTier: false,
+      housekeepingPatterns: [" title "],
+      reminderMarkers: [{ open: " <SYSTEM> ", close: " </SYSTEM> " }],
+      maxTokensFromTierModel: false,
+      classifierType: "custom",
+      classifierPluginTimeoutMs: 3000,
+    });
+    expect(payload).toMatchObject({
+      code_keywords: ["async"],
+      reasoning_keywords: ["prove"],
+      technical_keywords: ["api"],
+      simple_keywords: ["hello"],
+      plan_mode_patterns: ["plan"],
+      route_housekeeping_to_cheapest_tier: false,
+      housekeeping_patterns: ["title"],
+      reminder_markers: [{ open: "<system>", close: "</system>" }],
+      max_tokens_from_tier_model: false,
+      classifier_plugin_timeout_ms: 3000,
+    });
+  });
+
+  it("omits defaults, empty lists, and timeout values for non-custom classifiers", () => {
+    const payload = buildComplexityRouterConfig({
+      ...baseParams,
+      codeKeywords: [" ", ""],
+      reminderMarkers: [],
+      routeHousekeepingToCheapestTier: true,
+      maxTokensFromTierModel: true,
+      classifierPluginTimeoutMs: 3000,
+    });
+    expect(payload).not.toHaveProperty("code_keywords");
+    expect(payload).not.toHaveProperty("reminder_markers");
+    expect(payload).not.toHaveProperty("route_housekeeping_to_cheapest_tier");
+    expect(payload).not.toHaveProperty("max_tokens_from_tier_model");
+    expect(payload).not.toHaveProperty("classifier_plugin_timeout_ms");
+  });
+
+  it("validates marker pairs and custom classifier timeout", () => {
+    expect(getReminderMarkersError([{ open: " <X> ", close: " <x> " }])).toContain("different");
+    expect(getReminderMarkersError([{ open: "", close: "</x>" }])).toContain("needs both");
+    expect(getReminderMarkersError([{ open: "<x>", close: "</x>" }])).toBeNull();
+    expect(getClassifierPluginTimeoutError("custom", 0)).toContain("whole number");
+    expect(getClassifierPluginTimeoutError("custom", 3000)).toBeNull();
+    expect(getClassifierPluginTimeoutError("heuristic", 0)).toBeNull();
   });
 });

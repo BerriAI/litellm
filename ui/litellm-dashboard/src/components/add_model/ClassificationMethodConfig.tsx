@@ -19,7 +19,10 @@ import HeuristicScoringConfig from "./HeuristicScoringConfig";
 import ClassifierReasoningEffortSelect from "./ClassifierReasoningEffortSelect";
 import ClassifierCircuitBreakerConfig from "./ClassifierCircuitBreakerConfig";
 import ClassifierVisionConfig from "./ClassifierVisionConfig";
-import { getHeuristicV2SuccessThresholdError } from "./build_complexity_router_config";
+import {
+  getClassifierPluginTimeoutError,
+  getHeuristicV2SuccessThresholdError,
+} from "./build_complexity_router_config";
 import type { ReasoningEffort } from "./complexity_router_tiers";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
 import {
@@ -61,6 +64,7 @@ const CLASSIFIER_CONTEXT_WINDOW_SIZE_ID = "classifier-context-window-size";
 const CLASSIFIER_CONTEXT_BUDGET_CHARS_ID = "classifier-context-budget-chars";
 const HYBRID_BOUNDARY_MARGIN_ID = "hybrid-boundary-margin";
 const HEURISTIC_V2_SUCCESS_THRESHOLD_ID = "heuristic-v2-success-threshold";
+const CLASSIFIER_PLUGIN_TIMEOUT_ID = "classifier-plugin-timeout-ms";
 
 const CUSTOM_PROMPT_WITH_HEURISTIC_FALLBACK =
   "This router classifies with your own prompt, so the tier comes from whatever rubric it states. The four tier " +
@@ -466,6 +470,40 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   return (
     <>
       <ClassifierTypeRadios value={value} classifierType={classifierType} onTypeChange={handleClassifierTypeChange} />
+
+      {classifierType === "custom" && (
+        <div className="mt-4 space-y-2">
+          <p className="text-sm text-muted-foreground">
+            This router uses a custom classifier plugin set in config.yaml. Pick a classifier below to replace it.
+          </p>
+          <Label htmlFor={CLASSIFIER_PLUGIN_TIMEOUT_ID} className="block font-semibold">
+            Classifier plugin timeout (ms)
+          </Label>
+          <Input
+            id={CLASSIFIER_PLUGIN_TIMEOUT_ID}
+            inputMode="numeric"
+            placeholder="3000"
+            value={value.classifier_plugin_timeout_ms ?? ""}
+            onChange={(event) =>
+              onChange({
+                ...value,
+                classifier_plugin_timeout_ms: event.target.value.trim() === "" ? undefined : Number(event.target.value),
+              })
+            }
+            aria-invalid={Boolean(
+              showValidationErrors && getClassifierPluginTimeoutError(classifierType, value.classifier_plugin_timeout_ms),
+            )}
+          />
+          <p className="text-sm text-muted-foreground">
+            Time budget for the plugin call. On expiry the fallback path decides the tier.
+          </p>
+          {showValidationErrors && getClassifierPluginTimeoutError(classifierType, value.classifier_plugin_timeout_ms) && (
+            <p className="text-sm text-destructive" role="alert">
+              {getClassifierPluginTimeoutError(classifierType, value.classifier_plugin_timeout_ms)}
+            </p>
+          )}
+        </div>
+      )}
 
       {classifierType === "heuristic_v2" && (
         <div className="mt-4 space-y-2">

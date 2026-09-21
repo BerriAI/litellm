@@ -48,6 +48,8 @@ import {
   getKeywordTierRulesError,
   getClassifierModelError,
   getHeuristicV2SuccessThresholdError,
+  getReminderMarkersError,
+  getClassifierPluginTimeoutError,
   getClassifierReasoningEffortError,
   getMissingTiersError,
   getPlanModeTierError,
@@ -152,6 +154,8 @@ export const getSubmitBlockedReason = (
     getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
     getClassifierModelError(config) ??
     getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold) ??
+    getReminderMarkersError(config.reminder_markers) ??
+    getClassifierPluginTimeoutError(config.classifier_type, config.classifier_plugin_timeout_ms) ??
     (heuristicScoringRole(config) === "decides" ? customDimensionsError(config.custom_dimensions) : null) ??
     getClassifierReasoningEffortError(config, modelInfo) ??
     getReferencedModelsError(referencedModelsParams, availability)
@@ -448,6 +452,16 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     enableContextWindowEscalation: complexityRouterConfig.enable_context_window_escalation,
     contextWindowEscalationBuffer: complexityRouterConfig.context_window_escalation_buffer,
     sessionAffinityTtlSeconds: complexityRouterConfig.session_affinity_ttl_seconds,
+    codeKeywords: complexityRouterConfig.code_keywords,
+    reasoningKeywords: complexityRouterConfig.reasoning_keywords,
+    technicalKeywords: complexityRouterConfig.technical_keywords,
+    simpleKeywords: complexityRouterConfig.simple_keywords,
+    planModePatterns: complexityRouterConfig.plan_mode_patterns,
+    routeHousekeepingToCheapestTier: complexityRouterConfig.route_housekeeping_to_cheapest_tier,
+    housekeepingPatterns: complexityRouterConfig.housekeeping_patterns,
+    reminderMarkers: complexityRouterConfig.reminder_markers,
+    maxTokensFromTierModel: complexityRouterConfig.max_tokens_from_tier_model,
+    classifierPluginTimeoutMs: complexityRouterConfig.classifier_plugin_timeout_ms,
   };
 
   const submitRecommendedRouter = async (name: string) => {
