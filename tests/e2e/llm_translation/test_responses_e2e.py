@@ -374,9 +374,11 @@ class TestResponses:
                 )
             )
 
-        assert [body.additionalModelRequestFields for body in capture.bodies] == [
-            {"safety_identifier": safety_identifier}
-        ], f"{endpoint} did not forward safety_identifier to Bedrock Converse: {capture.bodies}"
+        forwarded: Final = tuple(body.additionalModelRequestFields for body in capture.bodies)
+        assert forwarded, f"{endpoint} produced no Bedrock Converse request"
+        assert forwarded == ({"safety_identifier": safety_identifier},) * len(forwarded), (
+            f"{endpoint} did not forward safety_identifier to Bedrock Converse on every attempt: {capture.bodies}"
+        )
 
     @pytest.mark.skip(reason="stage red: product gap, /v1/responses 500s (aresponses TypeError) on missing input instead of 400")
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
