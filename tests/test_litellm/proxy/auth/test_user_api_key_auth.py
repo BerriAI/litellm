@@ -5232,6 +5232,79 @@ async def test_centralized_common_checks_runs_for_passthrough_endpoint_with_auth
             setattr(_proxy_server_mod, k, v)
 
 
+async def _centralized_denial_for_jwt_caller_on_auth_passthrough(jwt_handler):
+    import litellm.proxy.proxy_server as _proxy_server_mod
+    from fastapi import HTTPException, Request
+    from starlette.datastructures import URL
+
+    route = "/model-host/v1/demographics-extractor/predict"
+    request = Request(scope={"type": "http", "method": "POST"})
+    request._url = URL(url=route)
+    mock_registered_routes = {
+        "test-uuid-1:subpath:/model-host/v1/demographics-extractor:POST": {
+            "endpoint_id": "test-uuid-1",
+            "path": "/model-host/v1/demographics-extractor",
+            "type": "subpath",
+            "methods": ["POST"],
+            "auth": True,
+        },
+    }
+
+    user_api_key_cache = DualCache()
+    await user_api_key_cache.async_set_cache(
+        key="team_id:team-a",
+        value=LiteLLM_TeamTableCachedObj(team_id="team-a"),
+    )
+    attrs = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=None),
+        "user_api_key_cache": user_api_key_cache,
+    }
+
+    with (
+        patch.multiple(_proxy_server_mod, jwt_handler=jwt_handler, **attrs),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            mock_registered_routes,
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        try:
+            await _run_centralized_common_checks(
+                user_api_key_auth_obj=UserAPIKeyAuth(team_id="team-a", jwt_claims={"sub": "user-1"}),
+                request=request,
+                request_data={},
+                route=route,
+            )
+        except HTTPException as denial:
+            return denial.detail
+    return None
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_grant_auth_passthrough_from_the_live_jwt_team_allowed_routes():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    configured = JWTHandler()
+    configured.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(
+            team_allowed_routes=["openai_routes", "/model-host/*"]
+        ),
+    )
+
+    assert (
+        await _centralized_denial_for_jwt_caller_on_auth_passthrough(configured) is None
+    )
+    assert await _centralized_denial_for_jwt_caller_on_auth_passthrough(
+        JWTHandler()
+    ) == (
+        "Key/team not allowed to access passthrough route /model-host/v1/demographics-extractor/predict. "
+        "Configure `allowed_passthrough_routes` on the team or key."
+    )
+
+
 @pytest.mark.asyncio
 async def test_centralized_common_checks_master_key_admin_overrides_db_user_role():
     """Regression: master_key tokens have user_id=litellm_proxy_admin_name

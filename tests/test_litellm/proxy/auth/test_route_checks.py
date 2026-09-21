@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
     LiteLLM_OrganizationMembershipTable,
     LiteLLM_UserTable,
     LiteLLMRoutes,
@@ -14,6 +15,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+from litellm.proxy.auth.pass_through_access import PassThroughGrants
 from litellm.proxy.auth.route_checks import RouteChecks
 
 
@@ -1264,10 +1266,11 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
     ],
 )
 def test_jwt_team_routes_grant_pass_through_only_for_explicit_paths(route, team_allowed_routes, expected):
-    assert (
-        RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes)
-        is expected
+    grants: Final = PassThroughGrants.for_jwt_team(
+        team=None, jwt_auth=LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes)
     )
+
+    assert grants.covers(route) is expected
 
 
 _AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
@@ -1280,15 +1283,6 @@ _AUTH_ENFORCED_MODEL_HOST_ROUTES: Final = {
 }
 
 
-def _jwt_handler_with_team_allowed_routes(team_allowed_routes: list[str]):
-    from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-
-    jwt_handler: Final = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes)
-    return jwt_handler
-
-
 def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes: list[str]) -> None:
     with (
         patch(
@@ -1296,10 +1290,6 @@ def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes:
             _AUTH_ENFORCED_MODEL_HOST_ROUTES,
         ),
         patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
-        patch(
-            "litellm.proxy.proxy_server.jwt_handler",
-            _jwt_handler_with_team_allowed_routes(team_allowed_routes),
-        ),
     ):
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=None,
@@ -1308,6 +1298,7 @@ def _check_model_host_route_as(valid_token: UserAPIKeyAuth, team_allowed_routes:
             request=MagicMock(spec=Request),
             valid_token=valid_token,
             request_data={},
+            jwt_auth=LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes),
         )
 
 

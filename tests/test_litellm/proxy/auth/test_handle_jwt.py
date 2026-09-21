@@ -328,6 +328,59 @@ async def test_find_team_with_model_access_team_allowed_routes_wildcard_grants_a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_allowed_routes",
+    [
+        pytest.param(["openai_routes", "mapped_pass_through_routes"], id="route_groups_only"),
+        pytest.param(["openai_routes", "*"], id="blanket_star"),
+        pytest.param(["/*"], id="blanket_slash_star"),
+        pytest.param(["/other-host/*"], id="wildcard_for_another_path"),
+        pytest.param(["/model-host/v1/extractor/predict/*"], id="wildcard_below_the_route"),
+    ],
+)
+async def test_find_team_with_model_access_denies_auth_passthrough_not_named_by_team_allowed_routes(
+    team_allowed_routes: list[str],
+):
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=team_allowed_routes)
+
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_object",
+            new_callable=AsyncMock,
+            return_value=LiteLLM_TeamTable(team_id="team-a", models=["all-proxy-models"], metadata={}),
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.allowed_routes_check",
+            return_value=True,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            _AUTH_ENFORCED_MODEL_HOST_ROUTES,
+        ),
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await JWTAuthManager.find_team_with_model_access(
+                team_ids={"team-a"},
+                requested_model=None,
+                route="/model-host/v1/extractor/predict",
+                jwt_handler=jwt_handler,
+                prisma_client=None,
+                user_api_key_cache=MagicMock(),
+                parent_otel_span=None,
+                proxy_logging_obj=MagicMock(),
+                request_method="POST",
+            )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == (
+        "Team not allowed to access passthrough route /model-host/v1/extractor/predict. "
+        "Configure `allowed_passthrough_routes` on the team."
+    )
+
+
+@pytest.mark.asyncio
 async def test_auth_builder_header_team_allows_auth_passthrough_for_team_allowed_routes_wildcard():
     from litellm.proxy.utils import ProxyLogging
 
@@ -2323,10 +2376,6 @@ async def test_auth_builder_rbac_team_denies_passthrough_without_allowlist():
         patch(
             "litellm.proxy.auth.handle_jwt.RouteChecks.is_auth_enforced_pass_through_route",
             return_value=True,
-        ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.RouteChecks.check_passthrough_route_access",
-            return_value=False,
         ),
     ):
         mock_auth_jwt.return_value = {"scope": ""}

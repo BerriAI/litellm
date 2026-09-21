@@ -2696,6 +2696,7 @@ async def _run_centralized_common_checks(
     """
     from litellm.proxy.proxy_server import (
         general_settings,
+        jwt_handler,
         litellm_proxy_admin_name,
         llm_router,
         master_key,
@@ -2971,6 +2972,7 @@ async def _run_centralized_common_checks(
     )
 
     bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
+    jwt_auth: Final[LiteLLM_JWTAuth | None] = getattr(jwt_handler, "litellm_jwtauth", None)
     try:
         _ = await common_checks(
             request=request,
@@ -2986,6 +2988,7 @@ async def _run_centralized_common_checks(
             valid_token=user_api_key_auth_obj,
             skip_budget_checks=skip_budget_checks,
             project_object=project_object,
+            jwt_auth=jwt_auth,
         )
     finally:
         release_spend_counter_batch()

@@ -14,7 +14,7 @@ import hashlib
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal, NoReturn, Protocol, TypeVar, cast
 
@@ -25,7 +25,7 @@ from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException, status
 from jwt.api_jwk import PyJWK
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
@@ -56,6 +56,13 @@ from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.model_access_denied import (
     ModelAccessDeniedHTTPException,
     model_access_denied_client_message,
+)
+from litellm.proxy.auth.pass_through_access import (
+    Denied,
+    Granted,
+    NotAuthEnforced,
+    PassThroughGrants,
+    authorize_pass_through,
 )
 from litellm.proxy.auth.resolvers.grants import GrantResolver, UserLookup, canonical_user_id
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -1602,24 +1609,21 @@ class JWTAuthManager:
         team_object: LiteLLM_TeamTable | None,
         route: str,
         request_method: str | None = None,
-        team_allowed_routes: Collection[str] = (),
+        jwt_auth: LiteLLM_JWTAuth | None = None,
     ) -> bool:
-        normalized_request_method: Final = request_method.upper() if isinstance(request_method, str) else None
-        if not RouteChecks.is_auth_enforced_pass_through_route(
+        access: Final = authorize_pass_through(
             route=route,
-            method=normalized_request_method,
-        ):
-            return True
-
-        if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=team_allowed_routes):
-            return True
-
-        # JWT team selection is team-scoped; key metadata is not available here,
-        # so beyond the JWT config grant above, only the selected team's metadata grants access.
-        return RouteChecks.check_passthrough_route_access(
-            route=route,
-            user_api_key_dict=UserAPIKeyAuth(team_metadata=(team_object.metadata or {}) if team_object else {}),
+            method=request_method.upper() if isinstance(request_method, str) else None,
+            grants=PassThroughGrants.for_jwt_team(team=team_object, jwt_auth=jwt_auth),
+            is_auth_enforced=RouteChecks.is_auth_enforced_pass_through_route,
         )
+        match access:
+            case NotAuthEnforced() | Granted():
+                return True
+            case Denied():
+                return False
+            case _:
+                assert_never(access)
 
     @staticmethod
     def _raise_team_passthrough_route_denial(route: str) -> None:
@@ -1693,7 +1697,7 @@ class JWTAuthManager:
                             team_object=team_object,
                             route=route,
                             request_method=request_method,
-                            team_allowed_routes=jwt_handler.litellm_jwtauth.team_allowed_routes,
+                            jwt_auth=jwt_handler.litellm_jwtauth,
                         ):
                             is_allowed = False
                             denied_auth_enforced_pass_through_route = True
@@ -2589,7 +2593,7 @@ class JWTAuthManager:
             team_object=team_object,
             route=route,
             request_method=request_method,
-            team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
+            jwt_auth=handler.litellm_jwtauth,
         ):
             JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
@@ -2659,7 +2663,7 @@ class JWTAuthManager:
                 team_object=team_object,
                 route=route,
                 request_method=request_method,
-                team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
+                jwt_auth=handler.litellm_jwtauth,
             ):
                 JWTAuthManager._raise_team_passthrough_route_denial(route=route)
         elif team_id is None:

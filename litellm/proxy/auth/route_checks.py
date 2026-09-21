@@ -3,11 +3,13 @@ from collections.abc import Collection
 from typing import Final
 
 from fastapi import HTTPException, Request, status
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     CommonProxyErrors,
     KeyManagementRoutes,
+    LiteLLM_JWTAuth,
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
@@ -15,6 +17,16 @@ from litellm.proxy._types import (
 )
 
 from .auth_checks_organization import _user_is_org_admin
+from .pass_through_access import (
+    Denied,
+    Granted,
+    NotAuthEnforced,
+    PassThroughAccess,
+    PassThroughGrants,
+    authorize_pass_through,
+    covered_by_pattern,
+    covered_by_prefix,
+)
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding
@@ -123,18 +135,15 @@ class RouteChecks:
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
-                        if (
-                            allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
-                            and RouteChecks.is_auth_enforced_pass_through_route(
-                                route=route,
-                                method=RouteChecks._get_request_method(request=request),
-                            )
-                        ):
-                            if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
-                                return True
-                            denied_auth_enforced_pass_through_route = True
-                        else:
+                        if allowed_route not in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS:
                             return True
+                        match RouteChecks._pass_through_access(route=route, request=request, valid_token=valid_token):
+                            case NotAuthEnforced() | Granted():
+                                return True
+                            case Denied():
+                                denied_auth_enforced_pass_through_route = True
+                            case unreachable:
+                                assert_never(unreachable)
 
                     ################################################
                     #  For llm_api_routes, also check registered pass-through endpoints
@@ -148,17 +157,15 @@ class RouteChecks:
                         )
 
                         if InitPassThroughEndpointHelpers.is_registered_pass_through_route(route=route):
-                            if RouteChecks.is_auth_enforced_pass_through_route(
-                                route=route,
-                                method=RouteChecks._get_request_method(request=request),
+                            match RouteChecks._pass_through_access(
+                                route=route, request=request, valid_token=valid_token
                             ):
-                                if RouteChecks.check_passthrough_route_access(
-                                    route=route, user_api_key_dict=valid_token
-                                ):
+                                case NotAuthEnforced() | Granted():
                                     return True
-                                denied_auth_enforced_pass_through_route = True
-                            else:
-                                return True
+                                case Denied():
+                                    denied_auth_enforced_pass_through_route = True
+                                case unreachable:
+                                    assert_never(unreachable)
 
                         # Method-aware carve-out: allow GET on the two
                         # read-only MCP-server discovery endpoints
@@ -264,6 +271,7 @@ class RouteChecks:
         request: Request,
         valid_token: UserAPIKeyAuth,
         request_data: dict,
+        jwt_auth: LiteLLM_JWTAuth | None = None,
     ):
         """
         Checks if Non Proxy Admin User is allowed to access the route
@@ -274,16 +282,20 @@ class RouteChecks:
             route=route,
         )
 
-        if RouteChecks.is_auth_enforced_pass_through_route(
-            route=route,
-            method=RouteChecks._get_request_method(request=request),
-        ):
-            RouteChecks._require_auth_pass_through_access(
-                route=route,
-                valid_token=valid_token,
-                jwt_team_allowed_routes=RouteChecks._jwt_team_allowed_routes(valid_token=valid_token),
-            )
-        elif RouteChecks.is_llm_api_route(route=route):
+        pass_through_access: Final = RouteChecks._pass_through_access(
+            route=route, request=request, valid_token=valid_token, jwt_auth=jwt_auth
+        )
+        match pass_through_access:
+            case Denied():
+                raise RouteChecks._auth_pass_through_denied_exception(route=route)
+            case Granted():
+                return
+            case NotAuthEnforced():
+                pass
+            case _:
+                assert_never(pass_through_access)
+
+        if RouteChecks.is_llm_api_route(route=route):
             pass
         elif RouteChecks.is_info_route(route=route):
             # check if user allowed to call an info route
@@ -575,13 +587,7 @@ class RouteChecks:
         - returns: True
 
         """
-        if pattern.endswith("*"):
-            # Get the prefix (everything before the wildcard)
-            prefix: Final = pattern[:-1]
-            return route.startswith(prefix)
-        else:
-            # If there's no wildcard, the pattern and route should match exactly
-            return route == pattern
+        return covered_by_pattern(route=route, pattern=pattern)
 
     @staticmethod
     def _route_matches_allowed_route(route: str, allowed_route: str) -> bool:
@@ -601,13 +607,7 @@ class RouteChecks:
         Returns:
             bool: True if route matches (exact or prefix), False otherwise
         """
-        # Exact match
-        if route == allowed_route:
-            return True
-        # Prefix match - ensure we add "/" to prevent false matches like /fake-openai-proxy-600
-        if route.startswith(allowed_route + "/"):
-            return True
-        return False
+        return covered_by_prefix(route=route, prefix=allowed_route)
 
     @staticmethod
     def check_route_access(route: str, allowed_routes: Collection[str]) -> bool:
@@ -694,72 +694,23 @@ class RouteChecks:
         )
 
     @staticmethod
-    def jwt_team_routes_grant_pass_through(route: str, team_allowed_routes: Collection[str]) -> bool:
-        """
-        Explicit paths and trailing-wildcard prefixes grant auth=true pass-through. Blanket grants never do:
-        a named route group like ``openai_routes`` is only ever compared as a path, and an entry that names
-        no path segment (``*``, ``/*``) is skipped.
-        """
-        return any(
-            RouteChecks.route_matches_wildcard_pattern(route=route, pattern=allowed_route)
-            for allowed_route in team_allowed_routes
-            if allowed_route.rstrip("*").strip("/")
-        )
-
-    @staticmethod
-    def _jwt_team_allowed_routes(valid_token: UserAPIKeyAuth) -> Collection[str]:
-        """``team_allowed_routes`` for team tokens built by JWT auth; JWT-mapped virtual keys stay key-scoped."""
-        if valid_token.jwt_claims is None or valid_token.token is not None or valid_token.team_id is None:
-            return ()
-
-        from litellm.proxy.proxy_server import jwt_handler
-
-        return jwt_handler.litellm_jwtauth.team_allowed_routes
-
-    @staticmethod
-    def _require_auth_pass_through_access(
+    def _pass_through_access(
         route: str,
+        request: Request | None,
         valid_token: UserAPIKeyAuth,
-        jwt_team_allowed_routes: Collection[str] = (),
-    ) -> None:
-        """
-        Require an explicit grant for auth=true pass-through: ``allowed_passthrough_routes`` on the
-        key or team, or an explicit JWT ``team_allowed_routes`` entry.
-        """
-        if RouteChecks.check_passthrough_route_access(route=route, user_api_key_dict=valid_token):
-            return
-        if RouteChecks.jwt_team_routes_grant_pass_through(route=route, team_allowed_routes=jwt_team_allowed_routes):
-            return
-        raise RouteChecks._auth_pass_through_denied_exception(route=route)
+        jwt_auth: LiteLLM_JWTAuth | None = None,
+    ) -> PassThroughAccess:
+        return authorize_pass_through(
+            route=route,
+            method=RouteChecks._get_request_method(request=request),
+            grants=PassThroughGrants.for_token(token=valid_token, jwt_auth=jwt_auth),
+            is_auth_enforced=RouteChecks.is_auth_enforced_pass_through_route,
+        )
 
     @staticmethod
     def check_passthrough_route_access(route: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
-        """
-        Check if route is a passthrough route.
-        Supports both exact match and prefix match.
-        """
-        metadata: Final = user_api_key_dict.metadata
-        team_metadata: Final = user_api_key_dict.team_metadata or {}
-        if metadata is None and team_metadata is None:
-            return False
-        if "allowed_passthrough_routes" not in metadata and "allowed_passthrough_routes" not in team_metadata:
-            return False
-        if (
-            metadata.get("allowed_passthrough_routes") is None
-            and team_metadata.get("allowed_passthrough_routes") is None
-        ):
-            return False
-
-        allowed_passthrough_routes: Final = (
-            metadata.get("allowed_passthrough_routes") or team_metadata.get("allowed_passthrough_routes") or []
-        )
-
-        # Check if route matches any allowed passthrough route (exact or prefix match)
-        for allowed_route in allowed_passthrough_routes:
-            if RouteChecks._route_matches_allowed_route(route=route, allowed_route=allowed_route):
-                return True
-
-        return False
+        """Whether the key's or team's ``allowed_passthrough_routes`` metadata covers the route (exact or subpath)."""
+        return PassThroughGrants.for_token(token=user_api_key_dict).covers(route)
 
     @staticmethod
     def _is_assistants_api_request(request: Request) -> bool:
