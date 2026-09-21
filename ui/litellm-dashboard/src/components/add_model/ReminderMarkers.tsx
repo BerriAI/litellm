@@ -30,14 +30,13 @@ const ReminderMarkers: React.FC<{
       </p>
       <div className="space-y-3">
         {markers.map((marker, index) => (
-          <div className="flex items-end gap-2" key={`${index}-${marker.open}-${marker.close}`}>
+          <div className="flex items-end gap-2" key={index}>
             <div className="flex-1">
               <label className="mb-1 block text-sm font-medium" htmlFor={`reminder-marker-${index}-open`}>
                 Opening delimiter
               </label>
               <Input
                 id={`reminder-marker-${index}-open`}
-                aria-label={`Reminder marker ${index + 1} opening delimiter`}
                 placeholder="<system-reminder>"
                 value={marker.open}
                 onChange={(event) => update(index, { open: event.target.value })}
@@ -49,7 +48,6 @@ const ReminderMarkers: React.FC<{
               </label>
               <Input
                 id={`reminder-marker-${index}-close`}
-                aria-label={`Reminder marker ${index + 1} closing delimiter`}
                 placeholder="</system-reminder>"
                 value={marker.close}
                 onChange={(event) => update(index, { close: event.target.value })}

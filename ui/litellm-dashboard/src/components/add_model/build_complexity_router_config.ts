@@ -744,6 +744,16 @@ export const buildComplexityRouterConfig = ({
     open: open.trim().toLowerCase(),
     close: close.trim().toLowerCase(),
   }));
+  const cleanedLists = Object.fromEntries(
+    Object.entries({
+      code_keywords: cleanList(codeKeywords),
+      reasoning_keywords: cleanList(reasoningKeywords),
+      technical_keywords: cleanList(technicalKeywords),
+      simple_keywords: cleanList(simpleKeywords),
+      plan_mode_patterns: cleanList(planModePatterns),
+      housekeeping_patterns: cleanList(housekeepingPatterns),
+    }).filter(([, list]) => list !== undefined),
+  );
 
   const supportsOpeningPrompt = !customTierSet && !forecast && usesLlmClassifier(effectiveType);
   const payload: ComplexityRouterConfigPayload = {
@@ -812,13 +822,8 @@ export const buildComplexityRouterConfig = ({
     ...(sessionAffinityTtlSeconds !== undefined && {
       session_affinity_ttl_seconds: sessionAffinityTtlSeconds,
     }),
-    ...(cleanList(codeKeywords) && { code_keywords: cleanList(codeKeywords) }),
-    ...(cleanList(reasoningKeywords) && { reasoning_keywords: cleanList(reasoningKeywords) }),
-    ...(cleanList(technicalKeywords) && { technical_keywords: cleanList(technicalKeywords) }),
-    ...(cleanList(simpleKeywords) && { simple_keywords: cleanList(simpleKeywords) }),
-    ...(cleanList(planModePatterns) && { plan_mode_patterns: cleanList(planModePatterns) }),
+    ...cleanedLists,
     ...(routeHousekeepingToCheapestTier === false && { route_housekeeping_to_cheapest_tier: false }),
-    ...(cleanList(housekeepingPatterns) && { housekeeping_patterns: cleanList(housekeepingPatterns) }),
     ...(cleanedReminderMarkers && cleanedReminderMarkers.length > 0 && { reminder_markers: cleanedReminderMarkers }),
     ...(maxTokensFromTierModel === false && { max_tokens_from_tier_model: false }),
     ...(classifierType === "custom" &&

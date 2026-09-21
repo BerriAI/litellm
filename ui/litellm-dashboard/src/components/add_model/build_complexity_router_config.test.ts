@@ -1531,6 +1531,22 @@ describe("advanced complexity router fields", () => {
     expect(payload).not.toHaveProperty("classifier_plugin_timeout_ms");
   });
 
+  it.each([
+    "code_keywords",
+    "reasoning_keywords",
+    "technical_keywords",
+    "simple_keywords",
+    "plan_mode_patterns",
+    "route_housekeeping_to_cheapest_tier",
+    "housekeeping_patterns",
+    "reminder_markers",
+    "max_tokens_from_tier_model",
+    "classifier_plugin_timeout_ms",
+  ])("omits unset advanced field %s", (key) => {
+    const payload = buildComplexityRouterConfig(baseParams);
+    expect(payload).not.toHaveProperty(key);
+  });
+
   it("validates marker pairs and custom classifier timeout", () => {
     expect(getReminderMarkersError([{ open: " <X> ", close: " <x> " }])).toContain("different");
     expect(getReminderMarkersError([{ open: "", close: "</x>" }])).toContain("needs both");
