@@ -14214,10 +14214,11 @@ async def test_request_selected_during_guardrail_runs_concurrently_with_tool(mon
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("with_caller", [True, False])
-async def test_client_sampling_does_not_fill_explicit_context_from_another_ambient_caller(with_caller):
+@pytest.mark.parametrize("with_caller,legacy_factory", [(True, False), (False, False), (True, True)])
+async def test_client_sampling_does_not_fill_explicit_context_from_another_ambient_caller(with_caller, legacy_factory):
     from mcp.server.auth.middleware.auth_context import auth_context_var
     from litellm.proxy._experimental.mcp_server import server as legacy_server
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import _create_sampling_callback
 
     upstream = MCPServer(server_id="explicit-empty", name="explicit_empty", url="https://example.invalid/mcp", transport=MCPTransport.http, allow_sampling=True)
     token = auth_context_var.set(None)
@@ -14228,8 +14229,12 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient") as factory,
             patch("litellm.proxy._experimental.mcp_server.sampling_handler.handle_sampling_create_message", sampling),
         ):
-            await MCPServerManager()._create_mcp_client(upstream, user_api_key_auth=UserAPIKeyAuth(user_id="explicit") if with_caller else None)
-            await factory.call_args.kwargs["sampling_callback"](None, None)
+            if legacy_factory:
+                callback = _create_sampling_callback(user_api_key_auth=UserAPIKeyAuth(user_id="explicit"))
+            else:
+                await MCPServerManager()._create_mcp_client(upstream, user_api_key_auth=UserAPIKeyAuth(user_id="explicit") if with_caller else None)
+                callback = factory.call_args.kwargs["sampling_callback"]
+            await callback(None, None)
         captured = sampling.await_args.kwargs
         if with_caller:
             assert captured["user_api_key_auth"].user_id == "explicit"
