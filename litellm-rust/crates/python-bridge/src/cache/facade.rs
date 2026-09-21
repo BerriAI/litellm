@@ -1,3 +1,4 @@
+use litellm_cache_redis::RedisTopology;
 use litellm_host_python::from_py;
 use pyo3::{
     PyTraverseError, PyVisit,
@@ -29,7 +30,8 @@ struct RedisPoolGuard {
     reference: Py<PyAny>,
     connection_class: Py<PyAny>,
     connection_kwargs: Py<PyAny>,
-    max_connections: usize,
+    max_connections: Option<usize>,
+    attributes: RedisPoolAttributes,
 }
 
 struct AzureBlobClientGuard {
@@ -44,6 +46,24 @@ enum ConnectionGuard {
     RedisPool(RedisPoolGuard),
     AzureBlob(AzureBlobClientGuard),
 }
+
+struct RedisPoolAttributes {
+    pool: &'static str,
+    connection_class: &'static str,
+    max_connections: Option<&'static str>,
+}
+
+const STANDALONE_POOL: RedisPoolAttributes = RedisPoolAttributes {
+    pool: "connection_pool",
+    connection_class: "connection_class",
+    max_connections: Some("max_connections"),
+};
+
+const CLUSTER_POOL: RedisPoolAttributes = RedisPoolAttributes {
+    pool: "nodes_manager",
+    connection_class: "connection_pool_class",
+    max_connections: None,
+};
 
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
@@ -151,31 +171,40 @@ impl ObjectGuard {
 }
 
 impl RedisPoolGuard {
-    fn capture(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let pool = backend
-            .getattr("redis_client")?
-            .getattr("connection_pool")?;
+    fn capture(backend: &Bound<'_, PyAny>, attributes: RedisPoolAttributes) -> PyResult<Self> {
+        let pool = backend.getattr("redis_client")?.getattr(attributes.pool)?;
         Ok(Self {
             reference: pool.clone().unbind(),
-            connection_class: pool.getattr("connection_class")?.unbind(),
+            connection_class: pool.getattr(attributes.connection_class)?.unbind(),
             connection_kwargs: pool
                 .getattr("connection_kwargs")?
                 .call_method0("copy")?
                 .unbind(),
-            max_connections: pool.getattr("max_connections")?.extract::<usize>()?,
+            max_connections: Self::max_connections(&pool, &attributes)?,
+            attributes,
         })
+    }
+
+    fn max_connections(
+        pool: &Bound<'_, PyAny>,
+        attributes: &RedisPoolAttributes,
+    ) -> PyResult<Option<usize>> {
+        attributes
+            .max_connections
+            .map(|name| pool.getattr(name)?.extract::<usize>())
+            .transpose()
     }
 
     fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
         let pool = backend
             .getattr("redis_client")?
-            .getattr("connection_pool")?;
+            .getattr(self.attributes.pool)?;
         Ok(self.reference.bind(py).is(&pool)
             && self
                 .connection_class
                 .bind(py)
-                .is(&pool.getattr("connection_class")?)
-            && self.max_connections == pool.getattr("max_connections")?.extract::<usize>()?
+                .is(&pool.getattr(self.attributes.connection_class)?)
+            && self.max_connections == Self::max_connections(&pool, &self.attributes)?
             && self
                 .connection_kwargs
                 .bind(py)
@@ -218,10 +247,11 @@ impl AzureBlobClientGuard {
 }
 
 impl ConnectionGuard {
-    fn capture(kind: &str, backend: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(match kind {
-            "redis" => Self::RedisPool(RedisPoolGuard::capture(backend)?),
-            "azure-blob" => Self::AzureBlob(AzureBlobClientGuard::capture(backend)?),
+    fn capture(kind: &str, cluster: bool, backend: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(match (kind, cluster) {
+            ("redis", false) => Self::RedisPool(RedisPoolGuard::capture(backend, STANDALONE_POOL)?),
+            ("redis", true) => Self::RedisPool(RedisPoolGuard::capture(backend, CLUSTER_POOL)?),
+            ("azure-blob", _) => Self::AzureBlob(AzureBlobClientGuard::capture(backend)?),
             _ => Self::None,
         })
     }
@@ -256,10 +286,16 @@ impl FacadeGuard {
                 "only exact built-in Cache facades can be registered",
             ));
         }
-        let (module, name, cache_kind) = match kind {
-            "memory" => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
-            "redis" => ("litellm.caching.redis_cache", "RedisCache", "redis"),
-            "azure-blob" => (
+        let cluster = matches!(service.topology(), Some(RedisTopology::Cluster { .. }));
+        let (module, name, cache_kind) = match (kind, cluster) {
+            ("memory", _) => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
+            ("redis", false) => ("litellm.caching.redis_cache", "RedisCache", "redis"),
+            ("redis", true) => (
+                "litellm.caching.redis_cluster_cache",
+                "RedisClusterCache",
+                "redis",
+            ),
+            ("azure-blob", _) => (
                 "litellm.caching.azure_blob_cache",
                 "AzureBlobCache",
                 "azure-blob",
@@ -309,7 +345,7 @@ impl FacadeGuard {
                     "redis_flush_size",
                 ],
             )?,
-            connection: ConnectionGuard::capture(kind, &backend)?,
+            connection: ConnectionGuard::capture(kind, cluster, &backend)?,
         })
     }
 

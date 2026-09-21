@@ -1651,6 +1651,92 @@ def test_bedrock_messages_allowlist_filters_anthropic_only_fields():
     assert set(result).issubset(cfg.BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS)
 
 
+@pytest.mark.parametrize(
+    "client_beta_header",
+    ["dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14", "interleaved-thinking-2025-05-14"],
+    ids=["client_sends_beta", "client_omits_beta"],
+)
+def test_bedrock_messages_forwards_safeguards_with_dangerous_tool_use_beta(local_beta_headers_config, client_beta_header):
+    """
+    Claude Code's server-side auto-mode classifier sends `safeguards` alongside the
+    dangerous-tool-use-2026-09-03 beta. Bedrock Invoke accepts the pair, answers
+    "safeguards: Extra inputs are not permitted" for the field alone, and returns
+    `safeguard_results: []` for the beta alone, so the field reaches it unchanged
+    and the beta rides along whether or not the client sent it, as every other
+    body-driven beta does here.
+    """
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+    safeguards = [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "safeguards": safeguards},
+        litellm_params=GenericLiteLLMParams(),
+        headers={"anthropic-beta": client_beta_header},
+    )
+
+    assert result["safeguards"] == safeguards
+    assert result["anthropic_beta"].count("dangerous-tool-use-2026-09-03") == 1
+
+
+def test_bedrock_messages_does_not_add_dangerous_tool_use_beta_without_safeguards(local_beta_headers_config):
+    from litellm.types.router import GenericLiteLLMParams
+
+    cfg = AmazonAnthropicClaudeMessagesConfig()
+
+    result = cfg.transform_anthropic_messages_request(
+        model="us.anthropic.claude-sonnet-5",
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert "safeguards" not in result
+    assert "dangerous-tool-use-2026-09-03" not in result.get("anthropic_beta", [])
+
+
+def test_bedrock_messages_stream_decoder_keeps_safeguard_results():
+    """Bedrock streams the classifier verdicts on message_start and on the final message_delta, exactly as api.anthropic.com does."""
+    decoder = AmazonAnthropicClaudeMessagesStreamDecoder(model="us.anthropic.claude-sonnet-5")
+    tool_verdicts = {"toolu_01": {"type": "evaluated", "outcome": "not_flagged"}}
+    safeguard_results = [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_verdicts}}]
+
+    message_start = decoder._chunk_parser(
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_01",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5",
+                "content": [],
+                "stop_reason": None,
+                "usage": {"input_tokens": 3, "output_tokens": 0},
+                "safeguard_results": safeguard_results,
+            },
+        }
+    )
+
+    assert isinstance(message_start, dict)
+    assert message_start["message"]["safeguard_results"] == safeguard_results
+
+    message_delta = decoder._chunk_parser(
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn", "stop_sequence": None, "safeguard_results": safeguard_results},
+            "usage": {"output_tokens": 1},
+            "amazon-bedrock-invocationMetrics": {"inputTokenCount": 3, "outputTokenCount": 1},
+        }
+    )
+
+    assert isinstance(message_delta, dict)
+    assert message_delta["delta"]["safeguard_results"] == safeguard_results
+
+
 def test_bedrock_messages_filters_user_provided_unsupported_beta_header():
     """
     In proxy deployments the client (e.g. Claude Code) doesn't know the backend

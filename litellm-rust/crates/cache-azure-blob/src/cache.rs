@@ -53,13 +53,16 @@ impl<C: CacheCodec> AzureBlobCache<C> {
         codec: C,
         runtime: Handle,
     ) -> Result<Self, Error> {
-        let account_url = Url::parse(account_url)
-            .map_err(|_| Error::Unavailable)?
-            .as_str()
-            .trim_end_matches('/')
-            .to_string();
-        let container_url =
-            Url::parse(&format!("{account_url}/{container}")).map_err(|_| Error::Unavailable)?;
+        let parsed = Url::parse(account_url).map_err(|_| Error::Unavailable)?;
+        let account_url = parsed.as_str().trim_end_matches('/').to_string();
+        let container_url = {
+            let mut url = parsed;
+            url.path_segments_mut()
+                .map_err(|()| Error::Unavailable)?
+                .pop_if_empty()
+                .push(container);
+            url
+        };
         let client = BlobContainerClient::new(
             container_url,
             credential,
