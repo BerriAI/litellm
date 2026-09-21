@@ -5,43 +5,18 @@ use litellm_cache::{
     BaseCache, BatchCache, BatchEntry, CacheCodec, CacheConnectionResult, Error, ExactCacheContext,
     FlushCache,
 };
-use percent_encoding::{AsciiSet, CONTROLS, percent_encode};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_encode};
 use reqwest::Client;
 
 use crate::{GcpTokenSource, TokenSource};
 
 pub const DEFAULT_ENDPOINT: &str = "https://storage.googleapis.com";
 
-const OBJECT_NAME_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'!')
-    .add(b'"')
-    .add(b'#')
-    .add(b'$')
-    .add(b'%')
-    .add(b'&')
-    .add(b'\'')
-    .add(b'(')
-    .add(b')')
-    .add(b'*')
-    .add(b'+')
-    .add(b',')
-    .add(b'/')
-    .add(b':')
-    .add(b';')
-    .add(b'<')
-    .add(b'=')
-    .add(b'>')
-    .add(b'?')
-    .add(b'@')
-    .add(b'[')
-    .add(b'\\')
-    .add(b']')
-    .add(b'^')
-    .add(b'`')
-    .add(b'{')
-    .add(b'|')
-    .add(b'}');
+const OBJECT_NAME_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
 
 pub fn key_prefix(gcs_path: Option<&str>) -> String {
     match gcs_path {
