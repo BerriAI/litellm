@@ -201,6 +201,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         collector_key: str | None = None,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         timeout: float | None = None,
+        streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
         guardrail_name: str | None = None,
         event_hook: GuardrailEventHooks | Mode | str | Sequence[str] | None = None,
         default_on: bool | None = None,
@@ -220,6 +221,10 @@ class NeuralTrustGuardrail(CustomGuardrail):
         if resolved_timeout <= 0:
             raise ValueError("TrustGuard timeout must be a positive number of seconds.")
         self.timeout = resolved_timeout
+        # Read off the instance by UnifiedLLMGuardrails.async_post_call_streaming_iterator_hook.
+        self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
+            streaming_transform_mode or "block_only"
+        )
         super().__init__(
             guardrail_name=guardrail_name,
             supported_event_hooks=self.get_supported_event_hooks(),
@@ -235,6 +240,18 @@ class NeuralTrustGuardrail(CustomGuardrail):
         request_data: dict,  # mutable-ok: CustomGuardrail.apply_guardrail contract
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return self._with_holdback(
+            await self._evaluate(inputs, request_data, input_type, logging_obj),
+            input_type,
+        )
+
+    async def _evaluate(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,  # mutable-ok: CustomGuardrail.apply_guardrail contract
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None,
     ) -> GenericGuardrailAPIInputs:
         body: Final = self._evaluate_body(inputs, request_data, input_type, logging_obj)
         try:
@@ -257,14 +274,31 @@ class NeuralTrustGuardrail(CustomGuardrail):
                 },
             )
         if status == STATUS_TRANSFORM:
-            return self._apply_transform(
-                inputs,
-                result.get("transformed_payload"),
-                sent_count=len(_sent_messages(inputs, input_type)),
-            )
+            return self._apply_transform(inputs, result.get("transformed_payload"), input_type=input_type)
         if status == STATUS_REPORT:
             verbose_proxy_logger.info("TrustGuard report-only findings trace_id=%s", result.get("trace_id"))
         return inputs
+
+    def _with_holdback(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        input_type: Literal["request", "response"],
+    ) -> GenericGuardrailAPIInputs:
+        """Withhold the whole reply from each streaming round under incremental_diff.
+
+        TrustGuard re-reads the full reply every round and its redaction spans move as the reply grows, so a
+        later round can rewrite text an earlier one already streamed. The engine cannot retract streamed bytes
+        and answers that with stream_transform_underflow, so nothing is released until the end-of-stream round
+        forces the holdback to zero and flushes the final redacted reply.
+        """
+        texts: Final = inputs.get("texts")
+        if input_type == "request" or self.streaming_transform_mode != "incremental_diff" or not texts:
+            return inputs
+        held: Final[GenericGuardrailAPIInputs] = {  # mutable-ok: GenericGuardrailAPIInputs is a TypedDict
+            **inputs,
+            "stream_holdback_chars": [len(text) for text in texts],  # mutable-ok: the field is a list
+        }
+        return held
 
     def _evaluate_body(
         self,
@@ -370,7 +404,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         inputs: GenericGuardrailAPIInputs,
         transformed: object,
         *,
-        sent_count: int,
+        input_type: Literal["request", "response"],
     ) -> GenericGuardrailAPIInputs:
         if not isinstance(transformed, Mapping):
             raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
@@ -378,7 +412,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         raw_messages: Final = transformed.get("messages")
         if isinstance(raw_messages, list) and raw_messages:
             rewritten_messages: Final = _copy_messages(raw_messages)
-            if rewritten_messages is None or len(rewritten_messages) != sent_count:
+            if rewritten_messages is None or len(rewritten_messages) != len(_sent_messages(inputs, input_type)):
                 raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
             return _inputs_with_messages(inputs, rewritten_messages, replace_tool_calls=True)
 
@@ -386,7 +420,9 @@ class NeuralTrustGuardrail(CustomGuardrail):
         if not isinstance(raw_input, str) or not raw_input:
             raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
 
-        original_messages: Final = inputs.get("structured_messages")
+        # structured_messages on a reply scan is the request conversation the framework attached for context,
+        # so a scalar payload rewrites the scanned reply text instead.
+        original_messages: Final = inputs.get("structured_messages") if input_type == "request" else None
         if isinstance(original_messages, list) and original_messages:
             copied: Final = _copy_messages(original_messages)
             if copied is None:

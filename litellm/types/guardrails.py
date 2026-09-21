@@ -1068,6 +1068,17 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = Field(
+        default=None,
+        description=(
+            "Whether a guardrail's text rewrite reaches a streaming client. "
+            "Implemented by guardrail='prompt_security' and 'neuraltrust'; generic_guardrail_api takes the "
+            "same setting under optional_params. 'block_only' (default) streams the raw model chunks, so a "
+            "block still ends the stream but rewrites are dropped. 'incremental_diff' withholds those chunks "
+            "and streams the guardrail's rewritten text instead. OpenAI chat completions streaming only."
+        ),
+    )
+
     extra_headers: list[str] | None = Field(
         default=None,
         description=(

@@ -18,6 +18,7 @@ guardrails:
       collector_key: os.environ/TRUSTGUARD_COLLECTOR_KEY  # tgcol_… ; optional if the API key is bound
       unreachable_fallback: fail_closed
       timeout: 5
+      streaming_transform_mode: block_only  # incremental_diff to stream redacted output
       default_on: true
 ```
 
@@ -50,7 +51,16 @@ HTTP 503 entitlements, 401/403, other 4xx/5xx, and unusable TrustGuard verdicts 
 
 ## Streaming
 
-LiteLLM streaming guardrails default to `block_only`. `block` still fires on streamed calls. `transform` rewrites are not applied to the streamed tokens; use non-streaming requests when DLP redaction must reach the client.
+`block` and `ask` end the stream in either mode. `streaming_transform_mode` decides whether a `transform` verdict reaches the client.
+
+| Mode | What the client receives |
+| --- | --- |
+| `block_only` (default) | the raw model tokens, so the redaction is dropped |
+| `incremental_diff` | TrustGuard's rewritten reply |
+
+Under `incremental_diff` the reply is held until the end-of-stream evaluate returns, so the first token arrives with the last. TrustGuard re-reads the whole reply on every scan and its redaction spans move as the reply grows, so releasing tokens early would let a later scan try to rewrite text already on the wire. Holding them also means a blocking verdict ends the stream with nothing sent at all.
+
+`incremental_diff` covers OpenAI chat completions streaming; other surfaces fall back to `block_only`.
 
 ## References
 

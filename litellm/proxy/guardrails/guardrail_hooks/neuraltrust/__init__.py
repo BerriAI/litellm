@@ -19,6 +19,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         collector_key=litellm_params.collector_key,
         unreachable_fallback=litellm_params.unreachable_fallback,
         timeout=litellm_params.timeout,
+        streaming_transform_mode=litellm_params.streaming_transform_mode,
         guardrail_name=guardrail.get("guardrail_name", ""),
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,

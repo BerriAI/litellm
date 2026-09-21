@@ -1,4 +1,5 @@
 import os
+from collections.abc import AsyncIterator, Sequence
 from typing import Literal
 from unittest.mock import AsyncMock, patch
 
@@ -18,9 +19,18 @@ from litellm.proxy.guardrails.guardrail_hooks.neuraltrust import initialize_guar
 from litellm.proxy.guardrails.guardrail_hooks.neuraltrust.neuraltrust import (
     NeuralTrustGuardrail,
 )
+from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.guardrails import LitellmParams
-from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message, ModelResponse
+from litellm.types.utils import (
+    Choices,
+    Delta,
+    GenericGuardrailAPIInputs,
+    Message,
+    ModelResponse,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 
 def _response(payload: object, status_code: int = 200) -> Response:
@@ -49,6 +59,7 @@ def _guardrail(
     default_on: bool = False,
     unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
     timeout: float | None = None,
+    streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
     api_base: str | None = None,
 ) -> NeuralTrustGuardrail:
     return NeuralTrustGuardrail(
@@ -59,8 +70,85 @@ def _guardrail(
         default_on=default_on,
         unreachable_fallback=unreachable_fallback,
         timeout=timeout,
+        streaming_transform_mode=streaming_transform_mode,
         api_base=api_base,
     )
+
+
+CARD_NUMBER = "4111 1111 1111 1111"
+REPLY_CHUNKS = (
+    "Here is ",
+    "the billing ",
+    "record. ",
+    "Card ",
+    "4111 1111 ",
+    "1111 1111 ",
+    "is on file.",
+)
+FULL_REPLY = "".join(REPLY_CHUNKS)
+REDACTED_REPLY = FULL_REPLY.replace(CARD_NUMBER, "[REDACTED]")
+
+
+def _stream_chunk(content: str, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        model="gpt-4o-mini",
+        choices=[
+            StreamingChoices(index=0, delta=Delta(content=content, role="assistant"), finish_reason=finish_reason)
+        ],
+    )
+
+
+async def _upstream_reply() -> AsyncIterator[ModelResponseStream]:
+    for chunk in REPLY_CHUNKS:
+        yield _stream_chunk(chunk)
+    yield _stream_chunk("", finish_reason="stop")
+
+
+def _redacting_trustguard(*, on_card: str = "transform") -> AsyncMock:
+    """A TrustGuard that only reacts once the whole card number is in the accumulated reply."""
+
+    async def _post(*_args: object, **kwargs: object) -> Response:
+        body = kwargs["json"]
+        seen = "".join(message["content"] or "" for message in body["payload"]["messages"])
+        if CARD_NUMBER not in seen:
+            return _response({"status": "allow"})
+        if on_card != "transform":
+            return _response({"status": on_card, "trace_id": "trace-1"})
+        return _response(
+            {
+                "status": "transform",
+                "transformed_payload": {
+                    "messages": [{"role": "assistant", "content": seen.replace(CARD_NUMBER, "[REDACTED]")}]
+                },
+            }
+        )
+
+    return AsyncMock(side_effect=_post)
+
+
+def _guardrail_stream(guardrail: NeuralTrustGuardrail) -> AsyncIterator[object]:
+    return UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="tgk_test", request_route="/v1/chat/completions"),
+        response=_upstream_reply(),
+        request_data={
+            "guardrail_to_apply": guardrail,
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "what card is on file?"}],
+        },
+    )
+
+
+async def _drain_into(stream: AsyncIterator[object], sink: list[object]) -> None:
+    async for item in stream:
+        sink.append(item)
+
+
+def _deltas(items: Sequence[object]) -> list[str]:
+    return [
+        item.choices[0].delta.content
+        for item in items
+        if isinstance(item, ModelResponseStream) and item.choices and item.choices[0].delta.content
+    ]
 
 
 class TestNeuralTrustGuardrail:
@@ -994,6 +1082,91 @@ class TestNeuralTrustGuardrail:
         assert result == inputs
         assert mock_post.call_args.kwargs["timeout"] == 12.0
 
+    @pytest.mark.asyncio
+    async def test_incremental_diff_redacts_a_value_split_across_streamed_chunks(self) -> None:
+        """The card straddles a sampled scan, so the earlier half must never leave before the redaction lands."""
+        guardrail = _guardrail(event_hook="post_call", default_on=True, streaming_transform_mode="incremental_diff")
+        with patch.object(guardrail.async_handler, "post", _redacting_trustguard()):
+            out = [item async for item in _guardrail_stream(guardrail)]
+        assert _deltas(out) == [REDACTED_REPLY]
+
+    @pytest.mark.asyncio
+    async def test_block_mid_stream_under_incremental_diff_sends_nothing(self) -> None:
+        guardrail = _guardrail(event_hook="post_call", default_on=True, streaming_transform_mode="incremental_diff")
+        received: list[object] = []  # mutable-ok: collects what the client saw before the block
+        with patch.object(guardrail.async_handler, "post", _redacting_trustguard(on_card="block")):
+            with pytest.raises(HTTPException) as exc_info:
+                await _drain_into(_guardrail_stream(guardrail), received)
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["verdict"] == "block"
+        assert _deltas(received) == []
+
+    @pytest.mark.asyncio
+    async def test_default_streaming_mode_leaves_the_transform_off_the_wire(self) -> None:
+        """Default stays block_only, where the framework streams the raw model chunks and drops rewrites."""
+        guardrail = _guardrail(event_hook="post_call", default_on=True)
+        assert guardrail.streaming_transform_mode == "block_only"
+        with patch.object(guardrail.async_handler, "post", _redacting_trustguard()):
+            out = [item async for item in _guardrail_stream(guardrail)]
+        streamed = "".join(_deltas(out))
+        assert CARD_NUMBER in streamed
+        assert "[REDACTED]" not in streamed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("mode", "input_type", "expected"),
+        [
+            ("incremental_diff", "response", [len(REDACTED_REPLY)]),
+            ("incremental_diff", "request", None),
+            ("block_only", "response", None),
+        ],
+    )
+    async def test_holdback_covers_streamed_reply_scans_only(
+        self,
+        mode: Literal["block_only", "incremental_diff"],
+        input_type: Literal["request", "response"],
+        expected: list[int] | None,
+    ) -> None:
+        guardrail = _guardrail(event_hook="post_call", streaming_transform_mode=mode)
+        mock_post = AsyncMock(
+            return_value=_response(
+                {
+                    "status": "transform",
+                    "transformed_payload": {"messages": [{"role": "assistant", "content": REDACTED_REPLY}]},
+                }
+            )
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={"texts": [FULL_REPLY]},
+                request_data={},
+                input_type=input_type,
+                logging_obj=_logging(),
+            )
+        assert result.get("stream_holdback_chars") == expected
+
+    @pytest.mark.asyncio
+    async def test_transform_input_on_a_reply_rewrites_the_reply_not_the_prompt(self) -> None:
+        """The framework attaches the request conversation to reply scans; a scalar payload must ignore it."""
+        guardrail = _guardrail(event_hook="post_call")
+        mock_post = AsyncMock(
+            return_value=_response({"status": "transform", "transformed_payload": {"input": "card [REDACTED]"}})
+        )
+        with patch.object(guardrail.async_handler, "post", mock_post):
+            result = await guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["card 4111 1111 1111 1111"],
+                    "structured_messages": [
+                        {"role": "user", "content": "what card is on file?"},
+                        {"role": "assistant", "content": "card 4111 1111 1111 1111"},
+                    ],
+                },
+                request_data={},
+                input_type="response",
+                logging_obj=_logging(),
+            )
+        assert result["texts"] == ["card [REDACTED]"]
+
     def test_get_config_model(self) -> None:
         model = NeuralTrustGuardrail.get_config_model()
         assert model is not None
@@ -1009,10 +1182,12 @@ class TestNeuralTrustGuardrail:
             "collector_key",
             "unreachable_fallback",
             "timeout",
+            "streaming_transform_mode",
         }
         assert fields["timeout"]["type"] == "number"
         assert fields["timeout"]["default_value"] == 5.0
         assert fields["unreachable_fallback"]["options"] == ["fail_closed", "fail_open"]
+        assert fields["streaming_transform_mode"]["options"] == ["block_only", "incremental_diff"]
 
     def test_timeout_default_stays_local_to_neuraltrust(self) -> None:
         assert LitellmParams(guardrail="lakera_v2", mode="pre_call").timeout is None
@@ -1035,6 +1210,7 @@ class TestNeuralTrustGuardrail:
             collector_key="tgcol_from_params",
             unreachable_fallback="fail_open",
             timeout=2,
+            streaming_transform_mode="incremental_diff",
             default_on=True,
         )
         hook = initialize_guardrail(params, {"guardrail_name": "tg-prod"})
@@ -1044,6 +1220,7 @@ class TestNeuralTrustGuardrail:
             assert hook.collector_key == "tgcol_from_params"
             assert hook.unreachable_fallback == "fail_open"
             assert hook.timeout == 2.0
+            assert hook.streaming_transform_mode == "incremental_diff"
             assert hook.guardrail_name == "tg-prod"
             assert hook.default_on is True
             assert hook in litellm.callbacks

@@ -10045,6 +10045,22 @@
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
             },
+            "streaming_transform_mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "block_only",
+                    "incremental_diff"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether a guardrail's text rewrite reaches a streaming client. Implemented by guardrail='prompt_security' and 'neuraltrust'; generic_guardrail_api takes the same setting under optional_params. 'block_only' (default) streams the raw model chunks, so a block still ends the stream but rewrites are dropped. 'incremental_diff' withholds those chunks and streams the guardrail's rewritten text instead. OpenAI chat completions streaming only.",
+              "title": "Streaming Transform Mode"
+            },
             "template_id": {
               "anyOf": [
                 {
@@ -10071,7 +10087,7 @@
             },
             "unreachable_fallback": {
               "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', 'typesafe', and 'neuraltrust'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
               "enum": [
                 "fail_closed",
                 "fail_open"
@@ -11570,6 +11586,18 @@
               "description": "Client secret of the gateway's Entra app registration, used to perform the On-Behalf-Of exchange. Falls back to the AGENT365_CLIENT_SECRET environment variable.",
               "title": "Client Secret"
             },
+            "collector_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "TrustGuard collector key (tgcol_...). Optional when the API key is bound to a collector. Env: TRUSTGUARD_COLLECTOR_KEY.",
+              "title": "Collector Key"
+            },
             "confidence_threshold": {
               "default": 0.5,
               "default_value": 0.5,
@@ -12852,6 +12880,22 @@
               "default": true,
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
+            },
+            "streaming_transform_mode": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "block_only",
+                    "incremental_diff"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether a guardrail's text rewrite reaches a streaming client. Implemented by guardrail='prompt_security' and 'neuraltrust'; generic_guardrail_api takes the same setting under optional_params. 'block_only' (default) streams the raw model chunks, so a block still ends the stream but rewrites are dropped. 'incremental_diff' withholds those chunks and streams the guardrail's rewritten text instead. OpenAI chat completions streaming only.",
+              "title": "Streaming Transform Mode"
             },
             "template_id": {
               "anyOf": [
