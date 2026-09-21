@@ -18,6 +18,7 @@ import LoggingSettings from "@/components/Settings/AdminSettings/LoggingSettings
 import SSOSettings from "@/components/Settings/AdminSettings/SSOSettings/SSOSettings";
 import UISettings from "@/components/Settings/AdminSettings/UISettings/UISettings";
 import UserBannerSettings from "@/components/Settings/AdminSettings/UserBannerSettings/UserBannerSettings";
+import CyberArk from "@/components/Settings/AdminSettings/CyberArk/CyberArk";
 import HashicorpVault from "@/components/Settings/AdminSettings/HashicorpVault/HashicorpVault";
 import PluginSettings from "@/components/Settings/AdminSettings/PluginSettings/PluginSettings";
 import SSOModals from "@/components/SSOModals";
@@ -394,6 +395,11 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
       key: "hashicorp-vault",
       label: "Hashicorp Vault",
       children: <HashicorpVault />,
+    },
+    {
+      key: "cyberark",
+      label: "CyberArk Conjur",
+      children: <CyberArk />,
     },
     {
       key: "plugins",

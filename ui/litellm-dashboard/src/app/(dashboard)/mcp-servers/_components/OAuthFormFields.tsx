@@ -11,6 +11,7 @@ import { OAUTH_FLOW } from "@/components/mcp_tools/types";
 import { MountedFormField } from "@/components/common_components/MountedFormField";
 import { requiredRule } from "@/components/common_components/formRules";
 import TokenEndpointAuthMethodField from "./TokenEndpointAuthMethodField";
+import UpstreamTokenHeaderField from "./UpstreamTokenHeaderField";
 import {
   numberControl,
   parsesAsJson,
@@ -175,6 +176,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
           </MountedFormField>
           <UpstreamResourceField />
+          <UpstreamTokenHeaderField />
         </>
       ) : (
         <>
@@ -237,6 +239,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
           </MountedFormField>
           <UpstreamResourceField />
+          <UpstreamTokenHeaderField />
           <MountedFormField
             label={
               <FieldLabel

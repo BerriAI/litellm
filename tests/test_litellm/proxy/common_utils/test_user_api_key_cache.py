@@ -1,3 +1,4 @@
+import hashlib
 import json
 from typing import Any
 
@@ -10,9 +11,13 @@ from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
+    end_user_cache_key,
     get_management_object_ttl,
+    is_user_key_cache_key,
 )
 from litellm.proxy.proxy_server import UserAPIKeyCacheTTLEnum
+
+HASHED_TOKEN = hashlib.sha256(b"sk-lit7563-hot-key").hexdigest()
 
 
 class CapturingInMemoryCache(InMemoryCache):
@@ -204,9 +209,7 @@ class TestUserApiKeyCache:
 
         # Bypass UserApiKeyCache.serialize: CacheCodec rejects non-dict cached values
         # for dict-based models (deserialize returns None).
-        await cache.in_memory_cache.async_set_cache(
-            key="k", value="invalid-payload-not-a-dict"
-        )
+        await cache.in_memory_cache.async_set_cache(key="k", value="invalid-payload-not-a-dict")
 
         value = await cache.async_get_cache("k", model_type=UserAPIKeyAuth)
         assert value is None
@@ -224,6 +227,141 @@ class TestUserApiKeyCache:
             fake.set_cache("k2", {"ok": NotSerializable()})
 
 
+class TestUserKeyObjectPartition:
+    """
+    Regression for LIT-7563: user-key objects share one 200-entry ``InMemoryCache`` with
+    every other management object, so end-user / team / tag churn evicts hot keys and
+    forces a ``LiteLLM_VerificationToken`` lookup on the next request.
+    """
+
+    @pytest.mark.parametrize(
+        ("key", "expected"),
+        [
+            (HASHED_TOKEN, True),
+            (HASHED_TOKEN.upper(), False),
+            (f"team_id:{HASHED_TOKEN}", False),
+            (end_user_cache_key("u1"), False),
+            ("sk-lit7563-hot-key", False),
+        ],
+    )
+    def test_is_user_key_cache_key(self, key: str, expected: bool):
+        assert is_user_key_cache_key(key) is expected
+
+    @pytest.mark.asyncio
+    async def test_management_object_churn_does_not_evict_key_object(self):
+        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(max_size_in_memory=2))
+        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth, ttl=100)
+        for i in range(2):
+            await cache.async_set_cache(end_user_cache_key(f"u{i}"), {"user_id": f"u{i}"}, ttl=200)
+
+        key_obj = await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
+        assert key_obj is not None
+        assert key_obj.token == HASHED_TOKEN
+        assert cache.get_cache(end_user_cache_key("u1")) == {"user_id": "u1"}
+        assert HASHED_TOKEN not in cache.in_memory_cache.cache_dict
+
+    def test_sync_write_and_read_route_to_key_object_partition(self):
+        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(max_size_in_memory=2))
+        cache.set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth, ttl=100)
+        for i in range(2):
+            cache.set_cache(end_user_cache_key(f"u{i}"), {"user_id": f"u{i}"}, ttl=200)
+
+        key_obj = cache.get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
+        assert key_obj is not None
+        assert key_obj.token == HASHED_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_redis_hit_backfills_key_object_partition_with_configured_ttl(self):
+        redis = FakeRedisCache()
+        writer = UserApiKeyCache(redis_cache=redis, default_in_memory_ttl=30)
+        await writer.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+
+        key_partition = CapturingInMemoryCache()
+        reader = UserApiKeyCache(redis_cache=redis, default_in_memory_ttl=30, key_object_in_memory_cache=key_partition)
+        key_obj = await reader.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
+
+        assert key_obj is not None
+        assert key_obj.token == HASHED_TOKEN
+        assert key_partition.last_ttl == 30
+        assert HASHED_TOKEN not in reader.in_memory_cache.cache_dict
+
+    @pytest.mark.asyncio
+    async def test_update_cache_ttl_applies_to_key_object_partition(self):
+        key_partition = CapturingInMemoryCache()
+        cache = UserApiKeyCache(default_in_memory_ttl=60, key_object_in_memory_cache=key_partition)
+        cache.update_cache_ttl(default_in_memory_ttl=7, default_redis_ttl=7)
+
+        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+
+        assert key_partition.last_ttl == 7
+
+    @pytest.mark.asyncio
+    async def test_attach_redis_cache_applies_to_key_object_partition(self):
+        redis = FakeRedisCache()
+        cache = UserApiKeyCache()
+        cache.attach_redis_cache(redis)
+
+        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+
+        other_worker = UserApiKeyCache(redis_cache=redis)
+        key_obj = await other_worker.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
+        assert key_obj is not None
+        assert key_obj.token == HASHED_TOKEN
+
+    @pytest.mark.asyncio
+    async def test_delete_removes_key_object_from_partition_and_redis(self):
+        redis = FakeRedisCache()
+        cache = UserApiKeyCache(redis_cache=redis)
+        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+        assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is not None
+
+        cache.delete_cache(HASHED_TOKEN)
+
+        assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
+        assert await redis.async_get_cache(HASHED_TOKEN) is None
+
+    @pytest.mark.asyncio
+    async def test_async_delete_removes_key_object_from_partition_and_redis(self):
+        redis = FakeRedisCache()
+        cache = UserApiKeyCache(redis_cache=redis)
+        await cache.async_set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+
+        await cache.async_delete_cache(HASHED_TOKEN)
+
+        assert await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
+        assert await redis.async_get_cache(HASHED_TOKEN) is None
+
+    @pytest.mark.asyncio
+    async def test_pipeline_write_routes_each_entry_to_its_partition(self):
+        cache = UserApiKeyCache(in_memory_cache=InMemoryCache(max_size_in_memory=2))
+        await cache.async_set_cache_pipeline(
+            [(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN))]
+            + [(end_user_cache_key(f"u{i}"), {"user_id": f"u{i}"}) for i in range(2)],
+            ttl=100,
+        )
+
+        key_obj = await cache.async_get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth)
+        assert key_obj is not None
+        assert key_obj.token == HASHED_TOKEN
+        assert HASHED_TOKEN not in cache.in_memory_cache.cache_dict
+        assert cache.get_cache(end_user_cache_key("u1")) == {"user_id": "u1"}
+
+    def test_flush_clears_key_object_partition(self):
+        cache = UserApiKeyCache()
+        cache.set_cache(HASHED_TOKEN, _make_key_obj(HASHED_TOKEN), model_type=UserAPIKeyAuth)
+        cache.set_cache(end_user_cache_key("u1"), {"user_id": "u1"})
+
+        cache.flush_cache()
+
+        assert cache.get_cache(HASHED_TOKEN, model_type=UserAPIKeyAuth) is None
+        assert cache.get_cache(end_user_cache_key("u1")) is None
+
+    def test_in_memory_cache_for_routes_by_key(self):
+        cache = UserApiKeyCache()
+        assert cache.in_memory_cache_for(HASHED_TOKEN) is cache.key_object_cache.in_memory_cache
+        assert cache.in_memory_cache_for(end_user_cache_key("u1")) is cache.in_memory_cache
+
+
 class TestManagementObjectTTL:
     """
     Regression for LIT-3338: ``general_settings.user_api_key_cache_ttl`` (which the
@@ -238,19 +376,13 @@ class TestManagementObjectTTL:
     def test_falls_back_to_constant_when_no_default_configured(self):
         cache = UserApiKeyCache()
         assert cache.default_in_memory_ttl is None
-        assert (
-            get_management_object_ttl(cache)
-            == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-        )
+        assert get_management_object_ttl(cache) == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 
     def test_resolves_on_a_plain_dual_cache(self):
         # Many call sites are typed UserApiKeyCache but exercised in tests with a
         # bare DualCache; the resolver must work on the base type, not just the subclass.
         assert get_management_object_ttl(DualCache(default_in_memory_ttl=300)) == 300
-        assert (
-            get_management_object_ttl(DualCache())
-            == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-        )
+        assert get_management_object_ttl(DualCache()) == DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
 
     @pytest.mark.asyncio
     async def test_management_write_uses_configured_ttl_over_constant(self):
@@ -260,9 +392,7 @@ class TestManagementObjectTTL:
             redis_cache=FakeRedisCache(),
             default_in_memory_ttl=300,
         )
-        assert get_management_object_ttl(cache) != (
-            DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
-        )
+        assert get_management_object_ttl(cache) != (DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL)
 
         await cache.async_set_cache(
             "team_id:abc",

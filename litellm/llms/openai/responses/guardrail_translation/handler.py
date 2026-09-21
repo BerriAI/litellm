@@ -28,42 +28,142 @@ Output: response.output is List[GenericResponseOutputItem] where each has:
     - text: str
 """
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Final, Union, cast
+import copy
+import time
+import uuid
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from itertools import accumulate, chain, repeat
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Union, cast
 
-from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from openai.types.responses.tool_param import FunctionToolParam
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
     OpenAiResponsesToChatCompletionStreamIterator,
+    tool_call_dict_from_output_item,
 )
-from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+from litellm.llms.base_llm.guardrail_translation.base_translation import (
+    BaseTranslation,
+    StreamingScanKey,
+    StreamTransformSink,
+)
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    blocked_responses_stream_usage,
+    stream_item_field,
+    stream_item_fingerprint,
+    stream_item_items,
+)
+from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
+    BaseLiteLLMOpenAIResponseObject,
     ChatCompletionToolCallChunk,
     ChatCompletionToolParam,
-    OpenAIMcpServerTool,
+    ContentPartAddedEvent,
+    ContentPartDoneEvent,
+    ContentPartDonePartOutputText,
+    ErrorEvent,
+    ErrorEventError,
+    OutputItemAddedEvent,
+    OutputItemDoneEvent,
+    OutputTextDeltaEvent,
+    OutputTextDoneEvent,
+    ResponseAPIUsage,
+    ResponseCompletedEvent,
+    ResponsesAPIOptionalRequestParams,
+    ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
+    ResponsesAPIStreamingResponse,
 )
 from litellm.types.responses.main import (
     GenericResponseOutputItem,
-    OutputFunctionToolCall,
     OutputText,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
-    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from fastapi import HTTPException
+
+    from litellm.integrations.custom_guardrail import (
+        CustomGuardrail,
+        ModifyResponseException,
+    )
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.llms.openai import ResponseInputParam
-    from litellm.types.utils import ResponsesAPIResponse
+
+
+class _ToolCallShape(NamedTuple):
+    name: str | None
+    arguments: str
+
+
+class _ToolCallFunctionFields(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str | None = None
+    arguments: str = ""
+
+
+class _ToolCallFields(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    function: _ToolCallFunctionFields
+
+
+def _tool_call_shapes(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> tuple[_ToolCallShape, ...]:
+    return tuple(
+        _ToolCallShape(name=tool_call["function"].get("name"), arguments=tool_call["function"].get("arguments", ""))
+        for tool_call in tool_calls
+    )
+
+
+def _returned_tool_call_shape(tool_call: object) -> _ToolCallShape | None:
+    payload: Final = tool_call.model_dump() if isinstance(tool_call, BaseModel) else tool_call
+    try:
+        fields: Final = _ToolCallFields.model_validate(payload)
+    except ValidationError:
+        return None
+    return _ToolCallShape(name=fields.function.name, arguments=fields.function.arguments)
+
+
+def _post_guardrail_tool_call_shapes(
+    returned_tool_calls: Sequence[object] | None,
+    pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+    guardrail_name: str | None,
+) -> tuple[_ToolCallShape, ...]:
+    if not pre_guardrail_tool_calls:
+        return pre_guardrail_tool_calls
+    if returned_tool_calls is None or len(returned_tool_calls) != len(pre_guardrail_tool_calls):
+        verbose_proxy_logger.warning(
+            "OpenAI Responses API: guardrail %s returned %s tool calls for the %d scanned, "
+            "leaving the tool call output items unchanged",
+            guardrail_name,
+            "no" if returned_tool_calls is None else len(returned_tool_calls),
+            len(pre_guardrail_tool_calls),
+        )
+        return pre_guardrail_tool_calls
+    returned_shapes: Final = tuple(_returned_tool_call_shape(tool_call) for tool_call in returned_tool_calls)
+    validated_shapes: Final = tuple(shape for shape in returned_shapes if shape is not None)
+    if len(validated_shapes) != len(returned_shapes):
+        verbose_proxy_logger.warning(
+            "OpenAI Responses API: guardrail %s returned tool calls without a function name and arguments, "
+            "leaving the tool call output items unchanged",
+            guardrail_name,
+        )
+        return pre_guardrail_tool_calls
+    return validated_shapes
+
+
+def _tool_call_rewrite(before: _ToolCallShape, after: _ToolCallShape) -> _ToolCallShape:
+    return _ToolCallShape(name=after.name if after.name != before.name else None, arguments=after.arguments)
 
 
 class ResponseOutputEnvelope(TypedDict, total=False):
@@ -78,6 +178,246 @@ class ResponsesStreamChunk(TypedDict, total=False):
 
     type: ReadOnly[str]
     text: ReadOnly[str]
+    delta: ReadOnly[str]
+    item_id: ReadOnly[str]
+    output_index: ReadOnly[int]
+    content_index: ReadOnly[int]
+
+
+_TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
+    {
+        ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
+        ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
+        ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
+    }
+)
+
+
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+_TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"function_call": "arguments", "custom_tool_call": "input"}
+)
+_TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES: Final = frozenset(
+    {"response.function_call_arguments.delta", "response.custom_tool_call_input.delta"}
+)
+_TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"response.function_call_arguments.done": "arguments", "response.custom_tool_call_input.done": "input"}
+)
+_TOOL_CALL_PAYLOAD_EVENT_TYPES: Final = _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES | frozenset(
+    _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS
+)
+_OUTPUT_ITEM_EVENT_TYPES: Final = frozenset({"response.output_item.added", "response.output_item.done"})
+_PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"function_call_output": "output", "message": "content"}
+)
+
+_EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
+
+
+def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
+    item_type: Final = item.get("type")
+    if item_type is None:
+        return "content" if "content" in item else None
+    if not isinstance(item_type, str):
+        return None
+    return _PATCHABLE_ITEM_FIELDS.get(item_type)
+
+
+def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapping[str, object] | None:
+    field: Final = _item_rewrite_field(item)
+    if field is None or not isinstance(rewritten, Mapping):
+        return None
+    rewritten_content: Final = rewritten.get("content")
+    if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
+        return {**item, field: rewritten_content}  # mutable-ok: request input items must stay JSON-plain dicts
+    rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
+    converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [rewritten_row]  # mutable-ok: converter signature takes a list
+    )
+    if len(converted_items) != 1 or not isinstance(converted_items[0], Mapping):
+        return None
+    first_converted: Final = cast("Mapping[str, object]", converted_items[0])  # cast-ok: isinstance-checked above
+    converted_value: Final = first_converted.get(field)
+    if converted_value is None:
+        return None
+    return {**item, field: converted_value}  # mutable-ok: request input items must stay JSON-plain dicts
+
+
+def _is_tool_call_item(item: object) -> bool:
+    return isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
+
+
+def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
+    if stream_item_field(item, "type") not in _TOOL_CALL_ITEM_TYPES:
+        return None
+    if isinstance(item, Mapping):
+        return cast("Mapping[str, object]", item)  # cast-ok: output items are str-keyed JSON objects
+    return item.model_dump() if isinstance(item, BaseModel) else None
+
+
+def _is_tool_call_output_item(item: object) -> bool:
+    return _tool_call_output_item_mapping(item) is not None
+
+
+def _last_message_role(messages: Sequence[object]) -> str | None:
+    if not messages:
+        return None
+    last: Final = messages[-1]
+    role: Final = last.get("role") if isinstance(last, Mapping) else getattr(last, "role", None)
+    return role if isinstance(role, str) else None
+
+
+def _provenance_unit_bounds(
+    raw_input: Sequence[object],
+    solo_conversions: Sequence[Sequence[object]],
+) -> tuple[tuple[int, int], ...]:
+    trailing_roles: Final = tuple(
+        accumulate(
+            (_last_message_role(messages) for messages in solo_conversions),
+            lambda previous, current: current if current is not None else previous,
+        )
+    )
+    start_indexes: Final = tuple(
+        index
+        for index in range(len(raw_input))
+        if index == 0 or not (_is_tool_call_item(raw_input[index]) and trailing_roles[index - 1] == "assistant")
+    )
+    return tuple(zip(start_indexes, (*start_indexes[1:], len(raw_input))))
+
+
+def _input_item_provenance(
+    raw_input: Sequence[object],
+    expected_messages: Sequence[object],
+) -> tuple[Mapping[int, int], frozenset[int]] | None:
+    if not all(isinstance(item, Mapping) for item in raw_input):
+        return None
+    solo_conversions: Final = tuple(
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
+            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+        )
+        for item in raw_input
+    )
+    full_conversion: Final = tuple(
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
+            responses_api_request=_EMPTY_RESPONSES_REQUEST,
+        )
+    )
+    if full_conversion != tuple(expected_messages):
+        return None
+    units: Final = _provenance_unit_bounds(raw_input, solo_conversions)
+    unit_messages: Final = tuple(
+        tuple(solo_conversions[start])
+        if end - start == 1
+        else tuple(
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
+                responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            )
+        )
+        for start, end in units
+    )
+    if tuple(message for messages in unit_messages for message in messages) != full_conversion:
+        return None
+    boundaries: Final = tuple(accumulate((len(messages) for messages in unit_messages), initial=0))
+    item_for_message: Final = MappingProxyType(
+        {
+            message_index: start
+            for unit_index, (start, end) in enumerate(units)
+            if end - start == 1
+            for message_index in range(boundaries[unit_index], boundaries[unit_index + 1])
+        }
+    )
+    tainted: Final = frozenset(
+        message_index
+        for unit_index, (start, end) in enumerate(units)
+        if end - start > 1
+        for message_index in range(boundaries[unit_index], boundaries[unit_index + 1])
+    )
+    return item_for_message, tainted
+
+
+class _RequestFields(NamedTuple):
+    input: tuple[object, ...]
+    instructions: str | None
+
+
+class _ExtractedInputs(NamedTuple):
+    inputs: GenericGuardrailAPIInputs
+    task_mappings: tuple[tuple[int, int | None], ...]
+
+
+def _patched_request_fields(
+    raw_input: object,
+    instructions: object,
+    original_messages: Sequence[object],
+    structured_messages: Sequence[object],
+) -> _RequestFields | None:
+    if not isinstance(raw_input, list) or len(original_messages) != len(structured_messages):
+        return None
+    offset: Final = 1 if instructions else 0
+    provenance: Final = _input_item_provenance(raw_input, tuple(original_messages)[offset:])
+    if provenance is None:
+        return None
+    item_for_message, tainted = provenance
+    changed: Final = tuple(
+        (index, rewritten)
+        for index, (original, rewritten) in enumerate(zip(original_messages, structured_messages))
+        if original != rewritten
+    )
+    instruction_rewrites: Final = tuple(rewritten for index, rewritten in changed if index < offset)
+    rewritten_instructions: Final = (
+        instruction_rewrites[0].get("content")
+        if instruction_rewrites and isinstance(instruction_rewrites[0], Mapping)
+        else instructions
+    )
+    instructions_value: Final = rewritten_instructions if isinstance(rewritten_instructions, str) else None
+    if rewritten_instructions is not None and instructions_value is None:
+        return None
+    body_changes: Final = tuple((index - offset, rewritten) for index, rewritten in changed if index >= offset)
+    if any(message_index in tainted or message_index not in item_for_message for message_index, _ in body_changes):
+        return None
+    replacements: Final = MappingProxyType(
+        {
+            item_for_message[message_index]: _rewritten_input_item(
+                cast("Mapping[str, object]", raw_input[item_for_message[message_index]]),  # cast-ok: checked Mappings
+                rewritten,
+            )
+            for message_index, rewritten in body_changes
+        }
+    )
+    if len(replacements) != len(body_changes) or any(item is None for item in replacements.values()):
+        return None
+    return _RequestFields(
+        input=tuple(replacements.get(index, item) for index, item in enumerate(raw_input)),
+        instructions=instructions_value,
+    )
+
+
+def _patch_or_convert_request_fields(
+    raw_input: object,
+    instructions: object,
+    original_messages: Sequence[object],
+    structured_messages: Sequence[AllMessageValues],
+) -> _RequestFields | None:
+    if not isinstance(structured_messages, list):
+        return None
+    patched: Final = _patched_request_fields(raw_input, instructions, original_messages, structured_messages)
+    if patched is not None:
+        return patched
+    input_items, converted_instructions = (
+        LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
+    )
+    return _RequestFields(input=tuple(input_items), instructions=converted_instructions)
+
+
+def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> int:
+    sequence_numbers: Final = (
+        item.get("sequence_number") if isinstance(item, dict) else getattr(item, "sequence_number", None)
+        for item in reversed(responses_so_far or ())
+    )
+    return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
 
 
 class OpenAIResponsesHandler(BaseTranslation):
@@ -90,6 +430,9 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     Methods can be overridden to customize behavior for different message formats.
     """
+
+    delivers_ended_stream_rewrites = True
+    assembles_streamed_response = True
 
     def get_structured_messages(self, data: dict) -> list[AllMessageValues] | None:
         """
@@ -119,102 +462,108 @@ class OpenAIResponsesHandler(BaseTranslation):
         Handles both string input and list of message objects.
         """
         input_data: Final[str | ResponseInputParam | None] = data.get("input")
-        tools_to_check: Final[list[ChatCompletionToolParam]] = []
-        if input_data is None:
+        if not isinstance(input_data, (str, list)):
             return data
-
         structured_messages: Final = self.get_structured_messages(data)
+        raw_tools: Final = data.get("tools")
+        original_tools: Final[tuple[Mapping[str, object], ...]] = (
+            tuple(raw_tools) if isinstance(raw_tools, list) else ()
+        )
+        flattened_tool_groups: Final = tuple(
+            form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
+        )
+        extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups)
+        if not extracted.inputs.get("texts"):
+            return data
+        if structured_messages:
+            extracted.inputs["structured_messages"] = structured_messages
+        guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
+            inputs=extracted.inputs,
+            request_data=data,
+            input_type="request",
+            logging_obj=litellm_logging_obj,
+        )
+        self._apply_guardrailed_tools_to_data(
+            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
+        )
+        written_back: Final = self._written_back_request_fields(data, structured_messages, guardrailed_inputs)
+        if written_back is not None:
+            data["input"] = list(written_back.input)  # mutable-ok: JSON body
+            if written_back.instructions is None:
+                data.pop("instructions", None)
+            else:
+                data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
+        elif isinstance(input_data, str):
+            guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
+            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
+        else:
+            rewritten_texts: Final = guardrailed_inputs.get("texts") or ()
+            if len(rewritten_texts) != len(extracted.task_mappings):
+                from litellm.proxy.policy_engine.pipeline_executor import UnappliableRequestRewrite
 
-        # Handle simple string input
-        if isinstance(input_data, str):
-            inputs = GenericGuardrailAPIInputs(texts=[input_data])
-            original_tools: list[dict[str, object]] = []
-
-            # Extract and transform tools if present
-            if "tools" in data and data["tools"]:
-                original_tools = list(data["tools"])
-                self._extract_and_transform_tools(data["tools"], tools_to_check)
-                if tools_to_check:
-                    inputs["tools"] = tools_to_check
-            if structured_messages:
-                inputs["structured_messages"] = structured_messages
-            # Include model information if available
-            model = data.get("model")
-            if model:
-                inputs["model"] = model
-
-            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
-                request_data=data,
-                input_type="request",
-                logging_obj=litellm_logging_obj,
+                raise UnappliableRequestRewrite(guardrail_to_apply.guardrail_name or "unknown")
+            await self._apply_guardrail_responses_to_input(
+                messages=input_data,
+                responses=rewritten_texts,
+                task_mappings=extracted.task_mappings,
             )
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
-            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data
-            self._apply_guardrailed_tools_to_data(data, original_tools, guardrailed_inputs.get("tools"))
-            verbose_proxy_logger.debug("OpenAI Responses API: Processed string input")
-            return data
+        verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", data.get("input"))
+        return data
 
-        # Handle list input (ResponseInputParam)
-        if not isinstance(input_data, list):
-            return data
-
+    def _extract_guardrail_inputs(
+        self,
+        data: Mapping[str, object],
+        input_data: "str | ResponseInputParam",
+        flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
+    ) -> _ExtractedInputs:
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
         task_mappings: Final[list[tuple[int, int | None]]] = []
-        original_tools_list: Final[list[dict[str, object]]] = list(data.get("tools") or [])
-
-        # Step 1: Extract all text content, images, and tools
-        for msg_idx, message in enumerate(input_data):
-            self._extract_input_text_and_images(
-                message=message,
-                msg_idx=msg_idx,
-                texts_to_check=texts_to_check,
-                images_to_check=images_to_check,
-                task_mappings=task_mappings,
+        tools_to_check: Final[list[ChatCompletionToolParam]] = list(  # mutable-ok: guardrail inputs want a list
+            copy.deepcopy(
+                tuple(
+                    cast(ChatCompletionToolParam, tool)  # cast-ok: mcp tools ride along in the guardrail's tool list
+                    for group in flattened_tool_groups
+                    for tool in group
+                )
             )
+        )
+        if isinstance(input_data, str):
+            texts_to_check.append(input_data)
+        else:
+            for msg_idx, message in enumerate(input_data):
+                self._extract_input_text_and_images(
+                    message=message,
+                    msg_idx=msg_idx,
+                    texts_to_check=texts_to_check,
+                    images_to_check=images_to_check,
+                    task_mappings=task_mappings,
+                )
+        inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+        if images_to_check:
+            inputs["images"] = images_to_check
+        if tools_to_check:
+            inputs["tools"] = tools_to_check
+        model: Final = data.get("model")
+        if isinstance(model, str):
+            inputs["model"] = model
+        return _ExtractedInputs(inputs=inputs, task_mappings=tuple(task_mappings))
 
-        # Extract and transform tools if present
-        if "tools" in data and data["tools"]:
-            self._extract_and_transform_tools(data["tools"], tools_to_check)
-
-        # Step 2: Apply guardrail to all texts in batch
-        if texts_to_check:
-            inputs = GenericGuardrailAPIInputs(texts=texts_to_check)
-            if images_to_check:
-                inputs["images"] = images_to_check
-            if tools_to_check:
-                inputs["tools"] = tools_to_check
-            if structured_messages:
-                inputs["structured_messages"] = structured_messages
-            # Include model information if available
-            model = data.get("model")
-            if model:
-                inputs["model"] = model
-            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
-                request_data=data,
-                input_type="request",
-                logging_obj=litellm_logging_obj,
-            )
-
-            guardrailed_texts = guardrailed_inputs.get("texts", [])
-            self._apply_guardrailed_tools_to_data(
-                data,
-                original_tools_list,
-                guardrailed_inputs.get("tools"),
-            )
-
-            # Step 3: Map guardrail responses back to original input structure
-            await self._apply_guardrail_responses_to_input(
-                messages=input_data,
-                responses=guardrailed_texts,
-                task_mappings=task_mappings,
-            )
-
-        verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", input_data)
-
-        return data
+    @staticmethod
+    def _written_back_request_fields(
+        data: Mapping[str, object],
+        structured_messages: Sequence[AllMessageValues] | None,
+        guardrailed_inputs: GenericGuardrailAPIInputs,
+    ) -> _RequestFields | None:
+        guardrailed: Final = guardrailed_inputs.get("structured_messages")
+        if guardrailed is None or guardrailed is structured_messages:
+            return None
+        return _patch_or_convert_request_fields(
+            data.get("input"),
+            data.get("instructions"),
+            structured_messages or (),
+            guardrailed,
+        )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:
         """Extract tool names from Responses API request (tools[].name for function
@@ -229,77 +578,22 @@ class OpenAIResponsesHandler(BaseTranslation):
                 names.append(str(tool["server_label"]))
         return names
 
-    def _extract_and_transform_tools(
-        self,
-        tools: list[FunctionToolParam | OpenAIMcpServerTool],
-        tools_to_check: list[ChatCompletionToolParam],
-    ) -> None:
-        """
-        Extract and transform tools from Responses API format to Chat Completion format.
-
-        Uses the LiteLLM transformation function to convert Responses API tools
-        to Chat Completion tools that can be passed to guardrails.
-        """
-        if tools is not None and isinstance(tools, list):
-            # Transform Responses API tools to Chat Completion tools
-            (
-                transformed_tools,
-                _,
-            ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools)
-            tools_to_check.extend(cast(list[ChatCompletionToolParam], transformed_tools))
-
-    def _remap_tools_to_responses_api_format(self, guardrailed_tools: list[Any]) -> list[dict[str, object]]:
-        """
-        Remap guardrail-returned tools (Chat Completion format) back to
-        Responses API request tool format.
-        """
-        return LiteLLMCompletionResponsesConfig.transform_chat_completion_tool_params_to_responses_api_tools(
-            guardrailed_tools
-        )
-
-    def _merge_tools_after_guardrail(
-        self,
-        original_tools: list[dict[str, object]],
-        remapped: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
-        """
-        Merge remapped guardrailed tools with original tools that were not sent
-        to the guardrail (e.g. web_search, web_search_preview), preserving order.
-        Tools a guardrail appended (``remapped`` longer than ``original_tools``)
-        have no original slot and are kept so an injected tool is not dropped.
-        """
-        if not original_tools:
-            return remapped
-        result: Final[list[dict[str, object]]] = []
-        j = 0
-        for tool in original_tools:
-            if isinstance(tool, dict) and tool.get("type") in (
-                "web_search",
-                "web_search_preview",
-            ):
-                result.append(tool)
-            else:
-                if j < len(remapped):
-                    result.append(remapped[j])
-                    j += 1
-        # Keep guardrail-appended tools that matched no original slot above.
-        result.extend(remapped[j:])
-        return result
-
     def _apply_guardrailed_tools_to_data(
         self,
         data: dict,
-        original_tools: list[dict[str, object]],
-        guardrailed_tools: list[ChatCompletionToolParam] | None,
+        original_tools: Sequence[Mapping[str, object]],
+        flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
+        guardrailed_tools: Sequence[ChatCompletionToolParam] | None,
     ) -> None:
-        """Remap guardrailed tools to Responses API format and merge with original, then set data['tools']."""
-        if guardrailed_tools is not None:
-            remapped: Final = self._remap_tools_to_responses_api_format(guardrailed_tools)
-            data["tools"] = self._merge_tools_after_guardrail(original_tools, remapped)
+        if guardrailed_tools is None:
+            return
+        data["tools"] = list(  # mutable-ok: downstream wants a list  # rebind-ok: in-place request rewrite
+            merge_guardrailed_tools(original_tools, flattened_tool_groups, guardrailed_tools)
+        )
 
     def _extract_input_text_and_images(
         self,
-        message: Any,
+        message: Mapping[str, object],
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
@@ -340,16 +634,18 @@ class OpenAIResponsesHandler(BaseTranslation):
     async def _apply_guardrail_responses_to_input(
         self,
         messages: Any,  # Can be List[Dict[str, Any]] or ResponseInputParam
-        responses: list[str],
-        task_mappings: list[tuple[int, int | None]],
+        responses: Sequence[str],
+        task_mappings: Sequence[tuple[int, int | None]],
     ) -> None:
         """
         Apply guardrail responses back to input messages.
 
+        ``responses`` pairs positionally with ``task_mappings``; the caller rejects
+        the request when the two disagree, so this never has to guess an alignment.
+
         Override this method to customize how responses are applied.
         """
-        for task_idx, guardrail_response in enumerate(responses):
-            mapping = task_mappings[task_idx]
+        for guardrail_response, mapping in zip(responses, task_mappings):
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(int | None, mapping[1])
 
@@ -390,7 +686,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             - response.output is a list of output items
             - Each output item can be:
               * GenericResponseOutputItem with a content list of OutputText objects
-              * ResponseFunctionToolCall with tool call data
+              * ResponseFunctionToolCall or CustomToolCallOutputItem with tool call data
             - Each OutputText object has a text field
         """
 
@@ -455,6 +751,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             if response_model:
                 inputs["model"] = response_model
 
+            pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=request_data,
@@ -463,12 +760,22 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+            post_guardrail_tool_calls: Final = _post_guardrail_tool_call_shapes(
+                returned_tool_calls=guardrailed_inputs.get("tool_calls"),
+                pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                guardrail_name=guardrail_to_apply.guardrail_name,
+            )
 
             # Step 3: Map guardrail responses back to original response structure
             await self._apply_guardrail_responses_to_output(
                 response=response,
                 responses=guardrailed_texts,
                 task_mappings=task_mappings,
+            )
+            self._write_tool_call_rewrites_to_output(
+                tool_call_items=tuple(item for item in response_output if _is_tool_call_output_item(item)),
+                pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                post_guardrail_tool_calls=post_guardrail_tool_calls,
             )
 
         verbose_proxy_logger.debug("OpenAI Responses API: Processed output response: %s", response)
@@ -482,6 +789,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
         request_data: dict | None = None,
+        stream_transform_sink: StreamTransformSink | None = None,
+        deliver_ended_stream_rewrites: bool = False,
     ) -> list[Any]:
         """
         Process output streaming response by applying guardrails to text content.
@@ -490,10 +799,18 @@ class OpenAIResponsesHandler(BaseTranslation):
         chunk, apply the guardrail, then write the result back in-place so the
         caller sees the modified content (e.g. PII tokens replaced).
 
-        For ``response.completed`` events (the normal end-of-stream signal) we
-        use the same per-item extraction + task-mapping approach as
-        ``process_output_response`` so that unmasking / blocking works correctly
-        for every output item.
+        For terminal envelope events (``response.completed``, and equally
+        ``response.incomplete`` / ``response.failed``, whose envelopes carry the
+        partial output) we use the same per-item extraction + task-mapping
+        approach as ``process_output_response`` so that unmasking / blocking
+        works correctly for every output item. With
+        ``deliver_ended_stream_rewrites`` the earlier text-carrying events
+        (``response.output_text.delta`` / ``.done``,
+        ``response.content_part.done``, ``response.output_item.done``) are synced
+        to the rewritten envelope too, so a client reading deltas sees the
+        rewrite instead of the raw model output; a rewrite observed where no
+        write-back is possible is reported as undeliverable, so the pipeline
+        executor discards it and releases the original events.
         """
         if not responses_so_far:
             return responses_so_far
@@ -505,14 +822,16 @@ class OpenAIResponsesHandler(BaseTranslation):
             return responses_so_far
 
         # ------------------------------------------------------------------ #
-        # Case 1: response.completed — full response is available in the      #
-        # final chunk; iterate output items, apply guardrail, write back.     #
+        # Case 1: terminal envelope events (completed/incomplete/failed).     #
+        # the accumulated response is available in the final chunk; iterate   #
+        # output items, apply guardrail, write back. Falls through to the     #
+        # string fallback when the envelope yields nothing to check.          #
         # ------------------------------------------------------------------ #
-        if final_chunk.get("type") == "response.completed":
+        if final_chunk.get("type") in _TERMINAL_ENVELOPE_EVENT_TYPES:
             response_obj: Final[ResponseOutputEnvelope] = final_chunk.get("response") or {}
-            if not hasattr(response_obj, "get"):
-                return responses_so_far
-            outputs: Final[Sequence[object]] = response_obj.get("output") or []
+            outputs: Final[Sequence[object]] = (
+                (response_obj.get("output") or []) if hasattr(response_obj, "get") else []
+            )
 
             texts_to_check: Final[list[str]] = []
             tool_calls_to_check: Final[list[ChatCompletionToolCallChunk]] = []
@@ -545,6 +864,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if response_model:
                     inputs["model"] = response_model
 
+                pre_guardrail_tool_calls: Final = _tool_call_shapes(tool_calls_to_check)
                 guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                     inputs=inputs,
                     request_data=request_data,
@@ -553,6 +873,11 @@ class OpenAIResponsesHandler(BaseTranslation):
                 )
 
                 guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
+                post_guardrail_tool_calls: Final = _post_guardrail_tool_call_shapes(
+                    returned_tool_calls=guardrailed_inputs.get("tool_calls"),
+                    pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                    guardrail_name=guardrail_to_apply.guardrail_name,
+                )
 
                 # Write guardrailed texts back into the output items in-place.
                 # final_chunk is a reference into responses_so_far so this
@@ -562,11 +887,32 @@ class OpenAIResponsesHandler(BaseTranslation):
                     responses=guardrailed_texts,
                     task_mappings=task_mappings,
                 )
-
-            return responses_so_far
+                if deliver_ended_stream_rewrites:
+                    rewrites_by_position: Final = MappingProxyType(
+                        {
+                            task_mappings[task_idx]: rewritten
+                            for task_idx, rewritten in enumerate(guardrailed_texts)
+                            if task_idx < len(texts_to_check) and rewritten != texts_to_check[task_idx]
+                        }
+                    )
+                    if rewrites_by_position:
+                        self._sync_stream_events_with_rewrites(
+                            stream_events=responses_so_far[:-1],
+                            rewrites_by_position=rewrites_by_position,
+                        )
+                    self._deliver_ended_stream_tool_call_rewrites(
+                        responses_so_far=responses_so_far,
+                        outputs=outputs,
+                        pre_guardrail_tool_calls=pre_guardrail_tool_calls,
+                        post_guardrail_tool_calls=post_guardrail_tool_calls,
+                        guardrail_name=guardrail_to_apply.guardrail_name or "unknown",
+                    )
+                return responses_so_far
 
         # ------------------------------------------------------------------ #
-        # Case 2: response.output_item.done — extract tool calls only.        #
+        # Case 2: response.output_item.done — extract tool calls only, then  #
+        # fall through to the text fallback when a caller expects rewrites   #
+        # delivered, so a truncated buffer still reports text undeliverable. #
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
             model_response_stream: Final = (
@@ -584,12 +930,14 @@ class OpenAIResponsesHandler(BaseTranslation):
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
-            return responses_so_far
+            if not deliver_ended_stream_rewrites:
+                return responses_so_far
 
         # ------------------------------------------------------------------ #
         # Fallback: apply guardrail to the accumulated text string.           #
         # No structured write-back is possible here; guardrails that only     #
-        # need to block/flag (not rewrite) still work correctly.             #
+        # need to block/flag (not rewrite) still work correctly, and a        #
+        # rewrite a caller expects delivered is reported undeliverable.       #
         # ------------------------------------------------------------------ #
         string_so_far: Final = self.get_streaming_string_so_far(responses_so_far)
         if string_so_far:
@@ -599,32 +947,317 @@ class OpenAIResponsesHandler(BaseTranslation):
             )
             if response_model:
                 fallback_inputs["model"] = response_model
-            await guardrail_to_apply.apply_guardrail(
+            fallback_outputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=fallback_inputs,
                 request_data=request_data if request_data is not None else {},
                 input_type="response",
                 logging_obj=litellm_logging_obj,
             )
+            fallback_texts: Final = fallback_outputs.get("texts")
+            if deliver_ended_stream_rewrites and fallback_texts and tuple(fallback_texts) != (string_so_far,):
+                from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+                raise UndeliverableStreamRewrite(guardrail_to_apply.guardrail_name or "unknown")
         return responses_so_far
 
-    def _check_streaming_has_ended(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> bool:
+    @staticmethod
+    def _write_event_field(event: object, field: str, value: str) -> None:
+        if isinstance(event, dict):
+            event[field] = value  # rebind-ok: delivering the rewrite means editing the buffered event in place
+        else:
+            setattr(event, field, value)
+
+    def _sync_stream_events_with_rewrites(
+        self,
+        stream_events: Sequence[Any],
+        rewrites_by_position: Mapping[tuple[int, int], str],
+    ) -> None:
+        """Sync pre-completion stream events with the rewritten completed
+        response, keyed by ``(output_index, content_index)``: the first
+        ``output_text.delta`` for a rewritten item carries the full rewritten
+        text and the rest are blanked, while ``output_text.done``,
+        ``content_part.done``, and ``output_item.done`` events carry the full
+        rewritten text, so every event a client may read agrees with the
+        rewritten ``response.completed`` payload."""
+        delta_replacements: Final = MappingProxyType(
+            {position: chain((rewritten,), repeat("")) for position, rewritten in rewrites_by_position.items()}
+        )
+        for event in stream_events:
+            if not (isinstance(event, dict) or hasattr(event, "get")):
+                continue
+            event_type = event.get("type")
+            output_index = event.get("output_index")
+            content_index = event.get("content_index")
+            if event_type == "response.output_item.done" and isinstance(output_index, int):
+                self._sync_output_item_done_event(event.get("item"), output_index, rewrites_by_position)
+                continue
+            if not isinstance(output_index, int) or not isinstance(content_index, int):
+                continue
+            position = (output_index, content_index)
+            if event_type == "response.output_text.delta" and position in delta_replacements:
+                self._write_event_field(event, "delta", next(delta_replacements[position]))
+            elif event_type == "response.output_text.done" and position in rewrites_by_position:
+                self._write_event_field(event, "text", rewrites_by_position[position])
+            elif event_type == "response.content_part.done" and position in rewrites_by_position:
+                part = event.get("part")
+                if isinstance(part, dict) or hasattr(part, "text"):
+                    self._write_event_field(part, "text", rewrites_by_position[position])
+
+    @staticmethod
+    def _sync_output_item_done_event(
+        item: object,
+        output_index: int,
+        rewrites_by_position: Mapping[tuple[int, int], str],
+    ) -> None:
+        content: Final = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
+        if not isinstance(content, list):
+            return
+        for (item_idx, content_idx), rewritten in rewrites_by_position.items():
+            if item_idx != output_index or content_idx >= len(content):
+                continue
+            OpenAIResponsesHandler._write_event_field(content[content_idx], "text", rewritten)
+
+    def _deliver_ended_stream_tool_call_rewrites(
+        self,
+        responses_so_far: Sequence[object],
+        outputs: Sequence[object],
+        pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        post_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        guardrail_name: str,
+    ) -> None:
+        """Write ended-stream guardrail tool-call rewrites into the completed
+        envelope's ``function_call`` and ``custom_tool_call`` items and sync the
+        earlier stream events, keyed by ``call_id``. The guardrail sees the
+        envelope's tool calls in output order, which is how a rewritten call
+        finds its ``call_id``; the stream events find their call through the
+        ``call_id`` on ``output_item`` events and the ``item_id`` on argument
+        and custom-input events, since an
+        event's ``output_index`` need not match the envelope's (the chat bridge
+        numbers tool calls from 1 while the envelope lists them after the
+        message). A rewrite whose calls do not line up with the envelope, or
+        whose events cannot be found, is reported as undeliverable, so the
+        pipeline executor discards it and releases the original events."""
+        if post_guardrail_tool_calls == pre_guardrail_tool_calls:
+            return
+        tool_call_items: Final = tuple(output_item for output_item in outputs if _is_tool_call_output_item(output_item))
+        call_ids: Final = tuple(
+            call_id
+            for output_item in tool_call_items
+            if isinstance(call_id := stream_item_field(output_item, "call_id"), str) and call_id
+        )
+        stream_events: Final = responses_so_far[:-1]
+        call_id_by_item_id: Final = self._tool_call_ids_by_item_id(stream_events)
+        event_call_ids: Final = tuple(
+            self._tool_call_event_call_id(event, call_id_by_item_id) for event in stream_events
+        )
+        rewrites_by_call_id: Final = MappingProxyType(
+            {
+                call_id: _tool_call_rewrite(before, after)
+                for call_id, before, after in zip(call_ids, pre_guardrail_tool_calls, post_guardrail_tool_calls)
+                if after != before
+            }
+        )
+        unresolved_argument_event: Final = any(
+            call_id is None and stream_item_field(event, "type") in _TOOL_CALL_PAYLOAD_EVENT_TYPES
+            for event, call_id in zip(stream_events, event_call_ids)
+        )
+        if (
+            len(call_ids) != len(tool_call_items)
+            or len(frozenset(call_ids)) != len(call_ids)
+            or len(call_ids) != len(post_guardrail_tool_calls)
+            or unresolved_argument_event
+            or not rewrites_by_call_id.keys() <= frozenset(event_call_ids)
+        ):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(guardrail_name)
+        for output_item, rewrite in (
+            (output_item, rewrites_by_call_id[call_id])
+            for output_item, call_id in zip(tool_call_items, call_ids)
+            if call_id in rewrites_by_call_id
+        ):
+            self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
+        delta_replacements: Final = MappingProxyType(
+            {call_id: chain((rewrite.arguments,), repeat("")) for call_id, rewrite in rewrites_by_call_id.items()}
+        )
+        for event, call_id in zip(stream_events, event_call_ids):
+            if call_id not in rewrites_by_call_id:
+                continue
+            match stream_item_field(event, "type"):
+                case str() as event_type if event_type in _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES:
+                    self._write_event_field(event, "delta", next(delta_replacements[call_id]))
+                case str() as event_type if event_type in _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS:
+                    self._write_event_field(
+                        event, _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS[event_type], rewrites_by_call_id[call_id].arguments
+                    )
+                case "response.output_item.added":
+                    self._write_tool_call_item(
+                        stream_item_field(event, "item"), rewrites_by_call_id[call_id].name, None
+                    )
+                case "response.output_item.done":
+                    self._write_tool_call_item(
+                        stream_item_field(event, "item"),
+                        rewrites_by_call_id[call_id].name,
+                        rewrites_by_call_id[call_id].arguments,
+                    )
+                case _:
+                    pass
+
+    def _write_tool_call_rewrites_to_output(
+        self,
+        tool_call_items: Sequence[object],
+        pre_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+        post_guardrail_tool_calls: tuple[_ToolCallShape, ...],
+    ) -> None:
+        if len(tool_call_items) != len(post_guardrail_tool_calls):
+            return
+        for output_item, rewrite in (
+            (output_item, _tool_call_rewrite(before, after))
+            for output_item, before, after in zip(tool_call_items, pre_guardrail_tool_calls, post_guardrail_tool_calls)
+            if after != before
+        ):
+            self._write_tool_call_item(output_item, rewrite.name, rewrite.arguments)
+
+    @staticmethod
+    def _tool_call_ids_by_item_id(stream_events: Sequence[object]) -> Mapping[str, str]:
+        items: Final = tuple(
+            stream_item_field(event, "item")
+            for event in stream_events
+            if stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
+        )
+        return MappingProxyType(
+            {
+                item_id: call_id
+                for item in items
+                if stream_item_field(item, "type") in _TOOL_CALL_ITEM_TYPES
+                and isinstance(item_id := stream_item_field(item, "id"), str)
+                and isinstance(call_id := stream_item_field(item, "call_id"), str)
+            }
+        )
+
+    @staticmethod
+    def _tool_call_event_call_id(event: object, call_id_by_item_id: Mapping[str, str]) -> str | None:
+        event_type: Final = stream_item_field(event, "type")
+        if event_type in _TOOL_CALL_PAYLOAD_EVENT_TYPES:
+            item_id: Final = stream_item_field(event, "item_id")
+            return call_id_by_item_id.get(item_id) if isinstance(item_id, str) else None
+        if event_type not in _OUTPUT_ITEM_EVENT_TYPES:
+            return None
+        item: Final = stream_item_field(event, "item")
+        call_id: Final = stream_item_field(item, "call_id")
+        return (
+            call_id if stream_item_field(item, "type") in _TOOL_CALL_ITEM_TYPES and isinstance(call_id, str) else None
+        )
+
+    @staticmethod
+    def _write_tool_call_item(item: object, name: str | None, payload: str | None) -> None:
+        if item is None:
+            return
+        if name is not None:
+            OpenAIResponsesHandler._write_event_field(item, "name", name)
+        item_type: Final = stream_item_field(item, "type")
+        if payload is not None and isinstance(item_type, str) and item_type in _TOOL_CALL_PAYLOAD_FIELDS:
+            OpenAIResponsesHandler._write_event_field(item, _TOOL_CALL_PAYLOAD_FIELDS[item_type], payload)
+
+    def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """
         Check if the streaming has ended.
         """
         if not responses_so_far:
             return False
-        terminal_types: Final = {
-            ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
-            ResponsesAPIStreamEvents.RESPONSE_FAILED.value,
-            ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value,
-        }
-        return responses_so_far[-1].get("type") in terminal_types
+        return stream_item_field(responses_so_far[-1], "type") in _TERMINAL_ENVELOPE_EVENT_TYPES
 
-    def get_streaming_string_so_far(self, responses_so_far: Sequence[ResponsesStreamChunk]) -> str:
+    def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        if not responses_so_far or not hasattr(responses_so_far[-1], "get"):
+            return None
+        last_event: Final = responses_so_far[-1]
+        last_event_type: Final = stream_item_field(last_event, "type")
+        if last_event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
+            return None
+        if last_event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value:
+            return self._completed_response_scan_key(stream_item_field(last_event, "response"))
+        return StreamingScanKey(
+            texts=(self.get_streaming_string_so_far(responses_so_far),),
+            stream_ended=self._check_streaming_has_ended(responses_so_far),
+        )
+
+    @staticmethod
+    def _completed_response_scan_key(response: object) -> StreamingScanKey:
+        output_items: Final = stream_item_items(response, "output")
+        message_items: Final = tuple(
+            item for item in output_items if stream_item_field(item, "type") not in _TOOL_CALL_ITEM_TYPES
+        )
+        return StreamingScanKey(
+            texts=tuple(
+                text
+                for item in message_items
+                for part in stream_item_items(item, "content")
+                if isinstance(text := stream_item_field(part, "text"), str) and text
+            ),
+            tool_calls=tuple(
+                stream_item_fingerprint(item)
+                for item in output_items
+                if stream_item_field(item, "type") in _TOOL_CALL_ITEM_TYPES
+            ),
+            stream_ended=True,
+        )
+
+    def build_stream_error_items(
+        self,
+        exc: "HTTPException",
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[object] | None:
+        from litellm.proxy.common_request_processing import (
+            serialize_http_exception_detail,
+        )
+
+        message, _ = serialize_http_exception_detail(exc.detail)
+        return (
+            ErrorEvent(
+                type=ResponsesAPIStreamEvents.ERROR,
+                sequence_number=_next_stream_sequence_number(responses_so_far),
+                error=ErrorEventError(
+                    type="guardrail_error",
+                    code=str(exc.status_code),
+                    message=message,
+                    param=None,
+                ),
+            ),
+        )
+
+    def get_streaming_string_so_far(self, responses_so_far: Sequence[object]) -> str:
         """
         Get the string so far from the responses so far.
+
+        ``response.output_text.done`` events carry the whole part in ``text``, while
+        ``response.output_text.delta`` events carry fragments in ``delta``. A stream
+        that dies before its done event (``response.failed`` / ``response.incomplete``)
+        has text only in deltas, so per content part the done text wins when present
+        and the joined deltas fill in otherwise, never both.
         """
-        return "".join([response.get("text", "") for response in responses_so_far])
+        keyed_events: Final = tuple(
+            (
+                (
+                    stream_item_field(event, "item_id"),
+                    stream_item_field(event, "output_index"),
+                    stream_item_field(event, "content_index"),
+                ),
+                stream_item_field(event, "text"),
+                stream_item_field(event, "delta"),
+            )
+            for event in responses_so_far
+            if isinstance(stream_item_field(event, "text"), str) or isinstance(stream_item_field(event, "delta"), str)
+        )
+
+        def part_text(part_key: tuple[object, object, object]) -> str:
+            done_texts: Final = tuple(
+                text for key, text, _ in keyed_events if key == part_key and isinstance(text, str)
+            )
+            if done_texts:
+                return done_texts[-1]
+            return "".join(delta for key, _, delta in keyed_events if key == part_key and isinstance(delta, str))
+
+        return "".join(part_text(key) for key in dict.fromkeys(key for key, _, _ in keyed_events))
 
     def _has_text_content(self, response: "ResponsesAPIResponse") -> bool:
         """
@@ -675,34 +1308,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         Override this method to customize text/image/tool extraction logic.
         """
 
-        # Check if this is a tool call (OutputFunctionToolCall)
-        if isinstance(output_item, OutputFunctionToolCall) or (
-            isinstance(output_item, BaseModel)
-            and hasattr(output_item, "type")
-            and getattr(output_item, "type") == "function_call"
-        ):
+        tool_call_item: Final = _tool_call_output_item_mapping(output_item)
+        if tool_call_item is not None:
             if tool_calls_to_check is not None:
-                tool_call_dict = (
-                    LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
-                        tool_call_item=output_item,
-                        index=output_idx,
-                    )
-                )
-                tool_calls_to_check.append(cast(ChatCompletionToolCallChunk, tool_call_dict))
-            return
-        elif isinstance(output_item, dict) and output_item.get("type") == "function_call":
-            # Handle dict representation of tool call
-            if tool_calls_to_check is not None:
-                # Convert dict to ResponseFunctionToolCall for processing
-                try:
-                    tool_call_obj: Final = ResponseFunctionToolCall(**output_item)
-                    tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
-                        tool_call_item=tool_call_obj,
-                        index=output_idx,
-                    )
-                    tool_calls_to_check.append(cast(ChatCompletionToolCallChunk, tool_call_dict))
-                except Exception:
-                    pass
+                tool_calls_to_check.append(tool_call_dict_from_output_item(tool_call_item, output_idx))
             return
 
         # Handle both GenericResponseOutputItem and dict
@@ -802,3 +1411,331 @@ class OpenAIResponsesHandler(BaseTranslation):
                         content[content_idx]["text"] = guardrail_response
                     elif hasattr(content[content_idx], "text"):
                         content[content_idx].text = guardrail_response
+
+    def build_block_sse_chunks(
+        self,
+        exc: "ModifyResponseException",
+        stream_started: bool = False,
+        responses_so_far: Sequence[object] | None = None,
+    ) -> Sequence[bytes]:
+        """
+        Build Responses API SSE events that deliver the guardrail block message
+        and terminate the stream cleanly, mirroring the non-streaming block
+        response: a completed response whose only output is the violation text,
+        with the real usage the upstream call consumed.
+
+        - ``stream_started`` False (buffered / pre-stream): nothing has been
+          sent, so emit the full synthetic sequence (``response.created``
+          through ``response.completed``).
+        - ``stream_started`` True (sampling / mid-stream): events already
+          reached the client, so continue the in-progress response: close the
+          output item still open on the wire, deliver the block message as a
+          new output item under the same response id, and close with a
+          ``response.completed`` carrying only the replacement item.
+
+        The proxy's data generator appends ``data: [DONE]`` itself.
+        """
+        events: Final = (
+            self._block_continuation_events(exc, responses_so_far or ())
+            if stream_started
+            else self._standalone_block_events(exc)
+        )
+        return tuple(
+            f"data: {event.model_dump_json(exclude_none=True, exclude_unset=True, serialize_as_any=True)}\n\n".encode()
+            for event in events
+        )
+
+    @staticmethod
+    def _standalone_block_events(exc: "ModifyResponseException") -> Sequence[ResponsesAPIStreamingResponse]:
+        from litellm.responses.streaming_iterator import build_synthetic_response_events
+
+        return build_synthetic_response_events(
+            transformed=_blocked_response(exc, response_id=f"resp_{uuid.uuid4()}", model=exc.model),
+            logging_obj=None,
+            chunk_size=max(len(exc.message), 1),
+        )
+
+    @staticmethod
+    def _block_continuation_events(
+        exc: "ModifyResponseException", responses_so_far: Sequence[object]
+    ) -> Sequence[ResponsesAPIStreamingResponse]:
+        response_id, model, output_index = _continuation_identity(exc, responses_so_far)
+        item: Final = _blocked_output_item(exc)
+        item_id: Final = item.id
+        part: Final[_BlockedContentPart] = {"type": "output_text", "text": exc.message, "annotations": ()}
+        done_part: Final[_BlockedDoneContentPart] = {
+            "type": "output_text",
+            "text": exc.message,
+            "annotations": (),
+            "logprobs": None,
+        }
+        return (
+            *_open_item_closing_events(responses_so_far),
+            OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                output_index=output_index,
+                item=item,
+            ),
+            ContentPartAddedEvent(
+                type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+                item_id=item_id,
+                output_index=output_index,
+                content_index=0,
+                part=BaseLiteLLMOpenAIResponseObject.model_validate(part),
+            ),
+            OutputTextDeltaEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+                item_id=item_id,
+                output_index=output_index,
+                content_index=0,
+                delta=exc.message,
+            ),
+            OutputTextDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+                item_id=item_id,
+                output_index=output_index,
+                content_index=0,
+                text=exc.message,
+            ),
+            ContentPartDoneEvent(
+                type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+                item_id=item_id,
+                output_index=output_index,
+                content_index=0,
+                part=ContentPartDonePartOutputText.model_validate(done_part),
+            ),
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=output_index,
+                item=item,
+            ),
+            ResponseCompletedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=_blocked_response(exc, response_id=response_id, model=model, output_item=item),
+            ),
+        )
+
+
+class _BlockedContentPart(TypedDict):
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+    annotations: ReadOnly[tuple[object, ...]]
+
+
+class _BlockedDoneContentPart(TypedDict):
+    type: ReadOnly[str]
+    text: ReadOnly[str]
+    annotations: ReadOnly[tuple[object, ...]]
+    logprobs: ReadOnly[None]
+
+
+class _BlockedItemPayload(TypedDict):
+    type: ReadOnly[str]
+    id: ReadOnly[str]
+    status: ReadOnly[str]
+    role: ReadOnly[str]
+    content: ReadOnly[tuple[_BlockedContentPart, ...]]
+
+
+class _BlockedResponsePayload(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    created_at: ReadOnly[int]
+    model: ReadOnly[str]
+    output: ReadOnly[tuple[GenericResponseOutputItem, ...]]
+    status: ReadOnly[str]
+    usage: ReadOnly[ResponseAPIUsage]
+
+
+def _blocked_output_item(exc: "ModifyResponseException") -> GenericResponseOutputItem:
+    payload: Final[_BlockedItemPayload] = {
+        "type": "message",
+        "id": f"msg_{uuid.uuid4()}",
+        "status": "completed",
+        "role": "assistant",
+        "content": ({"type": "output_text", "text": exc.message, "annotations": ()},),
+    }
+    return GenericResponseOutputItem.model_validate(payload)
+
+
+def _blocked_response(
+    exc: "ModifyResponseException",
+    response_id: str,
+    model: str,
+    output_item: GenericResponseOutputItem | None = None,
+) -> ResponsesAPIResponse:
+    payload: Final[_BlockedResponsePayload] = {
+        "id": response_id,
+        "object": "response",
+        "created_at": int(time.time()),
+        "model": model,
+        "output": (output_item if output_item is not None else _blocked_output_item(exc),),
+        "status": "completed",
+        "usage": blocked_responses_stream_usage(exc.original_response),
+    }
+    return ResponsesAPIResponse.model_validate(payload)
+
+
+def _continuation_identity(exc: "ModifyResponseException", responses_so_far: Sequence[object]) -> tuple[str, str, int]:
+    responses: Final = tuple(
+        response for item in responses_so_far if (response := stream_item_field(item, "response")) is not None
+    )
+    response_id: Final = next(
+        (rid for response in responses if isinstance(rid := stream_item_field(response, "id"), str) and rid),
+        f"resp_{uuid.uuid4()}",
+    )
+    model: Final = next(
+        (m for response in responses if isinstance(m := stream_item_field(response, "model"), str) and m),
+        exc.model,
+    )
+    indices: Final = tuple(
+        index for item in responses_so_far if isinstance(index := stream_item_field(item, "output_index"), int)
+    )
+    return response_id, model, max(indices) + 1 if indices else 0
+
+
+@dataclass(frozen=True, slots=True)
+class _OpenItemState:
+    item_id: str
+    item_type: str
+    role: str
+    output_index: int
+    content_index: int
+    text: str
+    part_open: bool
+    payload: object
+
+
+def _open_item_state(responses_so_far: Sequence[object]) -> _OpenItemState | None:
+    typed: Final = tuple((stream_item_field(event, "type"), event) for event in responses_so_far)
+    added: Final = tuple(
+        (added_index, stream_item_field(event, "item"))
+        for event_type, event in typed
+        if event_type == "response.output_item.added"
+        and isinstance(added_index := stream_item_field(event, "output_index"), int)
+    )
+    done_indices: Final = frozenset(
+        done_index
+        for event_type, event in typed
+        if event_type == "response.output_item.done"
+        and isinstance(done_index := stream_item_field(event, "output_index"), int)
+    )
+    open_added: Final = tuple((index, payload) for index, payload in added if index not in done_indices)
+    if not open_added:
+        return None
+    output_index, item_payload = open_added[-1]
+    if item_payload is None:
+        return None
+    item_id: Final = stream_item_field(item_payload, "id")
+    if not isinstance(item_id, str) or not item_id:
+        return None
+    raw_type: Final = stream_item_field(item_payload, "type")
+    raw_role: Final = stream_item_field(item_payload, "role")
+    part_added: Final = tuple(
+        part_index
+        for event_type, event in typed
+        if event_type == "response.content_part.added"
+        and stream_item_field(event, "item_id") == item_id
+        and isinstance(part_index := stream_item_field(event, "content_index"), int)
+    )
+    part_done: Final = frozenset(
+        part_done_index
+        for event_type, event in typed
+        if event_type == "response.content_part.done"
+        and stream_item_field(event, "item_id") == item_id
+        and isinstance(part_done_index := stream_item_field(event, "content_index"), int)
+    )
+    open_parts: Final = tuple(index for index in part_added if index not in part_done)
+    text: Final = "".join(
+        delta
+        for event_type, event in typed
+        if event_type == "response.output_text.delta"
+        and stream_item_field(event, "item_id") == item_id
+        and isinstance(delta := stream_item_field(event, "delta"), str)
+    )
+    return _OpenItemState(
+        item_id=item_id,
+        item_type=raw_type if isinstance(raw_type, str) and raw_type else "message",
+        role=raw_role if isinstance(raw_role, str) and raw_role else "assistant",
+        output_index=output_index,
+        content_index=open_parts[-1] if open_parts else 0,
+        text=text,
+        part_open=bool(open_parts),
+        payload=item_payload,
+    )
+
+
+_item_fields_adapter: Final = TypeAdapter(Mapping[str, object])
+_no_item_fields: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _incomplete_item_fields(payload: object) -> Mapping[str, object]:
+    raw: Final = payload.model_dump() if isinstance(payload, BaseModel) else payload
+    if not isinstance(raw, dict):
+        return _no_item_fields
+    return _item_fields_adapter.validate_python(raw)
+
+
+def _open_item_closing_events(responses_so_far: Sequence[object]) -> Sequence[ResponsesAPIStreamingResponse]:
+    """Close the output item still in progress on the relayed stream before the
+    block item is appended: strict Responses clients reject a
+    ``response.completed`` that arrives while an earlier ``output_item.added``
+    was never closed. A message item closes ``completed`` with exactly the text
+    the client has received so far; any other item type (a function call the
+    guardrail rejected, for instance) closes ``incomplete`` so the synthetic
+    done event can never authorize acting on it."""
+    open_item: Final = _open_item_state(responses_so_far)
+    if open_item is None:
+        return ()
+    if open_item.item_type != "message":
+        return (
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=open_item.output_index,
+                item=BaseLiteLLMOpenAIResponseObject.model_validate(
+                    MappingProxyType({**_incomplete_item_fields(open_item.payload), "status": "incomplete"})
+                ),
+            ),
+        )
+    partial_part: Final[_BlockedContentPart] = {
+        "type": "output_text",
+        "text": open_item.text,
+        "annotations": (),
+    }
+    closed_payload: Final[_BlockedItemPayload] = {
+        "type": open_item.item_type,
+        "id": open_item.item_id,
+        "status": "completed",
+        "role": open_item.role,
+        "content": (partial_part,),
+    }
+    item_done: Final = OutputItemDoneEvent(
+        type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+        output_index=open_item.output_index,
+        item=GenericResponseOutputItem.model_validate(closed_payload),
+    )
+    if not open_item.part_open:
+        return (item_done,)
+    partial_done_part: Final[_BlockedDoneContentPart] = {
+        "type": "output_text",
+        "text": open_item.text,
+        "annotations": (),
+        "logprobs": None,
+    }
+    return (
+        OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            item_id=open_item.item_id,
+            output_index=open_item.output_index,
+            content_index=open_item.content_index,
+            text=open_item.text,
+        ),
+        ContentPartDoneEvent(
+            type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+            item_id=open_item.item_id,
+            output_index=open_item.output_index,
+            content_index=open_item.content_index,
+            part=ContentPartDonePartOutputText.model_validate(partial_done_part),
+        ),
+        item_done,
+    )

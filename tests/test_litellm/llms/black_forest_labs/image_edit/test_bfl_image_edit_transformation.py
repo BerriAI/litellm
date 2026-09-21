@@ -16,6 +16,9 @@ import httpx
 import pytest
 
 
+from litellm.llms.black_forest_labs.image_edit import (
+    transformation as bfl_transformation,
+)
 from litellm.llms.black_forest_labs.image_edit.transformation import (
     BlackForestLabsImageEditConfig,
 )
@@ -186,7 +189,7 @@ class TestBlackForestLabsImageEditTransformation:
         assert data["output_format"] == "jpeg"
 
         # BFL uses JSON, not multipart - files should be empty
-        assert files == []
+        assert files == ()
 
     def test_transform_image_edit_request_with_mask(self):
         """Test request transformation with mask for inpainting."""
@@ -299,3 +302,76 @@ class TestBlackForestLabsImageEditTransformation:
     def test_use_multipart_form_data_returns_false(self):
         """Test that use_multipart_form_data returns False for BFL."""
         assert self.config.use_multipart_form_data() is False
+
+
+async def test_async_transform_image_edit_request_downloads_url_images_with_the_async_fetcher(monkeypatch):
+    served = b"png-bytes-from-cdn"
+    fetched = []
+
+    def forbid_sync_fetch(client, url, **kwargs):
+        raise AssertionError(f"sync image fetch ran on the event loop: {url}")
+
+    async def serve(client, url, **kwargs):
+        fetched.append((url, kwargs.get("timeout")))
+        return httpx.Response(200, content=served, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(bfl_transformation, "safe_get", forbid_sync_fetch)
+    monkeypatch.setattr(bfl_transformation, "async_safe_get", serve)
+
+    data, files = await BlackForestLabsImageEditConfig().async_transform_image_edit_request(
+        model="flux-kontext-pro",
+        prompt="Add a red hat",
+        image="https://cdn.example/photo.png",
+        image_edit_optional_request_params={"mask": "https://cdn.example/mask.png", "seed": 7},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert base64.b64decode(data["input_image"]) == served
+    assert base64.b64decode(data["mask"]) == served
+    assert data["seed"] == 7
+    assert files == ()
+    assert fetched == [("https://cdn.example/photo.png", 60.0), ("https://cdn.example/mask.png", 60.0)]
+
+
+async def test_async_transform_image_edit_request_never_fetches_for_local_images(monkeypatch):
+    def refuse(*args, **kwargs):
+        raise AssertionError("no network fetch expected for local image bytes")
+
+    monkeypatch.setattr(bfl_transformation, "safe_get", refuse)
+    monkeypatch.setattr(bfl_transformation, "async_safe_get", refuse)
+
+    data, _ = await BlackForestLabsImageEditConfig().async_transform_image_edit_request(
+        model="flux-kontext-pro",
+        prompt="Add a red hat",
+        image=[BytesIO(b"first"), BytesIO(b"other")],
+        image_edit_optional_request_params={"mask": b"mask-bytes"},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert base64.b64decode(data["input_image"]) == b"first"
+    assert base64.b64decode(data["mask"]) == b"mask-bytes"
+
+
+async def test_async_transform_image_edit_request_downloads_only_the_first_url_of_a_list(monkeypatch):
+    fetched = []
+
+    async def serve(client, url, **kwargs):
+        fetched.append(url)
+        return httpx.Response(200, content=b"first-bytes", request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(bfl_transformation, "safe_get", lambda *args, **kwargs: pytest.fail("sync fetch ran"))
+    monkeypatch.setattr(bfl_transformation, "async_safe_get", serve)
+
+    data, _ = await BlackForestLabsImageEditConfig().async_transform_image_edit_request(
+        model="flux-kontext-pro",
+        prompt="Add a red hat",
+        image=["https://cdn.example/a.png", "https://cdn.example/b.png"],
+        image_edit_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert fetched == ["https://cdn.example/a.png"]
+    assert base64.b64decode(data["input_image"]) == b"first-bytes"

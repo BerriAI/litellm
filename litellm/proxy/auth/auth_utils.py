@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import re
 import sys
@@ -10,11 +11,12 @@ from fastapi import HTTPException, Request, status
 from pydantic import PositiveInt, TypeAdapter, ValidationError
 
 import litellm
-from litellm import Router, provider_list
+from litellm import Router, constants, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
     EMPTY_MAPPING,
+    INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
     STANDARD_CUSTOMER_ID_HEADERS,
 )
@@ -25,6 +27,7 @@ from litellm.litellm_core_utils.url_utils import (
     provider_url_destination_candidates,
     validate_url,
 )
+from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
 from litellm.proxy._types import *
 from litellm.proxy.common_utils.http_parsing_utils import extract_nested_form_metadata
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -32,6 +35,43 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 from litellm.types.utils import CustomPricingLiteLLMParams
+
+
+def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
+    """True when an authentication error rejects a malformed virtual key.
+
+    Classifies only by the marker stamped where that 401 is raised. Message
+    content is never inspected: other 401s interpolate caller-supplied values
+    (vector store ids, organization ids) into their messages, so a phrase
+    match would let a request body demote an authorization failure to the
+    quiet log path.
+    """
+    if not isinstance(exception, (HTTPException, ProxyException)):
+        return False
+
+    code: Final[object] = getattr(exception, "code", None)
+    status_code: Final[object] = code if code is not None else getattr(exception, "status_code", None)
+    if str(status_code) != str(status.HTTP_401_UNAUTHORIZED):
+        return False
+
+    return getattr(exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, False) is True
+
+
+def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual_key: bool) -> ProxyException:
+    """Return an independently marked malformed-key exception after callback transformations."""
+    if not is_invalid_virtual_key or str(exception.code) != str(status.HTTP_401_UNAUTHORIZED):
+        return exception
+    marked_exception: Final = ProxyException(
+        message=exception.message,
+        type=exception.type,
+        param=exception.param,
+        code=exception.code,
+        headers=exception.headers.copy(),
+        openai_code=None if exception.openai_code is None else str(exception.openai_code),
+        provider_specific_fields=exception.provider_specific_fields,
+    )
+    setattr(marked_exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
+    return marked_exception
 
 
 def _get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
@@ -277,6 +317,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "aws_profile_name",
     "aws_session_name",
     "aws_external_id",
+    "aws_session_tags",
     "vertex_credentials",
     # Azure managed-identity / federated-auth token. The Azure provider
     # transformer reads ``azure_ad_token`` (top-level or via
@@ -956,7 +997,7 @@ def get_key_model_rpm_limit(
 
     # 2. Check model_max_budget
     if user_api_key_dict.model_max_budget:
-        model_rpm_limit: Final[dict[str, Any]] = {}
+        model_rpm_limit: Final[dict[str, int]] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
             if isinstance(budget, dict) and budget.get("rpm_limit") is not None:
                 model_rpm_limit[model] = budget["rpm_limit"]
@@ -999,7 +1040,7 @@ def get_key_model_tpm_limit(
 
     # 2. Check model_max_budget (iterate per-model like RPM does)
     if user_api_key_dict.model_max_budget:
-        model_tpm_limit: Final[dict[str, Any]] = {}
+        model_tpm_limit: Final[dict[str, int]] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
             if isinstance(budget, dict) and budget.get("tpm_limit") is not None:
                 model_tpm_limit[model] = budget["tpm_limit"]
@@ -1062,7 +1103,7 @@ def _validated_output_token_estimates_per_model(raw: object) -> Mapping[str, int
 
 
 def _estimated_output_tokens_from_metadata(
-    metadata: Mapping[str, Any] | None,
+    metadata: Mapping[str, object] | None,
     model_name: str | None,
 ) -> int | None:
     """Resolve the per-model, then global, estimate out of one metadata blob.
@@ -1351,6 +1392,24 @@ def warn_once_if_custom_auth_skips_common_checks(
     _custom_auth_common_checks_warning_emitted = True
 
 
+def log_once_if_budget_reservation_disabled(
+    *,
+    disabled: bool,
+    logger: Logger = verbose_proxy_logger,
+) -> None:
+    if constants.budget_reservation_disabled_info_emitted or not disabled:
+        return
+    logger.info(
+        "disable_budget_reservation is enabled: skipping optimistic budget "
+        "reservation. Budget enforcement is read-time only. Concurrent "
+        "requests can each pass the spend check before their cost is recorded, "
+        "so a configured budget may be briefly exceeded under high concurrency. "
+        "Set disable_budget_reservation to False or remove it to restore "
+        "hard per-request budget enforcement."
+    )
+    constants.budget_reservation_disabled_info_emitted = True  # rebind-ok: process-wide one-shot sentinel
+
+
 def is_pass_through_provider_route(route: str) -> bool:
     PROVIDER_SPECIFIC_PASS_THROUGH_ROUTES: Final = [
         "vertex-ai",
@@ -1364,7 +1423,7 @@ def is_pass_through_provider_route(route: str) -> bool:
     return False
 
 
-def _has_user_setup_sso() -> bool:
+def has_user_setup_sso() -> bool:
     """
     Check if the user has set up single sign-on (SSO).
 
@@ -1385,6 +1444,63 @@ def _has_user_setup_sso() -> bool:
         or bool(saml_idp_metadata_url)
         or bool(saml_idp_metadata_xml)
     )
+
+
+def _is_google_ready() -> bool:
+    return bool(os.getenv("GOOGLE_CLIENT_ID")) and bool(os.getenv("GOOGLE_CLIENT_SECRET"))
+
+
+def _is_microsoft_ready() -> bool:
+    return (
+        bool(os.getenv("MICROSOFT_CLIENT_ID"))
+        and bool(os.getenv("MICROSOFT_CLIENT_SECRET"))
+        and bool(os.getenv("MICROSOFT_TENANT"))
+    )
+
+
+def _is_generic_oauth_ready() -> bool:
+    return (
+        bool(os.getenv("GENERIC_CLIENT_ID"))
+        and bool(os.getenv("GENERIC_CLIENT_SECRET"))
+        and bool(os.getenv("GENERIC_AUTHORIZATION_ENDPOINT"))
+        and bool(os.getenv("GENERIC_TOKEN_ENDPOINT"))
+        and bool(os.getenv("GENERIC_USERINFO_ENDPOINT"))
+    )
+
+
+def _is_saml_ready() -> bool:
+    if not (os.getenv("SAML_IDP_METADATA_URL") or os.getenv("SAML_IDP_METADATA_XML")):
+        return False
+    # SAML's runtime (python3-saml) is an optional dependency; the SAML
+    # handler itself fails closed on every request when it is missing
+    # (SAMLAuthHandler raises before touching the IdP), so metadata alone
+    # is not "ready" either. find_spec raises ModuleNotFoundError (rather
+    # than returning None) when the top-level package is absent entirely,
+    # so this must not be a bare boolean expression or every password
+    # login would 500 on a deployment that configured SAML metadata
+    # without installing the optional extra.
+    try:
+        return importlib.util.find_spec("onelogin.saml2.auth") is not None
+    except ModuleNotFoundError:
+        return False
+
+
+def is_sso_provider_fully_configured() -> bool:
+    """Whether ANY configured SSO provider has every companion setting it
+    needs to actually authenticate a user, not merely a client id.
+
+    A lone ``MICROSOFT_CLIENT_ID`` with no secret or tenant makes
+    ``has_user_setup_sso()`` return True while every real sign-in attempt
+    fails, so a gate that BLOCKS the password fallback (unlike the UI
+    discovery use of ``has_user_setup_sso()``, where a dead login button is
+    merely confusing) must check readiness here, or it can lock every admin
+    out with no way to sign in at all. Checks every provider independently
+    (mirroring ``/sso/readiness``'s per-provider requirements) rather than
+    stopping at the first one with a client id set, so a stray leftover
+    client id for an unused provider can never mask a different, fully
+    configured provider that would otherwise satisfy this gate.
+    """
+    return _is_google_ready() or _is_microsoft_ready() or _is_generic_oauth_ready() or _is_saml_ready()
 
 
 def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:
@@ -1628,7 +1744,7 @@ def _dedupe_model_candidates(candidates: list[str]) -> list[str]:
     return deduped
 
 
-def _get_case_insensitive_mapping_value(mapping: Mapping[str, Any] | None, key: str) -> Any:
+def _get_case_insensitive_mapping_value(mapping: Mapping[str, object] | None, key: str) -> object:
     if not mapping:
         return None
     if key in mapping:
@@ -1732,8 +1848,8 @@ def _resolve_model_id_with_router(model_id: str | None, llm_router: Router | Non
 def _extract_model_candidates_from_request(
     request_data: dict,
     route: str,
-    request_headers: Mapping[str, Any] | None = None,
-    request_query_params: Mapping[str, Any] | None = None,
+    request_headers: Mapping[str, object] | None = None,
+    request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
 ) -> list[str]:
     candidates: Final[list[str]] = []
@@ -1825,8 +1941,8 @@ def request_dispatched_to_pass_through_endpoint(request: Request | None) -> bool
 def get_model_from_request(
     request_data: dict,
     route: str,
-    request_headers: Mapping[str, Any] | None = None,
-    request_query_params: Mapping[str, Any] | None = None,
+    request_headers: Mapping[str, object] | None = None,
+    request_query_params: Mapping[str, object] | None = None,
     llm_router: Router | None = None,
     request: Request | None = None,
 ) -> str | list[str] | None:
@@ -1885,7 +2001,37 @@ def get_model_from_request(
         if vertex_match:
             model = vertex_match.group(1)
 
+    if route.lower().startswith("/bedrock"):
+        bedrock_model: Final = _model_from_bedrock_route(route)
+        return model if bedrock_model is None else bedrock_model
+
+    if route.lower().startswith(("/azure/", "/azure_ai/")):
+        azure_model: Final = _router_model_from_azure_route(route, llm_router)
+        return model if azure_model is None else azure_model
+
     return model
+
+
+def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str | None:
+    if llm_router is None:
+        return None
+    endpoint: Final = re.sub(r"^/azure(?:_ai)?/", "", route, flags=re.IGNORECASE)
+    return azure_router_model_in_endpoint(endpoint, frozenset(llm_router.get_model_names()))
+
+
+def _model_from_bedrock_route(route: str) -> str | None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _extract_model_from_bedrock_endpoint,
+        is_bedrock_count_tokens_endpoint,
+    )
+
+    bedrock_endpoint: Final = re.sub(r"^/bedrock/", "", route, flags=re.IGNORECASE)
+    if is_bedrock_count_tokens_endpoint(bedrock_endpoint):
+        return None
+    try:
+        return _extract_model_from_bedrock_endpoint(bedrock_endpoint)
+    except ValueError:
+        return None
 
 
 def abbreviate_api_key(api_key: str) -> str:

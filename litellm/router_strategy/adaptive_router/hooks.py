@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
@@ -25,6 +26,9 @@ from litellm.router_strategy.adaptive_router.config import (
     SIGNAL_GATE_MIN_MESSAGES,
 )
 from litellm.router_strategy.adaptive_router.signals import Turn
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
 
 # Identity fields hashed into a derived session key so the same conversation
 # from the same caller produces a stable key, while different keys/teams/users
@@ -100,8 +104,8 @@ def _last_user_content(messages: list[dict[str, Any]] | None) -> str | None:
 
 
 def _recent_tool_results(
-    messages: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
+    messages: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
     """Extract the current turn's tool result payloads from the request messages.
 
     Tool results are `role == "tool"` messages that sit at the tail of the
@@ -115,7 +119,7 @@ def _recent_tool_results(
     """
     if not messages:
         return []
-    results: Final[list[dict[str, Any]]] = []
+    results: Final[list[dict[str, object]]] = []
     for msg in reversed(messages):
         if not isinstance(msg, dict):
             break
@@ -154,7 +158,7 @@ def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
     raw_tool_calls = getattr(msg, "tool_calls", None)
     if raw_tool_calls is None and isinstance(msg, dict):
         raw_tool_calls = msg.get("tool_calls")
-    tool_calls: Final[list[dict[str, Any]]] = []
+    tool_calls: Final[list[dict[str, object]]] = []
     for tc in raw_tool_calls or []:
         if isinstance(tc, dict):
             tool_calls.append(tc)
@@ -174,11 +178,11 @@ class AdaptiveRouterPostCallHook(CustomLogger):
 
     async def async_post_call_response_headers_hook(
         self,
-        data: dict[str, Any],
-        user_api_key_dict: Any,
-        response: Any,
+        data: Mapping[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
         request_headers: dict[str, str] | None = None,
-        litellm_call_info: dict[str, Any] | None = None,
+        litellm_call_info: dict[str, object] | None = None,
     ) -> dict[str, str] | None:
         """
         Surface the chosen logical model as the `x-litellm-adaptive-router-model`
@@ -209,7 +213,7 @@ class AdaptiveRouterPostCallHook(CustomLogger):
     async def _record(
         self,
         kwargs: dict[str, Any],
-        response_obj: Any,
+        response_obj: object,
         response_status: int,
     ) -> None:
         try:

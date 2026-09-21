@@ -5,6 +5,7 @@ import {
   normalizeTierModels,
   pruneTierModelParams,
   serializeTierModelConfigs,
+  tierRowLabel,
   setTierModelReasoningEffort,
 } from "./complexity_router_tiers";
 import { resolveComplexityDefaultModel } from "./tier_rows";
@@ -232,5 +233,24 @@ describe("pruneTierModelParams", () => {
   it("returns the input unchanged when the tier holds no params", () => {
     const current = { COMPLEX: { opus: { reasoning_effort: "high" } } };
     expect(pruneTierModelParams(current, "MEDIUM", [])).toBe(current);
+  });
+});
+
+describe("tierRowLabel", () => {
+  it("shows a built-in row's display label while it is untouched", () => {
+    expect(tierRowLabel({ id: "COMPLEX", name: "COMPLEX" })).toBe("Complex");
+    expect(tierRowLabel({ id: "COMPLEX", name: "COMPLEX" }, { COMPLEX: "Deep" })).toBe("Deep");
+  });
+
+  it("shows the operator's name once a built-in row is renamed, since the id stays canonical", () => {
+    expect(tierRowLabel({ id: "COMPLEX", name: "SECURITY_REVIEW" })).toBe("SECURITY_REVIEW");
+  });
+
+  it("shows a custom row's name", () => {
+    expect(tierRowLabel({ id: "stored-1", name: "AUDIT" })).toBe("AUDIT");
+  });
+
+  it("calls an unnamed new row New rather than rendering an empty label", () => {
+    expect(tierRowLabel({ id: "uuid", name: "  " })).toBe("New");
   });
 });

@@ -177,8 +177,9 @@ class VertexAIDeepSeekOCRConfig(BaseOCRConfig):
             content_item = {"type": "image_url", "image_url": document_url}
 
         # Build DeepSeek OCR request
+        provider_model: Final = model if model.startswith("deepseek-ai/") else f"deepseek-ai/{model}"
         data: Final = {
-            "model": "deepseek-ai/" + model,
+            "model": provider_model,
             "messages": [{"role": "user", "content": [content_item]}],
         }
 

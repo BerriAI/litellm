@@ -52,6 +52,43 @@ class HashicorpVaultConfig(BaseModel):
     )
 
 
+class CyberArkConfig(BaseModel):
+    """Configuration for CyberArk Conjur secret manager integration."""
+
+    cyberark_api_base: str | None = Field(
+        default=None,
+        description="The address of the CyberArk Conjur server (e.g., https://conjur.example.com)",
+    )
+    cyberark_account: str | None = Field(
+        default=None,
+        description="The Conjur organization account name",
+    )
+    cyberark_username: str | None = Field(
+        default=None,
+        description="The Conjur username (login) to authenticate as",
+    )
+    cyberark_api_key: str | None = Field(
+        default=None,
+        description="API key for Conjur API-key authentication",
+    )
+    client_cert: str | None = Field(
+        default=None,
+        description="Path to the client TLS certificate for certificate-based authentication",
+    )
+    client_key: str | None = Field(
+        default=None,
+        description="Path to the client TLS private key for certificate-based authentication",
+    )
+    ssl_verify: str | None = Field(
+        default=None,
+        description="Set to false to disable SSL verification (e.g., for self-signed certificates)",
+    )
+    refresh_interval: str | None = Field(
+        default=None,
+        description="Auth token cache TTL in seconds (default: 300)",
+    )
+
+
 class ConfigOverrideSettingsResponse(BaseModel):
     """Response model for config override settings GET endpoints."""
 

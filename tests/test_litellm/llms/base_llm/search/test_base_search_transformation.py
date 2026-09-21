@@ -322,7 +322,7 @@ async def test_query_param_key_not_leaked_with_dummy_caller_key(
         "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get",
         fake_get,
     ):
-        with pytest.raises(litellm.InternalServerError):
+        with pytest.raises(litellm.APIConnectionError):
             await litellm.asearch(
                 query="secrets",
                 search_provider=provider,

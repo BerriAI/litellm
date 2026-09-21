@@ -58,7 +58,7 @@ const PatternTable: React.FC<PatternTableProps> = ({ patterns, onActionChange, o
           <SelectTrigger size="sm" className="w-[120px]" aria-label="Action">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false}>
+          <SelectContent>
             {ACTION_ITEMS.map((item) => (
               <SelectItem key={item.value} value={item.value}>
                 {item.label}

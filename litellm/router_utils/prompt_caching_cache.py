@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
     litellm_router = Router
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
     litellm_router = Any
@@ -34,7 +34,7 @@ class PromptCachingCache:
         self.in_memory_cache = InMemoryCache()
 
     @staticmethod
-    def serialize_object(obj: Any) -> Any:
+    def serialize_object(obj: Any) -> object:
         """Helper function to serialize Pydantic objects, dictionaries, or fallback to string."""
         if hasattr(obj, "dict"):
             # If the object is a Pydantic model, use its `dict()` method

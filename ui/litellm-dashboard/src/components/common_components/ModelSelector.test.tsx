@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ModelSelector from "./ModelSelector";
+import { chooseSelectOption } from "../../../tests/test-utils";
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn().mockResolvedValue([]),
@@ -9,8 +10,7 @@ vi.mock("@/components/llm_calls/fetch_models", () => ({
 
 const openCustomModelInput = async () => {
   const user = userEvent.setup();
-  await user.click(screen.getByRole("combobox"));
-  await user.click(await screen.findByText("Enter custom model"));
+  await chooseSelectOption(user, screen.getByRole("combobox"), "Enter custom model");
   return screen.getByPlaceholderText("Enter custom model name");
 };
 

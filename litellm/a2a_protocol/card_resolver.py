@@ -4,6 +4,7 @@ Custom A2A Card Resolver for LiteLLM.
 Extends the A2A SDK's card resolver to support multiple well-known paths.
 """
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -152,7 +153,7 @@ class LiteLLMA2ACardResolver(_A2ACardResolver):
     async def get_agent_card(
         self,
         relative_card_path: str | None = None,
-        http_kwargs: dict[str, Any] | None = None,
+        http_kwargs: Mapping[str, object] | None = None,
     ) -> "AgentCard":
         """
         Fetch the agent card, trying multiple well-known paths.

@@ -16,6 +16,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlparse
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
@@ -23,7 +25,10 @@ from litellm.integrations.prompt_management_base import PromptManagementClient
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     with_prompt_cache_breakpoint,
 )
+from litellm.llms.anthropic.common_utils import is_claude_code_one_shot_subagent_request
 from litellm.types.integrations.anthropic_cache_control_hook import (
+    GATEWAY_INJECTED_CACHE_METADATA_KEY,
+    GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT,
     CacheControlInjectionPoint,
     CacheControlMessageInjectionPoint,
 )
@@ -60,8 +65,24 @@ OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
 )
 OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
+_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
+_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 AllToolParamValues = ChatCompletionToolParam | AllAnthropicToolsValues
+
+
+def _validated_object_mapping(value: object) -> dict[object, object] | None:
+    try:
+        return _OBJECT_MAPPING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _validated_object_list(value: object) -> list[object] | None:
+    try:
+        return _OBJECT_LIST_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
 
 
 def supports_openai_prompt_cache_breakpoint(model: str) -> bool:
@@ -112,6 +133,36 @@ CARRY_UNMATCHED_MESSAGE_POINTS: Final = "_litellm_carry_unmatched_cache_control_
 
 
 class AnthropicCacheControlHook(CustomPromptManagement):
+    @staticmethod
+    def _request_value(request_kwargs: object, key: str) -> object:
+        request_mapping: Final = _validated_object_mapping(request_kwargs)
+        if request_mapping is None:
+            return None
+        return request_mapping.get(key)
+
+    @staticmethod
+    def _request_user_agent(request_kwargs: object) -> str | None:
+        proxy_server_request: Final = AnthropicCacheControlHook._request_value(request_kwargs, "proxy_server_request")
+        proxy_server_request_mapping: Final = _validated_object_mapping(proxy_server_request)
+        if proxy_server_request_mapping is None:
+            return None
+        headers: Final = proxy_server_request_mapping.get("headers")
+        headers_mapping: Final = _validated_object_mapping(headers)
+        if headers_mapping is None:
+            return None
+        user_agent: Final = next(
+            (value for key, value in headers_mapping.items() if isinstance(key, str) and key.lower() == "user-agent"),
+            None,
+        )
+        return user_agent if isinstance(user_agent, str) else None
+
+    @staticmethod
+    def _request_system(request_kwargs: object) -> str | list[object] | None:
+        system: Final = AnthropicCacheControlHook._request_value(request_kwargs, "system")
+        if isinstance(system, str):
+            return system
+        return _validated_object_list(system)
+
     def get_chat_completion_prompt(
         self,
         model: str,
@@ -185,7 +236,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         reserved_blocks: Final = (
             1 if not openai_dialect and any(p.get("location") == "tool_config" for p in remaining_points) else 0
         )
-        breakpoints_before: Final = AnthropicCacheControlHook._count_request_cache_breakpoints(processed_messages)
+        breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages)
         processed_messages = self._apply_message_injections(
             points=applied_message_points,
             messages=processed_messages,
@@ -194,7 +245,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         if (
             openai_dialect
-            and AnthropicCacheControlHook._count_request_cache_breakpoints(processed_messages) > breakpoints_before
+            and AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages) > breakpoints_before
         ):
             non_default_params.setdefault("prompt_cache_options", PromptCacheOptions(mode="explicit"))
 
@@ -236,7 +287,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return provider
 
     @staticmethod
-    def _count_request_cache_breakpoints(messages: Iterable[object], system: object = None) -> int:
+    def count_request_cache_breakpoints(messages: Iterable[object], system: object = None) -> int:
         system_blocks: Final = (
             sum(1 for block in system if _carries_cache_breakpoint(block)) if isinstance(system, list) else 0
         )
@@ -258,7 +309,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         ``max_blocks`` is reached. Injection points are honored in config order,
         so earlier points win when slots are scarce.
         """
-        used_blocks = AnthropicCacheControlHook._count_request_cache_breakpoints(messages)
+        used_blocks = AnthropicCacheControlHook.count_request_cache_breakpoints(messages)
 
         limit_reached = False
         for point in points:
@@ -376,7 +427,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # 2. list of objects - only apply to last item per Anthropic spec
         elif isinstance(message_content, list):
             if len(message_content) > 0 and isinstance(message_content[-1], dict):
-                message_content[-1]["cache_control"] = control
+                message_content[-1]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
         return message
 
     @staticmethod
@@ -454,8 +505,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
         max_blocks: Final = MAX_CACHE_CONTROL_BLOCKS - reserved_blocks
 
-        message_blocks: Final = AnthropicCacheControlHook._count_request_cache_breakpoints(processed_messages)
-        system_blocks = AnthropicCacheControlHook._count_request_cache_breakpoints((), processed_system)
+        message_blocks: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(processed_messages)
+        system_blocks = AnthropicCacheControlHook.count_request_cache_breakpoints((), processed_system)
 
         if system_points and processed_system is not None and message_blocks + system_blocks < max_blocks:
             system_already_has_cc: Final = isinstance(processed_system, list) and any(
@@ -518,12 +569,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         points: Sequence[CacheControlInjectionPoint],
         messages: list[AllMessageValues],
         tools: list[object] | None,
+        cache_control: object,
         model: str,
         custom_llm_provider: str | None,
         api_base: object,
         prompt_cache_options: object,
     ) -> Sequence[Mapping[str, object]] | None:
-        if AnthropicCacheControlHook._should_stand_down(points, messages, None, tools):
+        if AnthropicCacheControlHook._should_stand_down(points, messages, None, tools, cache_control):
             return None
         return AnthropicCacheControlHook._stamped_with_dialect(
             points, model, custom_llm_provider, api_base, prompt_cache_options
@@ -559,6 +611,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: list[AllMessageValues],
         system: str | list | None,
         tools: list | None,
+        cache_control: object = None,
     ) -> bool:
         """Whether configured injection points must yield to client-set cache_control.
 
@@ -571,13 +624,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         """
         if all(point.get("_litellm_judged") for point in points):
             return False
-        return AnthropicCacheControlHook._request_has_cache_control(messages, system, tools)
+        return AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control)
 
     @staticmethod
     def _request_has_cache_control(
         messages: list[AllMessageValues],
         system: str | list | None,
         tools: list | None = None,
+        cache_control: object = None,
     ) -> bool:
         """Return True if the request already carries any client-supplied cache_control.
 
@@ -589,7 +643,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         carry the mark either at the top level (Anthropic shape) or nested under
         ``function`` (OpenAI shape); the Anthropic chat transform accepts both.
         """
-        if AnthropicCacheControlHook._count_request_cache_breakpoints(messages, system) > 0:
+        if cache_control is not None:
+            return True
+        if AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) > 0:
             return True
         if tools is not None:
             return any(
@@ -610,6 +666,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         custom_llm_provider: str | None,
         tools: list | None = None,
         enable_prompt_caching: bool | None = None,
+        cache_control: object = None,
+        request_kwargs: object = None,
     ) -> list[CacheControlInjectionPoint]:
         """Default breakpoints when ``litellm.enable_anthropic_prompt_caching`` is on.
 
@@ -647,7 +705,12 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not supports_prompt_caching(model=model, custom_llm_provider=provider):
             return []
 
-        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools):
+        if AnthropicCacheControlHook._request_has_cache_control(messages, system, tools, cache_control):
+            return []
+
+        if is_claude_code_one_shot_subagent_request(
+            messages, system, tools, AnthropicCacheControlHook._request_user_agent(request_kwargs)
+        ):
             return []
 
         control: Final = AnthropicCacheControlHook._default_control()
@@ -663,6 +726,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         models: Iterable[str],
         tools: list[AllToolParamValues] | None = None,
         enable_prompt_caching: bool | None = None,
+        request_kwargs: object = None,
     ) -> list[AllMessageValues]:
         """Return the messages auto prompt caching will send, default breakpoints included.
 
@@ -679,11 +743,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 for candidate in (
                     AnthropicCacheControlHook.get_default_injection_points(
                         messages=messages,
-                        system=None,
                         model=model,
                         custom_llm_provider=None,
                         tools=tools,
                         enable_prompt_caching=enable_prompt_caching,
+                        system=AnthropicCacheControlHook._request_system(request_kwargs),
+                        cache_control=AnthropicCacheControlHook._request_value(request_kwargs, "cache_control"),
+                        request_kwargs=request_kwargs,
                     )
                     for model in models
                 )
@@ -728,6 +794,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 non_default_params["cache_control_injection_points"],
                 messages,
                 tools,
+                non_default_params.get("cache_control"),
                 model,
                 custom_llm_provider,
                 api_base,
@@ -745,9 +812,85 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             custom_llm_provider=custom_llm_provider,
             tools=tools,
             enable_prompt_caching=enable_prompt_caching,
+            cache_control=non_default_params.get("cache_control"),
+            request_kwargs=non_default_params,
         )
         if points:
             non_default_params["cache_control_injection_points"] = points
+
+    @staticmethod
+    def record_gateway_injection(
+        request_kwargs: Mapping[str, object],
+        added: int,
+        injected_for_every_deployment: bool = False,
+    ) -> None:
+        """Name the deployment whose payload the gateway, not the client, put breakpoints on.
+
+        Spend accounting only asks whether litellm acted, so what it needs is which
+        deployment, not a count. Recording that is what makes the mark attempt-scoped: the
+        metadata bucket is one dict shared by every retry, failover and fallback of a
+        request, and ``litellm_call_id`` is shared with it, so anything request-scoped
+        written by one attempt is read by all of them and each boundary would have to
+        remember to strip it. The deployment is the part that actually changes when the
+        request moves, so a leg that injected nothing is never credited for one that did.
+
+        It also makes a zero delta (hook re-entry) and a negative one (a prompt manager
+        replacing the messages) harmless, since neither rewrites an earlier mark.
+
+        A pass that runs before a deployment is chosen, which is what the proxy does for
+        prompt templates, injects into the payload every leg goes on to send, so it marks
+        the request for all of them rather than for one. Such a pass says so with
+        ``injected_for_every_deployment`` instead of relying on the shape of
+        ``request_kwargs``: the router's prompt-management factory stamps a provisional
+        deployment's ``model_info`` into kwargs before the prompt pass runs, and billing
+        the request through any other deployment would silently drop the credit. An
+        every-deployment mark, once written, also never narrows: a later per-leg stamp
+        (the Bedrock converse tool_config one included) describes one leg of a payload
+        every leg sends, so narrowing to it would uncredit whichever leg gets billed
+        after a failover. Both losses are fail-closed under-crediting, which is why the
+        guard only protects the sentinel and per-leg marks still overwrite each other.
+
+        Only what this pass actually placed counts. A ``tool_config`` point is placed by
+        the Bedrock converse transform, and only when the request carries tools, so the
+        presence of one here says nothing about whether a breakpoint reaches the wire;
+        claiming it marked three request shapes out of four that inject nothing. Missing
+        that Bedrock credit is the fail-closed direction, and the alternative is a
+        provider transform that carries spend-attribution state.
+
+        Reads whichever bucket the request actually carries rather than asking the shared
+        name resolver, which answers on key presence: ``litellm_params`` declares
+        ``litellm_metadata`` as None on every request, so the resolver names a bucket that
+        is not there and the mark is dropped.
+
+        Never CREATES the bucket. The proxy seeds it on every request and is the marker's
+        only reader, so a request without one is a bare SDK call nothing would consume it
+        from. Creating it would also add a key to a dict call sites splat as ``**kwargs``,
+        and on the Responses API ``metadata`` is both this bucket's default name and an
+        explicit parameter, so the splat collides with the caller's own value.
+        """
+        if added <= 0:
+            return
+        bucket: Final = next(
+            (
+                candidate
+                for candidate in (request_kwargs.get("litellm_metadata"), request_kwargs.get("metadata"))
+                if isinstance(candidate, dict)
+            ),
+            None,
+        )
+        if bucket is None:
+            return
+        if bucket.get(GATEWAY_INJECTED_CACHE_METADATA_KEY) == GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT:
+            return
+        if injected_for_every_deployment:
+            bucket[GATEWAY_INJECTED_CACHE_METADATA_KEY] = GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT
+            return
+        model_info: Final = request_kwargs.get("model_info")
+        bucket[GATEWAY_INJECTED_CACHE_METADATA_KEY] = (
+            model_info.get("id", GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT)
+            if isinstance(model_info, dict)
+            else GATEWAY_INJECTED_FOR_EVERY_DEPLOYMENT
+        )
 
     @staticmethod
     def maybe_inject_cache_control(
@@ -777,10 +920,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         enable_prompt_caching: Final = cast(  # cast-ok: kwargs is untyped; key stamped as bool by the proxy
             bool | None, kwargs.pop("enable_prompt_caching", None)
         )
+        cache_control: Final = kwargs.get("cache_control")
         configured: Final = cast(  # cast-ok: kwargs is untyped; this key only holds the documented injection-point list
             list[CacheControlInjectionPoint] | None, kwargs.pop("cache_control_injection_points", None)
         )
-        if configured and AnthropicCacheControlHook._should_stand_down(configured, typed_messages, system, tools):
+        if configured and AnthropicCacheControlHook._should_stand_down(
+            configured, typed_messages, system, tools, cache_control
+        ):
             return messages, system
         injection_points: list[CacheControlInjectionPoint] = configured or []
         if not injection_points and model is not None:
@@ -791,6 +937,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 enable_prompt_caching=enable_prompt_caching,
+                cache_control=cache_control,
+                request_kwargs=kwargs,
             )
         if not injection_points:
             return messages, system
@@ -798,17 +946,18 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         openai_dialect: Final = AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
             model, custom_llm_provider, api_base, kwargs.get("prompt_cache_options")
         )
-        breakpoints_before: Final = AnthropicCacheControlHook._count_request_cache_breakpoints(messages, system)
+        breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)
         messages, system, remaining = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
             messages=messages,
             system=system,
             injection_points=injection_points,
             openai_dialect=openai_dialect,
         )
-        if (
-            openai_dialect
-            and AnthropicCacheControlHook._count_request_cache_breakpoints(messages, system) > breakpoints_before
-        ):
+        breakpoints_added: Final = (
+            AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system) - breakpoints_before
+        )
+        AnthropicCacheControlHook.record_gateway_injection(kwargs, breakpoints_added)
+        if openai_dialect and breakpoints_added > 0:
             kwargs.setdefault("prompt_cache_options", PromptCacheOptions(mode="explicit"))
         if remaining:
             kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_as_judged(remaining)

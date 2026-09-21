@@ -6,10 +6,13 @@ Tests for LiteLLM proxy realtime WebRTC HTTP endpoints:
 
 import json
 import time
+from collections.abc import Awaitable
+from typing import Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 
@@ -159,17 +162,27 @@ def mock_route_request_realtime_calls():
     return _mock_route
 
 
+class AddLitellmDataToRequest(Protocol):
+    def __call__(self, data: dict[str, object], **kwargs: object) -> Awaitable[dict[str, object]]: ...
+
+
+class PreCallHook(Protocol):
+    def __call__(
+        self, user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str
+    ) -> Awaitable[dict[str, object]]: ...
+
+
 @pytest.fixture
-def mock_add_litellm_data():
-    async def _mock(data, **kwargs):
+def mock_add_litellm_data() -> AddLitellmDataToRequest:
+    async def _mock(data: dict[str, object], **kwargs: object) -> dict[str, object]:
         return data
 
     return _mock
 
 
 @pytest.fixture
-def mock_pre_call_hook():
-    async def _mock(user_api_key_dict, data, call_type):
+def mock_pre_call_hook() -> PreCallHook:
+    async def _mock(user_api_key_dict: UserAPIKeyAuth, data: dict[str, object], call_type: str) -> dict[str, object]:
         return data
 
     return _mock
@@ -1199,3 +1212,78 @@ async def test_transcription_sessions_wraps_route_exception(
         assert "Model not allowed" in response.text
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_realtime_calls_upstream_rejection_answers_an_openai_typed_error(
+    proxy_app: FastAPI,
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A bare HTTPException carries no type or param, so the tail used to ship the
+    literal string "None" in both fields of the error the browser client reads."""
+    token_payload = _encode_realtime_token_payload(
+        ephemeral_key="fake_upstream_epk",
+        model_id="gpt-4o-realtime-preview",
+        user_id=None,
+        team_id=None,
+        expires_at=int(time.time()) + 3600,
+    )
+    encrypted_token = encrypt_value_helper(token_payload)
+
+    async def failing_route_request(*args: object, **kwargs: object) -> None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "realtime: Invalid model name passed in model=gpt-4o-realtime-preview"},
+        )
+
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.route_request", failing_route_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", mock_add_litellm_data)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+
+    response = TestClient(proxy_app).post(
+        "/v1/realtime/calls",
+        headers={"Authorization": f"Bearer {encrypted_token}"},
+        content=b"v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\n",
+    )
+
+    assert response.status_code == 404
+    assert (response.json()["error"]["type"], response.json()["error"]["param"]) == ("invalid_request_error", None)
+
+
+def test_transcription_sessions_rejection_answers_an_openai_typed_error(
+    proxy_app: FastAPI,
+    mock_add_litellm_data: AddLitellmDataToRequest,
+    mock_pre_call_hook: PreCallHook,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A model the router cannot serve surfaces as a bare HTTPException, which this tail
+    used to relabel with the literal string "None" for both type and param."""
+
+    async def failing_route_request(*args: object, **kwargs: object) -> None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "realtime: Invalid model name passed in model=no-such-transcribe"},
+        )
+
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.route_request", failing_route_request)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", mock_add_litellm_data)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="test-user")
+    try:
+        response = TestClient(proxy_app, raise_server_exceptions=False).post(
+            "/v1/realtime/transcription_sessions",
+            headers={"Authorization": "Bearer sk-test-master-key"},
+            json={"input_audio_transcription": {"model": "no-such-transcribe"}},
+        )
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+    assert response.status_code == 400
+    assert (response.json()["error"]["type"], response.json()["error"]["param"]) == ("invalid_request_error", None)

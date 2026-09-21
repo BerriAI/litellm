@@ -157,7 +157,7 @@ const MemberModal = <T extends BaseMember>({
               <BudgetDurationDropdown
                 id={id}
                 value={typeof value === "string" ? value : null}
-                onChange={(next) => onChange(next)}
+                onChange={(next) => onChange(mode === "add" ? next ?? undefined : next)}
               />
             );
           default:

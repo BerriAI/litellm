@@ -22,6 +22,8 @@ class VertexAIBatchTransformation:
     def transform_openai_batch_request_to_vertex_ai_batch_request(
         cls,
         request: CreateBatchRequest,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
     ) -> VertexAIBatchPredictionJob:
         """
         Transforms OpenAI Batch requests to Vertex AI Batch requests
@@ -31,7 +33,11 @@ class VertexAIBatchTransformation:
         if input_file_id is None:
             raise ValueError("input_file_id is required, but not provided")
         input_config: InputConfig = InputConfig(gcsSource=GcsSource(uris=[input_file_id]), instancesFormat="jsonl")
-        model: Final[str] = cls._get_model_from_gcs_file(input_file_id)
+        model: Final[str] = cls._get_batch_job_model(
+            input_file_id=input_file_id,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+        )
         output_config: Final[OutputConfig] = OutputConfig(
             predictionsFormat="jsonl",
             gcsDestination=GcsDestination(outputUriPrefix=cls._get_gcs_uri_prefix_from_file(input_file_id)),
@@ -189,6 +195,33 @@ class VertexAIBatchTransformation:
         return path_parts[0]
 
     @classmethod
+    def _get_batch_job_model(
+        cls,
+        input_file_id: str,
+        vertex_project: str | None,
+        vertex_location: str | None,
+    ) -> str:
+        """
+        Returns the `model` for the batchPredictionJobs request: the publisher model path as-is, or
+        the full `projects/../locations/../endpoints/<id>` resource name for a fine-tuned endpoint.
+
+        The v1 batch API only accepts Model resources, so the handler resolves an endpoint resource
+        to its deployed tuned model (`projects/../locations/../models/<id>`) before sending the job.
+        """
+        parsed_model: Final = cls._get_model_from_gcs_file(input_file_id)
+        if not parsed_model.startswith("endpoints/"):
+            return parsed_model
+        if not vertex_project:
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    f"Vertex AI batch jobs against a fine-tuned endpoint ('{parsed_model}') require "
+                    "`vertex_project` to build the endpoint resource name"
+                ),
+            )
+        return f"projects/{vertex_project}/locations/{vertex_location or 'us-central1'}/{parsed_model}"
+
+    @classmethod
     def _get_model_from_gcs_file(cls, gcs_file_uri: str) -> str:
         """
         Extracts the model from the gcs file uri
@@ -202,6 +235,9 @@ class VertexAIBatchTransformation:
         gcs_file_uri format: gs://litellm-testing-bucket/litellm-vertex-files/publishers/google/models/gemini-1.5-flash-001/e9412502-2c91-42a6-8e61-f5c294cc0fc8
         returns: "publishers/google/models/gemini-1.5-flash-001"
 
+        Fine-tuned Gemini endpoints are stored as `endpoints/<numeric id>` in the uri and returned
+        in that form.
+
         Raises a 400 `VertexAIError` when the uri carries no parseable model path.
         """
         model: Final = cls._parse_model_from_gcs_file(gcs_file_uri)
@@ -210,11 +246,13 @@ class VertexAIBatchTransformation:
                 status_code=400,
                 message=(
                     "Vertex AI batch creation requires the model to be part of `input_file_id`, but "
-                    f"'{gcs_file_uri}' contains no 'publishers/<publisher>/models/<model>' path segment. "
+                    f"'{gcs_file_uri}' contains no 'publishers/<publisher>/models/<model>' or "
+                    "'endpoints/<numeric endpoint id>' path segment. "
                     "Either upload the input file through LiteLLM (POST /v1/files with "
                     "custom_llm_provider=vertex_ai), which encodes the model into the returned file id, or "
                     "pass a uri of the form "
-                    "gs://<bucket>/<prefix>/publishers/<publisher>/models/<model>/<file>"
+                    "gs://<bucket>/<prefix>/publishers/<publisher>/models/<model>/<file> "
+                    "(or gs://<bucket>/<prefix>/endpoints/<numeric endpoint id>/<file> for fine-tuned models)"
                 ),
             )
         return model
@@ -222,18 +260,26 @@ class VertexAIBatchTransformation:
     @classmethod
     def _parse_model_from_gcs_file(cls, gcs_file_uri: str) -> str | None:
         """
-        Returns the `publishers/<publisher>/models/<model>` path from a gcs uri, or None if the uri
-        does not contain one.
+        Returns the `publishers/<publisher>/models/<model>` or `endpoints/<numeric id>` path from a
+        gcs uri, or None if the uri does not contain one.
+
+        A publisher path wins over an `endpoints/` segment, and the last `endpoints/` occurrence is
+        used, so a user-configured bucket prefix that happens to contain `endpoints/<digits>` cannot
+        override the model path LiteLLM appended after it.
         """
-        _, separator, model_path = unquote(gcs_file_uri).partition("publishers/")
-        if not separator:
-            return None
+        unquoted_uri: Final = unquote(gcs_file_uri)
+        _, separator, model_path = unquoted_uri.partition("publishers/")
+        if separator:
+            parts: Final = model_path.split("/")
+            if len(parts) >= 3 and parts[1] == "models" and parts[2]:
+                return f"publishers/{'/'.join(parts[:3])}"
 
-        parts: Final = model_path.split("/")
-        if len(parts) < 3 or parts[1] != "models" or not parts[2]:
-            return None
+        _, endpoint_separator, endpoint_path = unquoted_uri.rpartition("endpoints/")
+        endpoint_id: Final = endpoint_path.split("/")[0] if endpoint_separator else ""
+        if endpoint_id.isdigit():
+            return f"endpoints/{endpoint_id}"
 
-        return f"publishers/{'/'.join(parts[:3])}"
+        return None
 
     @classmethod
     def is_unmanaged_gcs_batch_input_file_id(cls, input_file_id: str | None) -> bool:

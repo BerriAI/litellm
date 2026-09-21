@@ -1,6 +1,6 @@
 import base64
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
@@ -24,6 +24,7 @@ from litellm.types.utils import (
     Choices,
     CompletionTokensDetails,
     CompletionTokensDetailsWrapper,
+    Delta,
     Function,
     FunctionCall,
     ModelResponse,
@@ -36,6 +37,8 @@ from litellm.types.utils import (
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
+    from openai.types.completion_usage import CompletionUsage
+
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.litellm_core_utils.streaming_chunk_builder_utils import (
         UsagePerChunk,
@@ -71,6 +74,18 @@ class _ContentChoice(TypedDict, total=False):
 
 class _ContentChunk(TypedDict):
     choices: Sequence[_ContentChoice]
+
+
+class _FunctionCallDelta(TypedDict):
+    function_call: ReadOnly[FunctionCall]
+
+
+class _FunctionCallChoice(TypedDict):
+    delta: ReadOnly[_FunctionCallDelta]
+
+
+class _FunctionCallChunk(TypedDict):
+    choices: ReadOnly[Sequence[_FunctionCallChoice]]
 
 
 class _AudioDelta(TypedDict, total=False):
@@ -195,7 +210,7 @@ def apply_grounding_request_counts(
 
 
 class ChunkProcessor:
-    def __init__(self, chunks: list, messages: list | None = None):
+    def __init__(self, chunks: list, messages: Sequence | None = None):
         self.chunks = self._sort_chunks(chunks)
         self.messages = messages
         self.first_chunk = chunks[0]
@@ -238,6 +253,22 @@ class ChunkProcessor:
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params = chunk.get("_hidden_params", {})
         return model_response
+
+    @staticmethod
+    def _get_provider_response_model(
+        chunks: Sequence["_BaseChunk"],
+        first_chunk_model: str,
+    ) -> str | None:
+        models: Final = tuple(
+            model
+            for chunk in chunks
+            if isinstance((hidden_params := chunk.get("_hidden_params")), Mapping)
+            if isinstance((model := hidden_params.get("provider_response_model")), str) and model
+        )
+        return next(
+            (model for model in models if model != first_chunk_model),
+            models[0] if models else None,
+        )
 
     @staticmethod
     def apply_provider_assembled_streaming_metadata(
@@ -297,6 +328,18 @@ class ChunkProcessor:
         return ""
 
     @staticmethod
+    def _get_role_from_chunks(chunks: Sequence["_BaseChunk"]) -> str:
+        return ChunkProcessor._role_of_choice(next((c["choices"][0] for c in chunks if c.get("choices")), None))
+
+    @staticmethod
+    def _role_of_choice(choice: object) -> str:
+        match choice:
+            case StreamingChoices(delta=Delta(role=str() as role)) | {"delta": {"role": str() as role}} if role:
+                return role
+            case _:
+                return "assistant"
+
+    @staticmethod
     def _get_model_from_chunks(chunks: Sequence["_BaseChunk"], first_chunk_model: str) -> str:
         """
         Get the actual model from chunks, preferring a model that differs from the first chunk.
@@ -323,8 +366,7 @@ class ChunkProcessor:
         model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
 
-        first_chunk_with_choices: Final = next((c for c in chunks if c.get("choices")), chunk)
-        role: Final = first_chunk_with_choices["choices"][0]["delta"]["role"]
+        role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
@@ -360,6 +402,15 @@ class ChunkProcessor:
         )
 
         response = self.update_model_response_with_hidden_params(model_response=response, chunk=chunk)
+        provider_response_model: Final = self._get_provider_response_model(
+            chunks,
+            first_chunk_model,
+        )
+        if provider_response_model is not None:
+            response._hidden_params = dict(  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params setter
+                response._hidden_params,  # pyright: ignore[reportPrivateUsage]  # ModelResponse exposes no public hidden-params getter
+                provider_response_model=provider_response_model,
+            )
         return response
 
     @staticmethod
@@ -563,7 +614,7 @@ class ChunkProcessor:
 
         return tool_calls_list
 
-    def get_combined_function_call_content(self, function_call_chunks: list[dict[str, Any]]) -> FunctionCall:
+    def get_combined_function_call_content(self, function_call_chunks: Sequence["_FunctionCallChunk"]) -> FunctionCall:
         argument_list: Final = []
         delta = function_call_chunks[0]["choices"][0]["delta"]
         function_call = delta.get("function_call", "")
@@ -757,7 +808,7 @@ class ChunkProcessor:
 
     @staticmethod
     def _extract_usage_chunk(chunk: "_UsageBearingChunk | ModelResponse | ModelResponseStream") -> Usage | None:
-        usage_chunk: Usage | None = None
+        usage_chunk: Usage | CompletionUsage | None = None
         if hasattr(chunk, "usage") and chunk.usage is not None:
             usage_chunk = chunk.usage
         elif "usage" in chunk:
@@ -769,7 +820,9 @@ class ChunkProcessor:
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)
-        return usage_chunk
+        if usage_chunk is None or isinstance(usage_chunk, Usage):
+            return usage_chunk
+        return Usage(**usage_chunk.model_dump())
 
     def _calculate_usage_per_chunk(
         self,
@@ -951,8 +1004,9 @@ class ChunkProcessor:
         chunks: Sequence["_UsageBearingChunk | ModelResponse"],
         model: str,
         completion_output: str,
-        messages: list | None = None,
+        messages: Sequence | None = None,
         reasoning_tokens: int | None = None,
+        count_prompt_tokens: Callable[[], int] | None = None,
     ) -> Usage:
         """
         Calculate usage for the given chunks.
@@ -977,7 +1031,9 @@ class ChunkProcessor:
         cost: Final[float | None] = calculated_usage_per_chunk["cost"]
 
         try:
-            returned_usage.prompt_tokens = prompt_tokens or token_counter(model=model, messages=messages)
+            returned_usage.prompt_tokens = prompt_tokens or (
+                count_prompt_tokens() if count_prompt_tokens else token_counter(model=model, messages=messages)
+            )
         except Exception:  # don't allow this failing to block a complete streaming response from being returned
             print_verbose("token_counter failed, assuming prompt tokens is 0")
             returned_usage.prompt_tokens = 0

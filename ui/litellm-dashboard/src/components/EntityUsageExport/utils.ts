@@ -1,6 +1,7 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import Papa from "papaparse";
+import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
 import type { EntityBreakdown, EntitySpendData, EntityType, ExportMetadata, ExportScope } from "./types";
 
 const resolveEntityDisplay = (
@@ -186,7 +187,7 @@ export const generateDailyWithKeysData = (
 
       // Iterate through each API key in the breakdown
       Object.entries(apiKeyBreakdown).forEach(([keyId, keyData]: [string, any]) => {
-        const keyAlias = keyData?.metadata?.key_alias || null;
+        const keyAlias = keyActivityLabel(keyData?.metadata, "") || null;
 
         // Create unique key for aggregation: Date_EntityID_KeyID
         const uniqueKey = `${day.date}_${entityId}_${keyId}`;

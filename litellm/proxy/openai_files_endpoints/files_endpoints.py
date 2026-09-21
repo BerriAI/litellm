@@ -8,7 +8,7 @@
 import asyncio
 import traceback
 from collections.abc import Mapping
-from typing import Any, BinaryIO, Final, cast, get_args
+from typing import Any, BinaryIO, Final, TypedDict, cast, get_args
 
 import httpx
 from fastapi import (
@@ -23,6 +23,7 @@ from fastapi import (
     status,
 )
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import CreateFileRequest, get_secret_str
@@ -32,6 +33,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -43,6 +45,11 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
+)
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    openai_error_param,
+    openai_error_type,
 )
 from litellm.proxy.openai_files_endpoints.batch_file_validation import (
     check_batch_file_upload,
@@ -69,12 +76,22 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     validate_managed_files_requirement,
     validate_managed_id_requirement,
 )
+from litellm.proxy.openai_files_endpoints.general_upload_validation import (
+    MB,
+    check_blocked_extension,
+    check_unsafe_filename,
+    check_upload_file_size,
+    coerce_optional_int_setting,
+    coerce_optional_str_list_setting,
+    raise_upload_validation_failure,
+)
 from litellm.proxy.utils import ProxyLogging, is_known_model
 from litellm.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
+    FileListPage,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
@@ -82,6 +99,14 @@ from litellm.types.llms.openai import (
 router: Final = APIRouter()
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
+_LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
+
+
+class UploadedFileInfo(TypedDict):
+    filename: ReadOnly[str | None]
+    content_type: ReadOnly[str | None]
+    size: ReadOnly[int | None]
+
 
 files_config = None
 
@@ -279,22 +304,22 @@ async def route_create_file(
         if managed_files_obj is None:
             raise ProxyException(
                 message="Managed files hook not found",
-                type="None",
-                param="None",
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=None,
                 code=500,
             )
         if llm_router is None:
             raise ProxyException(
                 message="LLM Router not found",
-                type="None",
-                param="None",
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=None,
                 code=500,
             )
         if not isinstance(managed_files_obj, BaseFileEndpoints):
             raise ProxyException(
                 message="Managed files hook is not a BaseFileEndpoints",
-                type="None",
-                param="None",
+                type=ProxyErrorTypes.internal_server_error.value,
+                param=None,
                 code=500,
             )
         # Managed files internally calls llm_router.acreate_file() which includes loadbalancing
@@ -389,13 +414,23 @@ async def create_file(
     # descriptor and its disk blocks until the collector runs.
     spools: Final[list[BinaryIO]] = []  # mutable-ok: filled as the scan opens handles
     try:
+        unsafe_filename_failure: Final = check_unsafe_filename(file.filename)
+        if unsafe_filename_failure is not None:
+            raise_upload_validation_failure(unsafe_filename_failure)
+
+        max_file_size_mb: Final = coerce_optional_int_setting(general_settings.get("max_file_size_mb"))
+
         # Batch uploads can be gigabytes. Starlette has already spooled the upload
         # to disk, so stream from that handle instead of reading it into memory.
-        # Other uploads are small and stay in-memory bytes.
+        # Other uploads stay in-memory bytes, bounded to max_file_size_mb (plus one
+        # byte, to still tell "exactly at the limit" from "over it") when it is set,
+        # so an oversized upload cannot be read to completion before it is rejected.
         file_source: bytes | BinaryIO
         if purpose == "batch":
             await file.seek(0)
             file_source = file.file
+        elif max_file_size_mb is not None and max_file_size_mb > 0:
+            file_source = await file.read(max_file_size_mb * MB + 1)
         else:
             file_source = await file.read()
         custom_llm_provider = (
@@ -433,6 +468,15 @@ async def create_file(
             )
         # Cast purpose to OpenAIFilesPurpose type
         purpose = cast(OpenAIFilesPurpose, purpose)
+
+        general_size_failure: Final = check_upload_file_size(file_source, max_file_size_mb)
+        if general_size_failure is not None:
+            raise_upload_validation_failure(general_size_failure)
+
+        blocked_extensions: Final = coerce_optional_str_list_setting(general_settings.get("blocked_file_extensions"))
+        blocked_extension_failure: Final = check_blocked_extension(file.filename, blocked_extensions)
+        if blocked_extension_failure is not None:
+            raise_upload_validation_failure(blocked_extension_failure)
 
         if purpose == "batch":
             batch_file_failure: Final = await asyncio.to_thread(
@@ -525,6 +569,22 @@ async def create_file(
             version=version,
             proxy_config=proxy_config,
         )
+
+        uploaded_file_info: Final[UploadedFileInfo] = {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "size": file.size,
+        }
+        data["purpose"] = purpose
+        data["file"] = uploaded_file_info
+        hooked_data: Final = await proxy_logging_obj.pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            data=data,
+            call_type="acreate_file",
+        )
+        data = hooked_data if hooked_data is not None else data
+        data.pop("purpose", None)
+        data.pop("file", None)
 
         # /v1/files stores its proxy metadata under litellm_metadata, not metadata
         request_metadata: Final = data.get("metadata") or data.get("litellm_metadata") or EMPTY_MAPPING
@@ -661,17 +721,17 @@ async def create_file(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )
     finally:
         for spool in spools:
@@ -760,22 +820,22 @@ async def get_file_content(
             if managed_files_obj is None:
                 raise ProxyException(
                     message="Managed files hook not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if llm_router is None:
                 raise ProxyException(
                     message="LLM Router not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if not isinstance(managed_files_obj, BaseFileEndpoints):
                 raise ProxyException(
                     message="Managed files hook is not a BaseFileEndpoints",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
 
@@ -969,17 +1029,17 @@ async def get_file_content(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )
 
 
@@ -1099,15 +1159,15 @@ async def get_file(
             if managed_files_obj is None:
                 raise ProxyException(
                     message="Managed files hook not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if not isinstance(managed_files_obj, BaseFileEndpoints):
                 raise ProxyException(
                     message="Managed files hook is not a BaseFileEndpoints",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             response = await managed_files_obj.afile_retrieve(
@@ -1163,17 +1223,17 @@ async def get_file(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )
 
 
@@ -1230,6 +1290,11 @@ async def delete_file(
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         )
+        if is_managed_cloud_storage_uri(file_id) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Raw cloud storage file ids can only be deleted by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
+            )
 
         custom_llm_provider: Final = (
             provider
@@ -1303,22 +1368,22 @@ async def delete_file(
             if managed_files_obj is None:
                 raise ProxyException(
                     message="Managed files hook not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if llm_router is None:
                 raise ProxyException(
                     message="LLM Router not found",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
             if not isinstance(managed_files_obj, BaseFileEndpoints):
                 raise ProxyException(
                     message="Managed files hook is not a BaseFileEndpoints",
-                    type="None",
-                    param="None",
+                    type=ProxyErrorTypes.internal_server_error.value,
+                    param=None,
                     code=500,
                 )
 
@@ -1375,18 +1440,24 @@ async def delete_file(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )
+
+
+def _as_file_list_page(response: object) -> object:
+    if not isinstance(response, list):
+        return response
+    return FileListPage(**build_list_page(_LISTED_FILES_ADAPTER.validate_python(response)))
 
 
 @router.get(
@@ -1467,7 +1538,7 @@ async def list_files(
 
         if should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -1493,7 +1564,7 @@ async def list_files(
                 model_id=target_model_names_list[0],
                 operation_context="file list",
             )
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -1535,6 +1606,7 @@ async def list_files(
                 status_code=500,
                 detail="Either 'provider' or 'target_model_names' must be provided e.g. `?target_model_names=gpt-4o`",
             )
+        response = _as_file_list_page(response)  # rebind-ok: each dispatch branch above binds response
 
         ## POST CALL HOOKS ###
         _response: Final = await proxy_logging_obj.post_call_success_hook(
@@ -1577,15 +1649,15 @@ async def list_files(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                code=error_status_code(e, 500),
             )
