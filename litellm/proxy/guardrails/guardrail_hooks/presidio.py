@@ -1332,18 +1332,27 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
         return response
 
-    async def _stream_apply_output_masking(
-        self,
-        response: AsyncIterable[object],
-        request_data: dict,
-    ) -> AsyncGenerator[object, None]:
-        """Apply Presidio masking to streaming output (apply_to_output=True path)."""
+    async def _mask_buffered_model_response_stream(
+        self, all_chunks: Sequence[ModelResponseStream], request_data: dict
+    ) -> tuple[object, ...]:
         from litellm.llms.base_llm.base_model_iterator import (
             convert_model_response_to_streaming,
         )
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponse
 
+        assembled: Final = stream_chunk_builder(chunks=list(all_chunks), messages=request_data.get("messages"))
+        if not isinstance(assembled, ModelResponse):
+            return tuple(all_chunks)
+        await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
+        return (convert_model_response_to_streaming(assembled),)
+
+    async def _stream_apply_output_masking(
+        self,
+        response: AsyncIterable[object],
+        request_data: dict,
+    ) -> AsyncGenerator[object, None]:
+        """Apply Presidio masking to streaming output (apply_to_output=True path)."""
         all_chunks: list[ModelResponseStream] = []
         passthrough_due_to_unknown_stream_shape = False
         try:
@@ -1390,21 +1399,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
                 return
 
-            assembled_model_response = stream_chunk_builder(chunks=all_chunks, messages=request_data.get("messages"))
-
-            if not isinstance(assembled_model_response, ModelResponse):
-                for chunk in all_chunks:
-                    yield chunk
-                return
-
-            await self._process_response_for_pii(
-                response=assembled_model_response,
-                request_data=request_data,
-                mode="mask",
-            )
-
-            mock_response_stream: Final = convert_model_response_to_streaming(assembled_model_response)
-            yield mock_response_stream
+            for masked_chunk in await self._mask_buffered_model_response_stream(all_chunks, request_data):
+                yield masked_chunk
 
         except Exception as e:
             if not all_chunks:
