@@ -8,6 +8,7 @@ mod handle;
 mod native;
 mod request;
 mod resolver;
+mod semantic;
 
 use litellm_cache::Error;
 use pyo3::{

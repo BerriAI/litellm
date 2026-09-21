@@ -6,6 +6,17 @@ use litellm_host_python::to_py;
 use pyo3::{PyTraverseError, PyVisit, prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
+tokio::task_local! {
+    static PREPARED_EMBEDDING: Result<Vec<f32>, Error>;
+}
+
+pub(super) fn with_prepared_embedding<F: Future>(
+    vector: Result<Vec<f32>, Error>,
+    future: F,
+) -> impl Future<Output = F::Output> {
+    PREPARED_EMBEDDING.scope(vector, future)
+}
+
 pub(super) struct PythonEmbedder(Py<PyAny>);
 
 impl PythonEmbedder {
@@ -34,7 +45,20 @@ impl PythonEmbedder {
         Ok(kwargs)
     }
 
-    fn extract(vector: Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
+    pub(super) fn async_embedding_coroutine(
+        &self,
+        py: Python<'_>,
+        prompt: &str,
+        metadata: &Map<String, Value>,
+    ) -> PyResult<Py<PyAny>> {
+        let kwargs = Self::metadata_kwargs(py, metadata)?;
+        self.0
+            .bind(py)
+            .call_method("_get_async_embedding", (prompt,), Some(&kwargs))
+            .map(Bound::unbind)
+    }
+
+    pub(super) fn extract(vector: Bound<'_, PyAny>) -> PyResult<Vec<f32>> {
         Ok(vector
             .extract::<Vec<f64>>()?
             .into_iter()
@@ -58,28 +82,36 @@ impl Embedder for PythonEmbedder {
 
     fn async_embed(
         &self,
-        prompt: &str,
-        metadata: &Map<String, Value>,
+        _prompt: &str,
+        _metadata: &Map<String, Value>,
     ) -> impl Future<Output = Result<Vec<f32>, Error>> + Send {
-        let coroutine = Python::attach(|py| {
-            let kwargs = Self::metadata_kwargs(py, metadata)?;
-            self.0
-                .bind(py)
-                .call_method("_get_async_embedding", (prompt,), Some(&kwargs))
-                .map(Bound::unbind)
-        })
-        .map_err(|_| Error::Unavailable);
-        async move {
-            let coroutine = coroutine?;
-            let awaited = Python::attach(|py| {
-                pyo3_async_runtimes::tokio::into_future(coroutine.into_bound(py))
+        let seeded = PREPARED_EMBEDDING
+            .try_with(Clone::clone)
+            .unwrap_or(Err(Error::Unavailable));
+        std::future::ready(seeded)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn async_embed_returns_the_seeded_vector_or_unavailable() {
+        let embedder = Python::attach(|py| PythonEmbedder::new(py.None()));
+        let metadata = Map::new();
+        let embedder_ref = &embedder;
+        let metadata_ref = &metadata;
+        assert_eq!(
+            with_prepared_embedding(Ok(vec![0.5f32, 0.25]), async move {
+                embedder_ref.async_embed("prompt", metadata_ref).await
             })
-            .map_err(|_| Error::Unavailable)?
-            .await
-            .map_err(|_| Error::Unavailable)?;
-            let vector = Python::attach(|py| awaited.extract::<Vec<f64>>(py))
-                .map_err(|_| Error::Unavailable)?;
-            Ok(vector.into_iter().map(|value| value as f32).collect())
-        }
+            .await,
+            Ok(vec![0.5, 0.25])
+        );
+        assert_eq!(
+            embedder.async_embed("prompt", &metadata).await,
+            Err(Error::Unavailable)
+        );
     }
 }

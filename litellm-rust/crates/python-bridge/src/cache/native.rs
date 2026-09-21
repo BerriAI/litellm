@@ -122,6 +122,13 @@ impl NativeResponseCache {
         }
     }
 
+    pub fn semantic_embedder(&self) -> Option<&PythonEmbedder> {
+        match self {
+            Self::RedisSemantic(cache) => Some(cache.backend().embedder()),
+            Self::Memory(_) | Self::Redis { .. } => None,
+        }
+    }
+
     pub fn embedder_object(&self) -> Option<&Py<PyAny>> {
         match self {
             Self::RedisSemantic(cache) => Some(cache.backend().embedder().object()),
