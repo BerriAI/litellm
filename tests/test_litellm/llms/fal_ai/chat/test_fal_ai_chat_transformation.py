@@ -103,26 +103,59 @@ def test_transform_request_passes_data_url_through():
     assert body["image_url"] == "data:image/png;base64,AAAA"
 
 
-def test_transform_request_uses_last_user_message():
+def test_transform_request_accepts_single_user_message():
     body = FalAIChatConfig().transform_request(
         model=MODEL,
         messages=[
             {
                 "role": "user",
-                "content": [{"type": "text", "text": "first"}, {"type": "image_url", "image_url": "https://a"}],
-            },
-            {"role": "assistant", "content": "an answer"},
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": "second"}, {"type": "image_url", "image_url": "https://b"}],
-            },
+                "content": [{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": "https://a"}],
+            }
         ],
         optional_params={},
         litellm_params={},
         headers={},
     )
-    assert body["prompt"] == "second"
-    assert body["image_url"] == "https://b"
+    assert body["prompt"] == "describe"
+    assert body["image_url"] == "https://a"
+
+
+def test_transform_request_rejects_system_message():
+    with pytest.raises(ValueError, match="exactly one user message"):
+        FalAIChatConfig().transform_request(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": "be terse"},
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "describe"}, {"type": "image_url", "image_url": "https://a"}],
+                },
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_transform_request_rejects_multi_turn_history():
+    with pytest.raises(ValueError, match="exactly one user message"):
+        FalAIChatConfig().transform_request(
+            model=MODEL,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "first"}, {"type": "image_url", "image_url": "https://a"}],
+                },
+                {"role": "assistant", "content": "an answer"},
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "second"}, {"type": "image_url", "image_url": "https://b"}],
+                },
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
 
 
 def test_transform_request_rejects_zero_images():

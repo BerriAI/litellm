@@ -53,14 +53,15 @@ def _image_part_url(part: Mapping[str, object]) -> str | None:
 
 
 def _prompt_and_image(messages: Sequence[AllMessageValues]) -> tuple[str, str]:
-    user_messages: Final = tuple(message for message in messages if message.get("role") == "user")
-    if not user_messages:
-        raise ValueError("fal_ai chat completions require a user message")
-    content: Final = user_messages[-1].get("content")
+    if len(messages) != 1 or messages[0].get("role") != "user":
+        raise ValueError(
+            "fal_ai chat completions accept exactly one user message; system prompts and multi-turn history are not supported"
+        )
+    content: Final = messages[0].get("content")
     if isinstance(content, str):
         if not content:
-            raise ValueError("fal_ai chat completions require text in the last user message")
-        raise ValueError("fal_ai chat completions require exactly one image_url content part in the last user message")
+            raise ValueError("fal_ai chat completions require text in the user message")
+        raise ValueError("fal_ai chat completions require exactly one image_url content part in the user message")
     parts: Final[tuple[Mapping[str, object], ...]] = (
         tuple(part for part in content if isinstance(part, Mapping)) if isinstance(content, Sequence) else ()
     )
@@ -71,9 +72,9 @@ def _prompt_and_image(messages: Sequence[AllMessageValues]) -> tuple[str, str]:
         url for part in parts if part.get("type") == "image_url" and (url := _image_part_url(part)) is not None
     )
     if not prompt:
-        raise ValueError("fal_ai chat completions require text in the last user message")
+        raise ValueError("fal_ai chat completions require text in the user message")
     if len(image_urls) != 1:
-        raise ValueError("fal_ai chat completions require exactly one image_url content part in the last user message")
+        raise ValueError("fal_ai chat completions require exactly one image_url content part in the user message")
     return prompt, image_urls[0]
 
 
