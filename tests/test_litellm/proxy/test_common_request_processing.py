@@ -28,6 +28,7 @@ from litellm.proxy.common_request_processing import (
     _buffer_first_chunk_honoring_disconnect,
     _cancel_llm_call_on_client_disconnect,
     _ClientDisconnectedBeforeFirstChunk,
+    attach_guardrail_information,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
@@ -52,6 +53,41 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+
+
+def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    response = litellm.ModelResponse()
+
+    attach_guardrail_information(
+        response=response,
+        request_metadata_bucket={"standard_logging_guardrail_information": recorded},
+    )
+
+    assert response.model_dump()["guardrail_information"] == recorded
+
+
+def test_attach_guardrail_information_reports_empty_list_when_nothing_ran():
+    response = litellm.ModelResponse()
+
+    attach_guardrail_information(response=response, request_metadata_bucket={})
+
+    assert response.model_dump()["guardrail_information"] == []
+
+
+def test_attach_guardrail_information_sets_key_on_dict_response():
+    recorded = [{"guardrail_name": "first", "guardrail_status": "success"}]
+    response = {"id": "x"}
+
+    attach_guardrail_information(
+        response=response,
+        request_metadata_bucket={"standard_logging_guardrail_information": recorded},
+    )
+
+    assert response == {"id": "x", "guardrail_information": recorded}
 
 
 class TestProxyBaseLLMRequestProcessing:

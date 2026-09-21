@@ -25,7 +25,7 @@ import httpx
 import orjson
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse, Response, StreamingResponse
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.types import Receive, Scope, Send
 
 import litellm
@@ -1372,6 +1372,18 @@ def _override_openai_response_model(
             str(e),
             exc_info=True,
         )
+
+
+def attach_guardrail_information(response: object, request_metadata_bucket: Mapping[str, object]) -> None:
+    recorded: Final = request_metadata_bucket.get("standard_logging_guardrail_information")
+    guardrail_information: Final = (
+        list(recorded) if isinstance(recorded, list) else []  # mutable-ok: response list API
+    )
+    if isinstance(response, dict):
+        response["guardrail_information"] = guardrail_information
+        return
+    if isinstance(response, BaseModel) and response.model_config.get("extra") == "allow":
+        setattr(response, "guardrail_information", guardrail_information)
 
 
 class CostBreakdownHeaderValues(NamedTuple):
@@ -2868,6 +2880,9 @@ class ProxyBaseLLMRequestProcessing:
 
         if isinstance(response, dict):
             response.pop("_hidden_params", None)
+
+        if request_metadata_bucket.get("include_guardrail_response") is True:
+            attach_guardrail_information(response=response, request_metadata_bucket=request_metadata_bucket)
 
         # Call response headers hook for non-streaming success
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
