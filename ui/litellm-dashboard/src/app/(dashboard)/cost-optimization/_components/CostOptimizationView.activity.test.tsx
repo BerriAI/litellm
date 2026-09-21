@@ -37,9 +37,14 @@ vi.mock("@/components/shared/charts", () => ({
   SEQUENTIAL_COLOR_RAMP: ["indigo"],
 }));
 
-vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", () => ({
-  PromptCachingPanel: () => <div data-testid="caching-settings" />,
-}));
+vi.mock("@/app/(dashboard)/router-settings/_components/general_settings", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("@/app/(dashboard)/router-settings/_components/general_settings")>();
+  return {
+    ...original,
+    PromptCachingPanel: () => <div data-testid="caching-settings" />,
+  };
+});
 
 vi.mock("./PromptCompressionTab", () => ({ __esModule: true, default: () => <div /> }));
 
