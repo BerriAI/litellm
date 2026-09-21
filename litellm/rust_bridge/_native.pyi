@@ -114,13 +114,22 @@ class _CacheTestHandle:
     @staticmethod
     def disk(directory: str) -> _CacheTestHandle: ...
     @staticmethod
+    def gcs(
+        bucket_name: str,
+        *,
+        gcs_path: str | None = None,
+        path_service_account: str | None = None,
+        endpoint: str | None = None,
+        token: str | None = None,
+    ) -> _CacheTestHandle: ...
+    @staticmethod
     def azure_blob(account_url: str, container: str) -> _CacheTestHandle: ...
     @staticmethod
     def redis_semantic(backend: object) -> _CacheTestHandle: ...
     @property
     def backend(
         self,
-    ) -> Literal["memory", "redis", "disk", "azure-blob", "redis_semantic"]: ...
+    ) -> Literal["memory", "redis", "gcs", "disk", "azure-blob", "redis_semantic"]: ...
     def _bind_facade(self, facade: object) -> None: ...
 
 @final
