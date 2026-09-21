@@ -166,6 +166,15 @@
     "tests/integration/providers/test_fal_ai_video_wire.py::test_fal_video_create_status_and_content_follow_queue_wire_contract": [
       "other.provider_wire.fal_ai.video_queue_create_status_and_content_download"
     ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_generation_sends_quality_and_size_and_charges_keyed_row": [
+      "other.provider_wire.fal_ai.gpt_image_generation_quality_size_wire_and_keyed_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_flux_dev_generation_targets_dev_endpoint_and_charges_per_image": [
+      "other.provider_wire.fal_ai.flux_dev_endpoint_and_per_image_pricing"
+    ],
+    "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row": [
+      "other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing"
+    ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_saved_headers_reach_real_mcp_tool_and_survive_unrelated_edit": [
       "mcp.call_tool.saved_headers.reach_actual_transport"
     ],
