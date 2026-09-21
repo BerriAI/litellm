@@ -2525,7 +2525,9 @@ name = "litellm-cache-disk"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
+ "py_literal",
  "rand 0.8.7",
+ "rstest",
  "rusqlite",
  "serde-pickle",
  "serde_json",
