@@ -148,7 +148,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
                         )
                     )
 
-        model_response.data = cast(list[OpenAIImage], data_list)  # pyright: ignore[reportAttributeAccessIssue]  # legacy OpenAI image response type
+        model_response.data = cast(list[OpenAIImage], data_list)
         if "usageMetadata" in response_json:
             model_response.usage = transform_gemini_image_usage(response_json["usageMetadata"])
         return model_response

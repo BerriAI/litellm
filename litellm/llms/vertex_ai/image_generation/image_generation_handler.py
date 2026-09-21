@@ -40,7 +40,7 @@ class VertexImageGeneration(VertexLLM):
             image_object = Image(b64_json=bytes_base64_encoded)
             response_data.append(image_object)
 
-        model_response.data = response_data  # pyright: ignore[reportAttributeAccessIssue]  # legacy OpenAI image response type
+        model_response.data = response_data
         return model_response
 
     def transform_optional_params(self, optional_params: dict | None) -> dict:
