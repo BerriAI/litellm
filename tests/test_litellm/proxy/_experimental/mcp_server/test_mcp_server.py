@@ -1992,6 +1992,7 @@ async def test_streamable_http_session_manager_is_stateless():
     (
         ("POST", b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}', True),
         ("POST", b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}', False),
+        ("POST", b"", False),
         ("GET", b"", False),
         ("DELETE", b"", False),
     ),
@@ -2463,6 +2464,68 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
     # All chunks must still reach the downstream handler via replay+stream.
     total_streamed = sum(len(b) for b in stateless_received_chunks)
     assert total_streamed == len(first_chunk) + sum(len(b) for b in oversized_tail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ("initialize", "tools/call"))
+@pytest.mark.parametrize("chunked", (False, True))
+@pytest.mark.parametrize(
+    ("character", "bytes_before_cap"),
+    (("é", 0), ("é", 1), ("中", 1), ("中", 2), ("😀", 1), ("😀", 2), ("😀", 3)),
+)
+async def test_mcp_routing_peek_survives_multibyte_char_split_at_cap(
+    method: str, chunked: bool, character: str, bytes_before_cap: int
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+
+    params: Final = (
+        {
+            "protocolVersion": LATEST_HANDSHAKE_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "<<text>>", "version": "1"},
+        }
+        if method == "initialize"
+        else {"name": "update_full_document", "arguments": {"markdown": "<<text>>"}}
+    )
+    template: Final = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    prefix, suffix = template.split(b"<<text>>")
+    cap: Final = mcp_module._MCP_ROUTING_PEEK_MAX_BYTES
+    body: Final = prefix + b"x" * (cap - bytes_before_cap - len(prefix)) + character.encode() + b"tail" + suffix
+    chunks: Final = (body[: cap - 1], body[cap - 1 : cap], body[cap:]) if chunked else (body,)
+    messages: Final[tuple[Message, ...]] = tuple(
+        {"type": "http.request", "body": chunk, "more_body": index < len(chunks) - 1}
+        for index, chunk in enumerate(chunks)
+    )
+    receive: Final = AsyncMock(side_effect=messages)
+    send: Final = AsyncMock()
+    received: Final[asyncio.Future[bytes]] = asyncio.get_running_loop().create_future()
+
+    async def handle_request(_: Scope, downstream_receive: Receive, outgoing: Send) -> None:
+        assert receive.await_count == (2 if chunked else 1)
+        received.set_result(await _drain_body(downstream_receive))
+        await outgoing({"type": "http.response.start", "status": 200, "headers": []})
+        await outgoing({"type": "http.response.body", "body": b"{}"})
+
+    stateless_handle: Final = AsyncMock(side_effect=handle_request)
+    stateful_handle: Final = AsyncMock()
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    with (
+        _client_allowlist_patches({}, None),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
+        ),
+    ):
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
+
+    assert send.call_args_list[0].args[0]["status"] == 200
+    assert received.result() == body
+    stateless_handle.assert_awaited_once()
+    stateful_handle.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -4016,7 +4079,12 @@ def test_jsonrpc_text_has_top_level_method_ignores_nested_method():
 
 
 @pytest.mark.asyncio
-async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
+@pytest.mark.parametrize("response_field", ("result", "error"))
+@pytest.mark.parametrize(("character", "bytes_before_cap"), (("", 0), ("x", 0), ("é", 1), ("中", 2), ("😀", 3)))
+@pytest.mark.parametrize("cancel_request", (False, True))
+async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
+    response_field: str, character: str, bytes_before_cap: int, cancel_request: bool
+) -> None:
     """Regression: a large JSON-RPC *response* POST whose ``result`` payload
     nests a ``method`` key must skip the per-session lock so it does not
     deadlock behind the in-flight request POST that is holding the lock while
@@ -4044,7 +4112,7 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
     async def handle(s, r, se):
         msg = await r()
         body = msg.get("body", b"") or b""
-        if b'"result"' in body:
+        if body == response_body:
             response_handled.set()
         else:
             request_in_handle.set()
@@ -4071,9 +4139,16 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
     # A JSON-RPC response larger than the routing peek cap so it can't be fully
     # parsed, with a nested "method" key in the first bytes to trip a flat
     # substring heuristic.
-    response_body = (
-        '{"jsonrpc":"2.0","id":99,"result":{"toolResult":{"method":"GET","payload":"' + ("x" * 5000) + '"}}}'
+    response_prefix: Final = (
+        '{"jsonrpc":"2.0","id":99,"' + response_field
+        + '":{"code":-32000,"message":"test","data":{"method":"GET","payload":"'
     ).encode()
+    response_body: Final = (
+        response_prefix
+        + b"x" * (mcp_server._MCP_ROUTING_PEEK_MAX_BYTES - bytes_before_cap - len(response_prefix) if character else 0)
+        + character.encode()
+        + b'tail"}}}'
+    )
 
     try:
         with (
@@ -4101,8 +4176,17 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
             # lock held by req_task and this wait would time out (deadlock).
             await asyncio.wait_for(response_handled.wait(), timeout=1.0)
 
-            gate.set()
-            await asyncio.gather(req_task, resp_task)
+            await resp_task
+            assert not req_task.done()
+            if cancel_request:
+                req_task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await req_task
+            else:
+                gate.set()
+                await req_task
+            assert not mcp_server._stateful_session_locks[session_id].locked()
+            assert session_id not in mcp_server._stateful_session_active_request_counts
     finally:
         gate.set()
         mcp_server._stateful_session_auth_contexts.pop(session_id, None)
