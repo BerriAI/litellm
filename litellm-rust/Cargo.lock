@@ -2503,6 +2503,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cache-valkey-semantic"
+version = "0.1.0"
+dependencies = [
+ "litellm-cache",
+ "litellm-cache-response",
+ "r2d2",
+ "redis",
+ "redis-test",
+ "rstest",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "litellm-callbacks-legacy-python"
 version = "0.1.0"
 dependencies = [
