@@ -2116,31 +2116,17 @@ class CustomStreamWrapper:
                     complete_streaming_response = None
 
             if complete_streaming_response is not None and isinstance(self.model, str) and self.model:
-                litellm_params = self.logging_obj.model_call_details.get(
-                    "litellm_params", {}
-                )
+                litellm_params = self.logging_obj.model_call_details.get("litellm_params", {})
                 proxy_request = litellm_params.get("proxy_server_request", {})
-                request_body = (
-                    proxy_request.get("body", {})
-                    if isinstance(proxy_request, dict)
-                    else {}
-                )
-                client_requested_model = (
-                    request_body.get("model")
-                    if isinstance(request_body, dict)
-                    else None
-                )
+                request_body = proxy_request.get("body", {}) if isinstance(proxy_request, dict) else {}
+                client_requested_model = request_body.get("model") if isinstance(request_body, dict) else None
 
                 assembled_model = complete_streaming_response.model
                 builder_recovered_routed_model = (
                     isinstance(assembled_model, str)
                     and bool(assembled_model)
                     and any(
-                        (
-                            chunk.get("model")
-                            if isinstance(chunk, dict)
-                            else getattr(chunk, "model", None)
-                        )
+                        (chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None))
                         == assembled_model
                         for chunk in self.chunks[1:]
                     )
