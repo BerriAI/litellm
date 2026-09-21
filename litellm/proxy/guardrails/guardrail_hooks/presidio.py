@@ -11,7 +11,7 @@
 import asyncio
 import json
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
@@ -1395,44 +1395,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 for buffered_chunk in buffered_chunks:
                     yield buffered_chunk
                 return
-            if raw_chunks:
-                if is_sse_error_stream(raw_chunks) or not is_anthropic_sse_stream(raw_chunks):
-                    verbose_proxy_logger.warning(
-                        "Presidio apply_to_output: raw streaming response was not an Anthropic SSE stream. "
-                        "Output PII masking was skipped for this response."
-                    )
-                    for chunk in raw_chunks:
-                        yield chunk
-                    return
-
-                assembled_anthropic_response = assemble_anthropic_sse_stream(raw_chunks, restore_identity=True)
-                if assembled_anthropic_response is None:
-                    verbose_proxy_logger.warning(
-                        "Presidio apply_to_output: Anthropic SSE stream could not be assembled. "
-                        "Output PII masking was skipped for this response."
-                    )
-                    for chunk in raw_chunks:
-                        yield chunk
-                    return
-
-                pre_text = model_response_text(assembled_anthropic_response)
-                process_response_for_pii: Final = cast(
-                    Callable[[ModelResponse, dict[str, object], Literal["mask", "unmask"]], Awaitable[ModelResponse]],
-                    self._process_response_for_pii,
-                )
-                await process_response_for_pii(
-                    assembled_anthropic_response,
-                    cast(dict[str, object], request_data),
-                    "mask",
-                )
-                if model_response_text(assembled_anthropic_response) != pre_text:
-                    for chunk in anthropic_sse_chunks_from_response(assembled_anthropic_response):
-                        yield chunk
-                else:
-                    for chunk in raw_chunks:
-                        yield chunk
-                return
-            if not model_chunks:
+            if not buffered_chunks:
                 verbose_proxy_logger.warning(
                     "Presidio apply_to_output: streaming response contained no "
                     "ModelResponseStream chunks (e.g. raw SSE bytes or an empty "
@@ -1440,22 +1403,48 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     "response."
                 )
                 return
-
-            assembled_model_response = stream_chunk_builder(chunks=model_chunks, messages=request_data.get("messages"))
-
-            if not isinstance(assembled_model_response, ModelResponse):
-                for chunk in model_chunks:
+            anthropic_sse: Final = (
+                bool(raw_chunks) and not is_sse_error_stream(raw_chunks) and is_anthropic_sse_stream(raw_chunks)
+            )
+            if raw_chunks and not anthropic_sse:
+                verbose_proxy_logger.warning(
+                    "Presidio apply_to_output: raw streaming response was not an Anthropic SSE stream. "
+                    "Output PII masking was skipped for this response."
+                )
+                for chunk in raw_chunks:
                     yield chunk
                 return
 
+            assembled_model_response: Final = (
+                assemble_anthropic_sse_stream(raw_chunks, restore_identity=True)
+                if anthropic_sse
+                else stream_chunk_builder(chunks=model_chunks, messages=request_data.get("messages"))
+            )
+            if not isinstance(assembled_model_response, ModelResponse):
+                if anthropic_sse:
+                    verbose_proxy_logger.warning(
+                        "Presidio apply_to_output: Anthropic SSE stream could not be assembled. "
+                        "Output PII masking was skipped for this response."
+                    )
+                for chunk in buffered_chunks:
+                    yield chunk
+                return
+
+            pre_text: Final = model_response_text(assembled_model_response)
             await self._process_response_for_pii(
                 response=assembled_model_response,
                 request_data=request_data,
                 mode="mask",
             )
-
-            mock_response_stream: Final = convert_model_response_to_streaming(assembled_model_response)
-            yield mock_response_stream
+            if not anthropic_sse:
+                yield convert_model_response_to_streaming(assembled_model_response)
+                return
+            for chunk in (
+                anthropic_sse_chunks_from_response(assembled_model_response)
+                if model_response_text(assembled_model_response) != pre_text
+                else raw_chunks
+            ):
+                yield chunk
 
         except Exception as e:
             verbose_proxy_logger.error("Error masking streaming PII output: %s", e)
