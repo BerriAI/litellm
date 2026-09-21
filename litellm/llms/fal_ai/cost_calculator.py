@@ -101,10 +101,8 @@ def _keyed_cost_per_image(
     rows: Final = _keyed_rows(model, quality)
     if not rows:
         return None
-    default_dimensions: Final = _parse_keyed_dimensions(FAL_TEXT_TO_IMAGE_DEFAULT_SIZE)
-    assert default_dimensions is not None
     target_dimensions: Final = (
-        _image_dimensions(image) or _parse_keyed_dimensions(_keyed_size(optional_params)) or default_dimensions
+        _image_dimensions(image) or _parse_keyed_dimensions(_keyed_size(optional_params)) or _DEFAULT_KEYED_DIMENSIONS
     )
     target_pixels: Final = target_dimensions[0] * target_dimensions[1]
     return min(rows, key=lambda row: (abs(row[0] * row[1] - target_pixels), row[0] * row[1]))[2]
