@@ -18,6 +18,7 @@ import pytest
 import litellm
 from litellm.anthropic_beta_headers_manager import (
     filter_and_transform_beta_headers,
+    update_headers_with_filtered_beta,
     update_request_with_filtered_beta,
 )
 
@@ -511,3 +512,20 @@ class TestAnthropicBetaHeadersFiltering:
             assert (
                 "unknown-header-123" not in filtered
             ), f"Unknown header should not be in result for {provider}"
+
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+    def test_blank_anthropic_beta_header_is_removed(self, provider):
+        headers = {"anthropic-beta": "", "anthropic-version": "2023-06-01"}
+
+        assert update_headers_with_filtered_beta(headers, provider) == {"anthropic-version": "2023-06-01"}
+
+    @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
+    def test_whitespace_only_anthropic_beta_header_is_removed(self, provider):
+        headers = {"anthropic-beta": " , ", "anthropic-version": "2023-06-01"}
+
+        assert update_headers_with_filtered_beta(headers, provider) == {"anthropic-version": "2023-06-01"}
+
+    def test_absent_anthropic_beta_header_is_left_alone(self):
+        headers = {"anthropic-version": "2023-06-01"}
+
+        assert update_headers_with_filtered_beta(headers, "bedrock_mantle") == {"anthropic-version": "2023-06-01"}
