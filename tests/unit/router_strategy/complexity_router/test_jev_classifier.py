@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import datetime
 from typing import Final, NoReturn
 from unittest.mock import create_autospec
@@ -297,6 +298,84 @@ async def test_jev_uses_bounded_history_and_separates_operator_instructions(incl
     assert ("assistant context" in state) is include_assistant
     assert "operator-only rubric" not in state
     assert "operator-only rubric" in str(captured[0]["questions"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fallback", "expected_model", "expected_cause"),
+    (
+        (
+            {"tier_definitions": [{"name": "SIMPLE"}, {"name": "REASONING"}], "fallback_tier": "REASONING"},
+            "deep",
+            "classifier_fallback",
+        ),
+        ({"classifier_fallback": "default_model", "default_model": "deep"}, "deep", "default_model_fallback"),
+        ({"classifier_fallback": "heuristic"}, "cheap", "heuristic_scorer"),
+    ),
+)
+async def test_jev_encrypted_task_skips_provider_without_disabling_plaintext_classification(
+    fallback: Mapping[str, object], expected_model: str, expected_cause: str
+) -> None:
+    transport: Final = create_autospec(httpx.AsyncBaseTransport, instance=True)
+    transport.handle_async_request.return_value = httpx.Response(
+        200, json={"answers": {"tier": _answer().model_dump()}}
+    )
+    handler: Final = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=transport)
+    router: Final = ComplexityRouter(
+        "jev-encrypted",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "jev",
+            "jev_classifier_config": {},
+            "tiers": {"SIMPLE": "cheap", "REASONING": "deep"},
+            "session_affinity": False,
+            "deployment_affinity": False,
+            **fallback,
+        },
+        jev_client=HttpJevClassifierClient("test", "https://typesafe.test", handler),
+        derive_savings_baseline=False,
+    )
+    request: Final = {
+        "input": [
+            {
+                "type": "agent_message",
+                "author": "/root",
+                "recipient": "/root/child",
+                "content": [
+                    {"type": "input_text", "text": "Message Type: NEW_TASK\nPayload:\nHello"},
+                    {"type": "encrypted_content", "encrypted_content": "opaque-task"},
+                ],
+            },
+            {"role": "user", "content": "<environment_context>cwd=/repo</environment_context>"},
+        ],
+        "metadata": {"user_agent": "codex-tui"},
+    }
+    original: Final = deepcopy(request)
+    try:
+        result: Final = await router.async_pre_routing_hook(model="jev-encrypted", request_kwargs=request)
+        assert result is not None and result.model == expected_model
+        assert result.routing_decision is not None
+        assert result.routing_decision["cause"] == expected_cause
+        assert result.routing_decision.get("classifier_cost") is None
+        assert result.messages is None
+        assert request == original
+        transport.handle_async_request.assert_not_awaited()
+
+        plaintext: Final = await router.async_pre_routing_hook(
+            model="jev-encrypted",
+            request_kwargs={**request, "input": [*request["input"], {"role": "user", "content": "Say hello again"}]},
+        )
+        assert plaintext is not None and plaintext.model == "cheap"
+        assert plaintext.routing_decision is not None
+        assert plaintext.routing_decision["cause"] == "jev_classifier"
+        transport.handle_async_request.assert_awaited_once()
+        sent: Final = transport.handle_async_request.call_args.args[0]
+        assert isinstance(sent, httpx.Request)
+        assert "Say hello again" in sent.content.decode()
+    finally:
+        await GLOBAL_LOGGING_WORKER.flush()
+        await handler.client.aclose()
 
 
 @pytest.mark.asyncio
