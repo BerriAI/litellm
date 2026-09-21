@@ -99,35 +99,29 @@ impl NativeResponseCache {
 
     pub fn namespace(&self) -> Option<&str> {
         match self {
-            Self::Memory(_) | Self::AzureBlob(_) => None,
+            Self::Memory(_) | Self::Disk(_) | Self::AzureBlob(_) => None,
             Self::Redis { cache, .. } => cache.backend().namespace(),
-            Self::Disk(_) => None,
         }
     }
 
     pub fn topology(&self) -> Option<&RedisTopology> {
         match self {
-            Self::Memory(_) | Self::AzureBlob(_) => None,
+            Self::Memory(_) | Self::Disk(_) | Self::AzureBlob(_) => None,
             Self::Redis { cache, .. } => Some(cache.backend().topology()),
-            Self::Disk(_) => None,
         }
     }
 
     pub fn capacity(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
-            Self::Redis { .. } => None,
-            Self::Disk(_) => None,
-            Self::AzureBlob(_) => None,
+            Self::Redis { .. } | Self::Disk(_) | Self::AzureBlob(_) => None,
         }
     }
 
     pub fn max_entry_bytes(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => cache.backend().max_entry_bytes(),
-            Self::Redis { .. } => None,
-            Self::Disk(_) => None,
-            Self::AzureBlob(_) => None,
+            Self::Redis { .. } | Self::Disk(_) | Self::AzureBlob(_) => None,
         }
     }
 
@@ -137,7 +131,6 @@ impl NativeResponseCache {
                 cache,
                 buffer: flush_size.map(|flush_size| Arc::new(WriteBuffer::new(flush_size))),
             },
-            disk @ Self::Disk(_) => disk,
             other => other,
         }
     }
