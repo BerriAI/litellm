@@ -357,7 +357,7 @@ class TestWordFormBudgetDurations(unittest.TestCase):
 
     def test_word_forms_match_canonical_int_unit_forms(self):
         base_time = datetime(2023, 5, 17, 15, 20, 30, tzinfo=timezone.utc)
-        for word, canonical in (("hourly", "1d"), ("daily", "24h"), ("weekly", "7d"), ("monthly", "30d")):
+        for word, canonical in (("hourly", "1h"), ("daily", "1d"), ("weekly", "7d"), ("monthly", "30d")):
             self.assertEqual(
                 get_next_standardized_reset_time(word, base_time, "UTC"),
                 get_next_standardized_reset_time(canonical, base_time, "UTC"),
