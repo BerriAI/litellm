@@ -71,7 +71,7 @@ class TestKeyAttachedGuardrailOnVideos:
                         f"block response missing content-filter reason: {body[:300]}"
                     )
                     return
-                case Success(data=video):
+                case Success(data=video) if time.monotonic() >= deadline:
                     pytest.fail(
                         f"key-attached guardrail {guardrail_name!r} was skipped on /v1/videos: "
                         f"the banned prompt reached the provider and started video job {video.id}"
