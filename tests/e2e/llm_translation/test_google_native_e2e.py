@@ -1,17 +1,39 @@
+"""Live e2e: the Gemini-native generateContent routes through the gateway.
+
+Google's own SDKs read these routes, and the streaming test asserts the exact SSE
+framing they expect (no doubled ``data:`` prefix, no bytes literal, no OpenAI
+``[DONE]`` sentinel), which an SDK would hide, so this passthrough surface stays on
+the shared transport.
+"""
+
 from __future__ import annotations
 
-import pytest
-from pydantic import BaseModel
+from typing import Literal
 
+import pytest
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
-from endpoints_client import EndpointsClient
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
+from proxy_client import ProxyClient
+from pydantic import BaseModel
 
 pytestmark = pytest.mark.e2e
 
 UPSTREAM_MODEL = "gemini/gemini-2.5-flash"
+
+
+class _GenerateContentPart(BaseModel):
+    text: str
+
+
+class _GenerateContentContent(BaseModel):
+    role: Literal["user"] = "user"
+    parts: tuple[_GenerateContentPart, ...]
+
+
+class _GenerateContentBody(BaseModel):
+    contents: tuple[_GenerateContentContent, ...]
 
 
 class _StreamPart(BaseModel):
@@ -30,14 +52,25 @@ class _StreamEvent(BaseModel):
     candidates: tuple[_StreamCandidate, ...] = ()
 
 
-def _managed_deployment(client: EndpointsClient, resources: ResourceManager) -> str:
+def _managed_deployment(proxy: ProxyClient, resources: ResourceManager) -> str:
     model = f"e2e-google-native-{unique_marker()}"
-    model_id = client.create_model(
+    model_id = proxy.create_model(
         model,
         LiteLLMParamsBody(model=UPSTREAM_MODEL, api_key="os.environ/GEMINI_API_KEY"),
     )
-    resources.defer(lambda: client.delete_model(model_id))
+    resources.defer(lambda: proxy.delete_model(model_id))
     return model
+
+
+def _generate_content(proxy: ProxyClient, key: str, model: str, text: str, *, stream: bool = False) -> StreamingResponse:
+    operation = "streamGenerateContent" if stream else "generateContent"
+    body = _GenerateContentBody(contents=(_GenerateContentContent(parts=(_GenerateContentPart(text=text),)),))
+    return proxy.transport.send(
+        f"/v1beta/models/{model}:{operation}",
+        headers=proxy.transport.bearer(key),
+        json=body,
+        stream=stream,
+    )
 
 
 def _streamed_text(result: StreamingResponse) -> str:
@@ -54,15 +87,13 @@ class TestGoogleNativeGenerateContent:
     @pytest.mark.covers("llm.google_native.gemini.basic.nonstream.cost_logged")
     def test_generate_content_returns_response_cost_header(
         self,
-        endpoints_client: EndpointsClient,
+        proxy: ProxyClient,
         resources: ResourceManager,
         scoped_key: str,
     ) -> None:
-        model = _managed_deployment(endpoints_client, resources)
+        model = _managed_deployment(proxy, resources)
 
-        result = endpoints_client.generate_content(
-            scoped_key, model, f"Reply with the single word ok. {unique_marker()}"
-        )
+        result = _generate_content(proxy, scoped_key, model, f"Reply with the single word ok. {unique_marker()}")
 
         require_successful_call(result)
         assert result.call_id, "generateContent must stamp x-litellm-call-id"
@@ -75,13 +106,14 @@ class TestGoogleNativeGenerateContent:
     @pytest.mark.covers("llm.google_native.gemini.basic.stream.works")
     def test_stream_generate_content_frames_sse_the_way_google_sdks_expect(
         self,
-        endpoints_client: EndpointsClient,
+        proxy: ProxyClient,
         resources: ResourceManager,
         scoped_key: str,
     ) -> None:
-        model = _managed_deployment(endpoints_client, resources)
+        model = _managed_deployment(proxy, resources)
 
-        result = endpoints_client.generate_content(
+        result = _generate_content(
+            proxy,
             scoped_key,
             model,
             f"Count from one to five, one number per line. {unique_marker()}",
