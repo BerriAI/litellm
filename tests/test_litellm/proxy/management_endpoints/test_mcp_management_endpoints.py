@@ -7829,10 +7829,6 @@ class TestDeleteMCPGatewaySessions:
 class TestGetMcpToolsWireShape:
     @pytest.mark.asyncio
     async def test_get_mcp_tools_returns_each_tool_in_mcp_wire_spelling(self):
-        """GET /v1/mcp/tools hands scripts each tool in the MCP wire spelling (`inputSchema`,
-        `outputSchema`, `_meta`), the shape v1.102.0 returned and the shape /mcp-rest/tools/list and the
-        JSON-RPC tools/list still return. SDK 2 renamed the Tool model's Python attributes to snake_case
-        behind camelCase aliases, so dumping attribute names leaked `input_schema` to every reader."""
         from mcp.types import ListToolsResult, Tool
 
         add_schema = {"type": "object", "properties": {"a": {"type": "integer"}}, "required": ["a"]}
