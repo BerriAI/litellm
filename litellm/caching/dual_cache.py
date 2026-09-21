@@ -139,7 +139,7 @@ class DualCache(BaseCache):
         except Exception as e:
             print_verbose(e)
 
-    def increment_cache(self, key, value: int, local_only: bool = False, **kwargs) -> float:
+    def increment_cache(self, key, value: int, local_only: bool = False, **kwargs) -> int:
         """
         Key - the key in cache
 
@@ -148,15 +148,14 @@ class DualCache(BaseCache):
         Returns - int - the incremented value
         """
         try:
-            if self.redis_cache is not None and local_only is False:
-                result: Final = self.redis_cache.increment_cache(key, value, **kwargs)
-                if self.in_memory_cache is not None:
-                    self.in_memory_cache.set_cache(key, result, **kwargs)
-                return result
-
+            result: int = value
             if self.in_memory_cache is not None:
-                return self.in_memory_cache.increment_cache(key, value, **kwargs)
-            return value
+                result = self.in_memory_cache.increment_cache(key, value, **kwargs)
+
+            if self.redis_cache is not None and local_only is False:
+                result = self.redis_cache.increment_cache(key, value, **kwargs)
+
+            return result
         except Exception as e:
             verbose_logger.error("LiteLLM Cache: Excepton async add_cache: %s", e)
             raise e
@@ -430,30 +429,29 @@ class DualCache(BaseCache):
         Returns - the incremented value, or None if no cache backend is
         available (in_memory_cache is None and Redis failed/is absent).
         """
+        result: float | None = None
         try:
+            if self.in_memory_cache is not None:
+                result = await self.in_memory_cache.async_increment(key, value, **kwargs)
+
             if self.redis_cache is not None and local_only is False:
-                result: Final = await self.redis_cache.async_increment(
+                result = await self.redis_cache.async_increment(
                     key,
                     value,
                     parent_otel_span=parent_otel_span,
                     ttl=kwargs.get("ttl", None),
                     refresh_ttl=refresh_ttl,
                 )
-                if self.in_memory_cache is not None:
-                    await self.in_memory_cache.async_set_cache(key, result, **kwargs)
-                return result
 
-            if self.in_memory_cache is not None:
-                return await self.in_memory_cache.async_increment(key, value, **kwargs)
-            return None
+            return result
         except Exception as e:
             log_redis_failure(
                 verbose_logger,
                 logging.WARNING,
-                "Redis async_increment_cache failed; local counter unchanged",
+                "Redis async_increment_cache failed, falling back to in-memory result",
                 e,
             )
-            return None
+            return result
 
     async def async_increment_cache_pipeline(
         self,
@@ -462,32 +460,29 @@ class DualCache(BaseCache):
         parent_otel_span: Span | None = None,
         **kwargs,
     ) -> list[float] | None:
+        result: list[float] | None = None
         try:
-            if self.redis_cache is not None and local_only is False:
-                result: Final = await self.redis_cache.async_increment_pipeline(
-                    increment_list=increment_list,
-                    parent_otel_span=parent_otel_span,
-                )
-                if result is not None and self.in_memory_cache is not None:
-                    await self.in_memory_cache.async_set_cache_pipeline(
-                        cache_list=tuple((increment["key"], value) for increment, value in zip(increment_list, result))
-                    )
-                return result
-
             if self.in_memory_cache is not None:
-                return await self.in_memory_cache.async_increment_pipeline(
+                result = await self.in_memory_cache.async_increment_pipeline(
                     increment_list=increment_list,
                     parent_otel_span=parent_otel_span,
                 )
-            return None
+
+            if self.redis_cache is not None and local_only is False:
+                result = await self.redis_cache.async_increment_pipeline(
+                    increment_list=increment_list,
+                    parent_otel_span=parent_otel_span,
+                )
+
+            return result
         except Exception as e:
             log_redis_failure(
                 verbose_logger,
                 logging.WARNING,
-                "Redis async_increment_cache_pipeline failed; local counters unchanged",
+                "Redis async_increment_cache_pipeline failed, falling back to in-memory result",
                 e,
             )
-            return None
+            return result
 
     async def async_set_cache_sadd(self, key, value: list, local_only: bool = False, **kwargs) -> None:
         """

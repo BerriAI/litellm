@@ -494,30 +494,6 @@ async def test_async_increment_cache_returns_none_when_no_in_memory_cache_and_re
     )
 
 
-@pytest.mark.asyncio
-async def test_failed_redis_increment_does_not_change_the_local_counter():
-    memory = InMemoryCache()
-    memory.set_cache("counter", 10)
-    redis_cache = MagicMock(spec=RedisCache)
-    redis_cache.async_increment = AsyncMock(side_effect=RuntimeError("redis down"))
-    cache = DualCache(in_memory_cache=memory, redis_cache=redis_cache)
-
-    assert await cache.async_increment_cache("counter", 2) is None
-    assert memory.get_cache("counter") == 10
-
-
-@pytest.mark.asyncio
-async def test_successful_redis_increment_replaces_the_local_counter_with_the_authoritative_value():
-    memory = InMemoryCache()
-    memory.set_cache("counter", 10)
-    redis_cache = MagicMock(spec=RedisCache)
-    redis_cache.async_increment = AsyncMock(return_value=42.0)
-    cache = DualCache(in_memory_cache=memory, redis_cache=redis_cache)
-
-    assert await cache.async_increment_cache("counter", 2) == 42.0
-    assert memory.get_cache("counter") == 42.0
-
-
 def test_dual_cache_late_attach_redis_wires_writes_and_ttl_sync():
     """
     Typical lazy startup (sync): DualCache runs with in-memory only, then Redis
@@ -748,7 +724,7 @@ async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplo
     assert [(r.levelno, r.getMessage()) for r in visible] == [
         (
             logging.WARNING,
-            "Redis async_increment_cache_pipeline failed; local counters unchanged:"
+            "Redis async_increment_cache_pipeline failed, falling back to in-memory result:"
             " Timeout reading from 127.0.0.1:6379",
         )
     ]
@@ -762,7 +738,7 @@ async def test_redis_timeouts_falling_back_to_memory_log_once_per_interval(caplo
     assert [(r.levelno, r.getMessage()) for r in caplog.records] == [
         (
             logging.WARNING,
-            "Redis async_increment_cache failed; local counter unchanged: Timeout reading from 127.0.0.1:6379"
+            "Redis async_increment_cache failed, falling back to in-memory result: Timeout reading from 127.0.0.1:6379"
             " (199 more Redis timeouts since the previous Redis timeout line were logged at DEBUG)",
         )
     ]

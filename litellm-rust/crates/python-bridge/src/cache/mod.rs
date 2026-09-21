@@ -10,7 +10,7 @@ use pyo3::{
     PyTraverseError, PyVisit,
     exceptions::{PyRuntimeError, PyTypeError, PyValueError},
     prelude::*,
-    types::PyDict,
+    types::{PyDict, PyList},
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -309,7 +309,7 @@ impl ResolvedCache {
                 .bind(py)
                 .call_method(
                     "batch_get_cache",
-                    (),
+                    (callback_keys(py, requests)?,),
                     Some(self::callback_kwargs(callback_kwargs)?),
                 )
                 .map(Bound::unbind),
@@ -383,7 +383,7 @@ impl ResolvedCache {
             }
             CacheBinding::PythonCallback(object) => object.bind(py).call_method(
                 "async_batch_get_cache",
-                (),
+                (callback_keys(py, requests)?,),
                 Some(self::callback_kwargs(callback_kwargs)?),
             ),
         }
@@ -416,11 +416,24 @@ impl ResolvedCache {
                     cache_error,
                 )
             }
-            CacheBinding::PythonCallback(object) => object.bind(py).call_method(
-                "async_set_cache_pipeline",
-                (responses,),
-                Some(self::callback_kwargs(callback_kwargs)?),
-            ),
+            CacheBinding::PythonCallback(object) => {
+                let keys = callback_keys(py, requests)?;
+                let responses = responses.try_iter()?.collect::<PyResult<Vec<_>>>()?;
+                if keys.len() != responses.len() {
+                    return Err(PyValueError::new_err(
+                        "batch cache requests and responses must have equal lengths",
+                    ));
+                }
+                let cache_list = PyList::empty(py);
+                for (key, response) in keys.iter().zip(responses) {
+                    cache_list.append((key, response))?;
+                }
+                object.bind(py).call_method(
+                    "async_set_cache_pipeline",
+                    (cache_list,),
+                    Some(self::callback_kwargs(callback_kwargs)?),
+                )
+            }
         }
     }
 
@@ -469,6 +482,18 @@ fn callback_kwargs<'a, 'py>(
     kwargs.ok_or_else(|| {
         PyTypeError::new_err("Python cache callbacks require their original callback_kwargs")
     })
+}
+
+fn callback_keys<'py>(
+    py: Python<'py>,
+    requests: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyList>> {
+    PyList::new(
+        py,
+        self::requests(requests)?
+            .into_iter()
+            .map(|request| litellm_cache_response::cache_key(&request.key)),
+    )
 }
 
 fn ready_none(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {

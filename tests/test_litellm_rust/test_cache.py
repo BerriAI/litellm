@@ -275,6 +275,45 @@ async def test_native_batch_lookup_and_store_report_partial_hits() -> None:
     }
 
 
+async def test_python_batch_callbacks_receive_keys_and_key_value_pairs() -> None:
+    first: Final = object()
+    second: Final = object()
+
+    class CustomCache:
+        def batch_get_cache(self, keys: list[str], *, marker: object) -> tuple[list[str], object]:
+            return keys, marker
+
+        async def async_batch_get_cache(self, keys: list[str], *, marker: object) -> tuple[list[str], object]:
+            return keys, marker
+
+        async def async_set_cache_pipeline(
+            self, cache_list: list[tuple[str, object]], *, marker: object
+        ) -> tuple[list[tuple[str, object]], object]:
+            return cache_list, marker
+
+    marker: Final = object()
+    binding: Final = _native.CacheResolver(SimpleNamespace(cache=CustomCache())).resolve()
+    requests: Final = [request("first"), request("second")]
+
+    assert binding.lookup_batch(requests, callback_kwargs={"marker": marker}) == (["first", "second"], marker)
+    assert await binding.async_lookup_batch(requests, callback_kwargs={"marker": marker}) == (
+        ["first", "second"],
+        marker,
+    )
+    stored: Final = cast(
+        tuple[list[tuple[str, object]], object],
+        await binding.async_store_batch(
+            requests,
+            [first, second],
+            callback_kwargs={"marker": marker},
+        ),
+    )
+    assert [key for key, _ in stored[0]] == ["first", "second"]
+    assert stored[1] is marker
+    assert stored[0][0][1] is first
+    assert stored[0][1][1] is second
+
+
 async def test_redis_handle_reads_the_python_default_ttl(redis_url: str) -> None:
     client: Final = redis.Redis.from_url(redis_url)
     with rebound(litellm, "default_redis_ttl", 7):
