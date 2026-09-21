@@ -359,3 +359,93 @@ def test_settings_store_refusal_stays_quiet_about_the_database_when_nothing_is_s
     assert refused.value.shadows_db_value is False
     assert "stored in the database" not in str(refused.value)
     assert "config file" in str(refused.value)
+
+
+def test_settings_store_keeps_a_resolved_runtime_value_when_a_db_row_repeats_it() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/HDR"})
+
+    assert store["litellm_key_header_name"] == "X-Resolved-Header"
+
+
+def test_settings_store_drops_a_resolved_runtime_value_when_a_db_row_changes_it() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/OTHER"})
+
+    assert store["litellm_key_header_name"] == "os.environ/OTHER"
+
+
+def test_settings_store_accepts_the_writes_it_does_not_report_as_rejected() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+    incoming: Final[dict[str, JsonValue]] = {"litellm_key_header_name": "X-Resolved-Header"}
+
+    assert store.rejected_writes(incoming) == ()
+    store["litellm_key_header_name"] = "X-Resolved-Header"
+    assert store["litellm_key_header_name"] == "X-Resolved-Header"
+
+
+def test_settings_store_reports_a_rejected_write_the_store_itself_refuses() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    assert store.rejected_writes({"litellm_key_header_name": "X-Other-Header"}) == ("litellm_key_header_name",)
+    with pytest.raises(ConfigOwnedKeyError):
+        store["litellm_key_header_name"] = "X-Other-Header"
+
+
+def test_settings_store_reports_no_shadowing_when_the_database_repeats_the_config_template() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    assert store.shadowed_db_keys() == ()
+    assert store.shadows_db_value("litellm_key_header_name") is False
+
+
+def test_settings_store_still_reports_shadowing_when_the_database_holds_another_template() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({"litellm_key_header_name": "os.environ/HDR"})
+    store.apply_db_row("general_settings", {"litellm_key_header_name": "os.environ/OTHER"})
+    store.apply_runtime_values({"litellm_key_header_name": "X-Resolved-Header"})
+
+    assert store.shadowed_db_keys() == ("litellm_key_header_name",)
+
+
+def test_settings_store_truthiness_stops_at_the_first_key() -> None:
+    store: Final = SettingsStore("general_settings")
+    store.load_yaml({f"key_{index}": index for index in range(25)})
+    resolutions: Final[list[str]] = []
+    original: Final = SettingsStore._resolution_for
+
+    def counted(self: SettingsStore, key: str):
+        resolutions.append(key)
+        return original(self, key)
+
+    with patch.object(SettingsStore, "_resolution_for", counted):  # test-quality-ok: counting resolutions is the only way to observe that truthiness short-circuits
+        assert bool(store) is True
+        truthiness_resolutions: Final = len(resolutions)
+        resolutions.clear()
+        assert len(store) == 25
+
+    assert len(resolutions) == 25
+    assert truthiness_resolutions <= 1
+
+
+def test_settings_store_truthiness_matches_emptiness() -> None:
+    store: Final = SettingsStore("general_settings")
+
+    assert bool(store) is False
+    store["max_parallel_requests"] = 3
+    assert bool(store) is True
+    del store["max_parallel_requests"]
+    assert bool(store) is False

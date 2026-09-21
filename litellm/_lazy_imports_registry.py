@@ -176,6 +176,7 @@ LLM_CONFIG_NAMES: Final = (
     "BedrockClaudePlatformMessagesConfig",
     "AmazonAnthropicClaudeMessagesConfig",
     "AmazonMantleMessagesConfig",
+    "BedrockMantleAnthropicMessagesConfig",
     "TogetherAIConfig",
     "TogetherAIChatConfig",
     "NLPCloudConfig",
@@ -745,6 +746,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "AmazonMantleMessagesConfig": (
         ".llms.bedrock.messages.mantle_transformation",
         "AmazonMantleMessagesConfig",
+    ),
+    "BedrockMantleAnthropicMessagesConfig": (
+        ".llms.bedrock_mantle.messages.transformation",
+        "BedrockMantleAnthropicMessagesConfig",
     ),
     "TogetherAIConfig": (".llms.together_ai.chat", "TogetherAIConfig"),
     "TogetherAIChatConfig": (

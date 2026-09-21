@@ -185,6 +185,91 @@ def test_create_request_omits_kms_key_when_absent(config):
     assert "s3EncryptionKeyId" not in s3out
 
 
+def _signed_batch_request(config, litellm_params: dict, optional_params: dict) -> dict:
+    with patch.object(
+        config.common_utils,
+        "generate_unique_job_name",
+        return_value="litellm-batch-1",
+    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+        mock_sign.return_value = ({}, b"{}")
+        config.transform_create_batch_request(
+            model="m",
+            create_batch_data={"input_file_id": "s3://in-bucket/in.jsonl"},
+            optional_params=optional_params,
+            litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r", **litellm_params},
+        )
+    return mock_sign.call_args.kwargs["data"]
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "optional_params", "env_owner", "expected_owner"),
+    [
+        pytest.param({"s3_bucket_owner": "111111111111"}, {}, None, "111111111111", id="litellm_params"),
+        pytest.param({}, {"s3_bucket_owner": "222222222222"}, None, "222222222222", id="optional_params"),
+        pytest.param({}, {}, "333333333333", "333333333333", id="env"),
+        pytest.param(
+            {"s3_bucket_owner": "111111111111"},
+            {"s3_bucket_owner": "222222222222"},
+            "333333333333",
+            "111111111111",
+            id="litellm_params_wins",
+        ),
+        pytest.param(
+            {}, {"s3_bucket_owner": "222222222222"}, "333333333333", "222222222222", id="optional_params_beats_env"
+        ),
+    ],
+)
+def test_create_request_sets_s3_bucket_owner_on_input_and_output(
+    config, monkeypatch, litellm_params, optional_params, env_owner, expected_owner
+):
+    monkeypatch.delenv("AWS_S3_ENCRYPTION_KEY_ID", raising=False)
+    if env_owner is None:
+        monkeypatch.delenv("AWS_S3_BUCKET_OWNER", raising=False)
+    else:
+        monkeypatch.setenv("AWS_S3_BUCKET_OWNER", env_owner)
+
+    bedrock_request = _signed_batch_request(config, litellm_params, optional_params)
+
+    assert bedrock_request["inputDataConfig"] == {
+        "s3InputDataConfig": {"s3Uri": "s3://in-bucket/in.jsonl", "s3BucketOwner": expected_owner}
+    }
+    assert bedrock_request["outputDataConfig"] == {
+        "s3OutputDataConfig": {
+            "s3Uri": "s3://in-bucket/litellm-batch-outputs/litellm-batch-1/",
+            "s3BucketOwner": expected_owner,
+        }
+    }
+
+
+def test_create_request_omits_s3_bucket_owner_when_unset(config, monkeypatch):
+    monkeypatch.delenv("AWS_S3_BUCKET_OWNER", raising=False)
+    monkeypatch.delenv("AWS_S3_ENCRYPTION_KEY_ID", raising=False)
+
+    bedrock_request = _signed_batch_request(config, {}, {})
+
+    assert bedrock_request["inputDataConfig"] == {"s3InputDataConfig": {"s3Uri": "s3://in-bucket/in.jsonl"}}
+    assert bedrock_request["outputDataConfig"] == {
+        "s3OutputDataConfig": {"s3Uri": "s3://in-bucket/litellm-batch-outputs/litellm-batch-1/"}
+    }
+
+
+def test_create_request_keeps_kms_key_alongside_s3_bucket_owner(config, monkeypatch):
+    monkeypatch.delenv("AWS_S3_BUCKET_OWNER", raising=False)
+    monkeypatch.delenv("AWS_S3_ENCRYPTION_KEY_ID", raising=False)
+
+    bedrock_request = _signed_batch_request(
+        config, {"s3_bucket_owner": "111111111111", "s3_encryption_key_id": "kms-key-123"}, {}
+    )
+
+    assert bedrock_request["outputDataConfig"] == {
+        "s3OutputDataConfig": {
+            "s3Uri": "s3://in-bucket/litellm-batch-outputs/litellm-batch-1/",
+            "s3BucketOwner": "111111111111",
+            "s3EncryptionKeyId": "kms-key-123",
+        }
+    }
+
+
 def test_create_request_missing_input_file_id_raises(config):
     with pytest.raises(ValueError, match="input_file_id is required"):
         config.transform_create_batch_request(

@@ -3749,6 +3749,14 @@ class ProxyBaseLLMRequestProcessing:
                         "async_streaming_data_generator: error closing response stream: %s",
                         e,
                     )
+            logging_obj: Final = request_data.get("litellm_logging_obj")
+            if (
+                not stream_completed
+                and isinstance(logging_obj, LiteLLMLoggingObj)
+                and logging_obj.baseline_cache_context is not None
+                and logging_obj.model_call_details.get("prompt_cache_response_complete") is not True
+            ):
+                await logging_obj.invalidate_baseline_cache_estimate("incomplete_response", completed=True)
 
     @staticmethod
     async def async_streaming_data_generator(
