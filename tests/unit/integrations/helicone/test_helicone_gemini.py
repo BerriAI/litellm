@@ -3,6 +3,7 @@ Test HeliconeLogger Gemini/Vertex AI support.
 Fixes: https://github.com/BerriAI/litellm/issues/19093
 """
 
+import pytest
 
 
 def test_helicone_gemini_model_in_list():
@@ -19,20 +20,39 @@ def test_helicone_gemini_model_in_list():
     ), "gemini should be in helicone_model_list"
 
 
-def test_helicone_gemini_models_recognized():
+@pytest.mark.parametrize(
+    "model, expected_logged_model",
+    [
+        ("gemini-1.5-pro", "gemini-1.5-pro"),
+        ("gemini-2.0-flash", "gemini-2.0-flash"),
+        ("vertex_ai/gemini-1.5-flash", "vertex_ai/gemini-1.5-flash"),
+        ("totally-unknown-model", "gpt-3.5-turbo"),
+    ],
+)
+def test_helicone_gemini_models_recognized(model, expected_logged_model):
     """
-    Test that Gemini models are recognized and not replaced with gpt-3.5-turbo.
+    Test that Gemini models are logged under their own name and not replaced with gpt-3.5-turbo.
     """
+    from unittest.mock import MagicMock, patch
+
     from litellm.integrations.helicone import HeliconeLogger
 
     logger = HeliconeLogger()
-
-    test_models = ["gemini-1.5-pro", "gemini-2.0-flash", "vertex_ai/gemini-1.5-flash"]
-    for model in test_models:
-        is_recognized = any(
-            accepted_model in model for accepted_model in logger.helicone_model_list
+    mock_client = MagicMock()
+    mock_client.post.return_value = MagicMock(status_code=200)
+    with patch("litellm.module_level_client", mock_client):
+        logger.log_success(
+            model=model,
+            messages=[{"role": "user", "content": "test"}],
+            response_obj={"choices": [{"message": {"content": "hi"}}]},
+            start_time=MagicMock(),
+            end_time=MagicMock(),
+            print_verbose=lambda *args, **kwargs: None,
+            kwargs={"litellm_params": {"custom_llm_provider": "", "metadata": {}}},
         )
-        assert is_recognized, f"{model} should be recognized by helicone_model_list"
+
+    logged_request = mock_client.post.call_args.kwargs["json"]["providerRequest"]["json"]
+    assert logged_request["model"] == expected_logged_model
 
 
 def test_helicone_vertex_gemini_gets_vertex_provider_url():

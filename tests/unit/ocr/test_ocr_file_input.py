@@ -57,8 +57,7 @@ class TestGetMimeType:
         assert get_mime_type("IMAGE.PNG") == "image/png"
 
     def test_should_fallback_for_unknown_extension(self):
-        result = get_mime_type("file.xyz123")
-        assert isinstance(result, str)
+        assert get_mime_type("file.xyz123") == "application/octet-stream"
 
 
 class TestConvertFileDocumentToUrlDocument:

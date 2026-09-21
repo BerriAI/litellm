@@ -239,14 +239,13 @@ class _SentMessagesCapture(CustomLogger):
             self.messages = standard_logging_object["messages"]
 
 
-async def _eventually(predicate, timeout: float = 10.0):
-    """Success callbacks run as tasks, so give the write a bounded window to land."""
-    deadline = asyncio.get_running_loop().time() + timeout
-    while asyncio.get_running_loop().time() < deadline:
+async def _eventually(predicate, ticks: int = 200_000):
+    """Success callbacks run as tasks, so give the write a bounded number of loop turns to land."""
+    for _ in range(ticks):
         result = predicate()
         if result:
             return result
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)
     return predicate()
 
 
@@ -495,37 +494,32 @@ async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost
 @pytest.mark.asyncio
 async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
-        assert_loop_stayed_free,
-        timed_with_loop_lags,
-        warm_tokenizer,
+    from tests.unit._support.event_loop_lag import (
+        assert_counted_off_the_event_loop,
+        recording_tokenizer_threads,
     )
 
-    warm_tokenizer("anthropic/claude-fable-5")
     check = PromptCachingDeploymentCheck(cache=DualCache())
     deployments = _deployments("anthropic/claude-fable-5")
     messages = cast(list[AllMessageValues], [{"role": "user", "content": text * 100}])
 
-    result, took, lags = await timed_with_loop_lags(
-        lambda: check.async_filter_deployments(
+    with recording_tokenizer_threads() as tokenizer_threads:
+        result = await check.async_filter_deployments(
             model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=messages
         )
-    )
 
     assert result == deployments
-    assert_loop_stayed_free(took, lags)
+    assert_counted_off_the_event_loop(tokenizer_threads)
 
 
 @pytest.mark.asyncio
 async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
-        assert_loop_stayed_free,
-        timed_with_loop_lags,
-        warm_tokenizer,
+    from tests.unit._support.event_loop_lag import (
+        assert_counted_off_the_event_loop,
+        recording_tokenizer_threads,
     )
 
-    warm_tokenizer("anthropic/claude-fable-5")
     cache = DualCache()
     check = PromptCachingDeploymentCheck(cache=cache)
     messages = cast(
@@ -539,16 +533,15 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
         "model_id": "dep-1",
     }
 
-    _, took, lags = await timed_with_loop_lags(
-        lambda: check.async_log_success_event(
+    with recording_tokenizer_threads() as tokenizer_threads:
+        await check.async_log_success_event(
             kwargs={"standard_logging_object": standard_logging_object},
             response_obj=None,
             start_time=None,
             end_time=None,
         )
-    )
 
     assert await PromptCachingCache(cache=cache).async_get_model_id(messages=messages, tools=None) == {
         "model_id": "dep-1"
     }
-    assert_loop_stayed_free(took, lags)
+    assert_counted_off_the_event_loop(tokenizer_threads)

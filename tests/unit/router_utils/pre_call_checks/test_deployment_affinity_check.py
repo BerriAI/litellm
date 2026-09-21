@@ -1,4 +1,3 @@
-import asyncio
 import itertools
 import json
 from collections.abc import Sequence
@@ -9,6 +8,7 @@ import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
 )
@@ -655,8 +655,9 @@ async def test_async_user_key_affinity_ttl_expiry_allows_reroute():
     After affinity TTL expires, cached pinning should no longer filter deployments.
     """
 
+    now = 1_700_000_000.0
     callback = DeploymentAffinityCheck(
-        cache=DualCache(),
+        cache=DualCache(in_memory_cache=InMemoryCache(clock=lambda: now)),
         ttl_seconds=1,
         enable_user_key_affinity=True,
         enable_responses_api_affinity=False,
@@ -698,7 +699,7 @@ async def test_async_user_key_affinity_ttl_expiry_allows_reroute():
     assert len(pinned) == 1
     assert pinned[0]["model_info"]["id"] == "deployment-1"
 
-    await asyncio.sleep(1.2)
+    now += 1.2
 
     after_ttl_expiry = await callback.async_filter_deployments(
         model="some-router-model-group",

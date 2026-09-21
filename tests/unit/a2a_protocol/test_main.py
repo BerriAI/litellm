@@ -15,7 +15,6 @@ from a2a.compat.v0_3.types import (
 )
 
 import litellm
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.a2a_protocol.main import (
     _send_message,
     _stream_messages,
@@ -25,6 +24,7 @@ from litellm.a2a_protocol.main import (
 )
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -83,48 +83,37 @@ async def test_send_message_rejects_update_event_final_with_runtime_error():
 
 
 @pytest.mark.asyncio
-async def test_streaming_trace_id_prefers_logging_trace_id():
+async def test_streaming_trace_id_prefers_logging_trace_id(isolated_client_cache):
     """The streaming X-LiteLLM-Trace-Id must use the logging object's trace id (same
     as the non-streaming path), not the JSON-RPC request id, so traces correlate."""
-    from unittest.mock import AsyncMock, MagicMock, patch
-
-    from a2a.compat.v0_3.types import (
-        MessageSendParams,
-        SendStreamingMessageRequest,
-    )
-
     from litellm.a2a_protocol import main as a2a_main
-    from litellm.litellm_core_utils.litellm_logging import Logging
 
+    recorder = await _seed_shared_a2a_client()
     request = SendStreamingMessageRequest(
         id="rpc-1",
         params=MessageSendParams(
-            message={
-                "messageId": "m1",
-                "role": "user",
-                "parts": [{"kind": "text", "text": "hi"}],
-            }
+            message={"messageId": "m1", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
         ),
     )
-    logging_obj = MagicMock(spec=Logging)
+    logging_obj = a2a_main._build_streaming_logging_obj(
+        request=request,
+        agent_name="some-agent",
+        agent_id=None,
+        litellm_params=None,
+        metadata=None,
+        proxy_server_request=None,
+    )
     logging_obj.litellm_trace_id = "trace-from-logging"
 
-    captured: dict = {}
+    async for _ in a2a_main.asend_message_streaming(
+        request=request,
+        api_base="http://127.0.0.1:9",
+        litellm_logging_obj=logging_obj,
+    ):
+        pass
 
-    async def _capture(*, base_url, extra_headers=None, streaming=False, **_):
-        captured["extra_headers"] = extra_headers
-        raise RuntimeError("stop")
-
-    with patch.object(a2a_main, "create_a2a_client", new=AsyncMock(side_effect=_capture)):
-        with pytest.raises(RuntimeError, match="stop"):
-            async for _ in a2a_main.asend_message_streaming(
-                request=request,
-                api_base="http://upstream.local",
-                litellm_logging_obj=logging_obj,
-            ):
-                pass
-
-    assert captured["extra_headers"]["X-LiteLLM-Trace-Id"] == "trace-from-logging"
+    assert recorder.card_requests[-1]["x-litellm-trace-id"] == "trace-from-logging"
+    assert recorder.rpc_requests[-1]["x-litellm-trace-id"] == "trace-from-logging"
 
 
 def test_streaming_logging_obj_carries_call_type_into_model_call_details():
@@ -469,13 +458,11 @@ class _UsageRecorder(CustomLogger):
 @pytest.mark.asyncio
 async def test_asend_message_counts_usage_off_the_event_loop(monkeypatch):
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
-        assert_loop_stayed_free,
-        timed_with_loop_lags,
-        warm_tokenizer,
+    from tests.unit._support.event_loop_lag import (
+        assert_counted_off_the_event_loop,
+        recording_tokenizer_threads,
     )
 
-    warm_tokenizer("gpt-5.6-luna")
     recorder = _UsageRecorder()
     monkeypatch.setattr(litellm, "callbacks", [recorder])
     monkeypatch.setattr(litellm, "success_callback", [recorder])
@@ -492,15 +479,14 @@ async def test_asend_message_counts_usage_off_the_event_loop(monkeypatch):
         ),
     )
 
-    response, took, lags = await timed_with_loop_lags(
-        lambda: asend_message(a2a_client=_FakeClient(reply), request=request)
-    )
+    with recording_tokenizer_threads() as tokenizer_threads:
+        response = await asend_message(a2a_client=_FakeClient(reply), request=request)
+        await recorder.logged.wait()
 
     assert response.id == "r1"
-    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
     assert recorder.payload["prompt_tokens"] > 100_000
     assert recorder.payload["completion_tokens"] > 100_000
-    assert_loop_stayed_free(took, lags)
+    assert_counted_off_the_event_loop(tokenizer_threads)
 
 
 def test_streaming_logging_obj_keeps_agent_credentials_out_of_logging_params():

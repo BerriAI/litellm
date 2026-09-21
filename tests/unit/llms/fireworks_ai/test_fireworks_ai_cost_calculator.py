@@ -1,5 +1,5 @@
 import math
-from collections.abc import Generator
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from typing import Final
 
@@ -26,11 +26,10 @@ OUTPUT_COST = 4.4e-06
 
 
 @pytest.fixture(autouse=True)
-def restore_model_cost() -> Generator[None, None, None]:
-    original: Final = litellm.model_cost
+def scratch_model_cost(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
     litellm.get_model_info.cache_clear()
     yield
-    litellm.model_cost = original
     litellm.get_model_info.cache_clear()
 
 
@@ -67,16 +66,13 @@ def _register_off_peak_model(
     cache_read_cost: float | None = STANDARD_CACHE_READ_COST,
     model: str = OFF_PEAK_MODEL,
 ) -> None:
-    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test
-        **litellm.model_cost,
-        f"fireworks_ai/{model}": {
-            "litellm_provider": "fireworks_ai",
-            "mode": "chat",
-            "input_cost_per_token": STANDARD_INPUT_COST,
-            "output_cost_per_token": STANDARD_OUTPUT_COST,
-            "off_peak_pricing": off_peak_pricing,
-            **({} if cache_read_cost is None else {"cache_read_input_token_cost": cache_read_cost}),
-        },
+    litellm.model_cost[f"fireworks_ai/{model}"] = {
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "input_cost_per_token": STANDARD_INPUT_COST,
+        "output_cost_per_token": STANDARD_OUTPUT_COST,
+        "off_peak_pricing": off_peak_pricing,
+        **({} if cache_read_cost is None else {"cache_read_input_token_cost": cache_read_cost}),
     }
 
 
@@ -161,14 +157,11 @@ def test_an_entry_without_a_cache_read_rate_bills_cached_tokens_at_the_documente
     """Fireworks documents a default 50% cached-token discount for serverless models:
     https://docs.fireworks.ai/guides/prompt-caching, accessed 2026-09-19."""
     model = "accounts/fireworks/models/default-cache-read-test"
-    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test
-        **litellm.model_cost,
-        f"fireworks_ai/{model}": {
-            "litellm_provider": "fireworks_ai",
-            "mode": "chat",
-            "input_cost_per_token": INPUT_COST,
-            "output_cost_per_token": OUTPUT_COST,
-        },
+    litellm.model_cost[f"fireworks_ai/{model}"] = {
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "input_cost_per_token": INPUT_COST,
+        "output_cost_per_token": OUTPUT_COST,
     }
     usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
 
@@ -181,14 +174,11 @@ def test_an_entry_without_a_cache_read_rate_bills_cached_tokens_at_the_documente
 
 def test_fireworks_cache_read_rates_match_breakdown_and_caching_savings():
     model = "accounts/fireworks/models/breakdown-cache-read-test"
-    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
-        **litellm.model_cost,
-        f"fireworks_ai/{model}": {
-            "litellm_provider": "fireworks_ai",
-            "mode": "chat",
-            "input_cost_per_token": INPUT_COST,
-            "output_cost_per_token": OUTPUT_COST,
-        },
+    litellm.model_cost[f"fireworks_ai/{model}"] = {
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "input_cost_per_token": INPUT_COST,
+        "output_cost_per_token": OUTPUT_COST,
     }
     usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
 
@@ -214,14 +204,11 @@ def test_fireworks_cache_read_rates_match_breakdown_and_caching_savings():
 
 def test_generic_cost_per_token_applies_fireworks_cache_read_default_with_or_without_model_info():
     model = "accounts/fireworks/models/generic-cache-read-test"
-    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test
-        **litellm.model_cost,
-        f"fireworks_ai/{model}": {
-            "litellm_provider": "fireworks_ai",
-            "mode": "chat",
-            "input_cost_per_token": INPUT_COST,
-            "output_cost_per_token": OUTPUT_COST,
-        },
+    litellm.model_cost[f"fireworks_ai/{model}"] = {
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "input_cost_per_token": INPUT_COST,
+        "output_cost_per_token": OUTPUT_COST,
     }
     usage = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
     expected_prompt_cost = (700 * INPUT_COST) + (300 * INPUT_COST * 0.5)
@@ -267,19 +254,16 @@ COMPONENT_AUDIO_OUT_COST = 6e-06
 
 
 def test_cache_write_reasoning_and_audio_tokens_are_billed_at_their_component_rates():
-    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
-        **litellm.model_cost,
-        f"fireworks_ai/{COMPONENT_MODEL}": {
-            "litellm_provider": "fireworks_ai",
-            "mode": "chat",
-            "input_cost_per_token": COMPONENT_INPUT_COST,
-            "output_cost_per_token": COMPONENT_OUTPUT_COST,
-            "cache_read_input_token_cost": COMPONENT_CACHE_READ_COST,
-            "cache_creation_input_token_cost": COMPONENT_CACHE_CREATION_COST,
-            "output_cost_per_reasoning_token": COMPONENT_REASONING_COST,
-            "input_cost_per_audio_token": COMPONENT_AUDIO_IN_COST,
-            "output_cost_per_audio_token": COMPONENT_AUDIO_OUT_COST,
-        },
+    litellm.model_cost[f"fireworks_ai/{COMPONENT_MODEL}"] = {
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "input_cost_per_token": COMPONENT_INPUT_COST,
+        "output_cost_per_token": COMPONENT_OUTPUT_COST,
+        "cache_read_input_token_cost": COMPONENT_CACHE_READ_COST,
+        "cache_creation_input_token_cost": COMPONENT_CACHE_CREATION_COST,
+        "output_cost_per_reasoning_token": COMPONENT_REASONING_COST,
+        "input_cost_per_audio_token": COMPONENT_AUDIO_IN_COST,
+        "output_cost_per_audio_token": COMPONENT_AUDIO_OUT_COST,
     }
     usage = Usage(
         prompt_tokens=1000,
@@ -312,13 +296,10 @@ def test_cache_write_reasoning_and_audio_tokens_are_billed_at_their_component_ra
 
 
 def test_an_entry_without_an_input_rate_gets_no_cache_read_fallback():
-    litellm.model_cost = {  # test-quality-ok: the restore_model_cost fixture returns litellm.model_cost to the original object after each test, so replacing the map for this entry leaks nothing
-        **litellm.model_cost,  # pyright: ignore[reportUnknownMemberType]  # the SDK types model_cost as dict[Unknown, Unknown]
-        "fireworks_ai/accounts/fireworks/models/no-input-rate-test": {
-            "litellm_provider": "fireworks_ai",
-            "mode": "chat",
-            "output_cost_per_token": 2e-06,
-        },
+    litellm.model_cost["fireworks_ai/accounts/fireworks/models/no-input-rate-test"] = {
+        "litellm_provider": "fireworks_ai",
+        "mode": "chat",
+        "output_cost_per_token": 2e-06,
     }
     usage: Final = _usage(prompt_tokens=1000, cached_tokens=300, completion_tokens=200)
 

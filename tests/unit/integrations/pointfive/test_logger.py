@@ -494,8 +494,8 @@ async def _settle(logger) -> None:
     The upload runs off the request path now, and either the batch task or the periodic
     loop can be the one carrying it, so this waits for whichever is in flight to finish.
     """
-    for _ in range(200):
-        await asyncio.sleep(0.001)
+    for _ in range(200_000):
+        await asyncio.sleep(0)
         task = logger._batch_flush_task
         if task is not None and not task.done():
             await task
@@ -504,12 +504,12 @@ async def _settle(logger) -> None:
     raise AssertionError("the flush never finished")
 
 
-async def _until(done: Callable[[], bool], ticks: int = 400) -> None:
+async def _until(done: Callable[[], bool], ticks: int = 200_000) -> None:
     """Wait for a condition the flush path reaches only after gzip finishes on a worker thread."""
     for _ in range(ticks):
         if done():
             return
-        await asyncio.sleep(0.005)
+        await asyncio.sleep(0)
     raise AssertionError("condition never became true")
 
 
@@ -579,7 +579,7 @@ async def test_a_dead_loop_does_not_strand_the_flusher():
     """A task whose loop was closed never runs and never reports done, so it must be replaced."""
     logger = PointFiveLogger(params=PointFiveInitParams(), upload_client=FakeUploadClient(), start_periodic_flush=False)
     stranded_loop = asyncio.new_event_loop()
-    forever = asyncio.sleep(3600)
+    forever = asyncio.Event().wait()
     logger._periodic_flush_task = stranded_loop.create_task(forever)
     stranded_loop.close()
     forever.close()
@@ -721,7 +721,7 @@ async def test_records_arriving_during_a_flush_survive_the_queue_cap():
     logger.log_queue.extend(_event(request_id)["standard_logging_object"] for request_id in ("a", "b"))
 
     flushing = asyncio.create_task(logger.flush_queue())
-    await asyncio.sleep(0.01)
+    await _until(lambda: logger._flushing)
     for request_id in ("c", "d", "e"):
         await logger.async_log_success_event(_event(request_id), None, None, None)
     release.set()

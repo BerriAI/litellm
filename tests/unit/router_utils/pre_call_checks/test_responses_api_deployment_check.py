@@ -1,10 +1,10 @@
-import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import litellm
+from litellm.responses.utils import ResponsesAPIRequestUtils
 
 
 @pytest.mark.asyncio
@@ -345,7 +345,6 @@ async def test_async_previous_response_id_not_in_cache():
         # Configure the mock to return our response
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
-        # Make a request with a non-existent previous_response_id
         response = await router.aresponses(
             model=MODEL,
             input="Hello, this is a test",
@@ -353,13 +352,18 @@ async def test_async_previous_response_id_not_in_cache():
             previous_response_id="non-existent-response-id",
         )
 
-        # Should still get a valid response
-        assert response is not None
-        assert response.id is not None
-
-        # Since the previous_response_id wasn't found, routing should work normally
-        # We can't assert exactly which deployment was chosen, but we can verify the basics
-        assert response._hidden_params["model_id"] is not None
+        chosen_model_id = response._hidden_params["model_id"]
+        deployment = router.get_deployment(model_id=chosen_model_id)
+        assert deployment is not None
+        assert deployment.litellm_params.api_base in (
+            "https://mock-endpoint-1.openai.azure.com",
+            "https://mock-endpoint-2.openai.azure.com",
+        )
+        assert mock_post.call_args.kwargs["url"].startswith(deployment.litellm_params.api_base)
+        assert response.output[0].content[0].text == "Nice to meet you!"
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(response.id)
+        assert decoded["model_id"] == chosen_model_id
+        assert decoded["response_id"] == "mock-resp-789"
 
 
 @pytest.mark.asyncio
@@ -524,8 +528,8 @@ async def test_async_multiple_response_ids_routing():
         model_id_2 = response2._hidden_params["model_id"]
         response_id_2 = response2.id
 
-        # Wait for cache updates
-        await asyncio.sleep(1)
+        assert ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id_1)["model_id"] == model_id_1
+        assert ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id_2)["model_id"] == model_id_2
 
         # Now make follow-up requests using the previous response IDs
 

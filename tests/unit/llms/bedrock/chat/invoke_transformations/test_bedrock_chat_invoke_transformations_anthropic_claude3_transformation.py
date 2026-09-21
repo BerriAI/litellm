@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import json
 import uuid
@@ -11,13 +10,11 @@ import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -57,25 +54,6 @@ def async_only_image_fetch(monkeypatch):
     for module in (image_handling, factory, gemini_chat_transformation):
         monkeypatch.setattr(module, "convert_url_to_base64", forbid_sync_convert)
     return fetch
-
-
-@pytest.fixture
-def local_model_cost_map(monkeypatch):
-    """Force the bundled in-repo cost map so capability and pricing assertions do not
-    depend on the network-fetched ``main`` copy, which lags this branch until merge.
-
-    ``get_model_info`` is lru_cached, so swapping ``model_cost`` is not enough on its
-    own; clear on the way in and out so entries warmed against either map never leak
-    across tests."""
-    original_model_cost = litellm.model_cost
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    litellm.get_model_info.cache_clear()
-    try:
-        yield
-    finally:
-        litellm.model_cost = original_model_cost
-        litellm.get_model_info.cache_clear()
 
 
 @pytest.fixture
