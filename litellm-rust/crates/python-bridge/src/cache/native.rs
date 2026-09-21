@@ -6,6 +6,7 @@ use litellm_cache_redis::RedisCache;
 use litellm_cache_response::{
     CacheEntry, PartialHits, ResponseCache, ResponseCacheCodec, ResponseCacheRequest, WriteBuffer,
 };
+use litellm_cache_s3::{S3Cache, S3CacheConfig};
 use serde_json::Value;
 
 #[derive(Clone)]
@@ -15,6 +16,7 @@ pub(super) enum NativeResponseCache {
         cache: Arc<ResponseCache<RedisCache<ResponseCacheCodec>>>,
         buffer: Option<Arc<WriteBuffer>>,
     },
+    S3(Arc<ResponseCache<S3Cache<ResponseCacheCodec>>>),
 }
 
 impl NativeResponseCache {
@@ -43,6 +45,15 @@ impl NativeResponseCache {
             buffer: None,
         })
     }
+
+    pub async fn s3(config: S3CacheConfig) -> Self {
+        let runtime = tokio::runtime::Handle::current();
+        Self::S3(Arc::new(ResponseCache::new(Arc::new(S3Cache::new(
+            config,
+            ResponseCacheCodec,
+            runtime,
+        )))))
+    }
 }
 
 impl NativeResponseCache {
@@ -50,6 +61,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) => "memory",
             Self::Redis { .. } => "redis",
+            Self::S3(_) => "s3",
         }
     }
 
@@ -57,6 +69,21 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
+            Self::S3(cache) => cache.default_ttl(),
+        }
+    }
+
+    pub fn bucket(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => Some(cache.backend().bucket()),
+            _ => None,
+        }
+    }
+
+    pub fn key_prefix(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => Some(cache.backend().key_prefix()),
+            _ => None,
         }
     }
 
@@ -64,20 +91,21 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) => None,
             Self::Redis { cache, .. } => cache.backend().namespace(),
+            Self::S3(_) => None,
         }
     }
 
     pub fn capacity(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
-            Self::Redis { .. } => None,
+            Self::Redis { .. } | Self::S3(_) => None,
         }
     }
 
     pub fn max_entry_bytes(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => cache.backend().max_entry_bytes(),
-            Self::Redis { .. } => None,
+            Self::Redis { .. } | Self::S3(_) => None,
         }
     }
 
@@ -87,7 +115,7 @@ impl NativeResponseCache {
                 cache,
                 buffer: flush_size.map(|flush_size| Arc::new(WriteBuffer::new(flush_size))),
             },
-            memory => memory,
+            cache => cache,
         }
     }
 
@@ -99,6 +127,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.lookup(request, now),
             Self::Redis { cache, .. } => cache.lookup(request, now),
+            Self::S3(cache) => cache.lookup(request, now),
         }
     }
 
@@ -111,6 +140,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.store(request, response, now),
             Self::Redis { cache, .. } => cache.store(request, response, now),
+            Self::S3(cache) => cache.store(request, response, now),
         }
     }
 
@@ -122,6 +152,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.lookup_batch(requests, now),
             Self::Redis { cache, .. } => cache.lookup_batch(requests, now),
+            Self::S3(cache) => cache.lookup_batch(requests, now),
         }
     }
 
@@ -133,6 +164,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.async_lookup(request, now).await,
             Self::Redis { cache, .. } => cache.async_lookup(request, now).await,
+            Self::S3(cache) => cache.async_lookup(request, now).await,
         }
     }
 
@@ -152,6 +184,7 @@ impl NativeResponseCache {
                 cache,
                 buffer: Some(buffer),
             } => buffer.async_store(cache, request, response, now).await,
+            Self::S3(cache) => cache.async_store(request, response, now).await,
         }
     }
 
@@ -163,6 +196,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.async_lookup_batch(requests, now).await,
             Self::Redis { cache, .. } => cache.async_lookup_batch(requests, now).await,
+            Self::S3(cache) => cache.async_lookup_batch(requests, now).await,
         }
     }
 
@@ -174,6 +208,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.async_store_batch(entries, now).await,
             Self::Redis { cache, .. } => cache.async_store_batch(entries, now).await,
+            Self::S3(cache) => cache.async_store_batch(entries, now).await,
         }
     }
 
@@ -186,6 +221,7 @@ impl NativeResponseCache {
                 }
                 cache.async_flush().await
             }
+            Self::S3(cache) => cache.async_flush().await,
         }
     }
 
@@ -193,6 +229,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.test_connection().await,
             Self::Redis { cache, .. } => cache.test_connection().await,
+            Self::S3(cache) => cache.test_connection().await,
         }
     }
 }
