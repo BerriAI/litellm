@@ -163,10 +163,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                         continue
                     # Only copy the block when the text changed.
                     if stripped_text == text:
-                        next_block = content_block
+                        filtered_list.append(content_block)
                     else:
-                        next_block = {**content_block, "text": stripped_text}  # mutable-ok: API message payload
-                    filtered_list.append(next_block)
+                        rewritten: Final = {**content_block, "text": stripped_text}  # mutable-ok: API message payload
+                        filtered_list.append(rewritten)
                 else:
                     # Keep non-dict items as-is
                     filtered_list.append(content_block)
