@@ -79,9 +79,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             "speed",
             "output_config",
             "reasoning_effort",
+            "safeguards",
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
+
+    def should_filter_anthropic_beta_headers(self) -> bool:
+        return self._resolved_provider != "anthropic"
 
     def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
         """
