@@ -1,6 +1,6 @@
 from asyncio import Future
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
-from typing import Never, final
+from typing import Literal, Never, final
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
@@ -92,6 +92,68 @@ class ResponsesWebSocketConnection:
     def send_text(self, text: str) -> Future[None]: ...
     def recv_text(self) -> Future[str | None]: ...
     def close(self) -> Future[None]: ...
+
+@final
+class _CacheTestHandle:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+    @staticmethod
+    def memory(
+        *,
+        capacity: int = 200,
+        ttl_seconds: float = 600.0,
+        max_entry_bytes: int = 1048576,
+    ) -> _CacheTestHandle: ...
+    @staticmethod
+    def redis(
+        url: str,
+        *,
+        ttl_seconds: float = 60.0,
+        namespace: str | None = None,
+    ) -> _CacheTestHandle: ...
+    @staticmethod
+    def redis_semantic(backend: object) -> _CacheTestHandle: ...
+    @property
+    def backend(self) -> Literal["memory", "redis", "redis_semantic"]: ...
+    def _bind_facade(self, facade: object) -> None: ...
+
+@final
+class _CacheTestBinding:
+    def __new__(cls, _uninstantiable: Never, /) -> Never: ...
+    @property
+    def kind(self) -> Literal["disabled", "native", "python_callback"]: ...
+    def lookup(
+        self, request: object, *, callback_kwargs: object = None
+    ) -> object: ...
+    def store(
+        self, request: object, response: object, *, callback_kwargs: object = None
+    ) -> None: ...
+    def lookup_batch(
+        self, requests: object, *, callback_kwargs: object = None
+    ) -> object: ...
+    def async_lookup(
+        self, request: object, *, callback_kwargs: object = None
+    ) -> Future[object]: ...
+    def async_store(
+        self, request: object, response: object, *, callback_kwargs: object = None
+    ) -> Future[object]: ...
+    def async_lookup_batch(
+        self, requests: object, *, callback_kwargs: object = None
+    ) -> Future[object]: ...
+    def async_store_batch(
+        self,
+        requests: object,
+        responses: object,
+        *,
+        callback_result: object = None,
+        callback_kwargs: object = None,
+    ) -> Future[object]: ...
+    def async_flush(self) -> Future[object]: ...
+    def ping(self) -> Future[object]: ...
+
+@final
+class _CacheTestResolver:
+    def __new__(cls, namespace: object) -> _CacheTestResolver: ...
+    def resolve(self) -> _CacheTestBinding: ...
 
 @final
 class TokenCounter:

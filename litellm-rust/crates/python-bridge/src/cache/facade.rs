@@ -117,7 +117,10 @@ impl ObjectGuard {
                 return Ok(false);
             }
             for (name, value) in &expected.attributes {
-                if instance.contains(name)? || !attributes.get_item(name)?.is(value.bind(py)) {
+                if !attributes.get_item(name)?.is(value.bind(py)) {
+                    return Ok(false);
+                }
+                if instance.contains(name)? && value.bind(py).is_callable() {
                     return Ok(false);
                 }
             }
