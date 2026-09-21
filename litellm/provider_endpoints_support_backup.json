@@ -1925,6 +1925,23 @@
         "interactions": true
       }
     },
+    "prism": {
+      "display_name": "Prism (`prism`)",
+      "url": "https://docs.litellm.ai/docs/providers/prism",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "recraft": {
       "display_name": "Recraft (`recraft`)",
       "url": "https://docs.litellm.ai/docs/providers/recraft",
