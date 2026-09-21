@@ -15,6 +15,7 @@ from pydantic import (
     Json,
     JsonValue,
     PositiveInt,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
@@ -3116,6 +3117,72 @@ class ConfigYAML(LiteLLMPydanticObjectBase):
     )
 
     model_config = ConfigDict(protected_namespaces=())
+
+
+ConfigSection: TypeAlias = Mapping[str, object]
+ConfigSectionList: TypeAlias = tuple[Mapping[str, object], ...]
+
+
+class ProxyRuntimeConfig(LiteLLMPydanticObjectBase):
+    """
+    The loaded, secret-resolved config.yaml that `ProxyConfig.get_config` returns.
+
+    Frozen: build a changed copy with `with_section` (or `model_copy(update=...)`) and hand it to
+    `ProxyConfig.save_config`. Top-level sections this model does not name are kept as extras so a
+    round trip through `to_mapping` loses nothing. `baseline` is the snapshot taken at load time
+    that `save_config` diffs against to find the sections that changed.
+    """
+
+    model_list: ConfigSectionList = ()
+    general_settings: ConfigSection = Field(default_factory=dict)
+    litellm_settings: ConfigSection = Field(default_factory=dict)
+    router_settings: ConfigSection = Field(default_factory=dict)
+    environment_variables: ConfigSection = Field(default_factory=dict)
+    callback_settings: ConfigSection = Field(default_factory=dict)
+    assistant_settings: ConfigSection = Field(default_factory=dict)
+    default_vertex_config: ConfigSection = Field(default_factory=dict)
+    mcp_servers: ConfigSection = Field(default_factory=dict)
+    policies: ConfigSection = Field(default_factory=dict)
+    search_tools: ConfigSectionList = ()
+    sandbox_tools: ConfigSectionList = ()
+    finetune_settings: ConfigSectionList = ()
+    files_settings: ConfigSectionList = ()
+    guardrails: ConfigSectionList = ()
+    prompts: ConfigSectionList = ()
+    credential_list: ConfigSectionList = ()
+    mcp_tools: ConfigSectionList = ()
+    agents: ConfigSectionList = ()
+    agent_list: ConfigSectionList = ()
+    vector_store_registry: ConfigSectionList = ()
+    worker_registry: ConfigSectionList = ()
+    policy_attachments: ConfigSectionList = ()
+
+    _baseline: Mapping[str, object] = PrivateAttr(default_factory=dict)
+
+    model_config = ConfigDict(frozen=True, extra="allow", protected_namespaces=())
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_null_sections(cls, data: object) -> object:
+        if not isinstance(data, Mapping):
+            return data
+        return {key: value for key, value in data.items() if value is not None}
+
+    @classmethod
+    def from_resolved(cls, raw: Mapping[str, object]) -> "ProxyRuntimeConfig":
+        loaded: Final = cls.model_validate(raw)
+        loaded._baseline = loaded.to_mapping()
+        return loaded
+
+    @property
+    def baseline(self) -> Mapping[str, object]:
+        return self._baseline
+
+    def to_mapping(self) -> Mapping[str, object]:
+        return MappingProxyType(self.model_dump(mode="json", exclude_defaults=True))
+
+    def with_section(self, name: str, value: ConfigSection | ConfigSectionList) -> "ProxyRuntimeConfig":
+        return self.model_copy(update={name: value})
 
 
 from litellm.models.verification_token import (  # noqa: E402
