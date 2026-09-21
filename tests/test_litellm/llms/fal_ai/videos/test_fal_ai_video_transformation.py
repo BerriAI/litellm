@@ -1,4 +1,5 @@
-from unittest.mock import Mock
+from typing import Final
+from unittest.mock import AsyncMock, Mock
 
 import httpx
 import pytest
@@ -215,9 +216,18 @@ class TestFalAIVideoTransformation:
             ({"request_id": "abc", "status": "COMPLETED"}, "completed"),
         ],
     )
-    def test_status_response_mapping(self, response_data, expected_status):
+    def test_status_response_mapping(self, response_data, expected_status, monkeypatch):
         status_url = "https://queue.fal.run/bytedance/seedance-2.5/requests/abc/status"
         response = httpx.Response(200, json=response_data, request=httpx.Request("GET", status_url))
+        if expected_status == "completed":
+            result_response: Final = httpx.Response(
+                200,
+                json={"video": {"url": "https://cdn.example.com/video.mp4"}},
+                request=httpx.Request("GET", status_url.removesuffix("/status")),
+            )
+            client: Final = Mock()
+            client.get.return_value = result_response
+            monkeypatch.setattr(fal_video_module, "_get_httpx_client", lambda: client)
 
         video = self.config.transform_video_status_retrieve_response(
             raw_response=response,
@@ -239,20 +249,26 @@ class TestFalAIVideoTransformation:
         )
         assert poll_url == status_url
 
-    def test_status_response_error(self):
+    def test_status_response_error(self, monkeypatch):
         response_data = {
             "request_id": "abc",
             "status": "COMPLETED",
             "error": "generation failed",
         }
+        status_url = "https://queue.fal.run/bytedance/seedance-2.5/requests/abc/status"
         response = httpx.Response(
             200,
             json=response_data,
-            request=httpx.Request(
-                "GET",
-                "https://queue.fal.run/bytedance/seedance-2.5/requests/abc/status",
-            ),
+            request=httpx.Request("GET", status_url),
         )
+        result_response: Final = httpx.Response(
+            200,
+            json={"video": {"url": "https://cdn.example.com/video.mp4"}},
+            request=httpx.Request("GET", status_url.removesuffix("/status")),
+        )
+        client: Final = Mock()
+        client.get.return_value = result_response
+        monkeypatch.setattr(fal_video_module, "_get_httpx_client", lambda: client)
 
         video = self.config.transform_video_status_retrieve_response(
             raw_response=response,
@@ -263,8 +279,99 @@ class TestFalAIVideoTransformation:
         assert video.status == "failed"
         assert video.error == {"code": "fal_error", "message": "generation failed"}
 
-    def test_status_response_uses_namespaced_request_url(self):
+    def test_status_completed_result_error_surfaces_fal_message(self, monkeypatch):
+        status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
+        auth_headers: Final = {"Authorization": "Key synthetic-fal-key", "Content-Type": "application/json"}
+        response: Final = httpx.Response(
+            200,
+            json={"request_id": "abc", "status": "COMPLETED"},
+            request=httpx.Request("GET", status_url, headers=auth_headers),
+        )
+        result_url: Final = status_url.removesuffix("/status")
+        result_response: Final = httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {
+                        "loc": ["body", "input.reference_image_urls"],
+                        "msg": "Failed to download the file. Please check if the URL is accessible and try again.",
+                    }
+                ]
+            },
+            request=httpx.Request("GET", result_url, headers=auth_headers),
+        )
+        client: Final = Mock()
+        client.get.return_value = result_response
+        monkeypatch.setattr(fal_video_module, "_get_httpx_client", lambda: client)
+
+        video = self.config.transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+        )
+
+        assert video.status == "failed"
+        assert "input.reference_image_urls: Failed to download the file" in video.error["message"]
+        client.get.assert_called_once_with(url=result_url, headers=auth_headers)
+
+    @pytest.mark.asyncio
+    async def test_async_status_completed_result_error_surfaces_fal_message(self, monkeypatch):
+        status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
+        auth_headers: Final = {"Authorization": "Key synthetic-fal-key", "Content-Type": "application/json"}
+        response: Final = httpx.Response(
+            200,
+            json={"request_id": "abc", "status": "COMPLETED"},
+            request=httpx.Request("GET", status_url, headers=auth_headers),
+        )
+        result_url: Final = status_url.removesuffix("/status")
+        result_response: Final = httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {
+                        "loc": ["body", "input.reference_image_urls"],
+                        "msg": "Failed to download the file. Please check if the URL is accessible and try again.",
+                    }
+                ]
+            },
+            request=httpx.Request("GET", result_url, headers=auth_headers),
+        )
+        client: Final = Mock()
+        client.get = AsyncMock(return_value=result_response)
+        monkeypatch.setattr(fal_video_module, "get_async_httpx_client", lambda llm_provider: client)
+
+        video = await self.config.async_transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+        )
+
+        assert video.status == "failed"
+        assert "input.reference_image_urls: Failed to download the file" in video.error["message"]
+        client.get.assert_awaited_once_with(url=result_url, headers=auth_headers)
+
+    def test_status_in_progress_does_not_fetch_result(self, monkeypatch):
+        status_url = "https://queue.fal.run/minimax/h3/requests/abc/status"
         response = httpx.Response(
+            200,
+            json={"request_id": "abc", "status": "IN_PROGRESS"},
+            request=httpx.Request("GET", status_url),
+        )
+
+        client: Final = Mock()
+        monkeypatch.setattr(fal_video_module, "_get_httpx_client", lambda: client)
+
+        video = self.config.transform_video_status_retrieve_response(
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+        )
+
+        assert video.status == "in_progress"
+        client.get.assert_not_called()
+
+    def test_status_response_uses_namespaced_request_url(self):
+        response: Final = httpx.Response(
             200,
             json={"status": "IN_PROGRESS"},
             request=httpx.Request(
@@ -307,6 +414,83 @@ class TestFalAIVideoTransformation:
         response.json.return_value = {"error": "generation failed"}
 
         with pytest.raises(ValueError, match="generation failed"):
+            self.config.transform_video_content_response(response, self.logging_obj)
+
+    def test_content_response_surfaces_list_detail_error(self):
+        response: Final = httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {
+                        "loc": ["body", "input.reference_image_urls"],
+                        "msg": "Failed to download the file. Please check if the URL is accessible and try again.",
+                    }
+                ]
+            },
+            request=httpx.Request("GET", "https://queue.fal.run/minimax/h3/requests/abc"),
+        )
+
+        with pytest.raises(FalAIVideoError) as error:
+            self.config.transform_video_content_response(response, self.logging_obj)
+
+        assert error.value.status_code == 422
+        assert "input.reference_image_urls: Failed to download the file" in error.value.message
+
+    def test_content_response_surfaces_string_detail_error(self):
+        response: Final = httpx.Response(
+            400,
+            json={"detail": "Request is still in progress"},
+            request=httpx.Request("GET", "https://queue.fal.run/minimax/h3/requests/abc"),
+        )
+
+        with pytest.raises(FalAIVideoError) as error:
+            self.config.transform_video_content_response(response, self.logging_obj)
+
+        assert error.value.status_code == 400
+        assert error.value.message == "Request is still in progress"
+
+    @pytest.mark.asyncio
+    async def test_async_content_response_surfaces_list_detail_error(self):
+        response: Final = httpx.Response(
+            422,
+            json={
+                "detail": [
+                    {
+                        "loc": ["body", "input.reference_image_urls"],
+                        "msg": "Failed to download the file. Please check if the URL is accessible and try again.",
+                    }
+                ]
+            },
+            request=httpx.Request("GET", "https://queue.fal.run/minimax/h3/requests/abc"),
+        )
+
+        with pytest.raises(FalAIVideoError) as error:
+            await self.config.async_transform_video_content_response(response, self.logging_obj)
+
+        assert error.value.status_code == 422
+        assert "input.reference_image_urls: Failed to download the file" in error.value.message
+
+    @pytest.mark.asyncio
+    async def test_async_content_response_surfaces_string_detail_error(self):
+        response = httpx.Response(
+            400,
+            json={"detail": "Request is still in progress"},
+            request=httpx.Request("GET", "https://queue.fal.run/minimax/h3/requests/abc"),
+        )
+
+        with pytest.raises(FalAIVideoError) as error:
+            await self.config.async_transform_video_content_response(response, self.logging_obj)
+
+        assert error.value.status_code == 400
+        assert error.value.message == "Request is still in progress"
+
+    def test_extract_video_url_surfaces_list_detail_error(self):
+        response: Final = Mock(spec=httpx.Response)
+        response.json.return_value = {
+            "detail": [{"loc": ["body", "input.reference_image_urls"], "msg": "Failed to download the file"}]
+        }
+
+        with pytest.raises(ValueError, match=r"input\.reference_image_urls: Failed to download the file"):
             self.config.transform_video_content_response(response, self.logging_obj)
 
     def test_provider_config_and_error_class(self):

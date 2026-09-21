@@ -1,7 +1,7 @@
 import math
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, TypeAlias
@@ -163,9 +163,85 @@ def _response_data(raw_response: httpx.Response) -> Mapping[str, object]:
     return TypeAdapter(Mapping[str, object]).validate_python(raw_response.json())
 
 
+def _response_data_or_none(raw_response: httpx.Response) -> Mapping[str, object] | None:
+    try:
+        return _response_data(raw_response)
+    except ValueError:
+        return None
+
+
+def _detail_item_text(item: Mapping[str, object]) -> str | None:
+    message: Final[object] = item.get("msg")
+    if not isinstance(message, str):
+        return None
+    location: Final[object] = item.get("loc")
+    if isinstance(location, str) and location:
+        return f"{location}: {message}"
+    if isinstance(location, (list, tuple)):
+        location_parts: Final[tuple[str, ...]] = tuple(part for part in location if isinstance(part, str))
+        if location_parts:
+            return f"{'.'.join(location_parts)}: {message}"
+    return message
+
+
+def _error_text(response_data: Mapping[str, object]) -> str | None:
+    detail: Final[object] = response_data.get("detail")
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, list):
+        detail_items: Final[Sequence[Mapping[str, object]]] = TypeAdapter(
+            Sequence[Mapping[str, object]]
+        ).validate_python(tuple(item for item in detail if isinstance(item, Mapping)))
+        detail_messages: Final[tuple[str, ...]] = tuple(
+            message for item in detail_items if (message := _detail_item_text(item)) is not None
+        )
+        if detail_messages:
+            return "; ".join(detail_messages)
+    error: Final[object] = response_data.get("error")
+    return error if isinstance(error, str) else None
+
+
+def _result_error(raw_response: httpx.Response) -> str | None:
+    if raw_response.is_success:
+        return None
+    response_data: Final[Mapping[str, object] | None] = _response_data_or_none(raw_response)
+    error_text: Final[str | None] = _error_text(response_data) if response_data is not None else None
+    if error_text:
+        return error_text
+    response_text: Final[str] = raw_response.text
+    return response_text or f"fal.ai returned HTTP {raw_response.status_code}"
+
+
 def _response_string(response_data: Mapping[str, object], key: str, default: str = "") -> str:
     value: Final[object] = response_data.get(key)
     return value if isinstance(value, str) else default
+
+
+def _status_video_object(
+    response_data: Mapping[str, object],
+    raw_response: httpx.Response,
+    custom_llm_provider: str | None,
+    result_error: str | None,
+) -> VideoObject:
+    raw_status: Final[str] = _response_string(response_data, "status", "IN_QUEUE")
+    status: Final[str] = _STATUS_MAP.get(raw_status, "queued")
+    status_error: Final[str | None] = _error_text(response_data)
+    error: Final[str | None] = result_error if result_error is not None else status_error
+    provider: Final[str] = custom_llm_provider or _FAL_AI_PROVIDER
+    model_path: Final[str | None] = _model_path_from_request_url(raw_response)
+    request_id: Final[str] = _response_string(response_data, "request_id") or (
+        _request_id_from_request_url(raw_response) or ""
+    )
+    return VideoObject(
+        id=encode_video_id_with_provider(request_id, provider, model_path),
+        object="video",
+        status="failed" if error else status,
+        created_at=0,
+        model=model_path,
+        error=(
+            {"code": "fal_error", "message": error} if error else None  # mutable-ok: VideoObject requires a dict
+        ),
+    )
 
 
 class FalAIVideoConfig(BaseVideoConfig):
@@ -345,25 +421,77 @@ class FalAIVideoConfig(BaseVideoConfig):
         custom_llm_provider: str | None = None,
     ) -> VideoObject:
         response_data: Final[Mapping[str, object]] = _response_data(raw_response)
-        raw_status: Final[str] = _response_string(response_data, "status", "IN_QUEUE")
-        status: Final[str] = _STATUS_MAP.get(raw_status, "queued")
-        error_value: Final[object] = response_data.get("error")
-        error: Final[str | None] = error_value if isinstance(error_value, str) else None
-        provider: Final[str] = custom_llm_provider or _FAL_AI_PROVIDER
-        model_path: Final[str | None] = _model_path_from_request_url(raw_response)
-        request_id: Final[str] = _response_string(response_data, "request_id") or (
-            _request_id_from_request_url(raw_response) or ""
+        result_error: Final[str | None] = self._fetch_result_error(raw_response, response_data)
+        return _status_video_object(
+            response_data=response_data,
+            raw_response=raw_response,
+            custom_llm_provider=custom_llm_provider,
+            result_error=result_error,
         )
-        return VideoObject(
-            id=encode_video_id_with_provider(request_id, provider, model_path),
-            object="video",
-            status="failed" if error else status,
-            created_at=0,
-            model=model_path,
-            error=(
-                {"code": "fal_error", "message": error} if error else None  # mutable-ok: VideoObject requires a dict
-            ),
+
+    def _fetch_result_error(
+        self,
+        raw_response: httpx.Response,
+        response_data: Mapping[str, object],
+    ) -> str | None:
+        if _response_string(response_data, "status", "IN_QUEUE") != "COMPLETED":
+            return None
+        result_url: Final[str] = str(raw_response.request.url).removesuffix("/status")
+        result_headers: Final[Mapping[str, str]] = MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("Authorization", raw_response.request.headers.get("Authorization")),
+                    ("Content-Type", raw_response.request.headers.get("Content-Type")),
+                )
+                if value is not None
+            }
         )
+        result_response: Final[httpx.Response] = _get_httpx_client().get(
+            url=result_url,
+            headers=result_headers,
+        )
+        return _result_error(result_response)
+
+    async def async_transform_video_status_retrieve_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        custom_llm_provider: str | None = None,
+    ) -> VideoObject:
+        response_data: Final[Mapping[str, object]] = _response_data(raw_response)
+        result_error: Final[str | None] = await self._fetch_result_error_async(raw_response, response_data)
+        return _status_video_object(
+            response_data=response_data,
+            raw_response=raw_response,
+            custom_llm_provider=custom_llm_provider,
+            result_error=result_error,
+        )
+
+    async def _fetch_result_error_async(
+        self,
+        raw_response: httpx.Response,
+        response_data: Mapping[str, object],
+    ) -> str | None:
+        if _response_string(response_data, "status", "IN_QUEUE") != "COMPLETED":
+            return None
+        result_url: Final[str] = str(raw_response.request.url).removesuffix("/status")
+        result_headers: Final[Mapping[str, str]] = MappingProxyType(
+            {
+                key: value
+                for key, value in (
+                    ("Authorization", raw_response.request.headers.get("Authorization")),
+                    ("Content-Type", raw_response.request.headers.get("Content-Type")),
+                )
+                if value is not None
+            }
+        )
+        async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(llm_provider=LlmProviders.FAL_AI)
+        result_response: Final[httpx.Response] = await async_httpx_client.get(
+            url=result_url,
+            headers=result_headers,
+        )
+        return _result_error(result_response)
 
     @staticmethod
     def _decode_video_id(video_id: str) -> tuple[str, str]:
@@ -401,15 +529,19 @@ class FalAIVideoConfig(BaseVideoConfig):
             video_url: Final[object] = video_data.get("url")
             if isinstance(video_url, str) and video_url:
                 return video_url
-        error_message: Final[str | None] = next(
-            (value for key in ("error", "detail") if isinstance(value := response_data.get(key), str)),
-            None,
-        )
+        error_message: Final[str | None] = _error_text(response_data)
         if error_message:
             raise ValueError(f"fal.ai video result did not include a video URL: {error_message}")
         raise ValueError("fal.ai video result did not include a video URL")
 
     def transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+        error: Final[str | None] = _result_error(raw_response)
+        if error is not None:
+            raise FalAIVideoError(
+                status_code=raw_response.status_code,
+                message=error,
+                headers=dict(raw_response.headers),  # mutable-ok: exception headers require a mutable dictionary
+            )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
         httpx_client: Final[HTTPHandler] = _get_httpx_client()
         video_response: Final[httpx.Response] = httpx_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
@@ -419,6 +551,13 @@ class FalAIVideoConfig(BaseVideoConfig):
         return video_response.content
 
     async def async_transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+        error: Final[str | None] = _result_error(raw_response)
+        if error is not None:
+            raise FalAIVideoError(
+                status_code=raw_response.status_code,
+                message=error,
+                headers=dict(raw_response.headers),  # mutable-ok: exception headers require a mutable dictionary
+            )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
         async_httpx_client: Final[AsyncHTTPHandler] = get_async_httpx_client(llm_provider=LlmProviders.FAL_AI)
         video_response: Final[httpx.Response] = await async_httpx_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
