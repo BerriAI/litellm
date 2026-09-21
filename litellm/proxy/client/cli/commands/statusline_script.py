@@ -1,6 +1,6 @@
 """Claude Code status line and Codex Stop hook for auto-routed sessions.
 
-`lite` copies this file verbatim to ~/.litellm/statusline.py and registers it as Claude
+`lite` copies this file with a CLI version header to ~/.litellm/statusline.py and registers it as Claude
 Code's `statusLine` command and as Codex's `[[hooks.Stop]]` command, so it must stay
 standard-library only and must never import litellm. Claude Code re-runs it on every
 status refresh (about every 300ms while typing), so the proxy is asked at most once per

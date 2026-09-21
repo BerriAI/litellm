@@ -6,6 +6,7 @@ import stat
 import sys
 import time
 from pathlib import Path
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -773,7 +774,7 @@ class TestStatusLine:
 
         script = tmp_path / "lite" / "statusline.py"
         command = install_statusline_script(script)
-        assert script.read_bytes() == pathlib.Path(statusline_script.__file__).read_bytes()
+        assert script.read_bytes().split(b"\n", 1)[1] == pathlib.Path(statusline_script.__file__).read_bytes()
         assert shlex.split(command) == [sys.executable, str(script)]
         assert command == statusline_command(script)
         assert stat.S_IMODE(script.stat().st_mode) == 0o600
@@ -783,11 +784,9 @@ class TestStatusLine:
     def test_a_reinstall_replaces_the_script_in_one_step_and_a_refused_one_leaves_the_old_script_whole(self, tmp_path):
         # Claude Code may be running the script at the moment `lite` reinstalls it; the file it has open
         # must stay complete, and a reinstall that cannot land must not leave a truncated script behind.
-        from litellm.proxy.client.cli.commands import statusline_script
-
         script = tmp_path / "lite" / "statusline.py"
         install_statusline_script(script)
-        bundled = pathlib.Path(statusline_script.__file__).read_bytes()
+        bundled = script.read_bytes()
         with script.open("rb") as running:
             install_statusline_script(script)
             assert running.read() == bundled
@@ -801,6 +800,67 @@ class TestStatusLine:
             finally:
                 script.parent.chmod(0o700)
             assert script.read_bytes() == bundled
+
+    @pytest.mark.parametrize(
+        ("installed_version", "older_version"),
+        (("2.10.0", "2.9.0"), ("2.1.0", "2.1.0rc1"), ("2.1.0rc1", "2.1.0.dev2"), ("2.1.0.post1", "2.1.0")),
+    )
+    def test_an_older_cli_preserves_the_newer_footer(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], installed_version: str, older_version: str
+    ) -> None:
+        script: Final = tmp_path / "statusline.py"
+        command: Final = install_statusline_script(script, package_version=installed_version)
+        installed: Final = script.read_bytes()
+        modified: Final = script.stat().st_mtime_ns
+
+        assert install_statusline_script(script, package_version=older_version) == command
+
+        assert script.read_bytes() == installed
+        assert script.stat().st_mtime_ns == modified
+        assert f"Keeping the status line from LiteLLM {installed_version}" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "old_header", (b"", b"# litellm-statusline-version: invalid\n", b"# litellm-statusline-version: \xff\n")
+    )
+    def test_a_legacy_or_damaged_version_marker_is_repaired(self, tmp_path: Path, old_header: bytes) -> None:
+        from litellm.proxy.client.cli.commands import statusline_script
+
+        script: Final = tmp_path / "statusline.py"
+        script.write_bytes(old_header + b"print('old footer')\n")
+
+        install_statusline_script(script, package_version="2.1.0")
+
+        assert script.read_bytes() == (
+            b"# litellm-statusline-version: 2.1.0\n" + Path(statusline_script.__file__).read_bytes()
+        )
+
+    @pytest.mark.parametrize("next_version", ("2.1.0", "2.2.0"))
+    def test_an_equal_or_newer_cli_refreshes_the_footer(self, tmp_path: Path, next_version: str) -> None:
+        from litellm.proxy.client.cli.commands import statusline_script
+
+        script: Final = tmp_path / "statusline.py"
+        script.write_bytes(b"# litellm-statusline-version: 2.1.0\nprint('old footer')\n")
+
+        install_statusline_script(script, package_version=next_version)
+
+        assert script.read_bytes() == (
+            f"# litellm-statusline-version: {next_version}\n".encode() + Path(statusline_script.__file__).read_bytes()
+        )
+
+    def test_configure_keeps_a_newer_footer_while_updating_settings(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        script: Final = tmp_path / "statusline.py"
+        script.write_bytes(b"# litellm-statusline-version: 999999.0.0\nprint('newer footer')\n")
+        installed: Final = script.read_bytes()
+        rig: Final = _Rig(tmp_path, {"theme": "dark"})
+
+        rig.configure(script_path=script)
+
+        assert script.read_bytes() == installed
+        assert rig.read()["statusLine"]["command"] == statusline_command(script)
+        assert rig.read()["env"]["ANTHROPIC_BASE_URL"] == PROXY
+        assert "Keeping the status line" in capsys.readouterr().err
 
     def test_configure_installs_it_and_unconfigure_removes_only_ours(self, tmp_path):
         rig = _Rig(tmp_path, {"theme": "dark"})
