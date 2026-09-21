@@ -119,6 +119,7 @@ class SseResponse(BaseModel):
 
     content_type: Literal["text/event-stream"]
     frames: tuple[str, ...]
+    frame_delay_ms: int = Field(default=0, ge=0)
 
 
 class EventStreamEvent(BaseModel):
@@ -163,6 +164,7 @@ class ExactExpected(BaseModel):
     tool_usage_cost: float | None = None
     breakdown_persisted: bool = True
     cost_header: bool = True
+    rollups: bool = False
 
 
 class RecountRates(BaseModel):
@@ -176,6 +178,10 @@ class RecountExpected(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     recount: RecountRates
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    min_completion_tokens: int | None = None
+    max_completion_tokens: int | None = None
 
 
 class FailureDetails(BaseModel):
@@ -220,6 +226,8 @@ class CostTrackingTestCase(BaseModel):
     request: dict[str, JsonValue]
     response: StoredResponse
     expected: Expected
+    fallback_from: StoredResponse | None = None
+    disconnect_after_frames: int | None = Field(default=None, ge=1)
 
     @property
     def rates(self) -> CostMapEntry:
@@ -442,7 +450,48 @@ def data_errors() -> tuple[str, ...]:
                 and case.rates.mode != "image_generation"
                 and not case.reports_provider_cost
             )
-            or (not case.expected.cost_header and case.passthrough_provider is None)
+            or (
+                not case.expected.cost_header
+                and case.passthrough_provider is None
+                and not isinstance(case.response, SseResponse)
+                and case.expected.spend != 0.0
+            )
+        )
+    )
+    invalid_fallbacks: Final = sorted(
+        case.name
+        for case in CASES
+        if case.fallback_from is not None
+        and (
+            not isinstance(case.fallback_from, JsonResponse)
+            or not 400 <= case.fallback_from.status <= 599
+        )
+    )
+    invalid_disconnects: Final = sorted(
+        case.name
+        for case in CASES
+        if case.disconnect_after_frames is not None
+        and (
+            not isinstance(case.response, SseResponse)
+            or case.response.frame_delay_ms <= 0
+            or not isinstance(case.expected, RecountExpected)
+        )
+    )
+    invalid_rollup_ids: Final = sorted(
+        case.name
+        for case in CASES
+        if isinstance(case.expected, ExactExpected)
+        and case.expected.rollups
+        and "$UNIQUE_ID" not in case.response.model_dump_json()
+    )
+    invalid_pinned_tool_ids: Final = sorted(
+        case.name
+        for case in CASES
+        if isinstance(case.expected, RecountExpected)
+        and (case.expected.prompt_tokens is not None or case.expected.completion_tokens is not None)
+        and any(
+            marker in case.response.model_dump_json()
+            for marker in ('"id": "call_$REQUEST_ID"', '"id": "toolu_$REQUEST_ID"')
         )
     )
     return tuple(
@@ -458,6 +507,12 @@ def data_errors() -> tuple[str, ...]:
             if failure_response_mismatches
             else None,
             f"invalid passthrough opt-outs: {invalid_opt_outs}" if invalid_opt_outs else None,
+            f"invalid fallback responses: {invalid_fallbacks}" if invalid_fallbacks else None,
+            f"invalid disconnect cases: {invalid_disconnects}" if invalid_disconnects else None,
+            f"rollup responses lack $UNIQUE_ID: {invalid_rollup_ids}" if invalid_rollup_ids else None,
+            f"pinned tool IDs contain $REQUEST_ID: {invalid_pinned_tool_ids}"
+            if invalid_pinned_tool_ids
+            else None,
         )
         if message is not None
     )

@@ -4,6 +4,7 @@ import functools
 import json
 import os
 from collections.abc import Mapping
+from dataclasses import dataclass
 from hashlib import sha256
 from typing import Final
 
@@ -13,8 +14,8 @@ from pydantic import BaseModel, ConfigDict
 
 from integration._support.client import JSON_OBJECT, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.upstream import delete_scenario, register_scenario
-from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase
+from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
+from integration.cost_calculation.cost_tracking_case import CostTrackingTestCase, StoredResponse
 
 
 class CostBreakdown(BaseModel):
@@ -43,6 +44,7 @@ class CostRow(BaseModel):
     status: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    model_id: str | None = None
     metadata: CostMetadata | None = None
 
     @property
@@ -57,6 +59,26 @@ class FailureRow(BaseModel):
     status: str
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+
+
+class DailySpend(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+    api_requests: int
+
+
+class Rollups(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    key_spend: float
+    team_spend: float
+    user_spend: float
+    end_user_spend: float
+    daily_user: DailySpend
+    daily_team: DailySpend
 
 
 def approx_equal(actual: float, expected: float) -> bool:
@@ -90,13 +112,105 @@ def poll_cost_row(key: str) -> CostRow:
 
     def read() -> CostRow | None:
         rows: Final = read_rows(
-            'SELECT spend, status, metadata, prompt_tokens, completion_tokens '
+            'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id '
             'FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
             (digest,),
         )
         return next((parsed for row in rows if (parsed := _row(row)) is not None), None)
 
     result: Final = eventually(read, lambda row: row is not None, seconds=60)
+    assert result is not None
+    return result
+
+
+def read_rows_now(key: str) -> tuple[CostRow, ...]:
+    digest: Final = sha256(key.encode()).hexdigest()
+    rows: Final = read_rows(
+        'SELECT spend, status, metadata, prompt_tokens, completion_tokens, model_id '
+        'FROM "LiteLLM_SpendLogs" WHERE api_key=%s ORDER BY "startTime"',
+        (digest,),
+    )
+    return tuple(parsed for row in rows if (parsed := _row(row)) is not None)
+
+
+def poll_rows(key: str, count: int) -> tuple[CostRow, ...]:
+    result: Final = eventually(
+        lambda: read_rows_now(key),
+        lambda rows: len(rows) >= count,
+        seconds=60,
+    )
+    return result
+
+
+def poll_rollups(
+    key: str,
+    team_id: str,
+    user_id: str,
+    end_user_id: str,
+    target_spend: float,
+    target_requests: int,
+) -> Rollups:
+    digest: Final = sha256(key.encode()).hexdigest()
+
+    def read() -> Rollups | None:
+        key_rows: Final = read_rows(
+            'SELECT spend FROM "LiteLLM_VerificationToken" WHERE token=%s',
+            (digest,),
+        )
+        team_rows: Final = read_rows(
+            'SELECT spend FROM "LiteLLM_TeamTable" WHERE team_id=%s',
+            (team_id,),
+        )
+        user_rows: Final = read_rows(
+            'SELECT spend FROM "LiteLLM_UserTable" WHERE user_id=%s',
+            (user_id,),
+        )
+        end_user_rows: Final = read_rows(
+            'SELECT spend FROM "LiteLLM_EndUserTable" WHERE user_id=%s',
+            (end_user_id,),
+        )
+        daily_user_rows: Final = read_rows(
+            'SELECT spend, prompt_tokens, completion_tokens, api_requests '
+            'FROM "LiteLLM_DailyUserSpend" WHERE user_id=%s AND api_key=%s AND date=CURRENT_DATE::text',
+            (user_id, digest),
+        )
+        daily_team_rows: Final = read_rows(
+            'SELECT spend, prompt_tokens, completion_tokens, api_requests '
+            'FROM "LiteLLM_DailyTeamSpend" WHERE team_id=%s AND api_key=%s AND date=CURRENT_DATE::text',
+            (team_id, digest),
+        )
+        if not all((key_rows, team_rows, user_rows, end_user_rows, daily_user_rows, daily_team_rows)):
+            return None
+        rollups: Final = Rollups(
+            key_spend=float(key_rows[0]["spend"]),
+            team_spend=float(team_rows[0]["spend"]),
+            user_spend=float(user_rows[0]["spend"]),
+            end_user_spend=float(end_user_rows[0]["spend"]),
+            daily_user=DailySpend.model_validate(daily_user_rows[0]),
+            daily_team=DailySpend.model_validate(daily_team_rows[0]),
+        )
+        return rollups
+
+    def settled(value: Rollups | None) -> bool:
+        return value is not None and all(
+            (
+                approx_equal(value.key_spend, target_spend),
+                approx_equal(value.team_spend, target_spend),
+                approx_equal(value.user_spend, target_spend),
+                approx_equal(value.end_user_spend, target_spend),
+                approx_equal(value.daily_user.spend, target_spend),
+                approx_equal(value.daily_team.spend, target_spend),
+                value.daily_user.api_requests == target_requests,
+                value.daily_team.api_requests == target_requests,
+            )
+        )
+
+    result: Final = eventually(
+        read,
+        settled,
+        seconds=20,
+        return_last_on_timeout=True,
+    )
     assert result is not None
     return result
 
@@ -147,17 +261,30 @@ def _vertex_service_account_json(url: str) -> str:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class RegisteredDeployment:
+    model_name: str
+    identity: str
+    handle: ScenarioHandle
+
+
 def register_scenario_deployment(
     scenario: Scenario,
     case: CostTrackingTestCase,
     marker: str,
     key: str,
-) -> str:
+    *,
+    response: StoredResponse | None = None,
+    marker_suffix: str = "",
+) -> RegisteredDeployment:
     control_url: Final = os.environ["INTEGRATION_UPSTREAM_URL"].rstrip("/")
     run_marker: Final = sha256(key.encode()).hexdigest()[:12]
-    handle: Final = register_scenario(f"sc-{marker}-{run_marker}", case.response)
+    handle: Final = register_scenario(
+        f"sc-{marker}{marker_suffix}-{run_marker}",
+        case.response if response is None else response,
+    )
     scenario.cleanups.callback(delete_scenario, handle)
-    model_name: Final = f"cost-{marker}-{run_marker}"
+    registered_model_name: Final = f"cost-{marker}{marker_suffix}-{run_marker}"
     parameters: Final = {
         "model": case.litellm_model,
         "api_key": case.api_key,
@@ -184,7 +311,7 @@ def register_scenario_deployment(
     created: Final = scenario.gateway.post(
         "/model/new",
         JSON_OBJECT.validate_python({
-            "model_name": model_name,
+            "model_name": registered_model_name,
             "litellm_params": parameters,
             "model_info": (
                 {"base_model": case.base_model}
@@ -195,4 +322,4 @@ def register_scenario_deployment(
     )
     identity: Final = string_value(object_value(created["model_info"])["id"])
     scenario.cleanups.callback(scenario.delete_model, identity)
-    return model_name
+    return RegisteredDeployment(model_name=registered_model_name, identity=identity, handle=handle)
