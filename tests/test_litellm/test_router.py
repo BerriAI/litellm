@@ -14223,6 +14223,50 @@ async def test_anthropic_messages_hop_stream_failure_reaches_second_fallback_ent
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_attempt_strips_the_controls_carrier_and_wraps_every_hop_stream():
+    """Each attempt of the chain, not only the primary's, comes back wrapped for mid-stream
+    failover, and the per-request controls carrier never reaches the provider call."""
+    from types import MappingProxyType
+
+    from litellm.router_utils.fallback_event_handlers import (
+        MID_STREAM_FALLBACK_CONTROLS_KEY,
+        MidStreamFallbackControls,
+    )
+
+    router = Router(
+        model_list=[
+            {"model_name": "fb1", "litellm_params": {"model": "anthropic/fb1-model", "api_key": "sk-test"}},
+        ],
+        num_retries=0,
+    )
+    hop_stream = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), _anthropic_messages_content_chunk("from fb1")]
+    )
+    seen: dict = {}
+
+    async def fake_original(**kwargs):
+        seen.update(kwargs)
+        return hop_stream
+
+    controls = MidStreamFallbackControls(MappingProxyType({"fallbacks": [{"primary": ["fb1", "fb2"]}]}))
+    stream = await router._ageneric_api_call_with_fallbacks_anthropic_messages_attempt(
+        model="fb1",
+        original_generic_function=fake_original,
+        stream=True,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=10,
+        **{MID_STREAM_FALLBACK_CONTROLS_KEY: controls},
+    )
+    body = b"".join([chunk async for chunk in stream])
+
+    assert seen["model"] == "anthropic/fb1-model"
+    assert MID_STREAM_FALLBACK_CONTROLS_KEY not in seen
+    assert "fallbacks" not in seen
+    assert stream is not hop_stream
+    assert b"from fb1" in body
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_fallback_triggers_after_lifecycle_only_frame():
     """Regression: Anthropic routinely sends a message_start lifecycle frame
     before an overload error even fires. A lifecycle-only frame (no real
