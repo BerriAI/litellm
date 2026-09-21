@@ -106,6 +106,31 @@ async def test_change_password_rejects_wrong_current_password():
 
 
 @pytest.mark.asyncio
+async def test_change_password_rejects_unchanged_password():
+    from litellm.proxy._types import ChangePasswordRequest
+
+    prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
+
+    with (
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.prisma_client", prisma
+        ),
+        patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
+            "litellm.proxy.proxy_server.general_settings", _POLICY_NO_BREACH_CHECK
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await change_password(
+                data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=CURRENT_PASSWORD),
+                user_api_key_dict=_caller(),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "must be different from the current password" in exc_info.value.detail["error"]
+    prisma.db.litellm_usertable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_change_password_rejects_session_without_user():
     from litellm.proxy._types import ChangePasswordRequest
 

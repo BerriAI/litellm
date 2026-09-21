@@ -63,11 +63,12 @@ async def change_password(
     """
     Change the calling user's own password.
 
-    Requires the current password. The new password must satisfy the
-    configured password policy (`general_settings.password_policy_*`: minimum
-    length, character classes, and, when enabled, breached-password screening
-    via haveibeenpwned.com). A successful change lifts any pending forced
-    password reset (`password_reset_required`) on the account.
+    Requires the current password. The new password must differ from the
+    current one and satisfy the configured password policy
+    (`general_settings.password_policy_*`: minimum length, character classes,
+    and, when enabled, breached-password screening via haveibeenpwned.com).
+    A successful change lifts any pending forced password reset
+    (`password_reset_required`) on the account.
 
     Parameters:
     - current_password: str - The user's current password.
@@ -102,6 +103,12 @@ async def change_password(
 
     if not verify_password(data.current_password, stored_password):
         raise HTTPException(status_code=400, detail=_error_detail("Current password is incorrect."))
+
+    if data.new_password == data.current_password:
+        raise HTTPException(
+            status_code=400,
+            detail=_error_detail("New password must be different from the current password."),
+        )
 
     validate_password_policy(data.new_password, general_settings)
     await validate_password_not_breached(data.new_password, general_settings)
