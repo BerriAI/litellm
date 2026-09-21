@@ -68617,8 +68617,8 @@
         "supports_web_search": true
     },
     "openrouter/meta-llama/llama-4-maverick": {
-        "input_cost_per_token": 1.875e-07,
-        "output_cost_per_token": 6.525e-07,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 8e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 16384,
@@ -69010,12 +69010,12 @@
         "supports_reasoning": false
     },
     "openrouter/meta-llama/llama-3.1-70b-instruct": {
-        "input_cost_per_token": 4e-07,
-        "output_cost_per_token": 4e-07,
+        "input_cost_per_token": 7.2e-07,
+        "output_cost_per_token": 7.2e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 131072,
-        "max_output_tokens": 16384,
-        "max_tokens": 16384,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
         "mode": "chat",
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
@@ -72727,14 +72727,14 @@
         "supports_web_search": false
     },
     "openrouter/ibm-granite/granite-4.2-8b": {
-        "cache_read_input_token_cost": 1.5e-08,
-        "input_cost_per_token": 6e-08,
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 131072,
         "max_output_tokens": 117964,
         "max_tokens": 117964,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 1.5e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
