@@ -122,7 +122,8 @@ class ExceptionCheckers:
         known_exception_substrings: Final = [
             "content_policy_violation",
             "responsibleaipolicyviolation",
-            "the response was filtered due to the prompt triggering azure openai's content management",
+            "contentfiltered",
+            "the response was filtered due to the prompt triggering azure openai",
             "your task failed as a result of our safety system",
             "the model produced invalid content",
             "content_filter_policy",
@@ -1923,6 +1924,10 @@ def _map_vllm_exception(
             )
 
 
+_AZURE_CONTENT_POLICY_ERROR_CODES: Final = frozenset(("content_policy_violation", "content_filter"))
+_AZURE_CONTENT_POLICY_INNER_CODES: Final = frozenset(("ResponsibleAIPolicyViolation", "ContentFiltered"))
+
+
 def _map_azure_exception(
     *,
     model: str,
@@ -1949,13 +1954,9 @@ def _map_azure_exception(
         if isinstance(body_dict, dict):
             if isinstance(body_dict.get("error"), dict):
                 azure_error_code = body_dict["error"].get("code")
-                # Also check inner_error for
-                # ResponsibleAIPolicyViolation which indicates a
-                # content policy violation even when the top-level
-                # code is generic (e.g. "invalid_request_error").
-                if azure_error_code != "content_policy_violation":
+                if azure_error_code not in _AZURE_CONTENT_POLICY_ERROR_CODES:
                     _inner: Final = body_dict["error"].get("inner_error") or body_dict["error"].get("innererror")
-                    if isinstance(_inner, dict) and _inner.get("code") == "ResponsibleAIPolicyViolation":
+                    if isinstance(_inner, dict) and _inner.get("code") in _AZURE_CONTENT_POLICY_INNER_CODES:
                         azure_error_code = "content_policy_violation"
             else:
                 azure_error_code = body_dict.get("code")
@@ -1986,8 +1987,9 @@ def _map_azure_exception(
             litellm_debug_info=extra_information,
             response=getattr(original_exception, "response", None),
         )
-    elif azure_error_code == "content_policy_violation" or ExceptionCheckers.is_azure_content_policy_violation_error(
-        error_str
+    elif (
+        azure_error_code in _AZURE_CONTENT_POLICY_ERROR_CODES
+        or ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
     ):
         from litellm.llms.azure.exception_mapping import (
             AzureOpenAIExceptionMapping,
