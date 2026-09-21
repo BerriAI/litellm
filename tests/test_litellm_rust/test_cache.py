@@ -8,10 +8,16 @@ import time
 import uuid
 import weakref
 from collections.abc import Generator
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final, Protocol, cast
+from unittest.mock import Mock
 from urllib.parse import urlparse
 
+import boto3
+import botocore.config
+import diskcache
 import fakeredis
 import pytest
 import redis
@@ -20,17 +26,23 @@ from azure.storage.blob import ContainerClient
 import litellm
 from litellm.caching.azure_blob_cache import AzureBlobCache
 from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
+from litellm.caching.disk_cache import DiskCache
+from litellm.caching.gcs_cache import GCSCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
+from litellm.caching.s3_cache import S3Cache
 from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
+from tests.test_litellm_rust.support.fake_gcs import FakeGcs
 from tests.test_litellm_rust.support.isolation import rebound
+from tests.test_litellm_rust.support.s3_stub import S3Stub
 
 pytestmark: Final = pytest.mark.requires_rust_extension
 
 
 class CacheLookup(Protocol):
     def get_cache(self, **kwargs: object) -> object: ...
+    def flush_cache(self) -> object: ...
 
 
 def request(key: str = "key") -> dict[str, object]:
@@ -48,6 +60,15 @@ def redis_url() -> Generator[str]:
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+
+
+@pytest.fixture
+def fake_gcs() -> Generator[FakeGcs]:
+    server: Final = FakeGcs()
+    try:
+        yield server
+    finally:
+        server.close()
 
 
 @pytest.fixture
@@ -411,15 +432,20 @@ def test_azure_blob_facade_serves_natively_and_python_reads_the_same_blobs(azure
     assert handle.backend == "azure-blob"
     account_url: Final = backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}")
     with pytest.raises(TypeError, match="containers must match"):
-        _native._CacheTestHandle.azure_blob(account_url, f"{backend.container_client.container_name}-other")._bind_facade(
-            azure_blob_facade
-        )
+        _native._CacheTestHandle.azure_blob(
+            account_url, f"{backend.container_client.container_name}-other"
+        )._bind_facade(azure_blob_facade)
     handle._bind_facade(azure_blob_facade)
     resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=azure_blob_facade))
     native: Final = resolver.resolve()
     assert native.kind == "native"
 
-    response: Final = {"choices": [{"text": "caf\u00e9 \u2603"}], "usage": {"total_tokens": 3}, "flag": True, "empty": None}
+    response: Final = {
+        "choices": [{"text": "caf\u00e9 \u2603"}],
+        "usage": {"total_tokens": 3},
+        "flag": True,
+        "empty": None,
+    }
     native.store({**request("sync"), "ttl_seconds": 0.001}, response)
     native.store(request("sync"), {"choices": [{"text": "second"}]})
     time.sleep(0.01)
@@ -474,7 +500,9 @@ async def test_azure_blob_native_async_writes_overwrite_batch_and_flush_like_pyt
     await binding.async_store({**request("async"), "ttl_seconds": 0.001}, {"value": 2})
     time.sleep(0.01)
     assert await binding.async_lookup(request("async")) == {"value": 2}
-    assert await backend.async_get_cache("async") == json.loads(backend.container_client.download_blob("async").readall())
+    assert await backend.async_get_cache("async") == json.loads(
+        backend.container_client.download_blob("async").readall()
+    )
     assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="async") == {"value": 2}
 
     await binding.async_store_batch([request("first"), request("second")], [{"value": 3}, {"value": 4}])
@@ -519,6 +547,508 @@ async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
     assert client.get("second") is not None
     await facade.cache.disconnect()
     client.close()
+
+
+async def test_disk_reads_python_entries_and_python_reads_native_entries(tmp_path: Path) -> None:
+    disk_cache: Final = DiskCache(disk_cache_dir=str(tmp_path))
+    response: Final = {"choices": [{"text": "cached"}], "usage": {"total_tokens": 3}}
+    disk_cache.disk_cache.set(
+        "sync",
+        {"timestamp": time.time(), "response": json.dumps(response)},
+    )
+    disk_cache.disk_cache.set("async", json.dumps({"timestamp": time.time(), "response": response}))
+    disk_cache.disk_cache.set("raw", json.dumps(response))
+    disk_cache.disk_cache.set("invalid", "not a cache entry")
+    disk_cache.disk_cache.set(
+        "large",
+        {"timestamp": time.time(), "response": {"text": "x" * 70_000}},
+    )
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=_native._CacheTestHandle.disk(str(tmp_path)))
+    ).resolve()
+
+    assert binding.lookup(request("sync")) == response
+    assert await binding.async_lookup(request("async")) == response
+    assert binding.lookup(request("raw")) == response
+    assert await binding.async_lookup(request("invalid")) is None
+    assert binding.lookup(request("large")) == {"text": "x" * 70_000}
+
+    await binding.async_store({**request("native"), "ttl_seconds": 12.0}, response)
+    stored_response: Final = disk_cache.get_cache("native")
+    assert isinstance(stored_response, dict)
+    assert stored_response["response"] == response
+    stored, expire_time = disk_cache.disk_cache.get("native", expire_time=True)
+    assert stored is not None
+    assert time.time() < expire_time <= time.time() + 12.0
+    await binding.async_store(request("no-ttl"), response)
+    _, no_expiry = disk_cache.disk_cache.get("no-ttl", expire_time=True)
+    assert no_expiry is None
+
+
+async def test_disk_entries_survive_a_fresh_handle_and_expire_on_time(tmp_path: Path) -> None:
+    first: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=_native._CacheTestHandle.disk(str(tmp_path)))
+    ).resolve()
+    await first.async_store(request("persistent"), {"value": "persistent"})
+    await first.async_store({**request("expiring"), "ttl_seconds": 0.3}, {"value": "expiring"})
+    fresh: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=_native._CacheTestHandle.disk(str(tmp_path)))
+    ).resolve()
+    assert fresh.lookup(request("persistent")) == {"value": "persistent"}
+    assert fresh.lookup(request("expiring")) == {"value": "expiring"}
+    await asyncio.sleep(0.4)
+    assert fresh.lookup(request("expiring")) is None
+    assert fresh.lookup(request("persistent")) == {"value": "persistent"}
+
+
+def test_disk_facade_registers_and_store_changes_fall_back(tmp_path: Path) -> None:
+    facade: Final = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path))
+    with pytest.raises(TypeError, match="directories must match"):
+        _native._CacheTestHandle.disk(str(tmp_path / "other"))._bind_facade(facade)
+    handle: Final = _native._CacheTestHandle.disk(str(tmp_path))
+    handle._bind_facade(facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    binding: Final = resolver.resolve()
+    assert binding.kind == "native"
+    binding.store(request("native"), {"value": "native"})
+    assert facade.get_cache(cache_key="native") == {"value": "native"}
+
+    with rebound(facade.cache, "disk_cache", diskcache.Cache(str(tmp_path))):
+        assert resolver.resolve().kind == "python_callback"
+    assert resolver.resolve().kind == "native"
+
+    class CustomDiskCache(DiskCache):
+        pass
+
+    with rebound(facade, "cache", CustomDiskCache(disk_cache_dir=str(tmp_path))):
+        assert resolver.resolve().kind == "python_callback"
+
+    class CustomStore(diskcache.Cache):
+        pass
+
+    custom_facade: Final = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path))
+    custom_facade.cache.disk_cache = CustomStore(str(tmp_path))
+    with pytest.raises(TypeError, match="built-in diskcache store"):
+        _native._CacheTestHandle.disk(str(tmp_path))._bind_facade(custom_facade)
+
+
+async def test_disk_native_batch_lookup_and_store_report_partial_hits(tmp_path: Path) -> None:
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=_native._CacheTestHandle.disk(str(tmp_path)))
+    ).resolve()
+    requests: Final = [request("hit"), request("miss"), request("disabled")]
+    requests[2]["controls"] = {
+        "supported_call_type": True,
+        "configured": True,
+        "native_backend": True,
+        "default_on": True,
+        "caching": False,
+        "no_cache": False,
+        "no_store": False,
+        "use_cache": False,
+    }
+    await binding.async_store_batch(requests, [{"value": 1}, {"value": 2}, {"value": 3}])
+
+    partial: Final = await binding.async_lookup_batch(requests)
+
+    assert partial == {
+        "values": [{"value": 1}, {"value": 2}, None],
+        "missing_indices": [2],
+    }
+
+
+@pytest.fixture
+def s3_stub() -> Generator[S3Stub]:
+    stub: Final = S3Stub()
+    try:
+        yield stub
+    finally:
+        stub.close()
+
+
+def python_s3(url: str) -> S3Cache:
+    return S3Cache(
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+    )
+
+
+async def test_s3_reads_python_entries_and_writes_with_python_metadata(s3_stub: S3Stub) -> None:
+    python_cache: Final = python_s3(s3_stub.url)
+    response: Final = {"choices": [{"text": "cached"}], "usage": {"total_tokens": 3}}
+    python_cache.set_cache("sync:key", {"timestamp": time.time(), "response": response}, ttl=90)
+    python_cache.set_cache("plain", {"timestamp": time.time(), "response": response})
+    s3_stub.put_object("team/malformed", b"not a cache entry")
+    s3_stub.put_object(
+        "team/expired",
+        json.dumps({"timestamp": time.time(), "response": response}).encode(),
+        {"expires": "Thu, 01 Jan 1970 00:00:00 GMT"},
+    )
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(
+            cache=_native._CacheTestHandle.s3(
+                "cache-bucket",
+                region="us-east-1",
+                endpoint_url=s3_stub.url,
+                key_prefix="team/",
+                access_key_id="key",
+                secret_access_key="secret",
+            )
+        )
+    ).resolve()
+
+    assert binding.lookup(request("sync:key")) == response
+    assert await binding.async_lookup(request("plain")) == response
+    assert binding.lookup(request("malformed")) is None
+    assert binding.lookup(request("expired")) is None
+    assert binding.lookup(request("absent")) is None
+
+    binding.store({**request("native:key"), "ttl_seconds": 90.0}, response)
+    await binding.async_store(request("no_ttl"), response)
+    stored: Final = s3_stub.objects["team/native/key"]
+    assert stored.headers["content-type"] == "application/json"
+    assert stored.headers["content-language"] == "en"
+    assert stored.headers["content-disposition"] == 'inline; filename="team/native/key.json"'
+    assert stored.headers["cache-control"] == "immutable, max-age=90, s-maxage=90"
+    expires: Final = cast(datetime, s3_stub.expires("team/native/key"))
+    remaining: Final = (expires - datetime.now(expires.tzinfo)).total_seconds()
+    assert 60 < remaining <= 91
+    no_ttl: Final = s3_stub.objects["team/no_ttl"]
+    assert no_ttl.headers["cache-control"] == "immutable, max-age=31536000, s-maxage=31536000"
+    assert "expires" not in no_ttl.headers
+    assert python_cache.get_cache("native:key")["response"] == response
+
+    partial: Final = await binding.async_lookup_batch([request("native:key"), request("absent"), request("malformed")])
+    assert partial == {"values": [response, None, None], "missing_indices": [1, 2]}
+
+
+def test_s3_facade_binds_only_exact_configuration_and_falls_back_on_mutation(s3_stub: S3Stub) -> None:
+    facade: Final = Cache(
+        type=LiteLLMCacheType.S3,
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=s3_stub.url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+    )
+    handle: Final = _native._CacheTestHandle.s3(
+        "cache-bucket",
+        region="us-east-1",
+        endpoint_url=s3_stub.url,
+        key_prefix="team/",
+        access_key_id="key",
+        secret_access_key="secret",
+    )
+    with pytest.raises(TypeError, match="buckets must match"):
+        _native._CacheTestHandle.s3("other", region="us-east-1", endpoint_url=s3_stub.url)._bind_facade(facade)
+    with pytest.raises(TypeError, match="key prefixes must match"):
+        _native._CacheTestHandle.s3(
+            "cache-bucket", region="us-east-1", endpoint_url=s3_stub.url, key_prefix="other/"
+        )._bind_facade(facade)
+    handle._bind_facade(facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    binding: Final = resolver.resolve()
+    assert binding.kind == "native"
+
+    handler: Final = Mock()
+    facade.cache.s3_client.meta.events.register("before-call.s3.*", handler)
+    binding.store(request("native"), {"answer": 1})
+    assert binding.lookup(request("native")) == {"answer": 1}
+    assert handler.call_count == 0
+    assert "team/native" in s3_stub.objects
+
+    with rebound(facade.cache, "bucket_name", "other"):
+        assert resolver.resolve().kind == "python_callback"
+    other_client: Final = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url=s3_stub.url,
+        aws_access_key_id="key",
+        aws_secret_access_key="secret",
+    )
+    with rebound(facade.cache, "s3_client", other_client):
+        assert resolver.resolve().kind == "python_callback"
+
+    class CustomS3Cache(S3Cache):
+        pass
+
+    subclassed: Final = Cache(
+        type=LiteLLMCacheType.S3,
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=s3_stub.url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+    )
+    subclassed.cache = CustomS3Cache(
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=s3_stub.url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+    )
+    with pytest.raises(TypeError):
+        handle._bind_facade(subclassed)
+    assert _native._CacheTestResolver(SimpleNamespace(cache=subclassed)).resolve().kind == "python_callback"
+
+
+def test_s3_facade_rejects_configurations_that_require_python(s3_stub: S3Stub) -> None:
+    handle: Final = _native._CacheTestHandle.s3(
+        "cache-bucket",
+        region="us-east-1",
+        endpoint_url=s3_stub.url,
+        key_prefix="team/",
+        access_key_id="key",
+        secret_access_key="secret",
+    )
+    unverified: Final = Cache(
+        type=LiteLLMCacheType.S3,
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url="https://s3.example.test",
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+        s3_verify=False,
+    )
+    with pytest.raises(TypeError, match="requires Python"):
+        handle._bind_facade(unverified)
+    proxied: Final = Cache(
+        type=LiteLLMCacheType.S3,
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=s3_stub.url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+        s3_config=botocore.config.Config(proxies={"https": "http://proxy.test"}),
+    )
+    with pytest.raises(TypeError, match="requires Python"):
+        handle._bind_facade(proxied)
+
+
+async def test_gcs_reads_python_entries_and_writes_python_compatible_objects(
+    fake_gcs: FakeGcs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GCS_PATH_SERVICE_ACCOUNT", raising=False)
+    monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+    response: Final = {"choices": [{"text": "cached"}], "usage": {"total_tokens": 3}, "flag": True, "empty": None}
+    fake_gcs.put(
+        "bucket",
+        "cache/sync",
+        json.dumps({"timestamp": time.time(), "response": json.dumps(response)}).encode(),
+    )
+    fake_gcs.put("bucket", "cache/async", json.dumps({"timestamp": time.time(), "response": response}).encode())
+    fake_gcs.put("bucket", "cache/raw", json.dumps(response).encode())
+    fake_gcs.put("bucket", "cache/invalid", b"not a cache entry")
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(
+            cache=_native._CacheTestHandle.gcs(
+                "bucket",
+                gcs_path="cache",
+                endpoint=fake_gcs.url,
+                token=fake_gcs.token,
+            )
+        )
+    ).resolve()
+
+    assert binding.lookup(request("sync")) == response
+    assert await binding.async_lookup(request("async")) == response
+    assert binding.lookup(request("raw")) == response
+    assert await binding.async_lookup(request("invalid")) is None
+    assert binding.lookup(request("missing")) is None
+
+    await binding.async_store({**request("native"), "ttl_seconds": 12.0}, response)
+    stored: Final = fake_gcs.objects[("bucket", "cache/native")]
+    stored_value: Final = cast(dict[str, object], json.loads(stored))
+    assert stored_value["response"] == response
+    assert isinstance(stored_value["timestamp"], float)
+    upload: Final = next(item for item in fake_gcs.requests if item.method == "POST")
+    assert upload.path == "/upload/storage/v1/b/bucket/o"
+    assert upload.query == "uploadType=media&name=cache%2Fnative"
+    assert upload.headers["Authorization"] == f"Bearer {fake_gcs.token}"
+    assert upload.headers["Content-Type"] == "application/json"
+    upload_text: Final = f"{upload.path}?{upload.query}{upload.headers}"
+    assert "ttl" not in upload_text.lower()
+    assert "expiry" not in upload_text.lower()
+    download: Final = next(item for item in fake_gcs.requests if item.path.endswith("/cache%2Fsync"))
+    assert download.path == "/storage/v1/b/bucket/o/cache%2Fsync"
+    assert download.query == "alt=media"
+
+    binding.store(request("sync2"), response)
+    assert binding.lookup(request("sync2")) == response
+    assert GCSCache(bucket_name="bucket", gcs_path="cache").key_prefix == "cache/"
+    assert GCSCache(bucket_name="bucket", gcs_path="cache/").key_prefix == "cache/"
+    assert GCSCache(bucket_name="bucket").key_prefix == ""
+
+
+async def test_gcs_batch_lookup_preserves_order_and_treats_malformed_entries_as_misses(fake_gcs: FakeGcs) -> None:
+    fake_gcs.put("bucket", "cache/hit", json.dumps({"timestamp": time.time(), "response": {"value": 1}}).encode())
+    fake_gcs.put("bucket", "cache/invalid", b"not a cache entry")
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(
+            cache=_native._CacheTestHandle.gcs(
+                "bucket",
+                gcs_path="cache",
+                endpoint=fake_gcs.url,
+                token=fake_gcs.token,
+            )
+        )
+    ).resolve()
+    requests: Final = [request("hit"), request("missing"), request("invalid")]
+    expected: Final = {"values": [{"value": 1}, None, None], "missing_indices": [1, 2]}
+
+    assert await binding.async_lookup_batch(requests) == expected
+    assert binding.lookup_batch(requests) == expected
+    await binding.async_store_batch([request("first"), request("second")], [{"value": 1}, {"value": 2}])
+    assert ("bucket", "cache/first") in fake_gcs.objects
+    assert ("bucket", "cache/second") in fake_gcs.objects
+
+
+async def test_gcs_facade_binds_only_exact_matching_configuration(
+    fake_gcs: FakeGcs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GCS_PATH_SERVICE_ACCOUNT", raising=False)
+    monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent")
+    facade: Final = Cache(type=LiteLLMCacheType.GCS, gcs_bucket_name="bucket", gcs_path="cache/")
+    assert type(facade.cache) is GCSCache
+
+    mismatched_bucket: Final = _native._CacheTestHandle.gcs(
+        "other",
+        gcs_path="cache",
+        endpoint=fake_gcs.url,
+        token=fake_gcs.token,
+    )
+    with pytest.raises(TypeError, match="buckets must match"):
+        mismatched_bucket._bind_facade(facade)
+    mismatched_prefix: Final = _native._CacheTestHandle.gcs(
+        "bucket",
+        gcs_path="x",
+        endpoint=fake_gcs.url,
+        token=fake_gcs.token,
+    )
+    with pytest.raises(TypeError, match="key prefixes must match"):
+        mismatched_prefix._bind_facade(facade)
+    mismatched_credentials: Final = _native._CacheTestHandle.gcs(
+        "bucket",
+        gcs_path="cache",
+        path_service_account="sa.json",
+        endpoint=fake_gcs.url,
+        token=fake_gcs.token,
+    )
+    with pytest.raises(TypeError, match="credentials must match"):
+        mismatched_credentials._bind_facade(facade)
+    with pytest.raises(TypeError, match="types must match"):
+        _native._CacheTestHandle.memory()._bind_facade(facade)
+
+    matching: Final = _native._CacheTestHandle.gcs(
+        "bucket",
+        gcs_path="cache",
+        endpoint=fake_gcs.url,
+        token=fake_gcs.token,
+    )
+    matching._bind_facade(facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    binding: Final = resolver.resolve()
+    assert binding.kind == "native"
+    await binding.async_store(request("native"), {"value": "native"})
+    assert await binding.async_lookup(request("native")) == {"value": "native"}
+    assert cast(CacheLookup, facade).get_cache(cache_key="native") is None
+
+    with rebound(facade.cache, "bucket_name", "other"):
+        assert resolver.resolve().kind == "python_callback"
+    with rebound(facade.cache, "key_prefix", "x/"):
+        assert resolver.resolve().kind == "python_callback"
+    with rebound(facade.cache, "path_service_account", "sa.json"):
+        assert resolver.resolve().kind == "python_callback"
+
+    def no_get_cache(*args: object, **kwargs: object) -> None:
+        return None
+
+    with rebound(facade.cache, "get_cache", no_get_cache):
+        assert resolver.resolve().kind == "python_callback"
+    with rebound(facade, "ttl", 12):
+        assert resolver.resolve().kind == "python_callback"
+
+    class CustomGcs(GCSCache):
+        pass
+
+    with rebound(facade, "cache", CustomGcs(bucket_name="bucket", gcs_path="cache/")):
+        assert resolver.resolve().kind == "python_callback"
+    custom_facade: Final = Cache(type=LiteLLMCacheType.GCS, gcs_bucket_name="bucket", gcs_path="cache/")
+    with rebound(custom_facade, "cache", CustomGcs(bucket_name="bucket", gcs_path="cache/")):
+        with pytest.raises(TypeError, match="types must match"):
+            matching._bind_facade(custom_facade)
+
+    missing_bucket: Final = Cache(type=LiteLLMCacheType.GCS)
+    with pytest.raises(TypeError, match="requires a configured bucket name"):
+        matching._bind_facade(missing_bucket)
+
+
+async def test_gcs_flush_is_a_no_op_and_ping_is_not_implemented(
+    fake_gcs: FakeGcs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("GCS_PATH_SERVICE_ACCOUNT", raising=False)
+    monkeypatch.delenv("GCS_BUCKET_NAME", raising=False)
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(
+            cache=_native._CacheTestHandle.gcs(
+                "bucket",
+                gcs_path="cache",
+                endpoint=fake_gcs.url,
+                token=fake_gcs.token,
+            )
+        )
+    ).resolve()
+    await binding.async_store(request("key"), {"value": "stored"})
+    await binding.async_flush()
+    assert ("bucket", "cache/key") in fake_gcs.objects
+    assert await binding.async_lookup(request("key")) == {"value": "stored"}
+    with pytest.raises(NotImplementedError):
+        await binding.ping()
+
+    facade: Final = Cache(type=LiteLLMCacheType.GCS, gcs_bucket_name="bucket", gcs_path="cache/")
+    with pytest.raises(AttributeError):
+        await facade.ping()
+    assert cast(CacheLookup, facade.cache).flush_cache() is None
+
+
+async def test_gcs_unauthorized_and_server_errors_surface_as_runtime_errors(fake_gcs: FakeGcs) -> None:
+    wrong_token: Final = _native._CacheTestResolver(
+        SimpleNamespace(
+            cache=_native._CacheTestHandle.gcs(
+                "bucket",
+                gcs_path="cache",
+                endpoint=fake_gcs.url,
+                token="wrong-token",
+            )
+        )
+    ).resolve()
+    with pytest.raises(RuntimeError):
+        wrong_token.lookup(request("missing"))
+    assert not fake_gcs.objects
+
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(
+            cache=_native._CacheTestHandle.gcs(
+                "bucket",
+                gcs_path="cache",
+                endpoint=fake_gcs.url,
+                token=fake_gcs.token,
+            )
+        )
+    ).resolve()
+    with pytest.raises(RuntimeError):
+        binding.lookup(request("server-error"))
+    assert binding.lookup(request("missing")) is None
 
 
 async def test_redis_cluster_facade_serves_multi_slot_batches_and_scoped_flush_natively(
@@ -574,7 +1104,9 @@ async def test_redis_cluster_facade_serves_multi_slot_batches_and_scoped_flush_n
 
     await binding.async_flush()
 
-    remaining: Final = tuple(sorted(key for node in client.get_primaries() for key in client.keys("parity:*", target_nodes=node)))
+    remaining: Final = tuple(
+        sorted(key for node in client.get_primaries() for key in client.keys("parity:*", target_nodes=node))
+    )
     assert remaining == (), remaining
     assert client.get("unscoped") == b"stays"
     client.delete("unscoped")

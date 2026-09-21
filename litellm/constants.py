@@ -1860,6 +1860,12 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "max_ui_session_budget",
     "budget_rollover",
     "mcp_tool_search",
+    "turn_off_message_logging",
+    "datadog_params",
+    "datadog_llm_observability_params",
+    "newrelic_params",
+    "pointfive_params",
+    "aws_sqs_callback_params",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
@@ -2121,3 +2127,6 @@ BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
 EMPTY_MAPPING: Final = MappingProxyType({})
+
+# API endpoint for breached password k-anonymity search
+HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"
