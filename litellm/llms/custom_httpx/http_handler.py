@@ -479,6 +479,11 @@ def _safe_get_response_text(response: httpx.Response) -> str:
         return ""
 
 
+def header_value(headers: Mapping[str, str], name: str) -> str | None:
+    """Read one header as ``str | None``; ``httpx.Headers.get`` itself is typed ``Any``."""
+    return headers.get(name)
+
+
 async def _safe_aread_response(response: httpx.Response, timeout: float | None = None) -> bytes:
     """Safely read async response body, falling back to empty bytes on errors."""
     try:
