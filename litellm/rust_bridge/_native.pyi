@@ -169,6 +169,15 @@ class _CacheTestHandle:
     @staticmethod
     def azure_blob(account_url: str, container: str) -> _CacheTestHandle: ...
     @staticmethod
+    def gcs(
+        bucket_name: str,
+        *,
+        gcs_path: str | None = None,
+        path_service_account: str | None = None,
+        endpoint: str | None = None,
+        token: str | None = None,
+    ) -> _CacheTestHandle: ...
+    @staticmethod
     def s3(
         bucket: str,
         *,

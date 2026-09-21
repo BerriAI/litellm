@@ -33,6 +33,7 @@ litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
 litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-cache-redis = { path = "crates/cache-redis" }
 litellm-cache-s3 = { path = "crates/cache-s3" }
+litellm-cache-gcs = { path = "crates/cache-gcs" }
 litellm-cache-disk = { path = "crates/cache-disk" }
 litellm-cache-response = { path = "crates/cache-response" }
 litellm-token-counter = { path = "crates/token-counter" }
@@ -71,6 +72,7 @@ base64 = "0.22"
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"
+percent-encoding = "2.3"
 webpki-roots = "1"
 time = { version = "0.3.53", features = ["parsing"] }
 criterion = "0.8.2"
