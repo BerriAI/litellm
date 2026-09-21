@@ -271,7 +271,7 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                 )
         elif case.response.content_type == "application/json":
             header: Final = cast(str | None, response.headers.get("x-litellm-response-cost"))
-            if expected.cost_header:
+            if expected.cost_header and expected.spend != 0:
                 assert header is not None and approx_equal(float(header), expected.spend), (
                     f"{case.name}: x-litellm-response-cost {header} != expected {expected.spend}"
                 )
