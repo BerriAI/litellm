@@ -18,6 +18,7 @@ from litellm.proxy.proxy_server import app
 from litellm.types.llms.openai import ResponsesAPIResponse
 
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "path,error_kind",
@@ -2549,11 +2550,7 @@ def test_responses_routes_document_response_models_in_openapi_schema():
 
 
 class TestStoreBackgroundResponseInManagedObjects:
-    """Regression for #32782: background=true must not 500 without litellm_enterprise."""
-
-    def _response(self, *, model_id: str | None = "deployment-123"):
-        from litellm.types.llms.openai import ResponsesAPIResponse
-
+    def _response(self, *, model_id: str | None = "deployment-123") -> ResponsesAPIResponse:
         response = ResponsesAPIResponse(
             id="resp_bg123",
             created_at=1234567890,
@@ -2564,6 +2561,26 @@ class TestStoreBackgroundResponseInManagedObjects:
         )
         response._hidden_params = {"model_id": model_id} if model_id else {}
         return response
+
+    @staticmethod
+    def _enterprise_modules(
+        *,
+        managed_files_module: object | None,
+    ) -> dict[str, object | None]:
+        import types
+
+        fake_enterprise = types.ModuleType("litellm_enterprise")
+        fake_proxy = types.ModuleType("litellm_enterprise.proxy")
+        fake_hooks = types.ModuleType("litellm_enterprise.proxy.hooks")
+        setattr(fake_enterprise, "proxy", fake_proxy)
+        setattr(fake_proxy, "hooks", fake_hooks)
+
+        return {
+            "litellm_enterprise": fake_enterprise,
+            "litellm_enterprise.proxy": fake_proxy,
+            "litellm_enterprise.proxy.hooks": fake_hooks,
+            "litellm_enterprise.proxy.hooks.managed_files": managed_files_module,
+        }
 
     @pytest.mark.asyncio
     async def test_missing_enterprise_package_is_noop(self):
@@ -2576,10 +2593,7 @@ class TestStoreBackgroundResponseInManagedObjects:
         proxy_logging_obj = MagicMock()
         proxy_logging_obj.get_proxy_hook = MagicMock()
 
-        with patch.dict(
-            sys.modules,
-            {"litellm_enterprise.proxy.hooks.managed_files": None},
-        ):
+        with patch.dict(sys.modules, {"litellm_enterprise": None}):
             await _store_background_response_in_managed_objects(
                 response=self._response(),
                 proxy_logging_obj=proxy_logging_obj,
@@ -2588,6 +2602,26 @@ class TestStoreBackgroundResponseInManagedObjects:
             )
 
         proxy_logging_obj.get_proxy_hook.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_nested_import_error_is_not_swallowed(self):
+        import sys
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _store_background_response_in_managed_objects,
+        )
+
+        with patch.dict(
+            sys.modules,
+            self._enterprise_modules(managed_files_module=None),
+        ):
+            with pytest.raises(ImportError):
+                await _store_background_response_in_managed_objects(
+                    response=self._response(),
+                    proxy_logging_obj=MagicMock(),
+                    llm_router=MagicMock(),
+                    user_api_key_dict=MagicMock(),
+                )
 
     @pytest.mark.asyncio
     async def test_stores_object_when_enterprise_hook_present(self):
@@ -2599,7 +2633,7 @@ class TestStoreBackgroundResponseInManagedObjects:
         )
 
         fake_module = types.ModuleType("litellm_enterprise.proxy.hooks.managed_files")
-        fake_module._PROXY_LiteLLMManagedFiles = type("_FakeManagedFiles", (), {})
+        setattr(fake_module, "_PROXY_LiteLLMManagedFiles", type("_FakeManagedFiles", (), {}))
 
         managed_files_obj = MagicMock()
         managed_files_obj.store_unified_object_id = AsyncMock()
@@ -2610,7 +2644,7 @@ class TestStoreBackgroundResponseInManagedObjects:
         response = self._response()
         with patch.dict(
             sys.modules,
-            {"litellm_enterprise.proxy.hooks.managed_files": fake_module},
+            self._enterprise_modules(managed_files_module=fake_module),
         ):
             await _store_background_response_in_managed_objects(
                 response=response,
@@ -2634,7 +2668,7 @@ class TestStoreBackgroundResponseInManagedObjects:
         )
 
         fake_module = types.ModuleType("litellm_enterprise.proxy.hooks.managed_files")
-        fake_module._PROXY_LiteLLMManagedFiles = type("_FakeManagedFiles", (), {})
+        setattr(fake_module, "_PROXY_LiteLLMManagedFiles", type("_FakeManagedFiles", (), {}))
 
         managed_files_obj = MagicMock()
         managed_files_obj.store_unified_object_id = AsyncMock()
@@ -2644,7 +2678,7 @@ class TestStoreBackgroundResponseInManagedObjects:
 
         with patch.dict(
             sys.modules,
-            {"litellm_enterprise.proxy.hooks.managed_files": fake_module},
+            self._enterprise_modules(managed_files_module=fake_module),
         ):
             await _store_background_response_in_managed_objects(
                 response=self._response(model_id=None),
@@ -2654,3 +2688,48 @@ class TestStoreBackgroundResponseInManagedObjects:
             )
 
         managed_files_obj.store_unified_object_id.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @patch("litellm.proxy.proxy_server.llm_router")
+    @patch("litellm.proxy.proxy_server.user_api_key_auth")
+    @patch(
+        "litellm.proxy.response_api_endpoints.endpoints._store_background_response_in_managed_objects",
+        new_callable=AsyncMock,
+    )
+    async def test_responses_endpoint_wires_store_for_queued_background(
+        self,
+        mock_store: AsyncMock,
+        mock_auth: MagicMock,
+        mock_router: MagicMock,
+    ) -> None:
+        mock_auth.return_value = MagicMock(
+            token="test_token",
+            user_id="test_user",
+            team_id=None,
+            spend=0.0,
+            tpm_limit=None,
+            rpm_limit=None,
+            max_budget=None,
+            allowed_model_region=None,
+            api_key="sk-test-key",
+            metadata={},
+        )
+
+        mock_response = self._response()
+        mock_router.aresponses = AsyncMock(return_value=mock_response)
+
+        client = TestClient(app)
+        response = client.post(
+            "/v1/responses",
+            json={
+                "model": "gpt-4o",
+                "input": "Tell me about AI",
+                "background": True,
+            },
+            headers={"Authorization": "Bearer sk-test-key"},
+        )
+
+        assert response.status_code == 200, response.text
+        mock_store.assert_awaited_once()
+        assert mock_store.await_args.kwargs["response"].id == mock_response.id
+        assert isinstance(mock_store.await_args.kwargs["response"], ResponsesAPIResponse)

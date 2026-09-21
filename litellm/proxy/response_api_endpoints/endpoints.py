@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import importlib
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Mapping, Sequence
 from enum import Enum
@@ -44,6 +45,7 @@ from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
+    from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
 router: Final = APIRouter()
@@ -65,19 +67,12 @@ RESPONSE_ITEM_LIST_SCHEMAS: Final[_ResponseDocSchemas] = {200: {"model": Respons
 
 async def _store_background_response_in_managed_objects(
     response: ResponsesAPIResponse,
-    proxy_logging_obj: Any,
+    proxy_logging_obj: "ProxyLogging",
     llm_router: "Router | None",
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
-    """Persist a queued/in_progress background Responses result for later polling.
-
-    Managed-object storage lives in litellm_enterprise; this is a no-op on OSS
-    installs where that package is not available.
-    """
     try:
-        from litellm_enterprise.proxy.hooks.managed_files import (
-            _PROXY_LiteLLMManagedFiles,
-        )
+        importlib.import_module("litellm_enterprise")
     except ImportError:
         verbose_proxy_logger.debug(
             "litellm_enterprise not installed; skipping managed-object storage for background response %s",
@@ -85,15 +80,19 @@ async def _store_background_response_in_managed_objects(
         )
         return
 
-    managed_files_obj = cast(
+    from litellm_enterprise.proxy.hooks.managed_files import (
+        _PROXY_LiteLLMManagedFiles,
+    )
+
+    managed_files_obj: Final = cast(
         _PROXY_LiteLLMManagedFiles | None,
         proxy_logging_obj.get_proxy_hook("managed_files"),
     )
     if not managed_files_obj or not llm_router:
         return
 
-    hidden_params = getattr(response, "_hidden_params", {}) or {}
-    model_id = hidden_params.get("model_id", None)
+    hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+    model_id: Final = hidden_params.get("model_id", None)
     if not model_id:
         verbose_proxy_logger.warning(
             "No model_id found in response hidden params for response %s, skipping managed object storage",
@@ -445,7 +444,6 @@ async def responses_api(
             version=version,
         )
 
-        # Store in managed objects table if background mode is enabled
         if data.get("background") and isinstance(response, ResponsesAPIResponse):
             if response.status in ["queued", "in_progress"]:
                 await _store_background_response_in_managed_objects(
