@@ -2530,14 +2530,18 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_block_action_raises
 
     analyzer_hit = [{"entity_type": "CREDIT_CARD", "score": 0.99, "start": 0, "end": 19}]
     collected = []
+
+    async def collect_masked_stream():
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
     with patch.object(guardrail, "_get_session_iterator", _make_mock_session_iterator(analyzer_hit)):
         with pytest.raises(BlockedPiiEntityError):
-            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
-                response=mock_stream(),
-                request_data={},
-            ):
-                collected.append(chunk)
+            await collect_masked_stream()
 
     assert collected == []
 
