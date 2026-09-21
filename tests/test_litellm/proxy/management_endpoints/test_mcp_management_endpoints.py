@@ -7797,11 +7797,13 @@ async def test_first_config_server_edit_persists_same_id_and_untouched_settings(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("role,unsupported,expected_status", [
-    (LitellmUserRoles.INTERNAL_USER, False, 403),
-    (LitellmUserRoles.PROXY_ADMIN, True, 400),
+@pytest.mark.parametrize("role,unsupported,changes,expected_status", [
+    (LitellmUserRoles.INTERNAL_USER, False, {}, 403),
+    (LitellmUserRoles.PROXY_ADMIN, True, {}, 400),
+    (LitellmUserRoles.PROXY_ADMIN, False, {"dcr_bridge": True}, 400),
+    (LitellmUserRoles.PROXY_ADMIN, False, {"per_server_oauth_discovery": True}, 400),
 ])
-async def test_rejected_config_edit_does_not_create_or_reload_server(monkeypatch, role, unsupported, expected_status):
+async def test_rejected_config_edit_does_not_create_or_reload_server(monkeypatch, role, unsupported, changes, expected_status):
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
     manager = MCPServerManager()
@@ -7820,7 +7822,7 @@ async def test_rejected_config_edit_does_not_create_or_reload_server(monkeypatch
 
     with pytest.raises(HTTPException) as error:
         await mgmt_endpoints.edit_mcp_server(
-            payload=UpdateMCPServerRequest(server_id=server.server_id, description="rejected edit"),
+            payload=UpdateMCPServerRequest(server_id=server.server_id, description="rejected edit", **changes),
             user_api_key_dict=UserAPIKeyAuth(user_id="actor", user_role=role),
         )
 
