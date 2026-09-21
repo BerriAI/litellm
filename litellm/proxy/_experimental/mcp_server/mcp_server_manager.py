@@ -147,6 +147,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     is_short_mcp_tool_prefix_enabled,
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
+    json_string_leaves,
     logging_safe_mcp_headers,
     lookup_mcp_server_auth_in_headers,
     match_known_server_prefix,
@@ -1782,13 +1783,8 @@ def _mcp_discovery_cache_ttl() -> float:
 
 
 def _contains_config_secret_reference(value: object) -> bool:
-    if isinstance(value, str):
-        return value.startswith("os.environ/")
-    if isinstance(value, Mapping):
-        return any(_contains_config_secret_reference(item) for item in value.values())
-    if isinstance(value, (list, tuple)):
-        return any(_contains_config_secret_reference(item) for item in value)
-    return False
+    leaves: Final = json_string_leaves(value)
+    return leaves is None or any(item.startswith("os.environ/") for _, item in leaves)
 
 
 class MCPServerManager:

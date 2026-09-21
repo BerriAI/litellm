@@ -14147,6 +14147,25 @@ async def test_config_edit_rejects_resolved_secret_references(raw, config_only_m
 
 
 @pytest.mark.asyncio
+async def test_config_edit_rejects_config_beyond_string_scan_depth(config_only_mcp_manager_factory):
+    from functools import reduce
+
+    manager = config_only_mcp_manager_factory()
+    nested = reduce(lambda value, _: {"nested": value}, range(105), "plain")
+    await manager.load_servers_from_config(
+        {"deep": {"url": "https://example.com/mcp"}},
+        raw_mcp_servers_config={"deep": {"url": "https://example.com/mcp", "metadata": nested}},
+    )
+    server = next(iter(manager.config_mcp_servers.values()))
+
+    with pytest.raises(HTTPException) as error:
+        manager.config_server_for_edit(server.server_id)
+
+    assert error.value.status_code == 400
+    assert "source configuration" in error.value.detail["error"]
+
+
+@pytest.mark.asyncio
 async def test_config_edit_rejects_pinned_id_before_creating_a_reload_collision(config_only_mcp_manager_factory):
     manager = config_only_mcp_manager_factory()
     await manager.load_servers_from_config({"pinned": {

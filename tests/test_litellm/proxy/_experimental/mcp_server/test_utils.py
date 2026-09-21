@@ -1,3 +1,4 @@
+from types import MappingProxyType
 from unittest.mock import patch
 
 import pytest
@@ -6,12 +7,19 @@ from fastapi import HTTPException
 from litellm.proxy._experimental.mcp_server.utils import (
     _upstream_credential_headers,
     build_synthetic_mcp_request,
+    json_string_leaves,
     logging_safe_mcp_headers,
     validate_and_normalize_mcp_server_payload,
     validate_tool_display_names,
 )
 from litellm.proxy._types import NewMCPServerRequest
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+
+def test_string_leaves_preserve_paths_through_immutable_config_containers():
+    config = MappingProxyType({"env": (MappingProxyType({"value": "os.environ/TOKEN"}),)})
+
+    assert json_string_leaves(config) == ((("env", 0, "value"), "os.environ/TOKEN"),)
 
 
 def _server_forwarding(*header_names: str) -> MCPServer:

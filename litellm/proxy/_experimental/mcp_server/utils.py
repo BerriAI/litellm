@@ -820,9 +820,9 @@ def json_string_leaves(value: object, path: JSONLeafPath = ()) -> tuple[tuple[JS
         return None
     if isinstance(value, str):
         return ((path, value),)
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return _flatten_leaf_groups(json_string_leaves(item, (*path, key)) for key, item in value.items())
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return _flatten_leaf_groups(json_string_leaves(item, (*path, index)) for index, item in enumerate(value))
     return ()
 
