@@ -594,9 +594,10 @@ async def test_resolved_identity_exported_on_auth_failure():
 
 
 @pytest.mark.asyncio
-async def test_auth_failure_without_resolved_identity_still_logs():
+@pytest.mark.parametrize("api_key", ["sk-unknown", "llm_caccess_sealed-test-access", "llm_crefresh_sealed-test-refresh"])
+async def test_auth_failure_without_resolved_identity_still_logs(api_key):
     """When auth fails before any identity is resolved (e.g. an unknown key),
-    the handler must still log a usable object carrying the raw api key and
+    the handler must still log a usable object carrying the hashed api key and
     route, not crash on the missing identity."""
     handler = UserAPIKeyAuthExceptionHandler()
 
@@ -625,14 +626,14 @@ async def test_auth_failure_without_resolved_identity_still_logs():
                 {},
                 "/v1/chat/completions",
                 None,
-                "sk-unknown",
+                api_key,
             )
 
     logged = mock_hook.call_args[1]["user_api_key_dict"]
     # Raw key must NOT land on the object — it would be promoted into telemetry
     # as litellm.api_key.hash and leak a real sk-... to anyone reading the trace.
-    assert logged.api_key != "sk-unknown"
-    assert logged.api_key == UserAPIKeyAuth(api_key="sk-unknown").api_key
+    assert logged.api_key != api_key
+    assert logged.api_key == UserAPIKeyAuth(api_key=api_key).api_key
     assert logged.request_route == "/v1/chat/completions"
 
 

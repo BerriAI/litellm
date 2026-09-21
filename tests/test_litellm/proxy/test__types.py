@@ -48,8 +48,9 @@ def test_the_server_sets_a_marker_by_assignment_after_construction(marker):
     assert getattr(auth, marker) == "set-by-the-server"
 
 
-def test_a_virtual_key_is_hashed_out_of_the_auth_object():
-    raw_key = "sk-1234567890abcdefghij"
+@pytest.mark.parametrize("prefix", ["sk-", "llm_caccess_", "llm_crefresh_"])
+def test_a_virtual_key_is_hashed_out_of_the_auth_object(prefix):
+    raw_key = prefix + "1234567890abcdefghij"
 
     auth = UserAPIKeyAuth(api_key=raw_key)
 
@@ -57,8 +58,9 @@ def test_a_virtual_key_is_hashed_out_of_the_auth_object():
     assert auth.token == auth.api_key
 
 
-def test_a_bearer_prefixed_key_hashes_the_same_as_the_bare_key():
-    raw_key = "sk-1234567890abcdefghij"
+@pytest.mark.parametrize("prefix", ["sk-", "llm_caccess_", "llm_crefresh_"])
+def test_a_bearer_prefixed_key_hashes_the_same_as_the_bare_key(prefix):
+    raw_key = prefix + "1234567890abcdefghij"
 
     assert UserAPIKeyAuth(api_key=f"Bearer {raw_key}").token == UserAPIKeyAuth(api_key=raw_key).token
 

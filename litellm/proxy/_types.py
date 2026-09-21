@@ -3300,7 +3300,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         normalized = api_key
         if normalized[:7].lower() == "bearer ":
             normalized = normalized[7:]
-        if normalized.startswith("sk-"):
+        if normalized.startswith(("sk-", "llm_caccess_", "llm_crefresh_")):
             return hash_token(normalized)
         from litellm.proxy.auth.handle_jwt import JWTHandler
 
