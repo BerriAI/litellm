@@ -33,6 +33,7 @@ litellm-cache = { path = "crates/cache" }
 litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
 litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-cache-redis = { path = "crates/cache-redis" }
+litellm-cache-s3 = { path = "crates/cache-s3" }
 litellm-cache-gcs = { path = "crates/cache-gcs" }
 litellm-cache-disk = { path = "crates/cache-disk" }
 litellm-cache-response = { path = "crates/cache-response" }
