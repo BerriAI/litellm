@@ -256,7 +256,7 @@ impl FacadeGuard {
                 "RedisClusterCache",
                 "redis",
             ),
-            "qdrant_semantic" => (
+            ("qdrant_semantic", _) => (
                 "litellm.caching.qdrant_semantic_cache",
                 "QdrantSemanticCache",
                 "qdrant-semantic",
