@@ -30,4 +30,7 @@ pub enum Error {
     #[cfg(feature = "google")]
     #[error(transparent)]
     Google(#[from] litellm_secrets_google::Error),
+    #[cfg(feature = "cyberark")]
+    #[error(transparent)]
+    Cyberark(#[from] litellm_secrets_cyberark::Error),
 }
