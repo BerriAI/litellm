@@ -1839,12 +1839,10 @@ class ComplexityRouter(CustomLogger):
             masked_tier_litellm_params: Final = mask_credentials_in_payload(tier_litellm_params)
             if isinstance(masked_tier_litellm_params, Mapping):
                 decision["tier_litellm_params"] = masked_tier_litellm_params
-        if previous_decision is None:
-            return decision
         forecast_fields: Final = MappingProxyType(
             {
                 field: value
-                for field, value in previous_decision.items()
+                for field, value in (previous_decision.items() if previous_decision is not None else ())
                 if field.startswith("classifier_") or field == "heuristic_v2_forecast"
             }
         )
