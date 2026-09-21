@@ -143,17 +143,12 @@ async def test_second_round_tool_call_is_executed_and_reaches_final_text(monkeyp
 
     # The stream reached round 3 and produced the final text response instead
     # of stopping after round 1 or round 2. The client sees one lifecycle whose
-    # final output lists every round's items in order.
+    # final output lists every round's items in order, each executed call as
+    # the gateway's mcp_call rather than the function_call the model emitted.
     completed_chunks = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
     assert len(completed_chunks) == 1
     final_output = completed_chunks[-1].response.output
-    assert [_item_type(item) for item in final_output] == [
-        "function_call",
-        "mcp_call",
-        "function_call",
-        "mcp_call",
-        "message",
-    ]
+    assert [_item_type(item) for item in final_output] == ["mcp_call", "mcp_call", "message"]
     assert final_output[-1]["content"][0]["text"] == "Here's what I found after retrying."
 
 
@@ -422,7 +417,7 @@ async def test_auto_execute_rounds_share_one_public_lifecycle(monkeypatch):
     # The single completed event lists every round's items and keeps the final round's id for continuation.
     completed = chunks[-1]
     assert completed.response.id == "resp-final"
-    assert [_item_type(item) for item in completed.response.output] == ["function_call", "mcp_call", "message"]
+    assert [_item_type(item) for item in completed.response.output] == ["mcp_call", "message"]
     assert completed.response.output[-1]["content"][0]["text"] == "Alpha."
     # The proxy serializes every chunk; the merged output must still be a valid response.
     assert '"type":"mcp_call"' in completed.response.model_dump_json(exclude_none=True, exclude_unset=True)
@@ -431,6 +426,41 @@ async def test_auto_execute_rounds_share_one_public_lifecycle(monkeypatch):
     sequence_numbers = [c.sequence_number for c in chunks if getattr(c, "sequence_number", None) is not None]
     assert sequence_numbers == sorted(sequence_numbers)
     assert len(set(sequence_numbers)) == len(sequence_numbers)
+
+
+@pytest.mark.asyncio
+async def test_final_output_lists_executed_call_as_completed_mcp_call(monkeypatch):
+    """
+    A function_call the gateway executed must not reach the final output: an
+    agent framework reading it (the OpenAI Agents SDK) tries to run a tool the
+    caller never declared and aborts the run. The final output lists the
+    gateway's completed mcp_call in its place, next to the round's other items.
+    """
+    _mock_mcp_environment(monkeypatch)
+
+    follow_up = _FakeAsyncStream(_lifecycle_round("resp-final", _text_message("Alpha.")))
+    monkeypatch.setattr(responses_main_module, "aresponses", AsyncMock(side_effect=[follow_up]))
+
+    reasoning = {"type": "reasoning", "id": "rs_1", "summary": []}
+    iterator = _make_iterator(
+        [
+            _created_chunk("resp-interim"),
+            _completed_chunk([reasoning, _function_call("call_1", "read_wiki_contents")], response_id="resp-interim"),
+        ]
+    )
+    chunks = [chunk async for chunk in iterator]
+
+    final_output = chunks[-1].response.output
+    assert [_item_type(item) for item in final_output] == ["reasoning", "mcp_call", "message"]
+    executed_call = final_output[1]
+    assert executed_call["status"] == "completed"
+    assert executed_call["name"] == "read_wiki_contents"
+    assert executed_call["arguments"] == "{}"
+
+    done_mcp_items = [
+        c.item for c in chunks if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(c.item) == "mcp_call"
+    ]
+    assert [item.status for item in done_mcp_items] == ["completed"]
 
 
 @pytest.mark.asyncio
