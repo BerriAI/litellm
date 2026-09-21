@@ -53,6 +53,30 @@ def test_is_claude_code_one_shot_subagent_request(messages, system, expected):
     )
 
 
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # Identity sentence alone -> drop the whole block.
+        ("You are Claude Code, Anthropic's official CLI for Claude.", None),
+        # Identity sentence followed by the rest of the system prompt -> keep the rest.
+        (
+            "You are Claude Code, Anthropic's official CLI for Claude.\nYou are an interactive agent.",
+            "You are an interactive agent.",
+        ),
+        # Leading/trailing whitespace around the bare sentence is treated as drop-only.
+        ("  You are Claude Code, Anthropic's official CLI for Claude.  ", None),
+        # Non-Claude-Code prompts are untouched.
+        ("You are a helpful assistant.", "You are a helpful assistant."),
+        # A sentence that merely mentions Claude Code is untouched.
+        ("You are Claude Code's helper.", "You are Claude Code's helper."),
+    ],
+)
+def test_strip_claude_code_identity(text, expected):
+    from litellm.llms.anthropic.common_utils import strip_claude_code_identity
+
+    assert strip_claude_code_identity(text) == expected
+
+
 class TestOptionallyHandleAnthropicOAuth:
     """Tests for optionally_handle_anthropic_oauth function."""
 

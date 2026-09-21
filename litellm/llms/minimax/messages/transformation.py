@@ -31,6 +31,9 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def should_strip_claude_code_identity(self) -> bool:
+        return True
+
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
         """

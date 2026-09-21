@@ -77,6 +77,9 @@ _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
 
+_CLAUDE_CODE_IDENTITY: Final = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
 def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None) -> bool:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
     from litellm.utils import supports_prompt_caching
@@ -96,6 +99,25 @@ def is_claude_code_user_agent(user_agent: str) -> bool:
     """Claude Code sends its API calls through the Anthropic SDK as `claude-cli/<version>` and its own
     fetches, such as gateway model discovery, as `claude-code/<version>`"""
     return user_agent.startswith(_CLAUDE_CODE_USER_AGENT_PREFIXES)
+
+
+def strip_claude_code_identity(text: str) -> str | None:
+    """Remove Claude Code's self-identification sentence from a single system text block.
+
+    Claude Code prefixes its system prompt with ``You are Claude Code, Anthropic's
+    official CLI for Claude.``. When that prompt is forwarded to a non-Claude model
+    (e.g. a DeepSeek-compatible or OpenAI-like Anthropic-compatible endpoint), the
+    sentence is a false self-description and should be dropped before sending
+    upstream. Returns ``None`` when the text was nothing but the identity sentence
+    (so callers can drop the whole block), otherwise the text with the sentence and
+    its framing whitespace removed.
+    """
+    stripped: Final = text.strip()
+    if stripped == _CLAUDE_CODE_IDENTITY:
+        return None
+    if stripped.startswith(_CLAUDE_CODE_IDENTITY):
+        return text.replace(_CLAUDE_CODE_IDENTITY, "", 1).lstrip("\n")
+    return text
 
 
 def _validated_claude_code_mapping(value: object) -> dict[object, object] | None:

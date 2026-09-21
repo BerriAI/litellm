@@ -32,6 +32,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         super().__init__()
         self._cache_control_ttl: Final = cache_control_ttl
 
+    def should_strip_claude_code_identity(self) -> bool:
+        return True
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict[str, str],

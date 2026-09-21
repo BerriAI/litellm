@@ -25,6 +25,7 @@ from ...common_utils import (
     AnthropicModelInfo,
     optionally_handle_anthropic_oauth,
     strip_advisor_blocks_from_messages,
+    strip_claude_code_identity,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from .mid_conversation_system import (
@@ -121,6 +122,56 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         base config keeps them. Providers that reject them override this to True.
         """
         return False
+
+    def should_strip_claude_code_identity(self) -> bool:
+        """
+        Whether to drop Claude Code's self-identification from the system prompt.
+
+        Distinct from ``should_strip_billing_metadata``: that drops the billing header on
+        every provider whose request shape rejects it, including Bedrock/Vertex/Azure, which
+        still serve *Claude* models. This only trips on providers whose
+        Anthropic-compatible endpoint serves a *different* model (DeepSeek, MiniMax,
+        Tencent, OpenAI-like passthrough), where "You are Claude Code" is a false
+        self-description. The first-party config keeps it.
+        """
+        return False
+
+    @staticmethod
+    def _strip_claude_code_identity_from_system(system_param):
+        """
+        Strip Claude Code's self-identification sentence from system parameter.
+
+        Args:
+            system_param: Can be a string or a list of system message content blocks
+
+        Returns:
+            System parameter with the identity sentence removed, or None if all content was removed
+        """
+        if isinstance(system_param, str):
+            return strip_claude_code_identity(system_param)
+        elif isinstance(system_param, list):
+            filtered_list: Final = []
+            for content_block in system_param:
+                if isinstance(content_block, dict):
+                    text = content_block.get("text", "")
+                    content_type = content_block.get("type", "")
+                    if content_type != "text":
+                        filtered_list.append(content_block)
+                        continue
+                    stripped_text: Final[str | None] = strip_claude_code_identity(text)
+                    if stripped_text is None:
+                        continue
+                    # Only copy the block when the text changed.
+                    if stripped_text == text:
+                        filtered_list.append(content_block)
+                    else:
+                        filtered_list.append({**content_block, "text": stripped_text})
+                else:
+                    # Keep non-dict items as-is
+                    filtered_list.append(content_block)
+            return filtered_list if len(filtered_list) > 0 else None
+        else:
+            return system_param
 
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
@@ -526,6 +577,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             filtered_system: Final = self._filter_billing_headers_from_system(system_param)
             if filtered_system is not None and len(filtered_system) > 0:
                 anthropic_messages_optional_request_params["system"] = filtered_system
+            else:
+                anthropic_messages_optional_request_params.pop("system", None)
+
+        stripped_identity_system: Final = anthropic_messages_optional_request_params.get("system")
+        if self.should_strip_claude_code_identity() and stripped_identity_system is not None:
+            identity_filtered: Final = self._strip_claude_code_identity_from_system(stripped_identity_system)
+            if identity_filtered is not None and len(identity_filtered) > 0:
+                anthropic_messages_optional_request_params["system"] = identity_filtered
             else:
                 anthropic_messages_optional_request_params.pop("system", None)
 
