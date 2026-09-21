@@ -486,7 +486,23 @@ class TestZeroCostDiagnostic:
         assert logging_obj.model_call_details.get("zero_cost_diagnostic") is None
         assert self._zero_cost_warnings(caplog) == []
 
-    def test_retry_that_prices_clears_the_diagnostic_and_a_later_zero_cost_warns_again(self, caplog):
+    def test_usage_less_evaluation_between_two_zero_cost_findings_does_not_warn_twice(self, deployment_pricing, caplog):
+        usage: Final = litellm.Usage(prompt_tokens=8, completion_tokens=2, total_tokens=10)
+        logging_obj: Final = self._logging_obj(deployment_pricing, stream=True, call_type="anthropic_messages")
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            logging_obj._response_cost_calculator(result=self._response(usage=None))
+            logging_obj._response_cost_calculator(result=self._response(usage))
+            logging_obj._response_cost_calculator(result=self._response(usage=None))
+            logging_obj._response_cost_calculator(result=self._response(usage))
+
+        if deployment_pricing is self.FREE_PRICING:
+            assert logging_obj.model_call_details["zero_cost_diagnostic"] is None
+            assert self._zero_cost_warnings(caplog) == []
+            return
+        self._assert_flagged(logging_obj, caplog)
+
+    def test_retry_that_prices_clears_the_diagnostic_and_a_later_zero_cost_is_recorded_silently(self, caplog):
         priced_id: Final = "lit7898-priced-deployment"
         priced_pricing: Final = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
         usage: Final = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
@@ -508,7 +524,7 @@ class TestZeroCostDiagnostic:
                 assert logging_obj._response_cost_calculator(result=self._response(usage)) == 0.0
 
             assert logging_obj.model_call_details["zero_cost_diagnostic"]["reason"] == "missing_pricing_key"
-            assert len(self._zero_cost_warnings(caplog)) == 2
+            assert len(self._zero_cost_warnings(caplog)) == 1
         finally:
             litellm.model_cost.pop(self.DEPLOYMENT_ID, None)
             litellm.model_cost.pop(priced_id, None)

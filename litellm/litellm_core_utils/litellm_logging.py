@@ -621,6 +621,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.truncated_messages_for_logging: str | list | dict | None = None  # mutable-ok: logged messages shape
         ## TIME TO FIRST TOKEN LOGGING ##
         self.completion_start_time: datetime.datetime | None = None
+        self.zero_cost_warned: bool = False
         self._llm_caching_handler: LLMCachingHandler | None = None
 
         # INITIAL LITELLM_PARAMS
@@ -1909,10 +1910,11 @@ class Logging(LiteLLMLoggingBaseClass):
         except Exception as e:  # noqa: BLE001  # the pricing helpers raise plain Exception and a diagnostic must never break cost tracking
             verbose_logger.debug("zero_cost_diagnostic skipped: %s", e)
             return
-        already_warned: Final = self.model_call_details.get("zero_cost_diagnostic") is not None
         self.model_call_details["zero_cost_diagnostic"] = finding[0] if finding is not None else None
-        if finding is not None and not already_warned:
-            verbose_logger.warning(finding[1])
+        if finding is None or self.zero_cost_warned:
+            return
+        self.zero_cost_warned = True
+        verbose_logger.warning(finding[1])
 
     def _zero_cost_finding(
         self,
