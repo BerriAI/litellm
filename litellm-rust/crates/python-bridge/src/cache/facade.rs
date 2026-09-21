@@ -47,10 +47,15 @@ struct AzureBlobClientGuard {
     container_name: String,
 }
 
+struct S3ClientGuard {
+    reference: Py<PyAny>,
+}
+
 enum ConnectionGuard {
     None,
     RedisPool(RedisPoolGuard),
     AzureBlob(AzureBlobClientGuard),
+    S3(S3ClientGuard),
 }
 
 #[derive(Clone, Copy)]
@@ -281,6 +286,22 @@ impl AzureBlobClientGuard {
     }
 }
 
+impl S3ClientGuard {
+    fn capture(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
+        Ok(Self {
+            reference: backend.getattr("s3_client")?.unbind(),
+        })
+    }
+
+    fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
+        Ok(self.reference.bind(py).is(&backend.getattr("s3_client")?))
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.reference)
+    }
+}
+
 impl ConnectionGuard {
     fn capture(kind: &str, cluster: bool, backend: &Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(match (kind, cluster) {
@@ -301,6 +322,7 @@ impl ConnectionGuard {
             )?),
             ("disk", _) => Self::None,
             ("azure-blob", _) => Self::AzureBlob(AzureBlobClientGuard::capture(backend)?),
+            ("s3", _) => Self::S3(S3ClientGuard::capture(backend)?),
             _ => Self::None,
         })
     }
@@ -310,6 +332,7 @@ impl ConnectionGuard {
             Self::None => Ok(true),
             Self::RedisPool(guard) => guard.matches(py, backend),
             Self::AzureBlob(guard) => guard.matches(py, backend),
+            Self::S3(guard) => guard.matches(py, backend),
         }
     }
 
@@ -318,6 +341,7 @@ impl ConnectionGuard {
             Self::None => Ok(()),
             Self::RedisPool(guard) => guard.traverse(visit),
             Self::AzureBlob(guard) => guard.traverse(visit),
+            Self::S3(guard) => guard.traverse(visit),
         }
     }
 }
@@ -356,6 +380,7 @@ impl FacadeGuard {
                 "AzureBlobCache",
                 "azure-blob",
             ),
+            ("s3", _) => ("litellm.caching.s3_cache", "S3Cache", "s3"),
             _ => unreachable!(),
         };
         let backend = facade.getattr("cache")?;

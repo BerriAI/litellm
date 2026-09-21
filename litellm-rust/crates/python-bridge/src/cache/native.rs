@@ -12,6 +12,7 @@ use litellm_cache_response::{
     CacheEntry, CacheKeyField, PartialHits, ResponseCache, ResponseCacheCodec,
     ResponseCacheRequest, WriteBuffer,
 };
+use litellm_cache_s3::{S3Cache, S3CacheConfig};
 use litellm_cache_valkey_semantic::{ValkeySemanticCache, ValkeySemanticConfig};
 use pyo3::prelude::*;
 use serde_json::Value;
@@ -78,6 +79,7 @@ pub(super) enum NativeResponseCache {
         cache: Arc<ResponseCache<RedisCache<ResponseCacheCodec>>>,
         buffer: Option<Arc<WriteBuffer>>,
     },
+    S3(Arc<ResponseCache<S3Cache<ResponseCacheCodec>>>),
     Gcs(Arc<ResponseCache<GcsCache<ResponseCacheCodec>>>),
     ValkeySemantic {
         cache: Arc<ResponseCache<ValkeySemanticCache<PythonEmbedder, ResponseCacheCodec>>>,
@@ -115,6 +117,15 @@ impl NativeResponseCache {
             cache: Arc::new(ResponseCache::new(Arc::new(backend))),
             buffer: None,
         })
+    }
+
+    pub async fn s3(config: S3CacheConfig) -> Self {
+        let runtime = tokio::runtime::Handle::current();
+        Self::S3(Arc::new(ResponseCache::new(Arc::new(S3Cache::new(
+            config,
+            ResponseCacheCodec,
+            runtime,
+        )))))
     }
 
     pub fn valkey_semantic(
@@ -177,6 +188,7 @@ impl NativeResponseCache {
             )),
             Self::Memory(_)
             | Self::Redis { .. }
+            | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::Disk(_)
             | Self::Gcs(_) => None,
@@ -237,6 +249,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_) => "memory",
             Self::Redis { .. } => "redis",
+            Self::S3(_) => "s3",
             Self::Gcs(_) => "gcs",
             Self::ValkeySemantic { .. } => "valkey-semantic",
             Self::Disk(_) => "disk",
@@ -248,6 +261,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
+            Self::S3(cache) => cache.default_ttl(),
             Self::Gcs(cache) => cache.default_ttl(),
             Self::ValkeySemantic { cache, .. } => cache.default_ttl(),
             Self::Disk(cache) => cache.default_ttl(),
@@ -255,9 +269,38 @@ impl NativeResponseCache {
         }
     }
 
+    pub fn bucket(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => Some(cache.backend().bucket()),
+            _ => None,
+        }
+    }
+
+    pub fn key_prefix(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => Some(cache.backend().key_prefix()),
+            _ => None,
+        }
+    }
+
+    pub fn region(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => Some(cache.backend().region()),
+            _ => None,
+        }
+    }
+
+    pub fn endpoint(&self) -> Option<&str> {
+        match self {
+            Self::S3(cache) => cache.backend().endpoint(),
+            _ => None,
+        }
+    }
+
     pub fn namespace(&self) -> Option<&str> {
         match self {
             Self::Memory(_)
+            | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::Disk(_)
             | Self::AzureBlob(_)
@@ -269,6 +312,7 @@ impl NativeResponseCache {
     pub fn topology(&self) -> Option<&RedisTopology> {
         match self {
             Self::Memory(_)
+            | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::Disk(_)
             | Self::AzureBlob(_)
@@ -281,6 +325,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
             Self::Redis { .. }
+            | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::Disk(_)
             | Self::AzureBlob(_)
@@ -292,6 +337,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.backend().max_entry_bytes(),
             Self::Redis { .. }
+            | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::Disk(_)
             | Self::AzureBlob(_)
@@ -304,6 +350,7 @@ impl NativeResponseCache {
             Self::Disk(cache) => Some(cache.backend().directory()),
             Self::Memory(_)
             | Self::Redis { .. }
+            | Self::S3(_)
             | Self::ValkeySemantic { .. }
             | Self::AzureBlob(_)
             | Self::Gcs(_) => None,
@@ -324,6 +371,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.lookup(&Self::exact(request), now),
             Self::Redis { cache, .. } => cache.lookup(&Self::exact(request), now),
+            Self::S3(cache) => cache.lookup(&Self::exact(request), now),
             Self::ValkeySemantic { cache, scope, .. } => {
                 cache.lookup(&Self::semantic(request, scope), now)
             }
@@ -342,6 +390,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.store(&Self::exact(request), response, now),
             Self::Redis { cache, .. } => cache.store(&Self::exact(request), response, now),
+            Self::S3(cache) => cache.store(&Self::exact(request), response, now),
             Self::ValkeySemantic { cache, scope, .. } => {
                 cache.store(&Self::semantic(request, scope), response, now)
             }
@@ -365,6 +414,9 @@ impl NativeResponseCache {
                 let requests = requests.iter().map(Self::exact).collect::<Vec<_>>();
                 cache.lookup_batch(&requests, now)
             }
+            Self::S3(cache) => {
+                cache.lookup_batch(&requests.iter().map(Self::exact).collect::<Vec<_>>(), now)
+            }
             Self::ValkeySemantic { .. } => Err(Error::UnsupportedOperation),
             Self::Gcs(cache) => {
                 cache.lookup_batch(&requests.iter().map(Self::exact).collect::<Vec<_>>(), now)
@@ -386,6 +438,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.async_lookup(&Self::exact(request), now).await,
             Self::Redis { cache, .. } => cache.async_lookup(&Self::exact(request), now).await,
+            Self::S3(cache) => cache.async_lookup(&Self::exact(request), now).await,
             Self::ValkeySemantic { cache, scope, .. } => {
                 cache
                     .async_lookup(&Self::semantic(request, scope), now)
@@ -405,6 +458,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_)
             | Self::Redis { .. }
+            | Self::S3(_)
             | Self::Disk(_)
             | Self::AzureBlob(_)
             | Self::Gcs(_) => {
@@ -458,6 +512,11 @@ impl NativeResponseCache {
                     .async_store(cache, &Self::exact(request), response, now)
                     .await
             }
+            Self::S3(cache) => {
+                cache
+                    .async_store(&Self::exact(request), response, now)
+                    .await
+            }
             Self::ValkeySemantic { cache, scope, .. } => {
                 cache
                     .async_store(&Self::semantic(request, scope), response, now)
@@ -490,6 +549,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_)
             | Self::Redis { .. }
+            | Self::S3(_)
             | Self::Disk(_)
             | Self::AzureBlob(_)
             | Self::Gcs(_) => {
@@ -534,6 +594,11 @@ impl NativeResponseCache {
                 let requests = requests.iter().map(Self::exact).collect::<Vec<_>>();
                 cache.async_lookup_batch(&requests, now).await
             }
+            Self::S3(cache) => {
+                cache
+                    .async_lookup_batch(&requests.iter().map(Self::exact).collect::<Vec<_>>(), now)
+                    .await
+            }
             Self::ValkeySemantic { .. } => Err(Error::UnsupportedOperation),
             Self::Gcs(cache) => {
                 cache
@@ -567,6 +632,13 @@ impl NativeResponseCache {
                 cache.async_store_batch(entries, now).await
             }
             Self::Redis { cache, .. } => {
+                let entries = entries
+                    .into_iter()
+                    .map(|(request, value)| (Self::exact(&request), value))
+                    .collect();
+                cache.async_store_batch(entries, now).await
+            }
+            Self::S3(cache) => {
                 let entries = entries
                     .into_iter()
                     .map(|(request, value)| (Self::exact(&request), value))
@@ -612,6 +684,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(_)
             | Self::Redis { .. }
+            | Self::S3(_)
             | Self::Disk(_)
             | Self::AzureBlob(_)
             | Self::Gcs(_) => {
@@ -657,6 +730,7 @@ impl NativeResponseCache {
                 }
                 cache.async_flush().await
             }
+            Self::S3(cache) => cache.async_flush().await,
             Self::ValkeySemantic { .. } => Err(Error::UnsupportedOperation),
             Self::Gcs(cache) => cache.async_flush().await,
             Self::Disk(cache) => cache.async_flush().await,
@@ -668,6 +742,7 @@ impl NativeResponseCache {
         match self {
             Self::Memory(cache) => cache.test_connection().await,
             Self::Redis { cache, .. } => cache.test_connection().await,
+            Self::S3(cache) => cache.test_connection().await,
             Self::ValkeySemantic { cache, .. } => cache.test_connection().await,
             Self::Gcs(cache) => cache.test_connection().await,
             Self::Disk(cache) => cache.test_connection().await,
