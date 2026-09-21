@@ -292,11 +292,10 @@ def _highlighted_choice(session: AppSession) -> Optional[str]:
     controls = [c for c in session.app.layout.find_all_controls() if isinstance(c, InquirerPyFuzzyControl)]
     if not controls:
         return None
-    filtered_choices = controls[0]._filtered_choices
-    index = controls[0].selected_choice_index
-    if not 0 <= index < len(filtered_choices):
+    try:
+        return controls[0].selection["name"]
+    except IndexError:
         return None
-    return filtered_choices[index]["name"]
 
 
 async def _wait_until_highlighted(session: AppSession, name: str) -> None:
