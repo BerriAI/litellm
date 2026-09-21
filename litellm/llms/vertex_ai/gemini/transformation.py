@@ -4,6 +4,8 @@ Transformation logic from OpenAI format to Gemini format.
 Why separate file? Make it easy to see how transformation works
 """
 
+import base64
+import binascii
 import json
 import os
 import re
@@ -637,6 +639,34 @@ def check_if_part_exists_in_parts(parts: list[PartType], part: PartType, exclude
     return False
 
 
+def _is_valid_thought_signature(signature: str | None) -> bool:
+    """Return True when a Gemini thought signature is decodable Base64.
+
+    Vertex AI encodes thought signatures as Base64 protobuf bytes; a signature
+    recovered from stored response history that is not decodable makes Vertex
+    reject the whole request with a ``TYPE_BYTES`` 400 before inference starts.
+    Replay drops such signatures instead of forwarding them.
+    """
+    if not isinstance(signature, str) or not signature:
+        return False
+    # Reject any character outside the Base64 alphabets up front: urlsafe
+    # decoding silently ignores stray characters, so a corrupted signature
+    # could otherwise appear decodable.
+    if any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/_-=" for c in signature):
+        return False
+    # Padding must only appear at the end
+    if "=" in signature.rstrip("="):
+        return False
+    # The official encoder emits standard padded Base64, but tolerate a
+    # missing-padding signature recovered from stored history as well.
+    padded = signature + "=" * (-len(signature) % 4)
+    try:
+        base64.b64decode(padded.encode("ascii"), validate=True)
+        return True
+    except (binascii.Error, ValueError):
+        return False
+
+
 def _collect_tool_call_thought_signatures(
     assistant_msg: ChatCompletionAssistantMessage,
 ) -> frozenset[str]:
@@ -889,6 +919,10 @@ def _gemini_convert_messages_with_history(
                         if block["type"] == "thinking":
                             block_thinking_str = block.get("thinking")
                             block_signature = block.get("signature")
+                            if block_signature is not None and not _is_valid_thought_signature(str(block_signature)):
+                                # A corrupted signature would be rejected by Vertex with a
+                                # TYPE_BYTES 400; drop the block so the replay can proceed.
+                                continue
                             if block_thinking_str is not None and block_signature is not None:
                                 try:
                                     assistant_content.append(
@@ -931,6 +965,7 @@ def _gemini_convert_messages_with_history(
                         thought_signatures
                         and isinstance(thought_signatures, list)
                         and len(thought_signatures) > 0
+                        and _is_valid_thought_signature(str(thought_signatures[0]))
                         and thought_signatures[0] not in tool_call_signatures
                     ):
                         # Use the first signature for the text part (Gemini expects one signature per part)
