@@ -5,6 +5,7 @@ mod capabilities;
 mod codec;
 mod dual;
 mod error;
+mod semantic;
 
 pub use base_cache::{
     BaseCache, BatchEntry, CacheConnectionResult, CacheConnectionStatus, CacheContext,
@@ -19,3 +20,4 @@ pub use capabilities::{
 pub use codec::{CacheCodec, JsonCodec};
 pub use dual::{DualCache, ReadPolicy, RemoteFailurePolicy, WritePolicy};
 pub use error::Error;
+pub use semantic::{SemanticCacheContext, SemanticCacheScope};
