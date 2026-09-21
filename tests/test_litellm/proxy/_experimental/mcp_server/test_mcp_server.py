@@ -9470,6 +9470,47 @@ class TestPreemptive401ModeAware:
         discovery.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_keyed_aggregate_managed_oauth_uses_resource_metadata(self):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        upstream = _make_oauth2_server("interactive")
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": "/mcp",
+            "headers": [(b"host", b"gateway.example"), (b"x-litellm-api-key", b"Bearer sk-test")],
+        }
+        with (
+            patch.object(server_module.global_mcp_server_manager, "get_mcp_server_by_name", return_value=upstream),
+            patch.object(
+                server_module.global_mcp_server_manager, "has_user_oauth_token", new=AsyncMock(return_value=False)
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.MCPRequestHandler.get_allowed_mcp_servers",
+                new=AsyncMock(return_value=[upstream.server_id]),
+            ),
+            patch.dict(os.environ, {"LITELLM_SALT_KEY": "regression-salt-not-a-real-secret"}),
+            pytest.raises(HTTPException) as exc,
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope=scope,
+                mcp_servers=["interactive"],
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-test"),
+                client_ip=None,
+                allowed_server_ids={upstream.server_id},
+            )
+
+        assert exc.value.status_code == 401
+        assert (
+            'resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/mcp?'
+            in exc.value.headers["www-authenticate"]
+        )
+        assert "sk-test" not in exc.value.headers["www-authenticate"]
+
+    @pytest.mark.asyncio
     async def test_gateway_managed_interactive_no_token_challenges_with_x_litellm_api_key(self):
         """No stored token, key in x-litellm-api-key (oauth2_headers empty): 401."""
         with pytest.raises(HTTPException) as exc:
@@ -10208,3 +10249,81 @@ async def test_streamable_http_rejects_modern_protocol_version(header_value: str
     assert header_value in body["error"]["message"]
     for version in body["error"]["message"].split("supported: ")[1].split(", "):
         assert version in HANDSHAKE_PROTOCOL_VERSIONS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream_status,expected,key_allowed", [(200, None, True), (401, 401, True), (403, 403, True), (401, 403, False)]
+)
+async def test_keyed_connection_preflight_uses_presented_token_without_vault_fallback(
+    monkeypatch, upstream_status, expected, key_allowed
+):
+    from datetime import timezone
+    from pydantic import SecretStr
+    from litellm.proxy._experimental.mcp_server import server as server_module
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import CONNECTION_SCOPE_KEY
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        ConnectionBinding,
+        ConnectionCredential,
+    )
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    upstream = _make_oauth2_server("connection-preflight")
+    credential = ConnectionCredential(
+        kind="connection_access",
+        binding=ConnectionBinding(
+            key_hash="test-hash", server_id=upstream.server_id, resource="https://gateway.example/mcp"
+        ),
+        client_id="client",
+        token=SecretStr("connection-provider-token"),
+        jti="connection-preflight",
+        exp=int(datetime.now(timezone.utc).timestamp()) + 300,
+    )
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "scheme": "https",
+        "path": "/mcp",
+        CONNECTION_SCOPE_KEY: credential,
+        "headers": [(b"host", b"gateway.example"), (b"x-litellm-api-key", b"Bearer sk-test")],
+    }
+    manager = server_module.global_mcp_server_manager
+    probe = AsyncMock(return_value=(upstream_status, {}))
+    vault = AsyncMock(side_effect=AssertionError("a rejected connection must not use stored credentials"))
+    with (
+        patch.object(manager, "get_mcp_server_by_name", return_value=upstream),
+        patch.object(manager, "has_user_oauth_token", vault),
+        patch.object(
+            MCPRequestHandler,
+            "get_allowed_mcp_servers",
+            AsyncMock(return_value=[upstream.server_id] if key_allowed else []),
+        ),
+        patch.object(server_module, "_probe_upstream_auth", probe),
+        patch.dict(os.environ, {"LITELLM_SALT_KEY": "preflight-regression-salt"}),
+    ):
+        if expected is None:
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope,
+                [upstream.server_name],
+                None,
+                None,
+                UserAPIKeyAuth(api_key="sk-test"),
+                None,
+                allowed_server_ids={upstream.server_id},
+            )
+        else:
+            with pytest.raises(HTTPException) as exc:
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope,
+                    [upstream.server_name],
+                    None,
+                    None,
+                    UserAPIKeyAuth(api_key="sk-test"),
+                    None,
+                    allowed_server_ids={upstream.server_id},
+                )
+            assert exc.value.status_code == expected
+            if expected == 401:
+                assert "resource_metadata=" in exc.value.headers["www-authenticate"]
+        probe.assert_awaited_once_with(upstream.url, "Bearer connection-provider-token")
+        vault.assert_not_awaited()

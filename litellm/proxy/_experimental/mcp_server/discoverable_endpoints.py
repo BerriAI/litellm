@@ -5,6 +5,7 @@ import secrets
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -46,20 +47,38 @@ from litellm.proxy._experimental.mcp_server.faults import (
     render_token_fault,
 )
 from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    CONNECTION_FLOW_PREFIX,
     VendorCredentialState,
+    _cookie_path_and_secure,  # pyright: ignore[reportPrivateUsage]  # reuse the gateway cookie scope policy
+    _oauth_error,  # pyright: ignore[reportPrivateUsage]  # reuse the gateway OAuth error contract
+    _pkce_verifier_matches,  # pyright: ignore[reportPrivateUsage]  # reuse the gateway S256 verification
+    _seal,  # pyright: ignore[reportPrivateUsage]  # reuse authenticated gateway flow sealing
     aggregate_authorize,
     aggregate_token,
+    authorize_connection,
+    claim_connection_once,
     complete_connect_flow,
     describe_connect_flow,
     introspect_gateway_token,
     is_gateway_dcr_client_id,
     is_proxy_api_resource,
+    mint_connection_tokens,
     native_client_auth_contract,
     native_client_authorize,
+    open_connection_bootstrap,
+    open_connection_code,
+    open_connection_credential,
+    open_connection_flow,
+    open_gateway_dcr_client,
     register_aggregate_client,
     relative_request_url,
     revoke_refresh_token,
+    seal_connection_code,
     supported_grant_types,
+    validate_connection_binding,
+)
+from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    _append_query_params as append_connection_query,  # pyright: ignore[reportPrivateUsage]  # reuse gateway redirect encoding
 )
 from litellm.proxy._experimental.mcp_server.idp_token_exchange import (
     exchange_idp_subject_token,
@@ -77,6 +96,10 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     resolve_upstream_resource,
     validate_trusted_redirect_uri,
     well_known_root_suffix,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+    ConnectionAuthorization,
+    ConnectionBinding,
 )
 from litellm.proxy._experimental.mcp_server.proxy_api_credentials import (
     lookup_consent_teams,
@@ -153,6 +176,7 @@ def encode_state_with_base_url(
     dcr_client_secret: str | None = None,
     dcr_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
     oauth_nonce: str | None = None,
+    connection_flow: str | None = None,
 ) -> str:
     """
     Encode the base_url, original state, and PKCE parameters using encryption.
@@ -182,6 +206,7 @@ def encode_state_with_base_url(
         An encrypted string that encodes all values
     """
     state_data: Final = {
+        "connection_flow": connection_flow,
         "oauth_nonce": oauth_nonce,
         "base_url": base_url,
         "original_state": original_state,
@@ -881,6 +906,7 @@ async def authorize_with_server(
     response_type: str | None = None,
     scope: str | None = None,
     ephemeral_dcr_client: "EphemeralDcrClient | None" = None,
+    connection: ConnectionAuthorization | None = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     resolved_server: Final = await _server_with_oauth_endpoints(mcp_server, _register_flow_needed_endpoint)
@@ -944,6 +970,7 @@ async def authorize_with_server(
     encoded_state: Final = encode_state_with_base_url(
         base_url=base_url,
         original_state=state,
+        connection_flow=_seal(CONNECTION_FLOW_PREFIX, connection) if connection is not None else None,
         oauth_nonce=oauth_nonce,
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
@@ -989,6 +1016,8 @@ async def authorize_with_server(
     final_url: Final = urlunparse(parsed_auth_url._replace(query=urlencode(existing_params)))
     response: Final = RedirectResponse(final_url)
     _set_oauth_state_cookie(response, request, relay_state, encoded_state)
+    if connection is not None and len(response.headers["set-cookie"]) > 4096:
+        return _oauth_error(400, "invalid_request", "Connection authorization metadata is too large")
     return response
 
 
@@ -1011,6 +1040,7 @@ async def exchange_token_with_server(
     refresh_token: str | None = None,
     scope: str | None = None,
     client_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
+    connection_binding: ConnectionBinding | None = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     if grant_type not in ("authorization_code", "refresh_token"):
@@ -1221,6 +1251,11 @@ async def exchange_token_with_server(
         if isinstance(token_response, dict)
         else None
     )
+
+    if connection_binding is not None:
+        return mint_connection_tokens(
+            connection_binding, client_id, token_response, fallback_refresh=refresh_token, fallback_scope=scope
+        )
 
     # Store server-side when the server is configured for per-user OAuth and
     # the calling client has provided a valid LiteLLM identity.
@@ -1912,6 +1947,21 @@ async def authorize(
     scope: str | None = None,
     resource: str | None = None,
 ):
+    registered: Final = open_gateway_dcr_client(client_id) if client_id else None
+    if registered is not None and registered.connection is not None:
+        if mcp_server_name is not None:
+            return _oauth_error(400, "invalid_client", "Use the registered connection authorization endpoint")
+        return await authorize_connection(
+            request,
+            client_id or "",
+            redirect_uri,
+            state,
+            code_challenge,
+            code_challenge_method,
+            response_type,
+            resource,
+            scope,
+        )
     # Redirect to real OAuth provider with PKCE support
     if mcp_server_name is None and client_id and is_gateway_dcr_client_id(client_id):
         if is_proxy_api_resource(request, resource):
@@ -1999,6 +2049,22 @@ async def token_endpoint(
     3. Return the token
     4. Return a virtual key in this response
     """
+    registered: Final = open_gateway_dcr_client(client_id)
+    if registered is not None and registered.connection is not None:
+        if mcp_server_name is not None:
+            return _oauth_error(400, "invalid_client", "Use the registered connection token endpoint")
+        return await exchange_connection_token(
+            request,
+            registered.connection,
+            grant_type,
+            client_id,
+            code,
+            redirect_uri,
+            code_verifier,
+            refresh_token,
+            resource,
+            scope,
+        )
     if mcp_server_name is None and is_gateway_dcr_client_id(client_id):
         from litellm.proxy.proxy_server import (  # noqa: PLC0415  # circular import at module load
             master_key,
@@ -2271,6 +2337,24 @@ async def callback(
         mcp_server_id: Final = state_data.get("mcp_server_id")
         dcr_client_id: Final = state_data.get("dcr_client_id")
         dcr_client_secret: Final = state_data.get("dcr_client_secret")
+        encoded_connection: Final = state_data.get("connection_flow")
+        connection: Final = open_connection_flow(encoded_connection) if isinstance(encoded_connection, str) else None
+        if encoded_connection is not None:
+            if connection is None or connection.redirect_uri != redirect_uri:
+                raise HTTPException(status_code=400, detail="Invalid or expired connection authorization")
+            replay: Final = await claim_connection_once(f"callback:{connection.jti}", connection.exp)
+            if replay is not None:
+                return replay
+            destination: Final = append_connection_query(
+                redirect_uri,
+                (
+                    ("code", seal_connection_code(connection, code)),
+                    ("state", connection.state),
+                ),
+            )
+            connection_response: Final = RedirectResponse(destination, status_code=302)
+            _clear_oauth_state_cookie(connection_response, request, state)
+            return connection_response
         forwarded_code = code
         if isinstance(litellm_user_id, str) and litellm_user_id and isinstance(mcp_server_id, str) and mcp_server_id:
             forwarded_code = seal_bridge_authorization_code(
@@ -2665,7 +2749,7 @@ def _build_aggregate_authorization_server_response(request: Request, token_excha
 # in registration order, and /.well-known/oauth-authorization-server/{name}
 # would otherwise capture the "/mcp" suffix as a server name.
 @router.get(f"/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp")
-async def oauth_protected_resource_aggregate(request: Request):
+async def oauth_protected_resource_aggregate(request: Request, connection: str | None = None):
     """
     OAuth protected resource discovery for the aggregate /mcp endpoint.
 
@@ -2673,7 +2757,52 @@ async def oauth_protected_resource_aggregate(request: Request):
     (those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously
     describes the aggregate resource.
     """
+    bootstrap: Final = connection
+    if bootstrap is not None:
+        binding: Final = open_connection_bootstrap(bootstrap)
+        if binding is None:
+            raise HTTPException(status_code=400, detail="Invalid or expired connection discovery")
+        server: Final = await validate_connection_binding(request, binding)
+        from mcp.shared.auth import ProtectedResourceMetadata
+
+        metadata: Final = ProtectedResourceMetadata.model_validate(
+            MappingProxyType(
+                {
+                    "resource": binding.resource,
+                    "authorization_servers": (f"{get_request_base_url(request)}/mcp-connect/{bootstrap}",),
+                    "scopes_supported": tuple(server.scopes or ()),
+                }
+            )
+        )
+        return JSONResponse(metadata.model_dump(mode="json", exclude_none=True), headers=TOKEN_NO_CACHE_HEADERS)
     return _build_aggregate_protected_resource_response(request)
+
+
+@router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp-connect/{{bootstrap}}")
+async def connection_authorization_metadata(request: Request, bootstrap: str) -> JSONResponse:
+    binding: Final = open_connection_bootstrap(bootstrap)
+    if binding is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired connection discovery")
+    server: Final = await validate_connection_binding(request, binding)
+    base: Final = get_request_base_url(request)
+    from mcp.shared.auth import OAuthMetadata
+
+    metadata: Final = OAuthMetadata.model_validate(
+        MappingProxyType(
+            {
+                "issuer": f"{base}/mcp-connect/{bootstrap}",
+                "authorization_endpoint": f"{base}/authorize",
+                "token_endpoint": f"{base}/token",
+                "registration_endpoint": append_connection_query(f"{base}/register", (("connection", bootstrap),)),
+                "scopes_supported": tuple(server.scopes or ()),
+                "response_types_supported": ("code",),
+                "grant_types_supported": ("authorization_code", "refresh_token"),
+                "code_challenge_methods_supported": ("S256",),
+                "token_endpoint_auth_methods_supported": ("none",),
+            }
+        )
+    )
+    return JSONResponse(metadata.model_dump(mode="json", exclude_none=True), headers=TOKEN_NO_CACHE_HEADERS)
 
 
 @router.get(f"/.well-known/oauth-authorization-server{well_known_root_suffix()}/mcp")
@@ -2895,7 +3024,15 @@ async def oauth_authorization_server_legacy(request: Request, mcp_server_name: s
 
 @router.post("/{mcp_server_name}/register")
 @router.post("/register")
-async def register_client(request: Request, mcp_server_name: str | None = None):
+async def register_client(request: Request, mcp_server_name: str | None = None, connection: str | None = None):
+    bootstrap: Final = connection
+    if bootstrap is not None:
+        binding: Final = open_connection_bootstrap(bootstrap)
+        if binding is None or mcp_server_name is not None:
+            return _oauth_error(400, "invalid_client", "Invalid or expired connection discovery")
+        await validate_connection_binding(request, binding)
+        body: Final = await _read_request_body(request=request)
+        return await register_aggregate_client(request, body, False, connection=binding)
     # Get the correct base URL considering X-Forwarded-* headers
     request_base_url: Final = get_request_base_url(request)
 
@@ -2946,3 +3083,111 @@ async def register_client(request: Request, mcp_server_name: str | None = None):
         fallback_client_id=mcp_server_name,
         client_redirect_uris=client_redirect_uris,
     )
+
+
+@router.post("/authorize/connection/complete")
+async def complete_connection(request: Request, flow: str = Form(...), decision: str = Form(...)) -> Response:
+    cookie_name: Final = f"mcp_connection_{flow}"
+    opened: Final = open_connection_flow(request.cookies.get(cookie_name, ""))
+    if opened is None or opened.jti != flow or decision not in ("approve", "deny"):
+        return _oauth_error(400, "invalid_request", "Invalid or expired consent")
+    server: Final = await validate_connection_binding(request, opened.binding)
+    claim: Final = await claim_connection_once(f"consent:{opened.jti}", opened.exp)
+    if claim is not None:
+        return claim
+    if decision == "deny":
+        denied: Final = RedirectResponse(
+            append_connection_query(
+                opened.redirect_uri,
+                (
+                    ("error", "access_denied"),
+                    ("state", opened.state),
+                ),
+            ),
+            status_code=302,
+        )
+        cookie_path, _ = _cookie_path_and_secure(request)
+        denied.delete_cookie(cookie_name, path=cookie_path)
+        return denied
+    response: Final = await authorize_with_server(
+        request,
+        server,
+        opened.client_id,
+        opened.redirect_uri,
+        opened.state,
+        opened.code_challenge,
+        "S256",
+        "code",
+        opened.scope,
+        connection=opened,
+    )
+    cookie_path, _ = _cookie_path_and_secure(request)
+    response.delete_cookie(cookie_name, path=cookie_path)
+    return response
+
+
+async def exchange_connection_token(
+    request: Request,
+    binding: ConnectionBinding,
+    grant_type: str,
+    client_id: str,
+    code: str | None,
+    redirect_uri: str | None,
+    code_verifier: str | None,
+    refresh_token: str | None,
+    resource: str | None,
+    scope: str | None,
+) -> Response:
+    if resource is not None and resource != binding.resource:
+        return _oauth_error(400, "invalid_target", "The requested resource does not match this connection")
+    server: Final = await validate_connection_binding(request, binding)
+    if grant_type == "authorization_code":
+        opened: Final = open_connection_code(code or "")
+        if (
+            opened is None
+            or opened.authorization.binding != binding
+            or opened.authorization.client_id != client_id
+            or opened.authorization.redirect_uri != redirect_uri
+            or not code_verifier
+            or not 43 <= len(code_verifier) <= 128
+            or not _pkce_verifier_matches(code_verifier, opened.authorization.code_challenge)
+        ):
+            return _oauth_error(400, "invalid_grant", "Invalid authorization code or PKCE verifier")
+        claim: Final = await claim_connection_once(f"code:{opened.jti}", opened.exp)
+        if claim is not None:
+            return claim
+        return await exchange_token_with_server(
+            request,
+            server,
+            grant_type,
+            opened.upstream_code.get_secret_value(),
+            redirect_uri,
+            client_id,
+            None,
+            code_verifier,
+            scope=opened.authorization.scope,
+            connection_binding=binding,
+        )
+    if grant_type == "refresh_token":
+        refreshed: Final = open_connection_credential(refresh_token or "", refresh=True)
+        if refreshed is None or refreshed.binding != binding or refreshed.client_id != client_id:
+            return _oauth_error(400, "invalid_grant", "Invalid refresh credential")
+        if scope and not frozenset(scope.split()).issubset((refreshed.scope or "").split()):
+            return _oauth_error(400, "invalid_scope", "Refresh cannot expand the granted scopes")
+        claimed: Final = await claim_connection_once(f"refresh:{refreshed.jti}", refreshed.exp)
+        if claimed is not None:
+            return claimed
+        return await exchange_token_with_server(
+            request,
+            server,
+            grant_type,
+            None,
+            None,
+            client_id,
+            None,
+            None,
+            refresh_token=refreshed.token.get_secret_value(),
+            scope=scope or refreshed.scope,
+            connection_binding=binding,
+        )
+    return _oauth_error(400, "unsupported_grant_type", "Unsupported connection grant type")

@@ -13,6 +13,12 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
+    CONNECTION_SCOPE_KEY,
+    connection_challenge,
+    is_connection_credential,
+    open_connection_credential,
+)
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_passthrough_resource_metadata_url,
     get_passthrough_www_authenticate,
@@ -28,6 +34,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credenti
     resolve_bridge_envelope,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+    ConnectionBinding,
     EnvelopeIdentity,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
@@ -42,6 +49,7 @@ from litellm.proxy._types import (
     SpecialMCPServerName,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    hash_token,
     user_api_key_has_admin_view,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -541,6 +549,52 @@ class MCPRequestHandler:
                     bearer_presented=False,
                 )
 
+        scope.pop(CONNECTION_SCOPE_KEY, None)
+        connection_header: Final = headers.get("authorization")
+        if is_connection_credential(connection_header):
+            if not has_explicit_litellm_key or request_route != "/mcp":
+                raise HTTPException(status_code=401, detail="A connection credential requires the original MCP key")
+            targets: Final = MCPRequestHandler._resolve_target_server_names(request_route, mcp_servers)
+            from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+            target: Final = (
+                global_mcp_server_manager.get_mcp_server_by_name(
+                    targets[0], client_ip=IPAddressUtils.get_mcp_client_ip(request)
+                )
+                if len(targets) == 1
+                else None
+            )
+            allowed: Final = await MCPRequestHandler.get_allowed_mcp_servers(validated_user_api_key_auth)
+            if (
+                target is None
+                or target.server_id not in allowed
+                or not target.needs_user_oauth_token
+                or target.oauth_identity_binding is not None
+            ):
+                raise HTTPException(status_code=403, detail="Connection credential does not authorize this MCP server")
+            expected_binding: Final = ConnectionBinding(
+                key_hash=hash_token(_get_bearer_token_or_received_api_key(litellm_api_key)),
+                server_id=target.server_id,
+                resource=f"{get_request_base_url(request)}/mcp",
+            )
+            connection: Final = open_connection_credential(connection_header or "")
+            if connection is None:
+                raise HTTPException(
+                    status_code=401,
+                    detail="Invalid or expired MCP connection credential",
+                    headers=MappingProxyType(
+                        {
+                            "www-authenticate": connection_challenge(request, expected_binding),
+                            "Cache-Control": "no-store",
+                        }
+                    ),
+                )
+            if connection.binding != expected_binding:
+                raise HTTPException(
+                    status_code=401, detail="Connection credential belongs to a different key or resource"
+                )
+            scope[CONNECTION_SCOPE_KEY] = connection
+
         # Leak-defense (single chokepoint): a gateway admission credential (session bearer or bridge
         # envelope) is NEVER a valid upstream token. Scrub it from EVERY egress context so no
         # client-forwarded, OBO, or passthrough path can send it upstream for replay. Anchored to the
@@ -573,7 +627,9 @@ class MCPRequestHandler:
         """True when a header value is a gateway admission credential — a session bearer or bridge
         envelope. It proves who signed in to the GATEWAY, never a valid UPSTREAM token, so it must never
         be forwarded (a hostile upstream could capture and replay it against the aggregate ``/mcp`` scope)."""
-        return value is not None and (is_session_bearer_shaped(value) or is_bridge_envelope_shaped(value))
+        return value is not None and (
+            is_session_bearer_shaped(value) or is_bridge_envelope_shaped(value) or is_connection_credential(value)
+        )
 
     @staticmethod
     def _scrub_gateway_admission_credentials(

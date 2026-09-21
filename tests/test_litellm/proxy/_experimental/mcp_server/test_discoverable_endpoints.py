@@ -12345,3 +12345,690 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
     proxy_server.prisma_client.db.litellm_mcpusercredentials.upsert.assert_not_called()
     proxy_server.prisma_client.db.litellm_usertable.create.assert_not_called()
     proxy_server.prisma_client.db.litellm_teamtable.create.assert_not_called()
+
+
+@pytest.fixture
+def keyed_oauth_client(monkeypatch):
+    from types import SimpleNamespace
+
+    import httpx
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server import gateway_dcr_flow as flow
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import ConnectionBinding
+    from litellm.proxy._types import hash_token
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "connection-flow-regression-salt")
+    cache = DualCache()
+    redis = SimpleNamespace(async_increment=cache.async_increment_cache, async_get_cache=cache.async_get_cache)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", redis)
+    server = MCPServer(
+        server_id="github-test",
+        name="GitHub",
+        server_name="github-test",
+        alias="github-test",
+        url="https://mcp.example/mcp",
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="upstream-app",
+        client_secret="upstream-secret",
+        scopes=["read:user"],
+        authorization_url="https://provider.example/authorize",
+        token_url="https://provider.example/token",
+    )
+    real_validate = flow.validate_connection_binding
+    validate = AsyncMock(return_value=server)
+    monkeypatch.setattr(flow, "validate_connection_binding", validate)
+    monkeypatch.setattr(endpoints, "validate_connection_binding", validate)
+    response = httpx.Response(
+        200,
+        json={
+            "access_token": "provider-access",
+            "refresh_token": "provider-refresh",
+            "expires_in": 3600,
+            "scope": "read:user",
+            "token_type": "Bearer",
+        },
+        request=httpx.Request("POST", "https://provider.example/token"),
+    )
+    upstream = SimpleNamespace(post=AsyncMock(return_value=response))
+    monkeypatch.setattr(endpoints, "get_async_httpx_client", lambda **kwargs: upstream)
+    vault = AsyncMock(side_effect=AssertionError("a connection must not write the user vault"))
+    monkeypatch.setattr(endpoints, "_store_per_user_token_server_side", vault)
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    binding = ConnectionBinding(
+        key_hash=hash_token("sk-original"), server_id=server.server_id, resource="https://gateway.example/mcp"
+    )
+    bootstrap = flow.mint_connection_bootstrap(binding)
+    with TestClient(app, base_url="https://gateway.example", follow_redirects=False) as client:
+        yield SimpleNamespace(
+            client=client,
+            binding=binding,
+            bootstrap=bootstrap,
+            upstream=upstream,
+            vault=vault,
+            validate=validate,
+            real_validate=real_validate,
+            server=server,
+            redis=redis,
+        )
+
+
+def _start_keyed_oauth(harness):
+    from urllib.parse import parse_qs, urlparse
+
+    client = harness.client
+    metadata = client.get("/.well-known/oauth-protected-resource/mcp", params={"connection": harness.bootstrap})
+    assert metadata.status_code == 200, metadata.text
+    assert metadata.json()["resource"] == harness.binding.resource
+    issuer = metadata.json()["authorization_servers"][0]
+    discovery = client.get("/.well-known/oauth-authorization-server" + urlparse(issuer).path)
+    assert discovery.status_code == 200, discovery.text
+    assert discovery.json()["issuer"] == issuer
+    registered = client.post(
+        discovery.json()["registration_endpoint"],
+        json={
+            "redirect_uris": ["http://localhost:33418/callback"],
+            "client_name": "Cursor <untrusted>",
+        },
+    )
+    assert registered.status_code == 201, registered.text
+    client_id = registered.json()["client_id"]
+    verifier = "v" * 43
+    challenge = urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    consent = client.get(
+        discovery.json()["authorization_endpoint"],
+        params={
+            "client_id": client_id,
+            "redirect_uri": "http://localhost:33418/callback",
+            "response_type": "code",
+            "state": "client-state",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "resource": harness.binding.resource,
+            "scope": "read:user",
+        },
+    )
+    assert consent.status_code == 200, consent.text
+    assert "Cursor &lt;untrusted&gt;" in consent.text
+    assert "http://localhost:33418/callback" in consent.text
+    assert "read:user" in consent.text
+    assert "/sso/" not in consent.text
+    handle = next(
+        cookie.name.removeprefix("mcp_connection_")
+        for cookie in client.cookies.jar
+        if cookie.name.startswith("mcp_connection_")
+    )
+    return client_id, verifier, handle
+
+
+def _complete_keyed_oauth(harness):
+    from urllib.parse import parse_qs, urlparse
+
+    client_id, verifier, handle = _start_keyed_oauth(harness)
+    consent = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
+    assert consent.status_code == 307, consent.text
+    upstream = urlparse(consent.headers["location"])
+    assert upstream.netloc == "provider.example"
+    params = parse_qs(upstream.query)
+    assert params["client_id"] == ["upstream-app"]
+    assert params["redirect_uri"] == ["https://gateway.example/callback"]
+    callback = harness.client.get("/callback", params={"state": params["state"][0], "code": "provider-code"})
+    assert callback.status_code == 302, callback.text
+    result = parse_qs(urlparse(callback.headers["location"]).query)
+    assert result["state"] == ["client-state"]
+    assert result["code"] != ["provider-code"]
+    return {
+        "grant_type": "authorization_code",
+        "client_id": client_id,
+        "code": result["code"][0],
+        "code_verifier": verifier,
+        "redirect_uri": "http://localhost:33418/callback",
+        "resource": harness.binding.resource,
+    }
+
+
+def test_keyed_connection_headerless_exchange_and_rotating_refresh(keyed_oauth_client):
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import open_connection_credential
+
+    harness = keyed_oauth_client
+    payload = _complete_keyed_oauth(harness)
+    token = harness.client.post("/token", data=payload)
+    assert token.status_code == 200, token.text
+    grant = open_connection_credential(token.json()["access_token"])
+    assert grant is not None
+    assert grant.binding == harness.binding
+    assert grant.token.get_secret_value() == "provider-access"
+    assert grant.client_id == payload["client_id"]
+    posted = harness.upstream.post.call_args.kwargs["data"]
+    assert posted["code"] == "provider-code"
+    assert posted["client_id"] == "upstream-app"
+    assert posted["code_verifier"] == payload["code_verifier"]
+    replay = harness.client.post("/token", data=payload)
+    assert replay.status_code == 400
+    assert replay.json()["error"] == "invalid_grant"
+    assert harness.upstream.post.call_count == 1
+    refresh_payload = {
+        "grant_type": "refresh_token",
+        "client_id": payload["client_id"],
+        "refresh_token": token.json()["refresh_token"],
+        "resource": harness.binding.resource,
+    }
+    refreshed = harness.client.post("/token", data=refresh_payload)
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["refresh_token"] != token.json()["refresh_token"]
+    assert harness.upstream.post.call_args.kwargs["data"]["refresh_token"] == "provider-refresh"
+    replayed_refresh = harness.client.post("/token", data=refresh_payload)
+    assert replayed_refresh.status_code == 400
+    assert harness.upstream.post.call_count == 2
+    harness.vault.assert_not_called()
+
+
+@pytest.mark.parametrize("change", ["verifier", "redirect", "resource", "tamper"])
+def test_keyed_connection_rejects_bad_exchange_before_upstream(keyed_oauth_client, change):
+    harness = keyed_oauth_client
+    payload = _complete_keyed_oauth(harness)
+    field, value = {
+        "verifier": ("code_verifier", "w" * 43),
+        "redirect": ("redirect_uri", "http://localhost:33419/callback"),
+        "resource": ("resource", "https://gateway.example/mcp/other"),
+        "tamper": ("code", "llm_ccode_invalid"),
+    }[change]
+    response = harness.client.post("/token", data={**payload, field: value})
+    assert response.status_code == 400, response.text
+    harness.upstream.post.assert_not_called()
+    harness.vault.assert_not_called()
+
+
+def test_keyed_connection_denial_and_replayed_consent_never_exchange(keyed_oauth_client):
+    harness = keyed_oauth_client
+    _, _, handle = _start_keyed_oauth(harness)
+    denied = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "deny"})
+    assert denied.status_code == 302
+    assert "error=access_denied" in denied.headers["location"]
+    assert "state=client-state" in denied.headers["location"]
+    repeated = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
+    assert repeated.status_code == 400
+    harness.upstream.post.assert_not_called()
+    harness.vault.assert_not_called()
+
+
+def test_keyed_connection_redis_outage_prevents_exchange(keyed_oauth_client):
+    harness = keyed_oauth_client
+    payload = _complete_keyed_oauth(harness)
+    harness.redis.async_increment = AsyncMock(side_effect=ConnectionError("redis unavailable"))
+    refused = harness.client.post("/token", data=payload)
+    assert refused.status_code == 503
+    assert refused.json()["error"] == "temporarily_unavailable"
+    harness.upstream.post.assert_not_called()
+    harness.vault.assert_not_called()
+
+
+@pytest.mark.parametrize("state_length", [1, 1024])
+def test_keyed_connection_cookie_sizes_are_browser_safe(keyed_oauth_client, state_length):
+    harness = keyed_oauth_client
+    client_id, verifier, _ = _start_keyed_oauth(harness)
+    challenge = urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    response = harness.client.get(
+        "/authorize",
+        params={
+            "client_id": client_id,
+            "redirect_uri": "http://localhost:33418/callback",
+            "response_type": "code",
+            "state": "s" * state_length,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "resource": harness.binding.resource,
+        },
+    )
+    if response.status_code == 400:
+        assert response.json()["error"] == "invalid_request"
+        assert state_length == 1024
+        harness.upstream.post.assert_not_called()
+        return
+    assert response.status_code == 200
+    assert all(len(value) <= 4096 for value in response.headers.get_list("set-cookie"))
+    handle = response.text.split('name="flow" value="')[1].split('"')[0]
+    approved = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
+    if approved.status_code == 400:
+        assert approved.json()["error"] == "invalid_request"
+        assert state_length == 1024
+    else:
+        assert approved.status_code == 307
+        assert all(len(value) <= 4096 for value in approved.headers.get_list("set-cookie"))
+    harness.upstream.post.assert_not_called()
+
+
+def test_keyed_connection_client_cannot_enter_session_login_flow(keyed_oauth_client):
+    harness = keyed_oauth_client
+    client_id, verifier, _ = _start_keyed_oauth(harness)
+    challenge = urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    response = harness.client.get(
+        "/authorize/mcp-session",
+        params={
+            "client_id": client_id,
+            "redirect_uri": "http://localhost:33418/callback",
+            "response_type": "code",
+            "state": "state",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "resource": harness.binding.resource,
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_client"
+    assert "location" not in response.headers
+    harness.upstream.post.assert_not_called()
+
+
+@pytest.mark.parametrize("stage", ["authorize", "exchange", "refresh"])
+@pytest.mark.parametrize("policy", ["blocked", "expired", "denied_server", "denied_route", "allowed"])
+def test_keyed_connection_reloads_live_key_before_provider(keyed_oauth_client, monkeypatch, stage, policy):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import gateway_dcr_flow as flow
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+    from litellm.proxy._experimental.mcp_server.auth import user_api_key_auth_mcp as admission
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+    from litellm.proxy.auth import auth_checks
+
+    harness = keyed_oauth_client
+    payload = _complete_keyed_oauth(harness)
+    token = harness.client.post("/token", data=payload) if stage == "refresh" else None
+    harness.upstream.post.reset_mock()
+    real_validate = harness.real_validate
+    monkeypatch.setattr(flow, "validate_connection_binding", real_validate)
+    monkeypatch.setattr(endpoints, "validate_connection_binding", real_validate)
+    key = UserAPIKeyAuth(
+        api_key=harness.binding.key_hash,
+        blocked=policy == "blocked",
+        expires=datetime.now(timezone.utc) - timedelta(seconds=1) if policy == "expired" else None,
+        allowed_routes=["/chat/completions"] if policy == "denied_route" else None,
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="connection-policy-test",
+            mcp_servers=["other-server"] if policy == "denied_server" else [harness.server.server_id],
+        ),
+    )
+    lookup = AsyncMock(return_value=key)
+    monkeypatch.setattr(auth_checks, "get_key_object", lookup)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(admission, "_run_centralized_common_checks", AsyncMock())
+    monkeypatch.setitem(global_mcp_server_manager.registry, harness.server.server_id, harness.server)
+    if stage == "authorize":
+        challenge = urlsafe_b64encode(hashlib.sha256(payload["code_verifier"].encode()).digest()).rstrip(b"=").decode()
+        response = harness.client.get(
+            "/authorize",
+            params={
+                "client_id": payload["client_id"],
+                "redirect_uri": payload["redirect_uri"],
+                "response_type": "code",
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "resource": harness.binding.resource,
+            },
+        )
+    elif stage == "exchange":
+        response = harness.client.post("/token", data=payload)
+    else:
+        assert token is not None and token.status_code == 200
+        response = harness.client.post(
+            "/token",
+            data={
+                "grant_type": "refresh_token",
+                "client_id": payload["client_id"],
+                "refresh_token": token.json()["refresh_token"],
+                "resource": harness.binding.resource,
+            },
+        )
+    assert response.status_code == (200 if policy == "allowed" else 401 if policy in ("blocked", "expired") else 403), (
+        response.text
+    )
+    lookup.assert_awaited_once()
+    assert lookup.call_args.kwargs["hashed_token"] == harness.binding.key_hash
+    assert harness.upstream.post.call_count == int(policy == "allowed" and stage != "authorize")
+    harness.vault.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "absent_redis",
+        "wrong_client",
+        "expired_code",
+        "refresh_as_code",
+        "access_as_refresh",
+        "expanded_scope",
+        "missing_pkce",
+        "named_route",
+    ],
+)
+def test_keyed_connection_rejects_invalid_grants_without_provider_calls(keyed_oauth_client, monkeypatch, case):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import gateway_dcr_flow as flow
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import ConnectionCode
+
+    harness = keyed_oauth_client
+    payload = _complete_keyed_oauth(harness)
+    issued = (
+        harness.client.post("/token", data=payload)
+        if case in ("refresh_as_code", "access_as_refresh", "expanded_scope")
+        else None
+    )
+    harness.upstream.post.reset_mock()
+    if case == "absent_redis":
+        monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+        monkeypatch.setattr(proxy_server.user_api_key_cache, "redis_cache", None)
+        response = harness.client.post("/token", data=payload)
+    elif case == "wrong_client":
+        other = harness.client.post(
+            "/register",
+            params={"connection": harness.bootstrap},
+            json={
+                "redirect_uris": [payload["redirect_uri"]],
+                "client_name": "Different application",
+            },
+        )
+        assert other.status_code == 201
+        response = harness.client.post("/token", data={**payload, "client_id": other.json()["client_id"]})
+    elif case == "expired_code":
+        opened = flow.open_connection_code(payload["code"])
+        assert opened is not None
+        expired = ConnectionCode(
+            authorization=opened.authorization, upstream_code=opened.upstream_code, jti=opened.jti, exp=1
+        )
+        response = harness.client.post(
+            "/token", data={**payload, "code": flow._seal(flow.CONNECTION_CODE_PREFIX, expired)}
+        )
+    elif case == "missing_pkce":
+        response = harness.client.post("/token", data={k: v for k, v in payload.items() if k != "code_verifier"})
+    elif case == "named_route":
+        response = harness.client.post("/github-test/token", data=payload)
+    else:
+        assert issued is not None and issued.status_code == 200
+        if case == "refresh_as_code":
+            response = harness.client.post("/token", data={**payload, "code": issued.json()["refresh_token"]})
+        else:
+            response = harness.client.post(
+                "/token",
+                data={
+                    "client_id": payload["client_id"],
+                    "grant_type": "refresh_token",
+                    "refresh_token": issued.json()["access_token" if case == "access_as_refresh" else "refresh_token"],
+                    "scope": "admin" if case == "expanded_scope" else "read:user",
+                },
+            )
+    assert response.status_code == (503 if case == "absent_redis" else 400), response.text
+    harness.upstream.post.assert_not_called()
+    harness.vault.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "body,status",
+    [
+        ({}, 502),
+        ({"access_token": "bad", "token_type": "MAC"}, 502),
+        ({"access_token": "old", "expires_in": 0}, 502),
+        ({"access_token": "x" * 13000}, 502),
+        ({"access_token": "short", "expires_in": 30}, 200),
+    ],
+)
+def test_keyed_connection_validates_provider_token_response(keyed_oauth_client, body, status):
+    import httpx
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import open_connection_credential
+
+    harness = keyed_oauth_client
+    payload = _complete_keyed_oauth(harness)
+    harness.upstream.post.return_value = httpx.Response(
+        200, json=body, request=httpx.Request("POST", harness.server.token_url)
+    )
+    response = harness.client.post("/token", data=payload)
+    assert response.status_code == status, response.text
+    harness.upstream.post.assert_awaited_once()
+    if status == 200:
+        grant = open_connection_credential(response.json()["access_token"])
+        assert grant is not None and grant.token.get_secret_value() == "short"
+        assert response.json()["expires_in"] == 30
+        assert "refresh_token" not in response.json()
+    else:
+        assert "access_token" not in response.json()
+    harness.vault.assert_not_called()
+
+
+def test_keyed_connection_refresh_preserves_nonrotating_provider_token(keyed_oauth_client):
+    import httpx
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import open_connection_credential
+
+    harness = keyed_oauth_client
+    payload = _complete_keyed_oauth(harness)
+    issued = harness.client.post("/token", data=payload)
+    assert issued.status_code == 200
+    harness.upstream.post.return_value = httpx.Response(
+        200,
+        json={"access_token": "renewed", "expires_in": 1800},
+        request=httpx.Request("POST", harness.server.token_url),
+    )
+    response = harness.client.post(
+        "/token",
+        data={
+            "client_id": payload["client_id"],
+            "grant_type": "refresh_token",
+            "refresh_token": issued.json()["refresh_token"],
+        },
+    )
+    assert response.status_code == 200, response.text
+    refresh = open_connection_credential(response.json()["refresh_token"], refresh=True)
+    assert refresh is not None and refresh.token.get_secret_value() == "provider-refresh"
+    assert refresh.scope == "read:user"
+    assert response.json()["refresh_token"] != issued.json()["refresh_token"]
+    assert harness.upstream.post.call_args.kwargs["data"]["refresh_token"] == "provider-refresh"
+    harness.vault.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/.well-known/oauth-protected-resource/mcp",
+        "/.well-known/oauth-authorization-server/mcp-connect/llm_cboot_invalid",
+        "/register",
+    ],
+)
+def test_keyed_connection_discovery_rejects_tampered_bootstrap(keyed_oauth_client, route):
+    harness = keyed_oauth_client
+    response = (
+        harness.client.post(
+            route, params={"connection": "llm_cboot_invalid"}, json={"redirect_uris": ["http://localhost/callback"]}
+        )
+        if route == "/register"
+        else harness.client.get(route, params={"connection": "llm_cboot_invalid"})
+    )
+    assert response.status_code == 400
+    harness.validate.assert_not_awaited()
+    harness.upstream.post.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "field,value,error",
+    [
+        ("resource", "https://wrong.example/mcp", "invalid_target"),
+        ("code_challenge", "bad", "invalid_request"),
+        ("code_challenge_method", "plain", "invalid_request"),
+        ("scope", "admin", "invalid_scope"),
+        ("redirect_uri", "http://localhost:4001/wrong", "invalid_request"),
+    ],
+)
+def test_keyed_connection_authorize_rejects_invalid_parameters(keyed_oauth_client, field, value, error):
+    harness = keyed_oauth_client
+    client_id, verifier, _ = _start_keyed_oauth(harness)
+    challenge = urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+    response = harness.client.get(
+        "/authorize",
+        params={
+            "client_id": client_id,
+            "redirect_uri": "http://localhost:33418/callback",
+            "response_type": "code",
+            "state": "state",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "resource": harness.binding.resource,
+            field: value,
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == error
+    assert "location" not in response.headers
+    harness.upstream.post.assert_not_called()
+
+
+@pytest.mark.parametrize("cancel", [True, False])
+def test_keyed_connection_callback_cancellation_and_replay(keyed_oauth_client, cancel):
+    from urllib.parse import parse_qs, urlparse
+
+    harness = keyed_oauth_client
+    _, _, handle = _start_keyed_oauth(harness)
+    approved = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
+    assert approved.status_code == 307
+    state = parse_qs(urlparse(approved.headers["location"]).query)["state"][0]
+    cookies = dict(harness.client.cookies.items())
+    response = harness.client.get(
+        "/callback", params={"state": state, **({"error": "access_denied"} if cancel else {"code": "provider-code"})}
+    )
+    assert response.status_code == 302
+    returned = parse_qs(urlparse(response.headers["location"]).query)
+    assert returned["state"] == ["client-state"]
+    if cancel:
+        assert returned["error"] == ["access_denied"]
+        assert "code" not in returned
+    else:
+        harness.client.cookies.update(cookies)
+        replay = harness.client.get("/callback", params={"state": state, "code": "provider-code"})
+        assert replay.status_code == 400
+        assert "location" not in replay.headers
+    harness.upstream.post.assert_not_called()
+    harness.vault.assert_not_called()
+
+
+def test_keyed_connection_replayed_approved_consent_does_not_redirect_twice(keyed_oauth_client):
+    harness = keyed_oauth_client
+    _, _, handle = _start_keyed_oauth(harness)
+    cookies = dict(harness.client.cookies.items())
+    approved = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
+    assert approved.status_code == 307
+    harness.client.cookies.update(cookies)
+    repeated = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
+    assert repeated.status_code == 400
+    assert repeated.json()["error"] == "invalid_grant"
+    assert "location" not in repeated.headers
+    harness.upstream.post.assert_not_called()
+
+
+def test_keyed_connection_expired_callback_never_issues_code(keyed_oauth_client, monkeypatch):
+    from urllib.parse import parse_qs, urlparse
+    from litellm.proxy._experimental.mcp_server import gateway_dcr_flow as flow
+
+    harness = keyed_oauth_client
+    _, _, handle = _start_keyed_oauth(harness)
+    approved = harness.client.post("/authorize/connection/complete", data={"flow": handle, "decision": "approve"})
+    assert approved.status_code == 307
+    state = parse_qs(urlparse(approved.headers["location"]).query)["state"][0]
+    clock = MagicMock()
+    clock.now.return_value = datetime.now(timezone.utc) + timedelta(days=1)
+    monkeypatch.setattr(flow, "datetime", clock)
+    refused = harness.client.get("/callback", params={"state": state, "code": "provider-code"})
+    assert refused.status_code == 400
+    assert "location" not in refused.headers
+    assert "expired" in refused.json()["detail"]
+    harness.upstream.post.assert_not_called()
+
+
+def test_keyed_connection_consent_rejects_metadata_over_cookie_limit(keyed_oauth_client):
+    harness = keyed_oauth_client
+    redirect = "http://localhost:33418/" + "c" * 230
+    registered = harness.client.post(
+        "/register",
+        params={"connection": harness.bootstrap},
+        json={"redirect_uris": [redirect, redirect + "1", redirect + "2"]},
+    )
+    assert registered.status_code == 201, registered.text
+    response = harness.client.get(
+        "/authorize",
+        params={
+            "client_id": registered.json()["client_id"],
+            "redirect_uri": redirect,
+            "response_type": "code",
+            "state": "s" * 1024,
+            "code_challenge": "c" * 43,
+            "code_challenge_method": "S256",
+            "resource": harness.binding.resource,
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_request"
+    assert "set-cookie" not in response.headers
+    harness.upstream.post.assert_not_called()
+
+
+@pytest.mark.parametrize("endpoint", ["/github-test/authorize", "/token"])
+def test_keyed_connection_rejects_wrong_endpoint_and_grant_type(keyed_oauth_client, endpoint):
+    harness = keyed_oauth_client
+    client_id, _, _ = _start_keyed_oauth(harness)
+    response = (
+        harness.client.get(endpoint, params={"client_id": client_id, "redirect_uri": "http://localhost:33418/callback"})
+        if endpoint.endswith("authorize")
+        else harness.client.post(endpoint, data={"client_id": client_id, "grant_type": "client_credentials"})
+    )
+    assert response.status_code == 400
+    assert response.json()["error"] == (
+        "invalid_client" if endpoint.endswith("authorize") else "unsupported_grant_type"
+    )
+    harness.upstream.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["wrong_resource", "m2m"])
+async def test_keyed_connection_binding_rejects_resource_or_server_mode(keyed_oauth_client, monkeypatch, mode):
+    from starlette.requests import Request
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.auth import user_api_key_auth_mcp as admission
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+    from litellm.proxy.auth import auth_checks
+
+    harness = keyed_oauth_client
+    lookup = AsyncMock(
+        return_value=UserAPIKeyAuth(
+            api_key=harness.binding.key_hash,
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="connection-mode-test",
+                mcp_servers=[harness.server.server_id],
+            ),
+        )
+    )
+    monkeypatch.setattr(auth_checks, "get_key_object", lookup)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(admission, "_run_centralized_common_checks", AsyncMock())
+    monkeypatch.setitem(
+        global_mcp_server_manager.registry,
+        harness.server.server_id,
+        harness.server.model_copy(update={"oauth2_flow": "client_credentials"}),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "method": "GET",
+            "path": "/authorize",
+            "headers": [(b"host", b"wrong.example" if mode == "wrong_resource" else b"gateway.example")],
+        }
+    )
+    with pytest.raises(HTTPException) as exc:
+        await harness.real_validate(request, harness.binding)
+    assert exc.value.status_code == 400
+    assert lookup.call_count == (0 if mode == "wrong_resource" else 1)
+    harness.upstream.post.assert_not_called()

@@ -30,9 +30,9 @@ Nothing here stores state server-side except the single-use code guard (a TTL ca
 entry). Every sealed value is authenticated encryption over the proxy salt/master key
 family, opened totally (bad input maps to an OAuth error, never a raise), and every
 identity is a stable reference re-validated live at mint, refresh, and (in the admission
-PR) tool-call time. Upstream server credentials never appear anywhere in this flow; they
-are vaulted per user by the existing ``/v1/mcp`` authorize endpoints and resolved at
-egress by user id.
+PR) tool-call time. The SSO flow vaults upstream credentials per user through the existing
+``/v1/mcp`` authorize endpoints. Keyed connections instead seal a server-specific upstream
+credential for the client, require the original key at admission, and never write the vault.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_logger
@@ -62,6 +62,15 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_request_base_url,
     is_loopback_redirect_host,
     validate_redirect_uri_shape,
+    well_known_root_suffix,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+    ConnectionAuthorization,
+    ConnectionBinding,
+    ConnectionBootstrap,
+    ConnectionCode,
+    ConnectionCredential,
+    RefreshCredential,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     SessionRefreshOpened,
@@ -284,6 +293,8 @@ class GatewayDcrClient(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     redirect_uris: tuple[str, ...] = Field(min_length=1, max_length=MAX_REDIRECT_URIS)
     iat: int
+    connection: ConnectionBinding | None = None
+    client_name: str | None = None
 
 
 class _ConnectFlow(BaseModel):
@@ -371,7 +382,10 @@ def open_gateway_dcr_client(client_id: str) -> GatewayDcrClient | None:
 
 
 async def register_aggregate_client(
-    request: Request, request_body: Mapping[str, object], token_exchange_available: bool
+    request: Request,
+    request_body: Mapping[str, object],
+    token_exchange_available: bool,
+    connection: ConnectionBinding | None = None,
 ) -> Response:
     """RFC 7591 dynamic registration against the gateway itself, statelessly.
 
@@ -425,7 +439,13 @@ async def register_aggregate_client(
         )
     now: Final = datetime.now(timezone.utc)
     client_id: Final = _seal(
-        GATEWAY_DCR_CLIENT_ID_PREFIX, GatewayDcrClient(redirect_uris=tuple(raw_uris), iat=int(now.timestamp()))
+        GATEWAY_DCR_CLIENT_ID_PREFIX,
+        GatewayDcrClient(
+            redirect_uris=tuple(raw_uris),
+            iat=int(now.timestamp()),
+            connection=connection,
+            client_name=str(request_body.get("client_name", "MCP client"))[:100] if connection else None,
+        ),
     )
     if len(client_id) > MAX_CLIENT_ID_LENGTH:
         return _oauth_error(400, "invalid_client_metadata", "registered metadata is too large")
@@ -533,6 +553,9 @@ def aggregate_authorize(
     )
     if rejected is not None:
         return rejected
+    registered: Final = open_gateway_dcr_client(client_id)
+    if registered is not None and registered.connection is not None:
+        return _oauth_error(400, "invalid_client", "Use the registered connection authorization endpoint")
     base_url: Final = get_request_base_url(request)
     if session_user_id is None:
         return _login_redirect(base_url, request)
@@ -1547,3 +1570,246 @@ async def introspect_gateway_token(
     if failure is not None:
         return _inactive_introspection_response()
     return _active_introspection_response(opened)
+
+
+CONNECTION_BOOTSTRAP_PREFIX: Final = "llm_cboot_"
+CONNECTION_FLOW_PREFIX: Final = "llm_cflow_"
+CONNECTION_CODE_PREFIX: Final = "llm_ccode_"
+CONNECTION_ACCESS_PREFIX: Final = "llm_caccess_"
+CONNECTION_REFRESH_PREFIX: Final = "llm_crefresh_"
+CONNECTION_SCOPE_KEY: Final = "litellm.mcp.connection_grant"
+
+
+def mint_connection_bootstrap(binding: ConnectionBinding) -> str:
+    return _seal(
+        CONNECTION_BOOTSTRAP_PREFIX,
+        ConnectionBootstrap(
+            binding=binding,
+            exp=int(datetime.now(timezone.utc).timestamp()) + CONNECT_FLOW_TTL_SECONDS,
+        ),
+    )
+
+
+def connection_challenge(request: Request, binding: ConnectionBinding) -> str:
+    bootstrap: Final = mint_connection_bootstrap(binding)
+    metadata: Final = _append_query_params(
+        f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp",
+        (("connection", bootstrap),),
+    )
+    return f'Bearer resource_metadata="{metadata}"'
+
+
+def open_connection_bootstrap(value: str) -> ConnectionBinding | None:
+    opened: Final = _open_sealed(value, CONNECTION_BOOTSTRAP_PREFIX, ConnectionBootstrap, "connection_bootstrap")
+    if opened is None or opened.exp <= int(datetime.now(timezone.utc).timestamp()):
+        return None
+    return opened.binding
+
+
+def is_connection_credential(value: str | None) -> bool:
+    bearer: Final = value[7:] if value and value[:7].lower() == "bearer " else value
+    return bool(bearer and bearer.startswith((CONNECTION_ACCESS_PREFIX, CONNECTION_REFRESH_PREFIX)))
+
+
+def open_connection_credential(value: str, *, refresh: bool = False) -> ConnectionCredential | None:
+    prefix: Final = CONNECTION_REFRESH_PREFIX if refresh else CONNECTION_ACCESS_PREFIX
+    expected: Final = "connection_refresh" if refresh else "connection_access"
+    bearer: Final = value[7:] if value[:7].lower() == "bearer " else value
+    if len(bearer) > 12288:
+        return None
+    opened: Final = _open_sealed(bearer, prefix, ConnectionCredential, "connection_credential")
+    if opened is None or opened.kind != expected or opened.exp <= int(datetime.now(timezone.utc).timestamp()):
+        return None
+    return opened
+
+
+async def validate_connection_binding(request: Request, binding: ConnectionBinding) -> MCPServer:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+
+    if binding.resource != f"{get_request_base_url(request)}/mcp":
+        raise HTTPException(status_code=400, detail="Invalid connection resource")
+    key: Final = await MCPRequestHandler._reload_admitted_key(binding.key_hash)  # pyright: ignore[reportPrivateUsage]  # reuse key revocation and SCIM checks
+    await MCPRequestHandler._enforce_admitted_live_policy(key.model_copy(), request, "/mcp")  # pyright: ignore[reportPrivateUsage]  # enforce the same MCP route and budget policy
+    allowed: Final = await MCPRequestHandler.get_allowed_mcp_servers(key)
+    server: Final = global_mcp_server_manager.get_mcp_server_by_id(
+        binding.server_id, client_ip=IPAddressUtils.get_mcp_client_ip(request)
+    )
+    if server is None or server.server_id not in allowed:
+        raise HTTPException(status_code=403, detail="Key is not allowed to access the selected MCP server")
+    if not server.needs_user_oauth_token or server.oauth_identity_binding is not None:
+        raise HTTPException(status_code=400, detail="Server does not support a keyed connection grant")
+    return server
+
+
+async def claim_connection_once(jti: str, expires: int) -> Response | None:
+    from litellm.proxy.proxy_server import redis_usage_cache, user_api_key_cache
+
+    if redis_usage_cache is None and getattr(user_api_key_cache, "redis_cache", None) is None:
+        return _oauth_error(503, "temporarily_unavailable", "Keyed MCP OAuth requires a shared Redis cache")
+    ttl: Final = max(1, expires - int(datetime.now(timezone.utc).timestamp()) + _CLAIM_TTL_BUFFER_SECONDS)
+    outcome: Final = await _SingleUseGuard(user_api_key_cache).claim(f"mcp_connection_used:{jti}", ttl)
+    return _claim_refusal(outcome, _oauth_error(400, "invalid_grant", "This authorization has already been used"))
+
+
+async def authorize_connection(
+    request: Request,
+    client_id: str,
+    redirect_uri: str,
+    state: str,
+    code_challenge: str | None,
+    code_challenge_method: str | None,
+    response_type: str | None,
+    resource: str | None,
+    scope: str | None,
+) -> Response:
+    from html import escape
+
+    rejected: Final = _rejected_authorize_request(
+        client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
+    )
+    if rejected is not None:
+        return rejected
+    client: Final = open_gateway_dcr_client(client_id)
+    if client is None or client.connection is None or resource != client.connection.resource:
+        return _oauth_error(400, "invalid_target", "The requested resource does not match this connection")
+    if (
+        code_challenge is None
+        or len(code_challenge) != 43
+        or not all(c.isascii() and (c.isalnum() or c in "-_") for c in code_challenge)
+    ):
+        return _oauth_error(400, "invalid_request", "A valid S256 code challenge is required")
+    server: Final = await validate_connection_binding(request, client.connection)
+    scopes: Final = scope or " ".join(server.scopes or ())
+    if not frozenset(scopes.split()).issubset(server.scopes or ()):
+        return _oauth_error(400, "invalid_scope", "Requested scopes are not configured for this server")
+    handle: Final = secrets.token_urlsafe(24)
+    flow: Final = ConnectionAuthorization(
+        binding=client.connection,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        state=state,
+        code_challenge=code_challenge,
+        scope=scopes,
+        jti=handle,
+        exp=int(datetime.now(timezone.utc).timestamp()) + CONNECT_FLOW_TTL_SECONDS,
+    )
+    action: Final = f"{get_request_base_url(request)}/authorize/connection/complete"
+    response: Final = HTMLResponse(
+        '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="referrer" content="no-referrer">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1"><title>Authorize MCP connection</title>'
+        "<h1>Authorize MCP connection</h1>"
+        f"<p><strong>{escape(client.client_name or 'MCP client')}</strong> wants access to "
+        f"<strong>{escape(server.name)}</strong>.</p><p>Return address: <code>{escape(redirect_uri)}</code></p>"
+        f"<p>Requested permissions: {escape(scopes or 'provider defaults')}</p>"
+        "<p>Only approve if you started this connection. You will continue to the provider to sign in.</p>"
+        f'<form method="post" action="{escape(action)}"><input type="hidden" name="flow" value="{escape(handle)}">'
+        '<button name="decision" value="deny">Deny</button> <button name="decision" value="approve">Continue</button>'
+        "</form></html>",
+        headers=MappingProxyType(
+            {
+                **TOKEN_NO_CACHE_HEADERS,
+                "Referrer-Policy": "no-referrer",
+                "X-Frame-Options": "DENY",
+                "Content-Security-Policy": "default-src 'none'; form-action 'self'; frame-ancestors 'none'",
+            }
+        ),
+    )
+    cookie_path, secure = _cookie_path_and_secure(request)
+    response.set_cookie(
+        f"mcp_connection_{handle}",
+        _seal(CONNECTION_FLOW_PREFIX, flow),
+        max_age=CONNECT_FLOW_TTL_SECONDS,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        path=cookie_path,
+    )
+    if len(response.headers["set-cookie"]) > 4096:
+        return _oauth_error(400, "invalid_request", "Connection authorization metadata is too large")
+    return response
+
+
+def open_connection_flow(value: str) -> ConnectionAuthorization | None:
+    flow: Final = _open_sealed(value, CONNECTION_FLOW_PREFIX, ConnectionAuthorization, "connection_flow")
+    return flow if flow is not None and flow.exp > int(datetime.now(timezone.utc).timestamp()) else None
+
+
+def seal_connection_code(flow: ConnectionAuthorization, upstream_code: str) -> str:
+    return _seal(
+        CONNECTION_CODE_PREFIX,
+        ConnectionCode(
+            authorization=flow,
+            upstream_code=SecretStr(upstream_code),
+            jti=secrets.token_urlsafe(24),
+            exp=int(datetime.now(timezone.utc).timestamp()) + GATEWAY_AUTH_CODE_TTL_SECONDS,
+        ),
+    )
+
+
+def open_connection_code(value: str) -> ConnectionCode | None:
+    code: Final = _open_sealed(value, CONNECTION_CODE_PREFIX, ConnectionCode, "connection_code")
+    return code if code is not None and code.exp > int(datetime.now(timezone.utc).timestamp()) else None
+
+
+def mint_connection_tokens(
+    binding: ConnectionBinding,
+    client_id: str,
+    token_response: object,
+    fallback_refresh: str | None = None,
+    fallback_scope: str | None = None,
+) -> Response:
+    from litellm.proxy._experimental.mcp_server.bridge_token_flow import (
+        _bridge_grant_from_token_response,  # pyright: ignore[reportPrivateUsage]  # reuse provider token validation
+        _upstream_refresh_credential,  # pyright: ignore[reportPrivateUsage]  # reuse provider refresh lifetime parsing
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import UpstreamTokenGrant
+
+    grant: Final = _bridge_grant_from_token_response(token_response)
+    if not isinstance(grant, UpstreamTokenGrant) or grant.token_type.lower() != "bearer":
+        return _oauth_error(502, "server_error", "The upstream did not return a usable bearer token")
+    granted_scope: Final = grant.scope if grant.scope is not None else fallback_scope
+    now: Final = int(datetime.now(timezone.utc).timestamp())
+    ttl: Final = min(grant.expires_in or 3600, 3600)
+    access: Final = _seal(
+        CONNECTION_ACCESS_PREFIX,
+        ConnectionCredential(
+            kind="connection_access",
+            binding=binding,
+            client_id=client_id,
+            token=grant.access_token,
+            scope=granted_scope,
+            jti=secrets.token_urlsafe(24),
+            exp=now + ttl,
+        ),
+    )
+    refresh: Final = _upstream_refresh_credential(token_response) or (
+        RefreshCredential(refresh_token=SecretStr(fallback_refresh), scope=granted_scope) if fallback_refresh else None
+    )
+    sealed_refresh: Final = (
+        _seal(
+            CONNECTION_REFRESH_PREFIX,
+            ConnectionCredential(
+                kind="connection_refresh",
+                binding=binding,
+                client_id=client_id,
+                token=refresh.refresh_token,
+                scope=refresh.scope if refresh.scope is not None else granted_scope,
+                jti=secrets.token_urlsafe(24),
+                exp=now + min(refresh.expires_in or 1209600, 1209600),
+            ),
+        )
+        if refresh is not None
+        else None
+    )
+    if len(access) > 12288 or (sealed_refresh is not None and len(sealed_refresh) > 12288):
+        return _oauth_error(502, "server_error", "The upstream credential is too large")
+    from mcp.shared.auth import OAuthToken
+
+    return JSONResponse(
+        OAuthToken(
+            access_token=access, token_type="Bearer", expires_in=ttl, refresh_token=sealed_refresh, scope=granted_scope
+        ).model_dump(exclude_none=True),
+        headers=TOKEN_NO_CACHE_HEADERS,
+    )

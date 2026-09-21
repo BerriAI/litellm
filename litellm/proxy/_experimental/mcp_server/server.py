@@ -16,7 +16,8 @@ import types
 import uuid
 from collections import Counter
 from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol
 
 import httpx
@@ -59,6 +60,7 @@ from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPToolResultError,
     MCPUpstreamAuthError,
 )
+from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import CONNECTION_SCOPE_KEY, connection_challenge
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
@@ -79,6 +81,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_route_relative_request_path,
     well_known_root_suffix,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import ConnectionBinding, ConnectionCredential
 from litellm.proxy._experimental.mcp_server.ui_session_utils import is_ui_session_credential
 from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
@@ -97,6 +100,7 @@ from litellm.proxy._types import (
     ProxyException,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
+    hash_token,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
@@ -4262,7 +4266,22 @@ if MCP_AVAILABLE:
                     # authorization server is the gateway itself, vaulting via the
                     # authorize interlude); the per-server relay advertised below
                     # cannot vault without a litellm key on its token request.
-                    if await global_mcp_server_manager.has_user_oauth_token(server, user_api_key_auth):
+                    connection = scope.get(CONNECTION_SCOPE_KEY)
+                    if (
+                        isinstance(connection, ConnectionCredential)
+                        and connection.binding.server_id == server.server_id
+                        and connection.exp > int(datetime.now(timezone.utc).timestamp())
+                    ):
+                        status, _ = await _probe_upstream_auth(
+                            server.url or "", f"Bearer {connection.token.get_secret_value()}"
+                        )
+                        if status == 403:
+                            raise HTTPException(status_code=403, detail="Upstream denied access")
+                        if status != 401:
+                            continue
+                    if connection is None and await global_mcp_server_manager.has_user_oauth_token(
+                        server, user_api_key_auth
+                    ):
                         continue
 
                     if _is_mcp_admitted_user_subject(user_api_key_auth):
@@ -4279,6 +4298,39 @@ if MCP_AVAILABLE:
 
                     request = StarletteRequest(scope)
                     base_url = get_request_base_url(request)
+                    if (
+                        get_route_relative_request_path(scope) == "/mcp"
+                        and len(mcp_servers or ()) == 1
+                        and request.headers.get("x-litellm-api-key")
+                        and user_api_key_auth is not None
+                        and server.oauth_identity_binding is None
+                    ):
+                        allowed = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+                        if server.server_id not in allowed:
+                            raise HTTPException(
+                                status_code=403, detail="Key is not allowed to access the selected MCP server"
+                            )
+                        from litellm.proxy.auth.user_api_key_auth import (
+                            _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # reuse the admission header parser
+                        )
+
+                        binding = ConnectionBinding(
+                            key_hash=hash_token(
+                                _get_bearer_token_or_received_api_key(request.headers["x-litellm-api-key"])
+                            ),
+                            server_id=server.server_id,
+                            resource=f"{base_url}/mcp",
+                        )
+                        challenge_headers = MappingProxyType(
+                            {
+                                "www-authenticate": connection_challenge(request, binding),
+                                "Cache-Control": "no-store",
+                            }
+                        )
+                        raise HTTPException(
+                            status_code=401, detail="Authorize the selected MCP server", headers=challenge_headers
+                        )
+
                     _path = get_route_relative_request_path(scope)
 
                     # Pick the well-known AS-metadata form that matches the inbound route

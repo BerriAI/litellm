@@ -14075,3 +14075,111 @@ async def test_request_selected_during_guardrail_runs_concurrently_with_tool(mon
     assert guardrail_started.is_set() is selected
     assert result.is_error is False
     assert result.content[0].text == "executed"
+
+
+@pytest.mark.asyncio
+async def test_connection_grants_follow_current_message_and_never_leak_to_another_server():
+    from types import SimpleNamespace
+    from datetime import timezone
+
+    from pydantic import SecretStr
+    from starlette.requests import Request
+
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import CONNECTION_SCOPE_KEY
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import UpstreamCredentialProvider
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        ConnectionBinding,
+        ConnectionCredential,
+    )
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+
+    store = SimpleNamespace(fetch=AsyncMock(return_value=OAuthToken(access_token="saved-vault-token")))
+    manager = MCPServerManager(cred_provider=UpstreamCredentialProvider(oauth_token_store=store))
+    server = MCPServer(
+        server_id="connection-target",
+        name="connection-target",
+        url="https://mcp.example/mcp",
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+    )
+    other = server.model_copy(update={"server_id": "other-target"})
+    binding = ConnectionBinding(key_hash="same-key", server_id=server.server_id, resource="https://gateway.example/mcp")
+    for token in ("connection-one", "connection-two"):
+        credential = ConnectionCredential(
+            kind="connection_access",
+            binding=binding,
+            client_id="client",
+            token=SecretStr(token),
+            jti=token,
+            exp=int(datetime.now(timezone.utc).timestamp()) + 300,
+        )
+        request = Request(
+            {"type": "http", "method": "POST", "path": "/mcp", "headers": [], CONNECTION_SCOPE_KEY: credential}
+        )
+        reset = active_mcp_request_ctx_var.set(SimpleNamespace(request=request))
+        try:
+            client = await manager._create_mcp_client(server)
+            sent = await client.prepare_request_auth()
+            assert sent.headers["authorization"] == f"Bearer {token}"
+            store.fetch.assert_not_awaited()
+        finally:
+            active_mcp_request_ctx_var.reset(reset)
+
+    reset = active_mcp_request_ctx_var.set(SimpleNamespace(request=request))
+    try:
+        other_client = await manager._create_mcp_client(other)
+        other_sent = await other_client.prepare_request_auth()
+        assert other_sent.headers["authorization"] == "Bearer saved-vault-token"
+        assert store.fetch.call_args.args[1] == "other-target"
+    finally:
+        active_mcp_request_ctx_var.reset(reset)
+    saved_client = await manager._create_mcp_client(server)
+    assert (await saved_client.prepare_request_auth()).headers["authorization"] == "Bearer saved-vault-token"
+
+
+@pytest.mark.asyncio
+async def test_connection_expiry_between_admission_and_egress_never_uses_vault():
+    from types import SimpleNamespace
+    from pydantic import SecretStr
+    from starlette.requests import Request
+    from fastapi import HTTPException
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import CONNECTION_SCOPE_KEY
+    from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+    from litellm.proxy._experimental.mcp_server.outbound_credentials import UpstreamCredentialProvider
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.envelope import (
+        ConnectionBinding,
+        ConnectionCredential,
+    )
+
+    store = SimpleNamespace(fetch=AsyncMock(side_effect=AssertionError("must not fall back to another credential")))
+    manager = MCPServerManager(cred_provider=UpstreamCredentialProvider(oauth_token_store=store))
+    server = MCPServer(
+        server_id="expired-connection",
+        name="expired-connection",
+        url="https://mcp.example/mcp",
+        transport="http",
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+    )
+    credential = ConnectionCredential(
+        kind="connection_access",
+        binding=ConnectionBinding(key_hash="key", server_id=server.server_id, resource="https://gateway.example/mcp"),
+        client_id="client",
+        token=SecretStr("expired-provider-token"),
+        jti="expired",
+        exp=1,
+    )
+    request = Request(
+        {"type": "http", "method": "POST", "path": "/mcp", "headers": [], CONNECTION_SCOPE_KEY: credential}
+    )
+    reset = active_mcp_request_ctx_var.set(SimpleNamespace(request=request))
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await manager._create_mcp_client(server)
+        assert exc.value.status_code == 401
+        assert "expired" in exc.value.detail
+        store.fetch.assert_not_awaited()
+    finally:
+        active_mcp_request_ctx_var.reset(reset)

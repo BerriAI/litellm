@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from typing import Final, Literal, TypeAlias
 
 import jwt
-from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, field_serializer
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value, encrypt_value
 
@@ -580,3 +580,58 @@ def _decrypt_refresh(
         return RefreshCredential.model_validate_json(plaintext)
     except ValidationError:
         return MalformedPayload()
+
+
+class ConnectionBinding(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    key_hash: str = Field(min_length=1)
+    server_id: str = Field(min_length=1)
+    resource: str = Field(min_length=1)
+
+
+class ConnectionBootstrap(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal["connection_bootstrap"] = "connection_bootstrap"
+    binding: ConnectionBinding
+    exp: int
+
+
+class ConnectionAuthorization(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal["connection_authorization"] = "connection_authorization"
+    binding: ConnectionBinding
+    client_id: str = Field(min_length=1)
+    redirect_uri: str = Field(min_length=1)
+    state: str
+    code_challenge: str = Field(min_length=43, max_length=43)
+    scope: str
+    jti: str = Field(min_length=1)
+    exp: int
+
+
+class ConnectionCode(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal["connection_code"] = "connection_code"
+    authorization: ConnectionAuthorization
+    upstream_code: SecretStr = Field(min_length=1)
+    jti: str = Field(min_length=1)
+    exp: int
+
+    @field_serializer("upstream_code", when_used="json")
+    def serialize_code(self, value: SecretStr) -> str:
+        return value.get_secret_value()
+
+
+class ConnectionCredential(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    kind: Literal["connection_access", "connection_refresh"]
+    binding: ConnectionBinding
+    client_id: str = Field(min_length=1)
+    token: SecretStr = Field(min_length=1)
+    scope: str | None = None
+    jti: str = Field(min_length=1)
+    exp: int
+
+    @field_serializer("token", when_used="json")
+    def serialize_token(self, value: SecretStr) -> str:
+        return value.get_secret_value()

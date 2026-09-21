@@ -4176,7 +4176,22 @@ class MCPServerManager:
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
         transport: Final = resolved_server.transport or MCPTransport.sse
         spec = None if transport == MCPTransport.stdio else _to_server_spec_fail_closed(resolved_server)
-        provider: Final = cred_provider or self._cred_provider
+        from litellm.proxy._experimental.mcp_server.mcp_context import get_connection_credential
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.presented_token_store import (
+            PresentedOAuthTokenStore,
+        )
+
+        connection: Final = get_connection_credential(resolved_server.server_id)
+        if connection is not None and connection.exp <= int(datetime.datetime.now(datetime.timezone.utc).timestamp()):
+            raise HTTPException(status_code=401, detail="MCP connection credential expired; reconnect")
+        provider: Final = (
+            UpstreamCredentialProvider(
+                oauth_token_store=PresentedOAuthTokenStore(OAuthToken(access_token=connection.token.get_secret_value()))
+            )
+            if connection is not None and resolved_server.needs_user_oauth_token
+            else cred_provider or self._cred_provider
+        )
         # A caller-supplied per-request override (mcp_auth_header / x-mcp-*) defers to the v1 path
         # so it wins - except for the modes the v2 resolver owns per-caller (authorization_code's
         # stored token, token_exchange's RFC 8693 minted token, id_jag's minted assertion, and the
