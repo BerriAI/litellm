@@ -146,21 +146,21 @@ impl CacheEntry {
     }
 }
 
-pub fn get_cache(
-    cache: &dyn BaseCache<Value = CacheEntry>,
+pub fn get_cache<B: BaseCache>(
+    cache: &B,
     key: &str,
     kwargs: &CacheKwargs,
-) -> Result<Option<CacheEntry>, Error> {
+) -> Result<Option<B::Value>, Error> {
     cache.get_cache(key, kwargs)
 }
 
-pub fn set_cache(
-    cache: &dyn BaseCache<Value = CacheEntry>,
+pub fn set_cache<B: BaseCache>(
+    cache: &B,
     key: &str,
-    entry: CacheEntry,
+    value: B::Value,
     kwargs: CacheKwargs,
 ) -> Result<(), Error> {
-    cache.set_cache(key, entry, kwargs)
+    cache.set_cache(key, value, kwargs)
 }
 
-pub type CacheBackend = Arc<dyn BaseCache<Value = CacheEntry>>;
+pub type CacheBackend<B> = Arc<B>;

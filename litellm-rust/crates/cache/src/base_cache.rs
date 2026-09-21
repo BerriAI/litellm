@@ -1,13 +1,10 @@
 use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::Error;
-
-pub type CacheFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, Error>> + Send + 'a>>;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct CacheKwargs {
@@ -45,54 +42,54 @@ pub trait BaseCache: Send + Sync {
 
     fn get_cache(&self, key: &str, kwargs: &CacheKwargs) -> Result<Option<Self::Value>, Error>;
 
-    fn async_set_cache<'a>(
-        &'a self,
-        key: &'a str,
+    fn async_set_cache(
+        &self,
+        key: &str,
         value: Self::Value,
         kwargs: CacheKwargs,
-    ) -> CacheFuture<'a, ()> {
-        Box::pin(async move { self.set_cache(key, value, kwargs) })
+    ) -> impl Future<Output = Result<(), Error>> + Send {
+        async move { self.set_cache(key, value, kwargs) }
     }
 
-    fn async_get_cache<'a>(
-        &'a self,
-        key: &'a str,
-        kwargs: &'a CacheKwargs,
-    ) -> CacheFuture<'a, Option<Self::Value>> {
-        Box::pin(async move { self.get_cache(key, kwargs) })
+    fn async_get_cache(
+        &self,
+        key: &str,
+        kwargs: &CacheKwargs,
+    ) -> impl Future<Output = Result<Option<Self::Value>, Error>> + Send {
+        async move { self.get_cache(key, kwargs) }
     }
 
-    fn async_set_cache_pipeline<'a>(
-        &'a self,
+    fn async_set_cache_pipeline(
+        &self,
         cache_list: Vec<(String, Self::Value)>,
         kwargs: CacheKwargs,
-    ) -> CacheFuture<'a, ()> {
-        Box::pin(async move {
+    ) -> impl Future<Output = Result<(), Error>> + Send {
+        async move {
             for (key, value) in cache_list {
-                self.set_cache(&key, value, kwargs.clone())?;
+                self.async_set_cache(&key, value, kwargs.clone()).await?;
             }
             Ok(())
-        })
+        }
     }
 
-    fn batch_cache_write<'a>(
-        &'a self,
-        key: &'a str,
+    fn batch_cache_write(
+        &self,
+        key: &str,
         value: Self::Value,
         kwargs: CacheKwargs,
-    ) -> CacheFuture<'a, ()> {
+    ) -> impl Future<Output = Result<(), Error>> + Send {
         self.async_set_cache(key, value, kwargs)
     }
 
     fn delete_cache(&self, key: &str) -> Result<(), Error>;
 
-    fn async_delete_cache<'a>(&'a self, key: &'a str) -> CacheFuture<'a, ()> {
-        Box::pin(async move { self.delete_cache(key) })
+    fn async_delete_cache(&self, key: &str) -> impl Future<Output = Result<(), Error>> + Send {
+        async move { self.delete_cache(key) }
     }
 
     fn flush_cache(&self) -> Result<(), Error>;
 
-    fn disconnect(&self) -> CacheFuture<'_, ()>;
+    fn disconnect(&self) -> impl Future<Output = Result<(), Error>> + Send;
 
-    fn test_connection(&self) -> CacheFuture<'_, CacheConnectionResult>;
+    fn test_connection(&self) -> impl Future<Output = Result<CacheConnectionResult, Error>> + Send;
 }

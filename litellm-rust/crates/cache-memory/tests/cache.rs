@@ -2,7 +2,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use litellm_cache::{BaseCache, CacheConnectionStatus, CacheEntry, Error};
+use litellm_cache::{
+    BaseCache, CacheBackend, CacheConnectionStatus, CacheEntry, CacheKwargs, Error, get_cache,
+    set_cache,
+};
 use litellm_cache_memory::{CacheWrite, InMemoryCache};
 use rstest::{fixture, rstest};
 
@@ -154,5 +157,47 @@ async fn connection_test_matches_python_result_contract() {
             "status": "success",
             "message": "In-memory cache connection test successful"
         })
+    );
+}
+
+#[tokio::test]
+async fn generic_consumers_share_typed_values_and_honor_expiration() {
+    let clock = clock();
+    let cache: CacheBackend<InMemoryCache<String>> = Arc::new(cache(clock.clone(), 4));
+    let reader = Arc::clone(&cache);
+    let kwargs = CacheKwargs {
+        ttl: Some(Duration::from_secs(5)),
+        ..Default::default()
+    };
+    set_cache(cache.as_ref(), "sync", "first".into(), kwargs.clone()).unwrap();
+    assert_eq!(
+        get_cache(reader.as_ref(), "sync", &kwargs).unwrap(),
+        Some("first".into())
+    );
+    cache
+        .batch_cache_write("async", "second".into(), kwargs.clone())
+        .await
+        .unwrap();
+    cache
+        .async_set_cache_pipeline(vec![("batch".into(), "third".into())], kwargs.clone())
+        .await
+        .unwrap();
+    drop(cache);
+    for (key, value) in [("sync", "first"), ("async", "second"), ("batch", "third")] {
+        assert_eq!(
+            reader.async_get_cache(key, &kwargs).await.unwrap(),
+            Some(value.into())
+        );
+    }
+    reader.async_delete_cache("async").await.unwrap();
+    assert_eq!(
+        reader.async_get_cache("async", &kwargs).await.unwrap(),
+        None
+    );
+    clock.store(106, Ordering::SeqCst);
+    assert_eq!(get_cache(reader.as_ref(), "sync", &kwargs).unwrap(), None);
+    assert_eq!(
+        reader.async_get_cache("batch", &kwargs).await.unwrap(),
+        None
     );
 }

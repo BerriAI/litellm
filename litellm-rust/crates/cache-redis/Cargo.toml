@@ -8,8 +8,8 @@ repository.workspace = true
 [dependencies]
 litellm-cache.workspace = true
 redis = "1.7.0"
-serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
 redis-test = "1.0.4"
+serde_json.workspace = true
