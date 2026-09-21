@@ -93,6 +93,7 @@ _BEDROCK_AWS_AUTH_PARAMETER_KEYS: Final[tuple[str, ...]] = (
     "aws_web_identity_token",
     "aws_sts_endpoint",
     "aws_external_id",
+    "aws_session_tags",
 )
 
 
@@ -1663,6 +1664,7 @@ class CommonBatchFilesUtils:
             aws_web_identity_token=optional_params.get("aws_web_identity_token"),
             aws_sts_endpoint=optional_params.get("aws_sts_endpoint"),
             aws_external_id=optional_params.get("aws_external_id"),
+            aws_session_tags=optional_params.get("aws_session_tags"),
         )
 
         # Prepare the request data

@@ -10,6 +10,7 @@ import litellm
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
+    encrypted_reasoning_signature,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -39,6 +40,21 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+
+
+def test_translate_openai_response_to_anthropic_empty_choices() -> None:
+    response: Final = ModelResponse(
+        id="chatcmpl-empty",
+        model="gemini-3.5-flash",
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+    )
+
+    result: Final = LiteLLMAnthropicMessagesAdapter().translate_openai_response_to_anthropic(response)
+
+    assert result["content"] == []
+    assert result["stop_reason"] == "end_turn"
+    assert result["usage"]["input_tokens"] == 10
 
 
 def test_translate_chat_refusal_to_anthropic_response():
@@ -406,6 +422,43 @@ def test_translate_anthropic_messages_to_openai_thinking_blocks():
     assert "tool_calls" in result[1]
     assert len(result[1]["tool_calls"]) == 1
     assert result[1]["tool_calls"][0]["id"] == "toolu_01234"
+
+
+def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning_blocks():
+    """A session that moves from an OpenAI reasoning model to a chat provider replays reasoning only OpenAI can read.
+
+    Gemini rejects the whole request when such a block reaches it as a thought_signature, so the
+    adapter drops those blocks and keeps the provider-signed ones.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Who drinks water?"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "plan", "signature": encrypted_reasoning_signature("gAAAA_1")},
+                {"type": "redacted_thinking", "data": encrypted_reasoning_signature("gAAAA_2")},
+                {"type": "text", "text": "The Norwegian."},
+            ],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {"type": "thinking", "thinking": "native", "signature": "EqQBCkYIAxgCIkA_signed"},
+                {"type": "text", "text": "Still the Norwegian."},
+            ],
+        ),
+    ]
+
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    assert [m["role"] for m in result] == ["user", "assistant", "assistant"]
+    assert not result[1].get("thinking_blocks")
+    assert result[1]["content"] == "The Norwegian."
+    assert [b["signature"] for b in result[2]["thinking_blocks"]] == ["EqQBCkYIAxgCIkA_signed"]
 
 
 def test_translate_anthropic_messages_to_openai_sets_reasoning_content():
@@ -3303,6 +3356,27 @@ def test_is_web_search_tool():
         "input_schema": {"type": "object"},
     }
     assert adapter._is_web_search_tool(regular_tool) is False
+
+
+@pytest.mark.parametrize("schema", [{}, {"type": "object", "properties": {"query": {"type": "string"}}}])
+def test_translate_anthropic_client_web_search_preserves_schema_and_choice(schema: dict[str, object]) -> None:
+    from litellm.types.llms.anthropic import AnthropicMessagesRequest
+
+    request: Final = AnthropicMessagesRequest(
+        model="gpt-5.4-mini",
+        max_tokens=128,
+        messages=[{"role": "user", "content": "Search for current news"}],
+        tools=[{"name": "web_search", "input_schema": schema}],
+        tool_choice={"type": "tool", "name": "web_search"},
+    )
+
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+    assert "web_search_options" not in translated
+    assert translated["tools"] == [
+        {"type": "function", "function": {"name": "web_search", "parameters": schema}}
+    ]
+    assert translated["tool_choice"] == {"type": "function", "function": {"name": "web_search"}}
 
 
 def test_translate_anthropic_to_openai_with_web_search_tool():

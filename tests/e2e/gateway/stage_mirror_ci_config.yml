@@ -1,4 +1,11 @@
 general_settings:
+  proxy_batch_write_at: 5
+  enable_jwt_auth: true
+  litellm_jwtauth:
+    user_id_jwt_field: sub
+    user_email_jwt_field: email
+    team_ids_jwt_field: groups
+    user_id_upsert: true
   proxy_config_reload_interval_seconds: 7
   store_prompts_in_spend_logs: true
   database_connection_pool_limit: 10

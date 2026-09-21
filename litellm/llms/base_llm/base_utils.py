@@ -50,6 +50,14 @@ class BaseLLMModelInfo(ABC):
         """
         return None
 
+    def get_model_cost_key(self, model: str) -> str | None:
+        """
+        Maps the model name a user sends to the key `litellm.model_cost` stores it under, when the two differ.
+        `get_model_info` tries this key once the exact `model` and `provider/model` keys miss. The default None means
+        the provider's user-facing names already match the cost map, so there is nothing extra to try.
+        """
+        return None
+
     @abstractmethod
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         """

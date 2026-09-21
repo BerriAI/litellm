@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Final
 
 from dotenv import load_dotenv
-
 from fixture_mode import deterministic_marker, parse_fixture_mode
 from provider_edge import provider_edge_api_base
 
@@ -144,6 +143,7 @@ LOAD_MIN_CONCURRENCY_EFFICIENCY = float(os.environ.get("E2E_LOAD_MIN_CONCURRENCY
 
 WEEKLY_ANOMALY_OPT_IN_ENV = "E2E_WEEKLY_ANOMALY"
 MANAGED_FILES_OPT_IN_ENV = "E2E_MANAGED_FILES_STACK"
+REDIS_CHAOS_OPT_IN_ENV = "E2E_REDIS_CHAOS"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
@@ -160,6 +160,14 @@ ANOMALY_MAX_KEY_SPEND_USD = float(
 ANOMALY_SPEND_SETTLE_SECONDS = float(
     os.environ.get("E2E_ANOMALY_SPEND_SETTLE_SECONDS", "75")
 )
+MEMORY_REQUESTS_PER_PHASE = int(os.environ.get("E2E_MEMORY_REQUESTS_PER_PHASE", "300"))
+MEMORY_RETRIES_PER_REQUEST = int(os.environ.get("E2E_MEMORY_RETRIES_PER_REQUEST", "2"))
+MEMORY_TRANSCRIPT_TURNS = int(os.environ.get("E2E_MEMORY_TRANSCRIPT_TURNS", "40"))
+MEMORY_CONCURRENCY = int(os.environ.get("E2E_MEMORY_CONCURRENCY", "4"))
+MEMORY_RSS_SETTLE_SAMPLES = int(os.environ.get("E2E_MEMORY_RSS_SETTLE_SAMPLES", "15"))
+MEMORY_RSS_SAMPLE_INTERVAL_SECONDS = float(os.environ.get("E2E_MEMORY_RSS_SAMPLE_INTERVAL_SECONDS", "1"))
+MEMORY_RSS_BUDGET_MB = float(os.environ.get("E2E_MEMORY_RSS_BUDGET_MB", "48"))
+MEMORY_STORED_REQUEST_BUDGET_KB = float(os.environ.get("E2E_MEMORY_STORED_REQUEST_BUDGET_KB", "64"))
 
 
 def ws_base_url() -> str:
@@ -181,8 +189,7 @@ def datadog_mcp_url(*, toolsets: str = "core") -> str:
     site = (
         os.environ.get("DD_SITE", DD_SITE) or "datadoghq.com"
     ).strip().removeprefix("https://").removeprefix("http://").rstrip("/")
-    if site.startswith("app."):
-        site = site[len("app.") :]
+    site = site.removeprefix("app.")
     host = "mcp.datadoghq.com" if site in ("", "datadoghq.com") else f"mcp.{site}"
     base = f"https://{host}/v1/mcp"
     return f"{base}?toolsets={toolsets}" if toolsets else base

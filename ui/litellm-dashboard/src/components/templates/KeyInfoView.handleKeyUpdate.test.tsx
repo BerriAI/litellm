@@ -366,6 +366,45 @@ describe("KeyInfoView handleKeyUpdate mcp_toolsets", () => {
   });
 });
 
+describe("KeyInfoView handleKeyUpdate skills", () => {
+  it("should forward the skills the edit form supplies into object_permission and drop the form key", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      skills: ["private-skill"],
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.object_permission.skills).toEqual(["private-skill"]);
+    expect(sentPayload).not.toHaveProperty("skills");
+  });
+
+  it("should send an explicit empty skills list when the form clears every skill", async () => {
+    renderView(true);
+
+    fireEvent.click(screen.getByText("Settings"));
+    fireEvent.click(screen.getByText("Edit Settings"));
+    (globalThis as any).__TEST_FORM_VALUES = {
+      token: "tok_123",
+      skills: [],
+    };
+
+    fireEvent.click(screen.getByText("Mock Submit"));
+
+    await waitFor(() => expect(keyUpdateCallMock).toHaveBeenCalled());
+
+    const [, sentPayload] = keyUpdateCallMock.mock.calls[0];
+    expect(sentPayload.object_permission.skills).toEqual([]);
+  });
+});
+
 describe("KeyInfoView handleKeyUpdate budget_duration", () => {
   it("should send a canonical budget_duration through unchanged", async () => {
     renderView(true);

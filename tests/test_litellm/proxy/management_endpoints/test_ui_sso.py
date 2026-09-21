@@ -2616,6 +2616,28 @@ class TestCLIKeyRegenerationFlow:
         )
         cache.set_cache.assert_not_called()
 
+    def test_cli_sso_flow_lookup_treats_an_open_redis_breaker_as_a_miss(self):
+        """A Redis read refused by the open circuit breaker is a missing session, not a server error.
+
+        The direct Redis read is what keeps the flow authoritative across workers, so the
+        refusal must not fall back to a possibly stale in-memory copy either.
+        """
+        from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+        from litellm.proxy.management_endpoints.ui_sso import _get_cli_sso_flow_or_raise
+
+        redis_cache = MagicMock()
+        redis_cache.get_cache.side_effect = RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+        cache = MagicMock()
+        cache.redis_cache = redis_cache
+        cache.get_cache.return_value = {"poll_secret_hash": "stale", "sso_complete": False}
+
+        with pytest.raises(HTTPException) as exc_info:
+            _get_cli_sso_flow_or_raise(login_id="cli-breaker_open_1234567890", cache=cache)
+
+        assert exc_info.value.status_code == 400
+        assert "not found or expired" in exc_info.value.detail
+        cache.get_cache.assert_not_called()
+
     def test_cli_sso_flow_with_enum_survives_redis_round_trip(self):
         """
         RedisCache stores values via str(value) and reads them back through

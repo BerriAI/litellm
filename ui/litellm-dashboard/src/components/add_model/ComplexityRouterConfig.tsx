@@ -632,7 +632,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
 
   // Clearing the select drops the key entirely rather than storing "", so an emptied pin reads as
   // "track the tiers" everywhere downstream instead of as a blank model name.
-  const handleDefaultModelChange = (model: string | undefined) => {
+  const handleDefaultModelChange = (model: string | null | undefined) => {
     onChange({ ...value, default_model: model || undefined });
   };
 

@@ -3,7 +3,10 @@
 import random
 from collections.abc import Sequence
 from datetime import datetime, timedelta
+from math import ceil
 from typing import TYPE_CHECKING, Any, Final
+
+from pydantic import Field
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
@@ -24,12 +27,19 @@ class RoutingArgs(LiteLLMPydanticObjectBase):
     ttl: float = 1 * 60 * 60  # 1 hour
     lowest_latency_buffer: float = 0
     max_latency_list_size: int = 10
+    ttft_percentile: float | None = Field(default=None, gt=0, le=1)
 
 
 def _average_latency(samples: Sequence[float]) -> float:
     if not samples:
         return 0.0
     return sum(samples) / len(samples)
+
+
+def _percentile_latency(samples: Sequence[float], percentile: float) -> float:
+    values: Final = sorted(samples)
+    index: Final = ceil(len(values) * percentile) - 1
+    return values[index]
 
 
 def _ttft_seconds(elapsed: timedelta | float) -> float:
@@ -427,14 +437,17 @@ class LowestLatencyLoggingHandler(CustomLogger):
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)
 
-            # get average latency or average ttft (depending on streaming/non-streaming)
             use_ttft = (
                 request_kwargs is not None
                 and request_kwargs.get("stream", None) is not None
                 and request_kwargs["stream"] is True
                 and len(item_ttft_latency) > 0
             )
-            average_latency = _average_latency(item_ttft_latency if use_ttft else item_latency)
+            selected_latency = (
+                _percentile_latency(item_ttft_latency, self.routing_args.ttft_percentile)
+                if use_ttft and self.routing_args.ttft_percentile is not None
+                else _average_latency(item_ttft_latency if use_ttft else item_latency)
+            )
 
             # -------------- #
             # Debugging Logic
@@ -443,7 +456,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             # this helps a user to debug why the router picked a specfic deployment      #
             _deployment_api_base = _deployment.get("litellm_params", {}).get("api_base", "")
             if _deployment_api_base is not None:
-                _latency_per_deployment[_deployment_api_base] = average_latency
+                _latency_per_deployment[_deployment_api_base] = selected_latency
             # -------------- #
             # End of Debugging Logic
             # -------------- #
@@ -453,7 +466,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
             ):  # if user passed in tpm / rpm in the model_list
                 continue
             else:
-                potential_deployments.append((_deployment, average_latency))
+                potential_deployments.append((_deployment, selected_latency))
 
         if len(potential_deployments) == 0:
             return None

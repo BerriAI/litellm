@@ -41,6 +41,7 @@ which stores either the registered alias or the provider-prefixed form.
 import json
 import os
 from collections.abc import Iterator
+from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Final
 
@@ -120,19 +121,10 @@ class ResponsesApiResponse(BaseModel):
 
 
 @dataclass(frozen=True, slots=True)
-class TagSplitDeployments:
-    """Scenario A mirrors the customer-shaped config from GitHub issue #36619:
-    plain deployment registered first, tier deployment and marker both tagged.
-    Scenario B flips both axes for GitHub issue #36621: marker registered first
-    and its tier deployment left untagged, so routing depends neither on
-    registration order nor on tier deployments carrying tags."""
-
-    tag_a: str
-    shared_a: str
-    tier_a: str
-    tag_b: str
-    shared_b: str
-    tier_b: str
+class TagSplitDeployment:
+    tag: str
+    shared: str
+    tier: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,9 +165,7 @@ def _uniform_tier_config(tier_model: str) -> dict[str, object]:
     }
 
 
-def _key_for(
-    proxy: ProxyClient, resources: ResourceManager, models: list[str], tag_filtering: bool = False
-) -> str:
+def _key_for(proxy: ProxyClient, resources: ResourceManager, models: list[str], tag_filtering: bool = False) -> str:
     key: Final = proxy.generate_key(
         KeyGenerateBody(
             models=models,
@@ -211,46 +201,61 @@ def _assert_served_only_by(rows: list[SpendLogRow], allowed: frozenset[str], con
     )
 
 
-@pytest.fixture(scope="module")
-def split(proxy: ProxyClient) -> Iterator[TagSplitDeployments]:
+@pytest.fixture(scope="class")
+def router_stack() -> Iterator[ExitStack]:
+    with ExitStack() as stack:
+        yield stack
+
+
+def _register_models(
+    proxy: ProxyClient, stack: ExitStack, registrations: tuple[tuple[str, LiteLLMParamsBody], ...]
+) -> None:
+    for name, params in registrations:
+        stack.callback(proxy.delete_model, proxy.create_model(name, params))
+
+
+def _tag_split(proxy: ProxyClient, stack: ExitStack, *, marker_first: bool) -> TagSplitDeployment:
     marker: Final = unique_marker()
-    deployments: Final = TagSplitDeployments(
-        tag_a=f"e2e-split-a-{marker}",
-        shared_a=f"e2e-autoroute-a-{marker}",
-        tier_a=f"e2e-tier-a-{marker}",
-        tag_b=f"e2e-split-b-{marker}",
-        shared_b=f"e2e-autoroute-b-{marker}",
-        tier_b=f"e2e-tier-b-{marker}",
+    named: Final = TagSplitDeployment(
+        tag=f"e2e-split-{marker}",
+        shared=f"e2e-autoroute-{marker}",
+        tier=f"e2e-tier-{marker}",
     )
     anthropic_key: Final = _provider_key("ANTHROPIC_API_KEY")
-    marker_params_a: Final = LiteLLMParamsBody(
-        model="auto_router/complexity_router",
-        complexity_router_config=_uniform_tier_config(deployments.tier_a),
-        tags=[deployments.tag_a],
+    marker_registration: Final = (
+        named.shared,
+        LiteLLMParamsBody(
+            model="auto_router/complexity_router",
+            complexity_router_config=_uniform_tier_config(named.tier),
+            tags=[named.tag],
+        ),
     )
-    marker_params_b: Final = LiteLLMParamsBody(
-        model="auto_router/complexity_router",
-        complexity_router_config=_uniform_tier_config(deployments.tier_b),
-        tags=[deployments.tag_b],
+    tier_registration: Final = (
+        named.tier,
+        LiteLLMParamsBody(model=CHEAP_MODEL, api_key=anthropic_key, tags=None if marker_first else [named.tag]),
     )
-    registrations: Final[tuple[tuple[str, LiteLLMParamsBody], ...]] = (
-        (deployments.shared_a, LiteLLMParamsBody(model=PLAIN_MODEL, api_key=anthropic_key)),
-        (deployments.tier_a, LiteLLMParamsBody(model=CHEAP_MODEL, api_key=anthropic_key, tags=[deployments.tag_a])),
-        (deployments.shared_a, marker_params_a),
-        (deployments.shared_b, marker_params_b),
-        (deployments.tier_b, LiteLLMParamsBody(model=CHEAP_MODEL, api_key=anthropic_key)),
-        (deployments.shared_b, LiteLLMParamsBody(model=PLAIN_MODEL, api_key=anthropic_key)),
+    plain_registration: Final = (named.shared, LiteLLMParamsBody(model=PLAIN_MODEL, api_key=anthropic_key))
+    registrations: Final = (
+        (marker_registration, tier_registration, plain_registration)
+        if marker_first
+        else (plain_registration, tier_registration, marker_registration)
     )
-    created: Final = tuple(proxy.create_model(name, params) for name, params in registrations)
-    try:
-        yield deployments
-    finally:
-        for model_id in created:
-            proxy.delete_model(model_id)
+    _register_models(proxy, stack, registrations)
+    return named
 
 
-@pytest.fixture(scope="module")
-def zero_priced_alias(proxy: ProxyClient) -> Iterator[ZeroPricedAlias]:
+@pytest.fixture(scope="class")
+def plain_first_split(proxy: ProxyClient, router_stack: ExitStack) -> TagSplitDeployment:
+    return _tag_split(proxy, router_stack, marker_first=False)
+
+
+@pytest.fixture(scope="class")
+def marker_first_split(proxy: ProxyClient, router_stack: ExitStack) -> TagSplitDeployment:
+    return _tag_split(proxy, router_stack, marker_first=True)
+
+
+@pytest.fixture(scope="class")
+def zero_priced_alias(proxy: ProxyClient, router_stack: ExitStack) -> ZeroPricedAlias:
     marker: Final = unique_marker()
     named: Final = ZeroPricedAlias(alias=f"e2e-priced-alias-{marker}", tier=f"e2e-priced-tier-{marker}")
     alias_params: Final = LiteLLMParamsBody(
@@ -263,16 +268,12 @@ def zero_priced_alias(proxy: ProxyClient) -> Iterator[ZeroPricedAlias]:
         (named.tier, LiteLLMParamsBody(model=CHEAP_MODEL, api_key=_provider_key("ANTHROPIC_API_KEY"))),
         (named.alias, alias_params),
     )
-    created: Final = tuple(proxy.create_model(name, params) for name, params in registrations)
-    try:
-        yield named
-    finally:
-        for model_id in created:
-            proxy.delete_model(model_id)
+    _register_models(proxy, router_stack, registrations)
+    return named
 
 
-@pytest.fixture(scope="module")
-def heuristic_split(proxy: ProxyClient) -> Iterator[HeuristicSplit]:
+@pytest.fixture(scope="class")
+def heuristic_split(proxy: ProxyClient, router_stack: ExitStack) -> HeuristicSplit:
     marker: Final = unique_marker()
     named: Final = HeuristicSplit(
         alias=f"e2e-heuristic-router-{marker}",
@@ -289,16 +290,12 @@ def heuristic_split(proxy: ProxyClient) -> Iterator[HeuristicSplit]:
         (named.strong, LiteLLMParamsBody(model=STRONG_MODEL, api_key=_provider_key("OPENAI_API_KEY"))),
         (named.alias, LiteLLMParamsBody(model="auto_router/complexity_router", complexity_router_config=config)),
     )
-    created: Final = tuple(proxy.create_model(name, params) for name, params in registrations)
-    try:
-        yield named
-    finally:
-        for model_id in created:
-            proxy.delete_model(model_id)
+    _register_models(proxy, router_stack, registrations)
+    return named
 
 
-@pytest.fixture(scope="module")
-def semantic_auto_router(proxy: ProxyClient) -> Iterator[SemanticAutoRouter]:
+@pytest.fixture(scope="class")
+def semantic_auto_router(proxy: ProxyClient, router_stack: ExitStack) -> SemanticAutoRouter:
     marker: Final = unique_marker()
     named: Final = SemanticAutoRouter(
         marker=f"e2e-semantic-router-{marker}",
@@ -321,16 +318,12 @@ def semantic_auto_router(proxy: ProxyClient) -> Iterator[SemanticAutoRouter]:
         (named.fallback, LiteLLMParamsBody(model=PLAIN_MODEL, api_key=_provider_key("ANTHROPIC_API_KEY"))),
         (named.marker, marker_params),
     )
-    created: Final = tuple(proxy.create_model(name, params) for name, params in registrations)
-    try:
-        yield named
-    finally:
-        for model_id in created:
-            proxy.delete_model(model_id)
+    _register_models(proxy, router_stack, registrations)
+    return named
 
 
-@pytest.fixture(scope="module")
-def credentialed_alias(proxy: ProxyClient) -> Iterator[CredentialedAlias]:
+@pytest.fixture(scope="class")
+def credentialed_alias(proxy: ProxyClient, router_stack: ExitStack) -> CredentialedAlias:
     marker: Final = unique_marker()
     named: Final = CredentialedAlias(alias=f"e2e-cred-alias-{marker}", tier=f"e2e-cred-tier-{marker}")
     alias_params: Final = LiteLLMParamsBody(
@@ -342,104 +335,110 @@ def credentialed_alias(proxy: ProxyClient) -> Iterator[CredentialedAlias]:
         (named.tier, LiteLLMParamsBody(model=CHEAP_MODEL, api_key=_provider_key("ANTHROPIC_API_KEY"))),
         (named.alias, alias_params),
     )
-    created: Final = tuple(proxy.create_model(name, params) for name, params in registrations)
-    try:
-        yield named
-    finally:
-        for model_id in created:
-            proxy.delete_model(model_id)
+    _register_models(proxy, router_stack, registrations)
+    return named
 
 
 class TestTagSplitRouting:
     @pytest.mark.covers("reliability.routing.tagged_marker.request_tag_selects_marker")
     def test_body_tagged_chat_routes_through_the_marker_to_its_tier(
-        self, proxy: ProxyClient, resources: ResourceManager, split: TagSplitDeployments
+        self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
         """Pins GitHub issue #36619: with tag filtering on, a chat request whose
         body metadata tags match the tagged marker under a shared model name is
         answered by the marker's tier deployment, not by the plain deployment
         that was registered under the name first."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
-        chat: Final = unwrap(proxy.chat(key, _hello_chat_body(split.shared_a, tags=[split.tag_a])))
+        key: Final = _key_for(proxy, resources, [plain_first_split.shared, plain_first_split.tier], tag_filtering=True)
+        chat: Final = unwrap(proxy.chat(key, _hello_chat_body(plain_first_split.shared, tags=[plain_first_split.tag])))
         assert chat.choices, "tagged chat through the shared name returned no choices"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
-        _assert_served_only_by(rows, CHEAP_SERVED | {split.tier_a}, "body-tagged chat on the shared name")
+        _assert_served_only_by(rows, CHEAP_SERVED | {plain_first_split.tier}, "body-tagged chat on the shared name")
 
     @pytest.mark.covers("reliability.routing.tagged_marker.untagged_request_served_by_plain_deployment")
     def test_untagged_chat_is_always_served_by_the_plain_deployment(
-        self, proxy: ProxyClient, resources: ResourceManager, split: TagSplitDeployments
+        self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
         """Pins GitHub issue #36620: untagged chat requests to the shared name
         succeed on every call and are all served by the plain deployment; the
         tagged marker never captures them, so no intermittent auto-router
         errors and no tier hijacking."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
+        key: Final = _key_for(proxy, resources, [plain_first_split.shared, plain_first_split.tier], tag_filtering=True)
         for _ in range(5):
-            chat = unwrap(proxy.chat(key, _hello_chat_body(split.shared_a)))
+            chat = unwrap(proxy.chat(key, _hello_chat_body(plain_first_split.shared)))
             assert chat.choices, "untagged chat through the shared name returned no choices"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=5)
-        _assert_served_only_by(rows, PLAIN_SERVED | {split.shared_a}, "untagged chat on the shared name")
+        _assert_served_only_by(rows, PLAIN_SERVED | {plain_first_split.shared}, "untagged chat on the shared name")
 
     @pytest.mark.covers("reliability.routing.tagged_marker.untagged_request_served_by_plain_deployment")
     def test_untagged_messages_is_served_by_the_plain_deployment(
-        self, proxy: ProxyClient, resources: ResourceManager, split: TagSplitDeployments
+        self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
         """Pins GitHub issue #36620 on the /v1/messages surface: an untagged
         Anthropic-native request to the shared name is served by the plain
         deployment, not captured by the tagged marker."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
-        answer: Final = unwrap(proxy.messages(key, _hello_messages_body(split.shared_a)))
+        key: Final = _key_for(proxy, resources, [plain_first_split.shared, plain_first_split.tier], tag_filtering=True)
+        answer: Final = unwrap(proxy.messages(key, _hello_messages_body(plain_first_split.shared)))
         assert answer.content or answer.choices, "untagged /v1/messages returned neither content nor choices"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
-        _assert_served_only_by(rows, PLAIN_SERVED | {split.shared_a}, "untagged /v1/messages on the shared name")
+        _assert_served_only_by(
+            rows, PLAIN_SERVED | {plain_first_split.shared}, "untagged /v1/messages on the shared name"
+        )
 
 
 class TestUntaggedTierDeployments:
     @pytest.mark.covers("reliability.routing.tagged_marker.header_tag_selects_marker")
     def test_header_tagged_messages_routes_through_the_marker_to_an_untagged_tier(
-        self, proxy: ProxyClient, resources: ResourceManager, split: TagSplitDeployments
+        self, proxy: ProxyClient, resources: ResourceManager, marker_first_split: TagSplitDeployment
     ) -> None:
         """Pins GitHub issue #36621: a /v1/messages request tagged only via the
         x-litellm-tags header selects the tagged marker, and the rewrite still
         lands on the tier deployment even though that deployment carries no
         tags, because the marker consumed the routing tags."""
-        key: Final = _key_for(proxy, resources, [split.shared_b, split.tier_b], tag_filtering=True)
-        headers: Final = TaggedAnthropicHeaders(authorization=f"Bearer {key}", x_litellm_tags=split.tag_b)
+        key: Final = _key_for(
+            proxy, resources, [marker_first_split.shared, marker_first_split.tier], tag_filtering=True
+        )
+        headers: Final = TaggedAnthropicHeaders(authorization=f"Bearer {key}", x_litellm_tags=marker_first_split.tag)
         answer: Final = unwrap(
             proxy.transport.post(
                 "/v1/messages",
                 headers=headers,
-                json=_hello_messages_body(split.shared_b),
+                json=_hello_messages_body(marker_first_split.shared),
                 response_type=AnthropicMessagesResponse,
             )
         )
         assert answer.content or answer.choices, "header-tagged /v1/messages returned neither content nor choices"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
-        _assert_served_only_by(rows, CHEAP_SERVED | {split.tier_b}, "header-tagged /v1/messages on the shared name")
+        _assert_served_only_by(
+            rows, CHEAP_SERVED | {marker_first_split.tier}, "header-tagged /v1/messages on the shared name"
+        )
 
     @pytest.mark.covers("reliability.routing.tagged_marker.untagged_tier_deployments_still_served")
     def test_body_tagged_chat_reaches_the_untagged_tier_after_marker_rewrite(
-        self, proxy: ProxyClient, resources: ResourceManager, split: TagSplitDeployments
+        self, proxy: ProxyClient, resources: ResourceManager, marker_first_split: TagSplitDeployment
     ) -> None:
         """Pins the tag-consumption half of GitHub issue #36621: after the
         tagged marker rewrites the request to its tier model, the consumed
         routing tags no longer constrain deployment selection, so the untagged
         tier deployment serves the request instead of a strict-tag denial."""
-        key: Final = _key_for(proxy, resources, [split.shared_b, split.tier_b], tag_filtering=True)
-        chat: Final = unwrap(proxy.chat(key, _hello_chat_body(split.shared_b, tags=[split.tag_b])))
+        key: Final = _key_for(
+            proxy, resources, [marker_first_split.shared, marker_first_split.tier], tag_filtering=True
+        )
+        chat: Final = unwrap(
+            proxy.chat(key, _hello_chat_body(marker_first_split.shared, tags=[marker_first_split.tag]))
+        )
         assert chat.choices, "body-tagged chat through the marker-first shared name returned no choices"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
-        _assert_served_only_by(rows, CHEAP_SERVED | {split.tier_b}, "body-tagged chat with untagged tier")
+        _assert_served_only_by(rows, CHEAP_SERVED | {marker_first_split.tier}, "body-tagged chat with untagged tier")
 
     @pytest.mark.covers("reliability.routing.tagged_marker.tag_semantics_stay_strict")
     def test_tagged_call_straight_at_an_untagged_deployment_stays_denied(
-        self, proxy: ProxyClient, resources: ResourceManager, split: TagSplitDeployments
+        self, proxy: ProxyClient, resources: ResourceManager, marker_first_split: TagSplitDeployment
     ) -> None:
         """The tag-consumption fix must not loosen strict tag semantics: a
         tagged request aimed directly at an untagged deployment (no marker
         involved) is still rejected with the 401 tags-configuration error."""
-        key: Final = _key_for(proxy, resources, [split.tier_b], tag_filtering=True)
-        result: Final = proxy.chat(key, _hello_chat_body(split.tier_b, tags=[split.tag_b]))
+        key: Final = _key_for(proxy, resources, [marker_first_split.tier], tag_filtering=True)
+        result: Final = proxy.chat(key, _hello_chat_body(marker_first_split.tier, tags=[marker_first_split.tag]))
         assert isinstance(result, UnauthorizedError), (
             f"expected the tagged direct call to an untagged deployment to be denied with 401, got {result}"
         )
@@ -451,37 +450,39 @@ class TestUntaggedTierDeployments:
 class TestResponsesApiTagRouting:
     @pytest.mark.covers("reliability.routing.tagged_marker.responses_input_routes_through_marker")
     def test_header_tagged_responses_with_string_input_routes_to_the_tier(
-        self, proxy: ProxyClient, resources: ResourceManager, split: TagSplitDeployments
+        self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
         """Pins the /v1/responses surface of the tag split (GitHub issues
         #36620/#36621): a /v1/responses request with string input, tagged via
         the x-litellm-tags header, succeeds and routes through the tagged
         marker to its tier."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
-        headers: Final = TaggedAuthHeaders(authorization=f"Bearer {key}", x_litellm_tags=split.tag_a)
+        key: Final = _key_for(proxy, resources, [plain_first_split.shared, plain_first_split.tier], tag_filtering=True)
+        headers: Final = TaggedAuthHeaders(authorization=f"Bearer {key}", x_litellm_tags=plain_first_split.tag)
         body: Final = ResponsesBody(
-            model=split.shared_a, input=f"say hello {unique_marker()}", max_output_tokens=64
+            model=plain_first_split.shared, input=f"say hello {unique_marker()}", max_output_tokens=64
         )
         answer: Final = unwrap(
             proxy.transport.post("/v1/responses", headers=headers, json=body, response_type=ResponsesApiResponse)
         )
         assert answer.id, "header-tagged /v1/responses returned no response id"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
-        _assert_served_only_by(rows, CHEAP_SERVED | {split.tier_a}, "header-tagged /v1/responses string input")
+        _assert_served_only_by(
+            rows, CHEAP_SERVED | {plain_first_split.tier}, "header-tagged /v1/responses string input"
+        )
 
     @pytest.mark.covers("reliability.routing.tagged_marker.responses_input_routes_through_marker")
     def test_body_tagged_responses_with_list_input_routes_to_the_tier(
-        self, proxy: ProxyClient, resources: ResourceManager, split: TagSplitDeployments
+        self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
         """Pins the body-tag and list-input combination of the same split:
         /v1/responses with litellm_metadata.tags and structured input items
         routes through the tagged marker to its tier."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
+        key: Final = _key_for(proxy, resources, [plain_first_split.shared, plain_first_split.tier], tag_filtering=True)
         body: Final = ResponsesBody(
-            model=split.shared_a,
+            model=plain_first_split.shared,
             input=[ResponsesInputItem(role="user", content=f"say hello {unique_marker()}")],
             max_output_tokens=64,
-            litellm_metadata=ResponsesTagMetadata(tags=[split.tag_a]),
+            litellm_metadata=ResponsesTagMetadata(tags=[plain_first_split.tag]),
         )
         answer: Final = unwrap(
             proxy.transport.post(
@@ -493,18 +494,18 @@ class TestResponsesApiTagRouting:
         )
         assert answer.id, "body-tagged /v1/responses returned no response id"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
-        _assert_served_only_by(rows, CHEAP_SERVED | {split.tier_a}, "body-tagged /v1/responses list input")
+        _assert_served_only_by(rows, CHEAP_SERVED | {plain_first_split.tier}, "body-tagged /v1/responses list input")
 
     @pytest.mark.covers("reliability.routing.tagged_marker.untagged_request_served_by_plain_deployment")
     def test_untagged_responses_is_served_by_the_plain_deployment(
-        self, proxy: ProxyClient, resources: ResourceManager, split: TagSplitDeployments
+        self, proxy: ProxyClient, resources: ResourceManager, plain_first_split: TagSplitDeployment
     ) -> None:
         """Pins the untagged half of the /v1/responses tag split: an untagged
         request to the shared name is served by the plain deployment, matching
         the chat and messages surfaces."""
-        key: Final = _key_for(proxy, resources, [split.shared_a, split.tier_a], tag_filtering=True)
+        key: Final = _key_for(proxy, resources, [plain_first_split.shared, plain_first_split.tier], tag_filtering=True)
         body: Final = ResponsesBody(
-            model=split.shared_a, input=f"say hello {unique_marker()}", max_output_tokens=64
+            model=plain_first_split.shared, input=f"say hello {unique_marker()}", max_output_tokens=64
         )
         answer: Final = unwrap(
             proxy.transport.post(
@@ -516,7 +517,9 @@ class TestResponsesApiTagRouting:
         )
         assert answer.id, "untagged /v1/responses returned no response id"
         rows: Final = proxy.poll_logs_for_key(key, min_rows=1)
-        _assert_served_only_by(rows, PLAIN_SERVED | {split.shared_a}, "untagged /v1/responses on the shared name")
+        _assert_served_only_by(
+            rows, PLAIN_SERVED | {plain_first_split.shared}, "untagged /v1/responses on the shared name"
+        )
 
 
 class TestStrategyAliasPricing:
@@ -551,9 +554,7 @@ class TestComplexityHeuristicScope:
         while the accompanying ~2KB agent system prompt is packed with enough
         reasoning and complexity keywords that scoring the combined text lands
         in REASONING; only ask-only scoring keeps this on the cheap tier."""
-        key: Final = _key_for(
-            proxy, resources, [heuristic_split.alias, heuristic_split.cheap, heuristic_split.strong]
-        )
+        key: Final = _key_for(proxy, resources, [heuristic_split.alias, heuristic_split.cheap, heuristic_split.strong])
         body: Final = ChatBody(
             model=heuristic_split.alias,
             messages=[

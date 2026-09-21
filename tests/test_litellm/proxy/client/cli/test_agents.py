@@ -28,6 +28,7 @@ from litellm.proxy.client.cli.commands.agents import (
 )
 
 AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
+CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
 
 
 def _agent_command(name):
@@ -180,7 +181,9 @@ class TestAgentLaunchArgs:
         assert 'model_providers.litellm.env_key="OPENAI_API_KEY"' in args
         assert 'model_providers.litellm.wire_api="responses"' in args
         assert "model_providers.litellm.supports_websockets=false" in args
-        assert joined.count("-c") == 6
+        assert "model_providers.litellm.requires_openai_auth=false" in args
+        assert "model_providers.litellm.http_headers={}" in args
+        assert joined.count("-c") == 8
 
     def test_codex_uses_basename(self):
         assert agent_launch_args("/usr/local/bin/codex", "http://localhost:4000") == (
@@ -1202,3 +1205,53 @@ class TestAgentCommands:
             )
         assert result.exit_code == 0, result.output
         assert captured["reattach_terminal"] is None
+
+
+class TestPrepareCodex:
+    def test_registers_the_installed_script_as_a_session_scoped_stop_hook(self):
+        from litellm.proxy.client.cli.commands.agents import prepare_codex
+
+        args = prepare_codex("http://localhost:4000", "sk-key", {}, install=lambda: "/py /home/me/.litellm/statusline.py")
+        assert args == (
+            "-c",
+            'hooks.Stop=[{hooks=[{type="command",command="/py /home/me/.litellm/statusline.py"}]}]',
+        )
+
+    def test_a_failed_install_is_an_agent_error_not_a_crash(self):
+        from litellm.proxy.client.cli.commands.agents import AgentRunError, prepare_codex
+        from litellm.proxy.client.cli.commands.claude_settings import ClaudeSettingsError
+
+        def boom():
+            raise ClaudeSettingsError("disk full")
+
+        with pytest.raises(AgentRunError, match="disk full"):
+            prepare_codex("http://localhost:4000", "sk-key", {}, install=boom)
+
+    def test_a_config_that_already_declares_hooks_keeps_them_and_skips_ours(self, tmp_path):
+        from litellm.proxy.client.cli.commands.agents import prepare_codex
+
+        warnings = []
+        env = {"CODEX_HOME": str(tmp_path)}
+        for body in ('[[hooks.Stop]]\nhooks = [{ type = "command", command = "mine" }]\n', 'hooks.Stop = []\n', "[hooks]\n"):
+            (tmp_path / "config.toml").write_text(body)
+            assert prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append) == ()
+        (tmp_path / "config.toml").write_text('model = "gpt-5.6-sol"\n[projects."/x"]\ntrust_level = "trusted"\n')
+        assert prepare_codex("http://localhost:4000", "sk", env, install=lambda: "/py /s.py", warn=warnings.append) != ()
+        assert len(warnings) == 3 and "already declares hooks" in warnings[0]
+
+    def test_a_config_that_cannot_be_read_or_decoded_still_lets_codex_launch(self, tmp_path):
+        # A UTF-16 config.toml (a Windows Notepad save) is Codex's problem to report at launch, not a reason
+        # for the hook pre-check to abort `lite codex` with a traceback before Codex ever starts.
+        from litellm.proxy.client.cli.commands.agents import codex_declares_stop_hooks, prepare_codex
+
+        config = tmp_path / "config.toml"
+        config.write_bytes('[[hooks.Stop]]\nhooks = [{ type = "command", command = "mine" }]\n'.encode("utf-16"))
+        assert codex_declares_stop_hooks(config) is False
+        assert codex_declares_stop_hooks(tmp_path / "absent.toml") is False
+        args = prepare_codex("http://localhost:4000", "sk", {"CODEX_HOME": str(tmp_path)}, install=lambda: "/py /s.py")
+        assert args[0] == "-c" and "hooks.Stop=" in args[1]
+
+    def test_codex_is_wired_through_the_preparer_registry(self):
+        from litellm.proxy.client.cli.commands.agents import _PREPARERS, prepare_codex
+
+        assert _PREPARERS["codex"] is prepare_codex

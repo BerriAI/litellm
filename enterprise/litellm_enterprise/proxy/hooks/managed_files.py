@@ -27,10 +27,13 @@ import litellm
 from litellm import Router, verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
+from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_metadata,
 )
+from openai.types.file_deleted import FileDeleted
+
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
@@ -48,7 +51,6 @@ from litellm.proxy._types import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
-    MAX_FILE_LIST_LIMIT,
     _is_base64_encoded_unified_file_id,
     apply_unified_file_ids,
     decode_model_from_file_id,
@@ -1787,7 +1789,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         litellm_parent_otel_span: Optional[Span],
         llm_router: Router,
         **data: Dict,
-    ) -> OpenAIFileObject:
+    ) -> FileDeleted:
 
         # Check if file deletion should be blocked due to batch references
         await self._check_file_deletion_allowed(file_id)
@@ -1795,29 +1797,28 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         # file_id = convert_b64_uid_to_unified_uid(file_id)
         model_file_id_mapping = await self.get_model_file_id_mapping([file_id], litellm_parent_otel_span)
 
-        delete_response = None
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
             # Remove conflicting keys from data to avoid duplicate keyword arguments
             filtered_data = {k: v for k, v in data.items() if k not in ("model", "file_id")}
             for model_id, model_file_id in specific_model_file_id_mapping.items():
-                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **filtered_data)  # type: ignore
+                credentials = llm_router.get_deployment_credentials_with_provider(model_id=model_id)
+                delete_data = {
+                    **{k: v for k, v in filtered_data.items() if k != "_litellm_internal_model_credentials"},
+                    **(
+                        {"_litellm_internal_model_credentials": MappingProxyType(dict(credentials))}
+                        if credentials is not None
+                        else {}
+                    ),
+                }
+                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **delete_data)
 
-        stored_file_object = await self.delete_unified_file_id(file_id, litellm_parent_otel_span)
+        await self.delete_unified_file_id(file_id, litellm_parent_otel_span)
 
-        # Record successful deletion metric only on actual success
-        if stored_file_object or delete_response:
-            prom_logger = self._get_prometheus_logger()
-            if prom_logger:
-                prom_logger.record_managed_file_deleted(result="success")
-
-        if stored_file_object:
-            return stored_file_object
-        elif delete_response:
-            delete_response.id = file_id
-            return delete_response
-        else:
-            raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+        prom_logger = self._get_prometheus_logger()
+        if prom_logger:
+            prom_logger.record_managed_file_deleted(result="success")
+        return FileDeleted(id=file_id, object="file", deleted=True)
 
     async def afile_content(
         self,

@@ -113,6 +113,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
 from litellm.llms.anthropic.common_utils import (
     is_empty_unsigned_thinking_block,
     normalize_anthropic_tool_use_id,
+    strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
     PolyfillResult,
@@ -399,7 +400,7 @@ class LiteLLMAnthropicMessagesAdapter:
 
         Anthropic web search tools have:
         - type starting with "web_search" (e.g., "web_search_20260209")
-        - name = "web_search"
+        - legacy name = "web_search" without a client input_schema
 
         Args:
             tool: Tool definition dict
@@ -409,7 +410,9 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         tool_type: Final = tool.get("type", "")
         tool_name: Final = tool.get("name", "")
-        return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search"
+        return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or (
+            tool_name == "web_search" and "input_schema" not in tool
+        )
 
     def translate_anthropic_messages_to_openai(
         self,
@@ -417,7 +420,8 @@ class LiteLLMAnthropicMessagesAdapter:
         model: str | None = None,
     ) -> list:
         new_messages: Final[list[AllMessageValues]] = []
-        for m in messages:
+        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        for m in replayable_messages:
             user_message: ChatCompletionUserMessage | None = None
             tool_message_list: list[ChatCompletionToolMessage] = []
             new_user_content_list: list[ChatCompletionTextObject | ChatCompletionImageObject] = []
@@ -1487,8 +1491,9 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_content.insert(0, polyfill_result.compaction_block)
 
         ## extract finish reason
+        openai_finish_reason: Final = response.choices[0].finish_reason if response.choices else "stop"
         translated_finish_reason: Final = self._translate_openai_finish_reason_to_anthropic(
-            openai_finish_reason=response.choices[0].finish_reason
+            openai_finish_reason=openai_finish_reason
         )
         anthropic_finish_reason: Final = (
             "refusal"

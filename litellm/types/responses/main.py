@@ -1,3 +1,5 @@
+from collections.abc import Mapping, Sequence
+
 # `Union` is no longer referenced in this module, but
 # `litellm/llms/base_llm/image_edit/transformation.py` does
 # `from litellm.types.responses.main import *` and annotates with it, so
@@ -5,6 +7,7 @@
 from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
+from openai.types.responses.response_function_web_search import ActionSearchSource, ResponseFunctionWebSearch
 from pydantic import PrivateAttr
 from typing_extensions import Any, TypedDict
 
@@ -55,6 +58,36 @@ class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     id: str | None
     status: Literal["in_progress", "completed", "incomplete"]
     phase: Phase = None
+
+
+def build_web_search_call(
+    tool_id: str,
+    tool_input: object,
+    result: object,
+    status: Literal["in_progress", "searching", "completed", "failed"] | None = None,
+) -> ResponseFunctionWebSearch:
+    query: Final = tool_input.get("query", "") if isinstance(tool_input, Mapping) else ""
+    content: Final = result.get("content") if isinstance(result, Mapping) else None
+    result_items: Final = content if isinstance(content, Sequence) and not isinstance(content, (str, bytes)) else ()
+    sources: Final = [  # mutable-ok: official SDK expects a source list
+        ActionSearchSource(type="url", url=url)
+        for item in result_items
+        if isinstance(item, Mapping)
+        and item.get("type") == "web_search_result"
+        and isinstance((url := item.get("url")), str)
+    ]
+    failed: Final = isinstance(content, Mapping) and content.get("type") == "web_search_tool_result_error"
+    return ResponseFunctionWebSearch(
+        id=f"ws_{tool_id}",
+        type="web_search_call",
+        status=status or ("failed" if failed else "completed"),
+        action={  # mutable-ok: official SDK expects an action mapping
+            "type": "search",
+            "query": query if isinstance(query, str) else "",
+            "queries": [query] if isinstance(query, str) and query else [],  # mutable-ok: SDK list field
+            "sources": sources,
+        },
+    )
 
 
 class OutputImageGenerationCall(BaseLiteLLMOpenAIResponseObject):

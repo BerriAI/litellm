@@ -3,7 +3,7 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -24,6 +24,7 @@ from litellm.constants import (
     DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_DETAILED_TIMING,
     LITELLM_HTTP_STATUS_CLIENT_DISCONNECTED,
+    MAX_LITELLM_CALL_ID_LENGTH,
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
@@ -190,6 +191,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     refresh_proxy_server_request_body_snapshot,
     reject_url_valued_destination,
 )
+from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
@@ -214,6 +216,12 @@ _CLIENT_DISCONNECTED_ERROR_INFORMATION: Final[StandardLoggingPayloadErrorInforma
 
 def _withheld_provider_output(response: object) -> bool:
     return getattr(response, "has_buffered_provider_output", False) is True
+
+
+def resolve_litellm_call_id(client_call_id: str | None) -> str:
+    if client_call_id is not None and 0 < len(client_call_id) <= MAX_LITELLM_CALL_ID_LENGTH:
+        return client_call_id
+    return str(uuid.uuid4())
 
 
 def _should_return_raw_model_name(request_data: dict[str, object]) -> bool:
@@ -1849,7 +1857,6 @@ class ProxyBaseLLMRequestProcessing:
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
             )
-
         # Calculate request queue time after add_litellm_data_to_request
         # which sets arrival_time in proxy_server_request. Ends at start_time
         # (not a freshly captured time.time() here) so this window is exactly
@@ -1938,7 +1945,7 @@ class ProxyBaseLLMRequestProcessing:
                 if alias_target is not None:
                     self.data["model"] = alias_target
 
-        self.data["litellm_call_id"] = request.headers.get("x-litellm-call-id", str(uuid.uuid4()))
+        self.data["litellm_call_id"] = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
         DDSpanTagger.tag_call_id(self.data.get("litellm_call_id"))
         DDSpanTagger.tag_request(
             user_api_key_dict=user_api_key_dict,
@@ -1997,6 +2004,12 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data,
             call_type=route_type,
         )
+        if route_type == "aget_responses":
+            attach_post_call_pipelines_to_retrieval(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
 
         # Refresh AFTER pre_call_hook: guardrails (e.g. Presidio PII masking) may
         # have mutated `self.data` in place, and the audit-trail snapshot taken in
@@ -2431,6 +2444,7 @@ class ProxyBaseLLMRequestProcessing:
             if self._is_streaming_request(
                 data=self.data, is_streaming_request=is_streaming_request
             ) or self._is_streaming_response(response):  # use generate_responses to stream responses
+                selected_data_generator: AsyncGenerator[str, None] | None = None
                 # Call response headers hook for streaming success
                 stream_callback_headers: Final = await proxy_logging_obj.post_call_response_headers_hook(
                     data=self.data,
@@ -2555,14 +2569,9 @@ class ProxyBaseLLMRequestProcessing:
                                 None if _should_return_raw_model_name(self.data) else requested_model_from_client
                             ),
                         )
-                        return await create_response(
-                            generator=wrap_sse_stream_with_keepalive_pings(
-                                stream=selected_data_generator,
-                                ping_interval_seconds=litellm.anthropic_sse_ping_interval_seconds,
-                            ),
-                            media_type="text/event-stream",
-                            headers=custom_headers,
-                            request=request,
+                        selected_data_generator = wrap_sse_stream_with_keepalive_pings(
+                            stream=selected_data_generator,
+                            ping_interval_seconds=litellm.anthropic_sse_ping_interval_seconds,
                         )
                     # Non-streaming response - fall through to normal response handling
                 elif select_data_generator:
@@ -2589,6 +2598,7 @@ class ProxyBaseLLMRequestProcessing:
                                 user_api_key_dict=user_api_key_dict,
                             )
                         )
+                if selected_data_generator is not None:
                     return await create_response(
                         generator=selected_data_generator,
                         media_type="text/event-stream",
@@ -3178,6 +3188,11 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can exercise the production
         gating logic directly rather than reimplementing the finally block.
         """
+        if getattr(logging_obj, "call_type", None) in ("ocr", "aocr"):
+            pending: Final = getattr(logging_obj, "_native_pending_logging", None)
+            if pending is not None:
+                logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
+                pending.release(not exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
@@ -3202,20 +3217,24 @@ class ProxyBaseLLMRequestProcessing:
         end-of-stream blocks complete, so the spend log sees
         guardrail_information.
 
-        Three closure shapes, matching who owns logging for the stream:
+        Two closure shapes, matching who owns logging for the stream:
         - CustomStreamWrapper (chat completions) stores
           (assembled_response, cache_hit); the closure also runs
           non-apply_guardrail post-call hooks via
           _run_deferred_stream_guardrails.
-        - Bridged /v1/responses (LiteLLMCompletionStreamingIterator) shares
-          its inner CustomStreamWrapper's logging_obj, so it stores the same
-          (assembled_response, cache_hit) shape; the closure only dispatches
-          success logging, matching the route's pre-existing hook surface.
-        - Native anthropic_messages/aresponses iterators store a single
-          ready-made logging coroutine to enqueue.
+        - Every other anthropic_messages/aresponses stream gets a closure
+          that dispatches on the stored args shape, because the arming site
+          cannot tell the producers apart: native iterators store a single
+          ready-made logging coroutine to enqueue, while bridged streams
+          (LiteLLMCompletionStreamingIterator, and the plain SSE generator
+          AnthropicStreamWrapper returns for bridged /v1/messages) share
+          their inner CustomStreamWrapper's logging_obj and so store
+          (assembled_response, cache_hit); for those the closure only
+          dispatches success logging, matching the route's pre-existing
+          hook surface.
 
-        Raw async generators from passthrough routes bypass all three and
-        would orphan the closure, so they are not armed here.
+        Raw async generators from passthrough routes bypass both and would
+        orphan the closure, so they are not armed here.
 
         The router wraps iterators that cannot carry _hidden_params in
         HiddenParamsAsyncIteratorWrapper, so class sniffing runs on the
@@ -3249,31 +3268,27 @@ class ProxyBaseLLMRequestProcessing:
         if route_type not in ("anthropic_messages", "aresponses") or not self._is_streaming_response(response):
             return
 
-        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
-            LiteLLMCompletionStreamingIterator,
-        )
-
-        if isinstance(unwrapped, LiteLLMCompletionStreamingIterator):
-            _captured_bridge_logging_obj: Final = logging_obj
-
-            async def _on_deferred_bridged_stream_complete(assembled_response: object, cache_hit: object) -> None:
-                await _as_success_dispatcher(_captured_bridge_logging_obj).dispatch_success_handlers(
-                    assembled_response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                    prefer_async_handlers=True,
-                )
-
-            logging_obj._on_deferred_stream_complete = _on_deferred_bridged_stream_complete
-            return
-
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        async def _on_deferred_native_stream_complete(
-            logging_coroutine: Coroutine[object, object, object],
-        ) -> None:
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+        _captured_native_logging_obj: Final = logging_obj
+
+        async def _on_deferred_native_stream_complete(*args: object) -> None:
+            match args:
+                case (logging_coroutine,) if asyncio.iscoroutine(logging_coroutine):
+                    GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(async_coroutine=logging_coroutine)
+                case (assembled_response, cache_hit):
+                    await _as_success_dispatcher(_captured_native_logging_obj).dispatch_success_handlers(
+                        assembled_response,
+                        cache_hit=cache_hit,
+                        start_time=None,
+                        end_time=None,
+                        prefer_async_handlers=True,
+                    )
+                case _:
+                    verbose_proxy_logger.error(
+                        "Deferred stream logging dropped: unexpected stored args shape %s",
+                        tuple(type(arg).__name__ for arg in args),
+                    )
 
         logging_obj._on_deferred_stream_complete = _on_deferred_native_stream_complete
 
@@ -3294,9 +3309,10 @@ class ProxyBaseLLMRequestProcessing:
         has completed.
 
         Guardrails routed through unified_guardrail are skipped, since they already ran
-        via its streaming iterator.  Guardrails that override
-        async_post_call_success_hook directly run here, including those that implement
-        apply_guardrail but keep their native lifecycle hooks.
+        via its streaming iterator, and so are guardrails a post_call policy pipeline
+        manages, since the pipeline ran them against the buffered stream.  Guardrails
+        that override async_post_call_success_hook directly run here, including those
+        that implement apply_guardrail but keep their native lifecycle hooks.
 
         This is audit-only — content has already been delivered to the client.
 
@@ -3306,11 +3322,17 @@ class ProxyBaseLLMRequestProcessing:
         _response = assembled_response
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
-            from litellm.proxy.utils import _check_and_merge_model_level_guardrails
+            from litellm.proxy.utils import (
+                _check_and_merge_model_level_guardrails,
+                stream_gated_guardrail_names,
+            )
 
             guardrail_data = _check_and_merge_model_level_guardrails(data=captured_data, llm_router=_global_llm_router)
+            stream_gated: Final = stream_gated_guardrail_names(captured_data, captured_user_api_key_dict)
             for cb in litellm.callbacks:
                 if not isinstance(cb, CustomGuardrail):
+                    continue
+                if cb.guardrail_name in stream_gated:
                     continue
                 if not cb.should_run_guardrail(
                     data=guardrail_data,

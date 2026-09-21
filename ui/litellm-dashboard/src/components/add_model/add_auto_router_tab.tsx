@@ -150,7 +150,10 @@ export const getSubmitBlockedReason = (
 const autoRouterSchema = (requiresTeamScope: boolean) =>
   z.object({
     auto_router_name: z.string().min(1, "Auto router name is required"),
-    team_id: requiresTeamScope ? z.string().min(1, "Please select a team to continue") : z.string(),
+    team_id: z
+      .string()
+      .nullable()
+      .refine((teamId) => !requiresTeamScope || Boolean(teamId), "Please select a team to continue"),
     model_access_group: z.array(z.string()).optional(),
   });
 
@@ -158,12 +161,12 @@ type AddAutoRouterFormValues = z.infer<ReturnType<typeof autoRouterSchema>>;
 
 const EMPTY_FORM_VALUES: AddAutoRouterFormValues = {
   auto_router_name: "",
-  team_id: "",
+  team_id: null,
   model_access_group: undefined,
 };
 
-const teamScopePayload = (requiresTeamScope: boolean, teamId: string): { team_id?: string } =>
-  requiresTeamScope ? { team_id: teamId } : {};
+const teamScopePayload = (requiresTeamScope: boolean, teamId: string | null): { team_id?: string } =>
+  requiresTeamScope && teamId ? { team_id: teamId } : {};
 
 const BlockedReasonTooltip: React.FC<{ reason: string | null; children: React.ReactElement }> = ({
   reason,
@@ -458,7 +461,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     const serverVerdict = await validateAutoRouterConfig(
       accessToken,
       complexityRouterConfigPayload as unknown as Record<string, unknown>,
-      requiresTeamScope ? form.getValues("team_id") : undefined,
+      requiresTeamScope ? form.getValues("team_id") ?? undefined : undefined,
     );
     const dryRunError = dryRunRejection(serverVerdict);
     if (dryRunError) {
@@ -630,9 +633,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     "Select the team this auto router belongs to. Only keys for this team will be able to call it.",
                   )}
                 >
-                  {({ id, value, onChange }) => (
-                    <TeamDropdown id={id} value={value} onChange={(next) => onChange(next ?? "")} />
-                  )}
+                  {({ id, value, onChange }) => <TeamDropdown id={id} value={value} onChange={onChange} />}
                 </FormField>
               )}
 
@@ -776,7 +777,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               config={buildComplexityRouterConfig(complexityRouterConfigParams)}
               defaultModel={resolveComplexityDefaultModel(complexityRouterConfig, complexityRouterConfig.default_model)}
               routerName={watchedName}
-              teamId={requiresTeamScope ? watchedTeamId : undefined}
+              teamId={requiresTeamScope ? watchedTeamId ?? undefined : undefined}
             />
           )}
           <DialogFooter>

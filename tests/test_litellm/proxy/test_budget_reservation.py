@@ -2220,6 +2220,15 @@ class _ExpiringRedisCache:
     async def async_delete_cache(self, key: str, *args: object, **kwargs: object) -> None:
         self.store.pop(key, None)
 
+    async def async_increment_pipeline(self, increment_list, **kwargs):
+        results = []
+        for op in increment_list:
+            results.append(await self.async_increment(op["key"], op["increment_value"]))
+        return results
+
+    def get_ttl(self, **kwargs) -> None:
+        return None
+
 
 @pytest.mark.asyncio
 async def test_reconcile_after_redis_counter_expiry_keeps_request_cost_enforced(

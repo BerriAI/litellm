@@ -2,6 +2,7 @@
 ## Helper utilities
 import copy
 import logging
+import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -19,6 +20,13 @@ if TYPE_CHECKING:
     Span = _Span | Any
 else:
     Span = Any
+
+
+_CODEX_CLIENT_PREFIX_RE: Final = re.compile(r"^codex[-_ /]", re.IGNORECASE)
+
+
+def is_codex_user_agent(user_agent: str) -> bool:
+    return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
 
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:

@@ -57,6 +57,7 @@ def test_aws_params_filtered_from_request_body():
         "aws_sts_endpoint": "https://sts.amazonaws.com",
         "aws_bedrock_runtime_endpoint": "https://bedrock-runtime.us-west-2.amazonaws.com",
         "aws_external_id": "external-id-123",
+        "aws_session_tags": [{"Key": "team", "Value": "genai"}],
     }
 
     # Transform the request
@@ -105,6 +106,9 @@ def test_aws_params_filtered_from_request_body():
     assert (
         "aws_external_id" not in result_json
     ), "AWS external ID should not be in request body"
+    assert (
+        "aws_session_tags" not in result_json
+    ), "AWS session tags should not be in request body"
 
     # Also check that the sensitive values themselves are not in the response
     assert (

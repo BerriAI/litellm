@@ -655,6 +655,23 @@ describe("processActivityData", () => {
     expect(result["key1"].label).toBe("test-key-1 (team_id: team1)");
   });
 
+  it("retains the api key metadata so key activity can be searched by user", () => {
+    const metadata = { key_alias: "test-key-1", team_id: "team1", user_id: "user-1", user_email: "user1@example.com" };
+    const withUser: { results: DailyData[] } = {
+      results: [
+        createMockDailyData("2025-01-01", mockDailyActivity.results[0].metrics, {
+          ...EMPTY_BREAKDOWN,
+          api_keys: { key1: createMockKeyMetricWithMetadata(metadata, mockDailyActivity.results[0].metrics) },
+        }),
+      ],
+    };
+
+    const result = processActivityData(withUser, "api_keys", MOCK_TEAMS);
+
+    expect(result["key1"].key_metadata).toEqual(metadata);
+    expect(processActivityData(withUser, "models")["key1"]).toBeUndefined();
+  });
+
   it("should process data for models key with data", () => {
     const dailyActivityWithModels: { results: DailyData[] } = {
       results: [

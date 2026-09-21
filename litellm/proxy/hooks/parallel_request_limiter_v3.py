@@ -6,6 +6,7 @@ This is currently in development and not yet ready for production.
 
 import asyncio
 import binascii
+import logging
 import os
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence, Set
@@ -26,11 +27,13 @@ from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_cache import log_redis_failure
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE, INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
+from litellm.litellm_core_utils.token_counter import offload_token_count
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     ESTIMATED_OUTPUT_TOKENS_FIELD,
@@ -52,6 +55,10 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     canonical_provider_batch_id,
 )
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.router_utils.add_retry_fallback_headers import (
+    ensure_response_additional_headers,
+    response_has_hidden_params,
+)
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject, ResponseAPIUsage
 from litellm.types.utils import (
@@ -1223,7 +1230,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
-                verbose_proxy_logger.warning("Redis Lua script failed for hash tag %s: %s", hash_tag, e)
+                log_redis_failure(
+                    verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
+                )
                 # Fallback to in-memory cache for this group
                 group_cache_values = await self.in_memory_cache_sliding_window(
                     keys=group_keys,
@@ -1470,7 +1479,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                     counts = [max(0, int(value)) for value in raw_counts]
                 except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror, never a 500
-                    verbose_proxy_logger.warning("parallel_count_script failed, using local mirror: %s", e)
+                    log_redis_failure(
+                        verbose_proxy_logger, logging.WARNING, "parallel_count_script failed, using local mirror", e
+                    )
                     counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
             else:
                 counts = await self._read_local_gauge_counts(gauge_keys, parent_otel_span)
@@ -1500,7 +1511,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ],
                 )
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to in-memory enforcement, never a 500
-                verbose_proxy_logger.warning("parallel_acquire_script failed, falling back to in-memory gauge: %s", e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "parallel_acquire_script failed, falling back to in-memory gauge",
+                    e,
+                )
                 async with self._check_and_increment_lock:
                     return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
             if int(raw[0]) == 1:
@@ -1626,7 +1642,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                 return
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the in-memory release, never a 500
-                verbose_proxy_logger.warning("parallel_release_script failed, falling back to in-memory release: %s", e)
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    "parallel_release_script failed, falling back to in-memory release",
+                    e,
+                )
 
         async with self._check_and_increment_lock:
             for counter_key in counter_keys:
@@ -1809,12 +1830,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # state ambiguous. Refund any prior groups so Redis returns
                 # to its pre-call state, then fall back to in-memory for the
                 # whole call (counters there are independent of Redis).
-                verbose_proxy_logger.error(
-                    "atomic_check_and_increment_by_n: Redis Lua execution failed (%s: %s). Refunding %s prior descriptors and falling back to in-memory enforcement — counters will diverge from Redis until window expires (window_size=%ss).",
-                    type(e).__name__,
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.ERROR,
+                    f"atomic_check_and_increment_by_n: Redis Lua execution failed ({type(e).__name__}). Refunding "
+                    f"{len(applied)} prior descriptors and falling back to in-memory enforcement, counters will "
+                    f"diverge from Redis until window expires (window_size={self.window_size}s)",
                     e,
-                    len(applied),
-                    self.window_size,
                 )
                 await self._refund_applied_descriptor_groups(applied)
                 flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
@@ -1861,8 +1883,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         value=-entry["increment"],
                     )
                 except Exception as e:
-                    verbose_proxy_logger.warning(
-                        "Failed to refund %s on cross-descriptor rollback: %s", entry["counter_key"], e
+                    log_redis_failure(
+                        verbose_proxy_logger,
+                        logging.WARNING,
+                        f"Failed to refund {entry['counter_key']} on cross-descriptor rollback",
+                        e,
                     )
 
     def _build_atomic_response(
@@ -3303,7 +3328,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             min_configured_tpm_limit=min_configured_otpm_limit,
             call_type=call_type,
         )
-        raw_estimated_input_tokens: Final = self._estimate_precise_input_tokens(
+        raw_estimated_input_tokens: Final = await offload_token_count(self._estimate_precise_input_tokens)(
             data=data, model=requested_model, call_type=call_type
         )
         estimated_input_tokens: Final = max(raw_estimated_input_tokens, 1)
@@ -3851,7 +3876,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
         except Exception as e:
-            verbose_proxy_logger.warning("TTL preservation failed, falling back to regular pipeline: %s", e)
+            log_redis_failure(
+                verbose_proxy_logger, logging.WARNING, "TTL preservation failed, falling back to regular pipeline", e
+            )
             # Fallback to regular pipeline on error
             await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
                 increment_list=pipeline_operations,
@@ -3917,9 +3944,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     )
                     continue
                 except Exception as e:  # noqa: BLE001  # Redis failures use the plain increment fallback
-                    verbose_proxy_logger.warning(
-                        "Window-guarded token adjustment failed for %s: %s",
-                        operation["key"],
+                    log_redis_failure(
+                        verbose_proxy_logger,
+                        logging.WARNING,
+                        f"Window-guarded token adjustment failed for {operation['key']}",
                         e,
                     )
             if operation["increment_value"] > 0:
@@ -4677,34 +4705,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Post-call hook to update rate limit headers in the response.
         """
         try:
-            from pydantic import BaseModel
-
             stash: Final = get_request_stash()
             litellm_proxy_rate_limit_response: Final = stash.rate_limit_response if stash is not None else None
 
-            if litellm_proxy_rate_limit_response is not None:
-                # Update response headers
-                if hasattr(response, "_hidden_params"):
-                    _hidden_params = getattr(response, "_hidden_params")
-                else:
-                    _hidden_params = None
-
-                if _hidden_params is not None and (
-                    isinstance(_hidden_params, BaseModel) or isinstance(_hidden_params, dict)
-                ):
-                    if isinstance(_hidden_params, BaseModel):
-                        _hidden_params = _hidden_params.model_dump()
-
-                    _additional_headers: Final = self._merge_ratelimit_statuses_into_additional_headers(
-                        additional_headers=_hidden_params.get("additional_headers", {}) or {},
+            if litellm_proxy_rate_limit_response is not None and response_has_hidden_params(response):
+                additional_headers: Final = ensure_response_additional_headers(response)
+                additional_headers.update(
+                    self._merge_ratelimit_statuses_into_additional_headers(
+                        additional_headers={},
                         statuses=litellm_proxy_rate_limit_response["statuses"],
                     )
-
-                    setattr(
-                        response,
-                        "_hidden_params",
-                        {**_hidden_params, "additional_headers": _additional_headers},
-                    )
+                )
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit post-call hook: %s", e)

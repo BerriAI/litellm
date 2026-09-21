@@ -328,7 +328,8 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     onChange(nextValue);
   };
 
-  const handleClassifierModelChange = (model: string) => {
+  const handleClassifierModelChange = (model: string | null) => {
+    if (model === null) return;
     if (model === value.classifier_llm_config?.model) return;
     const { reasoning_effort: _reasoningEffort, ...classifierLlmConfig } = value.classifier_llm_config ?? {
       model: "",

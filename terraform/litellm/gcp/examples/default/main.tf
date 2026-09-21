@@ -53,4 +53,6 @@ module "litellm" {
   backend_extra_env     = var.backend_extra_env
   gateway_extra_secrets = var.gateway_extra_secrets
   backend_extra_secrets = var.backend_extra_secrets
+
+  gateway_metrics_port = var.gateway_metrics_port
 }

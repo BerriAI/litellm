@@ -1,5 +1,7 @@
 import json
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 
@@ -190,3 +192,45 @@ def test_get_error_class_preserves_provider_headers():
     assert isinstance(error, BedrockError)
     assert error.headers == {"x-amzn-RequestId": "req-invoke-500"}
     assert error.response.headers["x-amzn-requestid"] == "req-invoke-500"
+
+
+def test_transform_response_hands_json_mode_to_nova():
+    """The invoke dispatcher forwards its json_mode argument to Nova instead of dropping it."""
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_nova_json",
+                            "name": "json_tool_call",
+                            "input": {"city": "Paris", "temperature": 21},
+                        }
+                    }
+                ],
+            }
+        },
+        "stopReason": "tool_use",
+        "usage": {"inputTokens": 5, "outputTokens": 4, "totalTokens": 9},
+    }
+    raw_response = httpx.Response(200, json=response_json, request=httpx.Request("POST", "https://bedrock"))
+
+    result = AmazonInvokeConfig().transform_response(
+        model="invoke/amazon.nova-lite-v1:0",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "weather"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key=None,
+        json_mode=True,
+    )
+
+    assert result.choices[0].message.tool_calls is None
+    assert json.loads(result.choices[0].message.content) == {"city": "Paris", "temperature": 21}

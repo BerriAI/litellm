@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
@@ -14,6 +14,10 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
+)
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    drop_non_python_regex_patterns,
+    flatten_combinators_and_drop_non_python_regex_patterns,
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
@@ -40,7 +44,7 @@ else:
 
 _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
-_PROVIDERS_WITH_COMBINATOR_REJECTING_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
+_PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 _PROVIDERS_VALIDATING_TOOL_CALL_ITEM_IDS: Final = frozenset({LlmProviders.AZURE, LlmProviders.OPENAI})
 
 
@@ -105,6 +109,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
 
     def supports_native_file_search(self) -> bool:
         return True
+
+    def supports_encrypted_agent_messages(self) -> bool:
+        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE)
 
     @staticmethod
     def _is_gpt_5_model(model: str) -> bool:
@@ -293,7 +300,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             model=model, input=validated_input, tools=tools
         )
         object_schema_tools: Final = self._tools_with_object_parameters(model=model, tools=stripped_tools)
-        sanitized_tools: Final = self._flatten_tool_schema_combinators_for_openai(
+        sanitized_tools: Final = self._sanitized_tool_schemas_for_openai(
             model=model, tools=object_schema_tools, litellm_params=litellm_params
         )
         return self._drop_foreign_tool_call_item_ids(stripped_input), sanitized_tools
@@ -378,35 +385,35 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return item
         return {key: value for key, value in item.items() if key != "id"}  # mutable-ok: outgoing JSON request item
 
-    def _flatten_tool_schema_combinators_for_openai(
+    def _sanitized_tool_schemas_for_openai(
         self,
         model: str,
         tools: Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None,
         litellm_params: GenericLiteLLMParams,
     ) -> Sequence[ALL_RESPONSES_API_TOOL_PARAMS] | None:
-        """Flatten top-level schema combinators only where OpenAI's validator rejects them.
+        """Rewrite tool schemas only where OpenAI's validator rejects them.
 
-        OpenAI-compatible backends reusing this config (and the ChatGPT backend
-        Codex talks to natively) accept them, and so do GPT-5 and later models,
-        which also call tools better with the union intact. Codex wraps MCP tools
-        inside namespace entries, so nested ``tools`` arrays are walked too.
-        Azure OpenAI shares the validator but names deployments arbitrarily, so
-        the router's declared ``model_info.base_model`` wins over the deployment
-        name and an unrecognized name without one is left untouched.
+        Every model family refuses a ``pattern`` Python's ``re`` cannot compile,
+        while top-level schema combinators are flattened only for the families
+        whose validator rejects them: OpenAI-compatible backends reusing this
+        config (and the ChatGPT backend Codex talks to natively) accept them,
+        and so do GPT-5 and later models, which also call tools better with the
+        union intact. Codex wraps MCP tools inside namespace entries, so nested
+        ``tools`` arrays are walked too. Azure OpenAI shares the validator but
+        names deployments arbitrarily, so the router's declared
+        ``model_info.base_model`` wins over the deployment name and an
+        unrecognized name without one keeps its combinators.
         """
-        if tools is None or self.custom_llm_provider not in _PROVIDERS_WITH_COMBINATOR_REJECTING_VALIDATOR:
+        if tools is None or self.custom_llm_provider not in _PROVIDERS_WITH_OPENAI_SCHEMA_VALIDATOR:
             return tools
         gate_model: Final = self._combinator_gate_model(model=model, litellm_params=litellm_params)
-        if not self._rejects_top_level_schema_combinators(gate_model):
-            return tools
-        flattened: Final = [  # mutable-ok: request tools are a JSON list
-            self._flattened_tool_or_passthrough(tool) for tool in tools
-        ]
-        return cast("Sequence[ALL_RESPONSES_API_TOOL_PARAMS]", flattened)  # cast-ok: spread keeps each tool's shape
-
-    @staticmethod
-    def _flattened_tool_or_passthrough(tool: object) -> object:
-        return OpenAIResponsesAPIConfig._flattened_tool_entry(tool) if isinstance(tool, dict) else tool
+        sanitize: Final = (
+            flatten_combinators_and_drop_non_python_regex_patterns
+            if self._rejects_top_level_schema_combinators(gate_model)
+            else drop_non_python_regex_patterns
+        )
+        sanitized: Final = self._sanitized_tools(tools, sanitize)
+        return cast("Sequence[ALL_RESPONSES_API_TOOL_PARAMS]", sanitized)  # cast-ok: spread keeps each tool's shape
 
     @staticmethod
     def _rejects_top_level_schema_combinators(model: str) -> bool:
@@ -421,35 +428,42 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return base_model if isinstance(base_model, str) and base_model else model
 
     @staticmethod
-    def _flattened_tool_entry(
+    def _sanitized_tool_entry(
         entry: Mapping[str, object],
-    ) -> dict[str, object]:  # mutable-ok: request tools are JSON dicts
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            flatten_top_level_schema_combinators,
-        )
-
+        sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
+    ) -> Mapping[str, object]:
         parameters: Final = entry.get("parameters")
         nested_tools: Final = entry.get("tools")
+        sanitized_parameters: Final = sanitize(parameters) if isinstance(parameters, dict) else parameters
+        sanitized_nested_tools: Final = (
+            OpenAIResponsesAPIConfig._sanitized_tools(nested_tools, sanitize)
+            if isinstance(nested_tools, list)
+            else nested_tools
+        )
         parameters_update: Final = (
-            MappingProxyType({"parameters": flatten_top_level_schema_combinators(parameters)})
-            if isinstance(parameters, dict)
+            MappingProxyType({"parameters": sanitized_parameters})
+            if sanitized_parameters is not parameters
             else _NO_TOOL_UPDATE
         )
         tools_update: Final = (
-            MappingProxyType({"tools": OpenAIResponsesAPIConfig._flattened_nested_tools(nested_tools)})
-            if isinstance(nested_tools, list)
+            MappingProxyType({"tools": sanitized_nested_tools})
+            if sanitized_nested_tools is not nested_tools
             else _NO_TOOL_UPDATE
         )
+        if not parameters_update and not tools_update:
+            return entry
         return {**entry, **parameters_update, **tools_update}  # mutable-ok: request tools are JSON dicts
 
     @staticmethod
-    def _flattened_nested_tools(
-        nested_tools: Sequence[object],
-    ) -> list[object]:  # mutable-ok: namespace tools are a JSON list
-        return [  # mutable-ok: namespace tools are a JSON list
-            OpenAIResponsesAPIConfig._flattened_tool_entry(item) if isinstance(item, dict) else item
-            for item in nested_tools
+    def _sanitized_tools(
+        tools: Sequence[object],
+        sanitize: Callable[[Mapping[str, object]], Mapping[str, object]],
+    ) -> Sequence[object]:
+        sanitized: Final = [  # mutable-ok: request tools are a JSON list
+            OpenAIResponsesAPIConfig._sanitized_tool_entry(item, sanitize) if isinstance(item, dict) else item
+            for item in tools
         ]
+        return tools if all(new is old for new, old in zip(sanitized, tools, strict=True)) else sanitized
 
     def _validate_input_param(self, input: str | ResponseInputParam) -> str | ResponseInputParam:
         """
@@ -620,14 +634,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             return event_pydantic_model.model_construct(**parsed_chunk)
 
     @staticmethod
-    def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+    def parse_terminal_event_from_stream_chunks(all_chunks: Sequence[str]) -> ResponsesTerminalEvent | None:
         for chunk_str in reversed(all_chunks):
             for event_model in (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent):
                 try:
-                    return event_model.model_validate_json(chunk_str.removeprefix("data: ")).response
+                    return event_model.model_validate_json(chunk_str.removeprefix("data: "))
                 except ValueError:
                     continue
         return None
+
+    @staticmethod
+    def parse_terminal_response_from_stream_chunks(all_chunks: list[str]) -> ResponsesAPIResponse | None:
+        terminal_event: Final = OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks)
+        return None if terminal_event is None else terminal_event.response
 
     @staticmethod
     def get_event_model_class(event_type: str) -> type[BaseLiteLLMOpenAIResponseObject]:

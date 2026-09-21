@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import get_or_create_metadata_bucket
 from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+from litellm.llms.base_llm.managed_resources.isolation import build_list_page
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -90,6 +91,7 @@ from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,
     FileExpiresAfter,
+    FileListPage,
     OpenAIFileObject,
     OpenAIFilesPurpose,
 )
@@ -97,6 +99,7 @@ from litellm.types.llms.openai import (
 router: Final = APIRouter()
 
 _MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
+_LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
 
 
 class UploadedFileInfo(TypedDict):
@@ -1287,6 +1290,11 @@ async def delete_file(
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         )
+        if is_managed_cloud_storage_uri(file_id) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Raw cloud storage file ids can only be deleted by a proxy admin key. Use the LiteLLM managed file id returned when the file was created.",
+            )
 
         custom_llm_provider: Final = (
             provider
@@ -1446,6 +1454,12 @@ async def delete_file(
             )
 
 
+def _as_file_list_page(response: object) -> object:
+    if not isinstance(response, list):
+        return response
+    return FileListPage(**build_list_page(_LISTED_FILES_ADAPTER.validate_python(response)))
+
+
 @router.get(
     "/{provider}/v1/files",
     dependencies=[Depends(user_api_key_auth)],
@@ -1524,7 +1538,7 @@ async def list_files(
 
         if should_route and credentials is not None:
             # Use model-based routing with credentials from config
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -1550,7 +1564,7 @@ async def list_files(
                 model_id=target_model_names_list[0],
                 operation_context="file list",
             )
-            prepare_data_with_credentials(data=data, credentials=credentials)
+            prepare_data_with_credentials(data=data, credentials=credentials, include_internal_credentials=True)
             response = await litellm.afile_list(
                 custom_llm_provider=credentials["custom_llm_provider"],
                 purpose=purpose,
@@ -1592,6 +1606,7 @@ async def list_files(
                 status_code=500,
                 detail="Either 'provider' or 'target_model_names' must be provided e.g. `?target_model_names=gpt-4o`",
             )
+        response = _as_file_list_page(response)  # rebind-ok: each dispatch branch above binds response
 
         ## POST CALL HOOKS ###
         _response: Final = await proxy_logging_obj.post_call_success_hook(

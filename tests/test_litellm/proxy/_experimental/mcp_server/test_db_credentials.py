@@ -628,6 +628,7 @@ async def test_oauth_round_trip_returns_payload():
         access_token,
         refresh_token="rfr-xyz",
         scopes=["a", "b"],
+        identity_binding_proof="verified-proof",
     )
 
     stored = _stored_value(prisma)
@@ -642,6 +643,7 @@ async def test_oauth_round_trip_returns_payload():
     assert result["access_token"] == access_token
     assert result["refresh_token"] == "rfr-xyz"
     assert result["scopes"] == ["a", "b"]
+    assert result["identity_binding_proof"] == "verified-proof"
 
 
 @pytest.mark.asyncio
@@ -1184,6 +1186,7 @@ class _RefreshResponse:
 
 def _refresh_server(**overrides):
     base = dict(
+        oauth_identity_binding=None,
         token_url="https://idp.example.com/token",
         server_id="srv-1",
         client_id="cid",
@@ -1309,7 +1312,7 @@ async def test_refresh_user_oauth_token_uses_client_secret_basic(monkeypatch):
     sends HTTP Basic and keeps the secret out of the body."""
     import litellm.proxy._experimental.mcp_server.db as db_mod
 
-    server = MagicMock()
+    server = MagicMock(oauth_identity_binding=None)
     server.token_url = "https://idp.example.com/oauth2/token"
     server.server_id = "srv"
     server.client_id = "cid"
@@ -1348,7 +1351,7 @@ async def test_refresh_user_oauth_token_defaults_to_client_secret_post(monkeypat
     the body (client_secret_post) and sends no Authorization header."""
     import litellm.proxy._experimental.mcp_server.db as db_mod
 
-    server = MagicMock()
+    server = MagicMock(oauth_identity_binding=None)
     server.token_url = "https://idp.example.com/oauth2/token"
     server.server_id = "srv"
     server.client_id = "cid"
@@ -1609,3 +1612,95 @@ def test_partial_update_defers_omitted_eligibility_fields_to_the_stored_row():
     request = UpdateMCPServerRequest(server_id="relay-update", per_server_oauth_discovery=True)
 
     assert request.per_server_oauth_discovery is True
+
+
+@pytest.mark.asyncio
+async def test_enforcement_rejects_preexisting_unverified_credential():
+    from litellm.types.mcp_server.mcp_server_manager import MCPOAuthIdentityBinding, MCPServer
+
+    server = MCPServer(
+        server_id="srv-1", name="srv-1", url="https://mcp.example.com", transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
+        oauth_identity_binding=MCPOAuthIdentityBinding(
+            mode="enforce", issuer="https://idp.example.com", audiences=["client"],
+        ),
+    )
+    result = await resolve_valid_user_oauth_token(
+        user_id="alice", server=server,
+        cred={"access_token": "belongs-to-bob", "refresh_token": "bobs-refresh-token"},
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_identity_rejection_returns_reauthentication_without_persisting(monkeypatch):
+    from fastapi import HTTPException
+    from litellm.proxy._experimental.mcp_server import db as module
+
+    validator = AsyncMock(side_effect=HTTPException(status_code=403, detail="oauth_principal_mismatch"))
+    monkeypatch.setattr(module, "enforce_oauth_identity_binding", validator)
+    result, captured = await _run_refresh(
+        monkeypatch, _refresh_server(), {"access_token": "bob", "refresh_token": "rotated"}
+    )
+    assert result is None
+    assert captured["data"]["grant_type"] == "refresh_token"
+    module.store_user_oauth_credential.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_verified_legacy_cache_reads_avoid_database_and_reject_policy_changes(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db as module
+    from litellm.proxy._experimental.mcp_server.oauth2_token_cache import mcp_per_user_token_cache
+    from litellm.proxy._experimental.mcp_server.oauth_identity_binding import current_binding_proof
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        oauth_identity_binding={
+            "mode": "enforce",
+            "issuer": "https://idp.example",
+            "audiences": ["client"],
+            "caller_field": "user_id",
+            "principal_claim": "sub",
+        },
+    )
+    proof = await current_binding_proof(server.oauth_identity_binding, "alice", "srv")
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    read = AsyncMock(return_value=None)
+    monkeypatch.setattr(module, "get_user_oauth_credential", read)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    await mcp_per_user_token_cache.set("alice", "srv", "alice-token", 60, identity_binding_proof=proof)
+    assert await module.resolve_user_oauth_access_token("alice", server) == "alice-token"
+    assert await module.resolve_user_oauth_access_token("alice", server) == "alice-token"
+    read.assert_not_awaited()
+    server.oauth_identity_binding = server.oauth_identity_binding.model_copy(update={"audiences": ["changed"]})
+    assert await module.resolve_user_oauth_access_token("alice", server) is None
+    read.assert_awaited_once()
+    assert await mcp_per_user_token_cache.get_token("alice", "srv") is None
+
+
+@pytest.mark.asyncio
+async def test_unverified_legacy_cache_cannot_bypass_enforcement(monkeypatch):
+    from litellm.caching.caching import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server import db as module
+    from litellm.proxy._experimental.mcp_server.oauth2_token_cache import mcp_per_user_token_cache
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        oauth_identity_binding={"mode": "enforce", "issuer": "https://idp.example", "audiences": ["client"]},
+    )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(module, "get_user_oauth_credential", AsyncMock(return_value={"access_token": "bob"}))
+    await mcp_per_user_token_cache.set("alice", "srv", "bob", 60)
+    assert await module.resolve_user_oauth_access_token("alice", server) is None
+    assert await mcp_per_user_token_cache.get("alice", "srv") is None
