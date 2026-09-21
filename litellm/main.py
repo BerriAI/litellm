@@ -3568,6 +3568,32 @@ def _complete_vercel_ai_gateway(
     return response
 
 
+def _complete_edenai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    api_base: Final = litellm.EdenAIChatConfig.get_api_base(ctx.api_base)
+    api_key: Final = litellm.EdenAIChatConfig.get_api_key(ctx.api_key or litellm.api_key)
+    response: Final = base_llm_http_handler.completion(
+        model=ctx.model,
+        messages=ctx.messages,
+        api_base=api_base,
+        custom_llm_provider="edenai",
+        model_response=ctx.model_response,
+        encoding=_get_encoding(),
+        logging_obj=ctx.logging,
+        optional_params=ctx.optional_params,
+        timeout=ctx.timeout,
+        litellm_params=ctx.litellm_params,
+        shared_session=ctx.shared_session,
+        acompletion=ctx.acompletion,
+        stream=ctx.stream,
+        api_key=api_key,
+        headers=ctx.headers or litellm.headers,
+        client=_dispatch_client_http(ctx),
+        provider_config=ctx.provider_config,
+    )
+    ctx.logging.post_call(input=ctx.messages, api_key=api_key, original_response=response)
+    return response
+
+
 def _complete_vertex_ai_beta(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -5771,6 +5797,8 @@ def completion(
             response = _complete_minimax(_dispatch_ctx)
         elif custom_llm_provider == "hosted_vllm":
             response = _complete_hosted_vllm(_dispatch_ctx)
+        elif custom_llm_provider == "edenai":
+            response = _complete_edenai(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
         elif (
             # A known OpenAI model name only decides the route when nothing else
             # resolved a provider. get_llm_provider() already maps these names to
@@ -6439,6 +6467,22 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
                 headers=headers or {},
+            )
+        elif custom_llm_provider == "edenai":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
             )
         elif (
             custom_llm_provider == "openai_like"
@@ -8142,7 +8186,23 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "openai" or (
+    if custom_llm_provider == "edenai":
+        litellm_params_dict["api_base"] = api_base
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            text_to_speech_provider_config=text_to_speech_provider_config or litellm.EdenAITextToSpeechConfig(),
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
+    elif custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
         and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS
     ):

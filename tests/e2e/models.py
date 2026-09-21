@@ -697,6 +697,26 @@ class EmbedResponse(BaseModel):
     model: str | None = None
 
 
+# ---------- rerank ----------
+
+
+class RerankBody(BaseModel):
+    model: str
+    query: str
+    documents: list[str]
+    top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
+
+
+class RerankItem(BaseModel):
+    index: int | None = None
+    relevance_score: float | None = None
+
+
+class RerankResponse(BaseModel):
+    results: list[RerankItem] = []
+
+
 # ---------- ocr ----------
 
 
