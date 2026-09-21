@@ -99,6 +99,7 @@ class MCPServer(BaseModel):
     configured_authorization_url: str | None = None
     configured_token_url: str | None = None
     configured_registration_url: str | None = None
+    configured_scopes: tuple[str, ...] | None = None
     # How the gateway authenticates to the upstream token endpoint. When
     # "client_secret_basic" the credentials go in an HTTP Basic Authorization
     # header (omitted from the body); None defaults to "client_secret_post".

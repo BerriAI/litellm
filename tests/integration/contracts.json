@@ -244,6 +244,30 @@
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-input_text]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.6-batch-halved_rates_when_map_has_no_batch_keys]": [
+      "quota_management.spend_tracking.batch_costs.fallback_rates"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.6-batch-cached_input_halved]": [
+      "quota_management.spend_tracking.batch_costs.cached_input"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.4-batch-explicit_batch_rates_bill_cached_at_batch_input_rate]": [
+      "quota_management.spend_tracking.batch_costs.explicit_rates"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.6-batch-all_requests_failed_zero_spend]": [
+      "quota_management.spend_tracking.batch_costs.failed_requests"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-single_turn_text_audio_cached]": [
+      "quota_management.spend_tracking.realtime_costs.single_turn"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-two_turns_summed_into_one_row]": [
+      "quota_management.spend_tracking.realtime_costs.multiple_turns"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-priced_from_session_created_model]": [
+      "quota_management.spend_tracking.realtime_costs.session_model"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-session_without_turns_zero_spend]": [
+      "quota_management.spend_tracking.realtime_costs.session_without_turns"
+    ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-cache_read]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
@@ -1623,6 +1647,48 @@
     ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[openai-deployment-pricing-override]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_400_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_401_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-upstream_500_stream_request_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-responses_upstream_500_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[claude-sonnet-5-messages_upstream_500_zero_spend]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-fallback_billed_to_answering_deployment]": [
+      "quota_management.spend_tracking.routing.fallback_billing"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-n_2_choices]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-finish_reason_length]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_usage_in_empty_choices_chunk]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-stream_usage_in_last_delta_chunk]": [
+      "quota_management.spend_tracking.scripted_wire.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-unknown_model_response_model_unknown]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-unknown_model_response_model_known]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-chat_request_to_embedding_entry]": [
+      "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-5.6-client_disconnect_mid_stream]": [
+      "quota_management.spend_tracking.scripted_wire.client_disconnect"
     ],
     "tests/integration/mcp/test_mcp_lifecycle.py::test_health_intersects_route_restricted_key_grants_in_both_management_modes": [
       "other.mcp.health.restricted_keys_intersect_grants_in_both_modes"

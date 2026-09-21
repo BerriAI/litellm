@@ -5,21 +5,26 @@ from __future__ import annotations
 import io
 import json
 import struct
+import time
+import uuid
 import wave
 import zlib
 from hashlib import sha256
+from itertools import islice
 from typing import Final, cast
 
 import httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway
 from integration._support.upstream import delete_scenario, register_scenario
+from integration.cost_calculation.assertions import assert_exact, assert_recount
 from integration.cost_calculation.conftest import (
-    CostBreakdown,
     approx_equal,
-    assert_total_is_sum_of_components,
     poll_cost_row,
     poll_failure_row,
+    poll_rollups,
+    poll_rows,
+    read_rows_now,
     register_scenario_deployment,
 )
 from integration.cost_calculation.cost_tracking_case import (
@@ -107,82 +112,22 @@ def _replace_model(value: JsonValue, model_name: str) -> JsonValue:
     return value
 
 
-def _assert_breakdown(
-    case: CostTrackingTestCase,
-    expected: ExactExpected,
-    breakdown: CostBreakdown,
-    response: httpx.Response,
-) -> None:
-    assert breakdown.input_cost is not None and approx_equal(breakdown.input_cost, expected.input_cost), (
-        f"{case.name}: input_cost {breakdown.input_cost} != expected {expected.input_cost}"
-    )
-    assert breakdown.output_cost is not None and approx_equal(breakdown.output_cost, expected.output_cost), (
-        f"{case.name}: output_cost {breakdown.output_cost} != expected {expected.output_cost}"
-    )
-    for field, header_name, actual_component, expected_component in (
-        (
-            "cache_read_cost",
-            "x-litellm-response-cost-cache-read",
-            breakdown.cache_read_cost,
-            expected.cache_read_cost,
-        ),
-        (
-            "cache_creation_cost",
-            "x-litellm-response-cost-cache-creation",
-            breakdown.cache_creation_cost,
-            expected.cache_creation_cost,
-        ),
-        (
-            "reasoning_cost",
-            "x-litellm-response-cost-reasoning",
-            breakdown.reasoning_cost,
-            expected.reasoning_cost,
-        ),
-        (
-            "tool_usage_cost",
-            "x-litellm-response-cost-tool-usage",
-            breakdown.tool_usage_cost,
-            expected.tool_usage_cost,
-        ),
-    ):
-        if expected_component is None:
-            continue
-        omitted_component_allowed: Final = expected_component == 0.0
-        assert (actual_component is None and omitted_component_allowed) or (
-            actual_component is not None and approx_equal(actual_component, expected_component)
-        ), f"{case.name}: {field} {actual_component} != expected {expected_component}"
-        if expected.cost_header and case.response.content_type == "application/json":
-            header: Final = response.headers.get(header_name)
-            assert (header is None and omitted_component_allowed) or (
-                header is not None and approx_equal(float(header), expected_component)
-            ), f"{case.name}: {header_name} {header} != expected {expected_component}"
-    if expected.cost_header and case.response.content_type == "application/json" and any(
-        component is not None
-        for component in (
-            expected.cache_read_cost,
-            expected.cache_creation_cost,
-            expected.reasoning_cost,
-            expected.tool_usage_cost,
-        )
-    ):
-        input_header: Final = response.headers.get("x-litellm-response-cost-input")
-        output_header: Final = response.headers.get("x-litellm-response-cost-output")
-        expected_input_header: Final = expected.input_cost - (
-            expected.cache_read_cost or 0.0
-        ) - (expected.cache_creation_cost or 0.0)
-        assert input_header is not None and approx_equal(float(input_header), expected_input_header), (
-            f"{case.name}: x-litellm-response-cost-input {input_header} != expected {expected_input_header}"
-        )
-        assert output_header is not None and approx_equal(float(output_header), expected.output_cost), (
-            f"{case.name}: x-litellm-response-cost-output {output_header} != expected {expected.output_cost}"
-        )
-
-
 @pytest.mark.parametrize("case", _CASES)
 def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) -> None:
     marker: Final = sha256(case.name.encode()).hexdigest()[:12]
     with gateway.scenario() as scenario:
-        key: Final = scenario.key()
+        expected: Final = case.expected
+        team_id: Final = scenario.team() if isinstance(expected, ExactExpected) and expected.rollups else None
+        user_id: Final = (
+            scenario.user(team_id=team_id)
+            if team_id is not None
+            else None
+        )
+        key: Final = (
+            scenario.key(team_id=team_id, user_id=user_id)
+            if team_id is not None and user_id is not None
+            else scenario.key()
+        )
         passthrough_provider: Final = case.passthrough_provider
         scenario_id: Final = f"sc-{marker}-{sha256(key.encode()).hexdigest()[:12]}"
         scenario_handle: Final = (
@@ -192,20 +137,58 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         )
         if scenario_handle is not None:
             scenario.cleanups.callback(delete_scenario, scenario_handle)
+        deployment: Final = (
+            register_scenario_deployment(scenario, case, marker, key)
+            if passthrough_provider not in {"gemini", "anthropic"}
+            else None
+        )
+        fallback_deployment: Final = (
+            register_scenario_deployment(
+                scenario,
+                case,
+                marker,
+                key,
+                response=case.fallback_from,
+                marker_suffix="-fb",
+            )
+            if case.fallback_from is not None
+            else None
+        )
         model_name: Final = (
             case.model
             if passthrough_provider in {"gemini", "anthropic"}
-            else register_scenario_deployment(scenario, case, marker, key)
+            else deployment.model_name if deployment is not None else None
         )
+        assert model_name is not None
         request_model: Final = (
             case.model.rsplit("/", 1)[-1]
             if passthrough_provider in {"gemini", "anthropic"}
-            else model_name
+            else fallback_deployment.model_name if fallback_deployment is not None else model_name
         )
-        request_body: Final = JSON_OBJECT.validate_python(
+        base_request_values: Final = (
             _replace_model(case.request, request_model)
             if passthrough_provider is not None
             else {**case.request, "model": model_name}
+        )
+        end_user_id: Final = (
+            f"end-user-{uuid.uuid4()}"
+            if isinstance(expected, ExactExpected) and expected.rollups
+            else None
+        )
+        request_body: Final = JSON_OBJECT.validate_python(
+            {
+                **base_request_values,
+                **(
+                    {"model": fallback_deployment.model_name, "fallbacks": [model_name]}
+                    if fallback_deployment is not None
+                    else {}
+                ),
+                **(
+                    {"user": end_user_id, "cache": {"no-cache": True}}
+                    if end_user_id is not None
+                    else {}
+                ),
+            }
         )
         request_headers: Final = (
             {
@@ -224,12 +207,35 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             if passthrough_provider is not None
             else case.endpoint
         )
-        response: Final = (
-            _multipart_request(gateway, case, model_name, key)
-            if case.upload is not None
-            else gateway.request("POST", request_path, request_body, key=key, headers=request_headers)
+        if case.disconnect_after_frames is not None:
+            with gateway.client.stream(
+                "POST",
+                request_path,
+                json=request_body,
+                headers={"Authorization": f"Bearer {key}", **request_headers},
+            ) as stream_response:
+                frames: Final = tuple(
+                    islice(
+                        (line for line in stream_response.iter_lines() if line.startswith("data:")),
+                        case.disconnect_after_frames,
+                    )
+                )
+                assert len(frames) == case.disconnect_after_frames
+            row: Final = poll_cost_row(key)
+            assert isinstance(expected, RecountExpected)
+            assert row.status == "success", f"{case.name}: disconnect row status was {row.status}"
+            assert_recount(case.name, expected, row)
+            return
+        responses: Final = tuple(
+            (
+                _multipart_request(gateway, case, model_name, key)
+                if case.upload is not None
+                else gateway.request("POST", request_path, request_body, key=key, headers=request_headers)
+            )
+            for _ in range(3 if isinstance(expected, ExactExpected) and expected.rollups else 1)
         )
-        if isinstance(case.expected, FailureExpected):
+        response: Final = responses[0]
+        if isinstance(expected, FailureExpected):
             assert response.status_code == case.expected.failure.status, (
                 f"{case.name}: proxy returned {response.status_code}, expected {case.expected.failure.status}: "
                 f"{response.text[:400]}"
@@ -244,26 +250,19 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
         if case.response.content_type == "text/event-stream":
             _assert_stream_has_no_error(response.text)
-        row: Final = poll_cost_row(key)
-        if isinstance(case.expected, RecountExpected):
-            assert row.prompt_tokens is not None and row.prompt_tokens > 0, (
-                f"{case.name}: recount case counted no input tokens: prompt_tokens={row.prompt_tokens}"
-            )
-            assert row.completion_tokens is not None and row.completion_tokens > 0, (
-                f"{case.name}: recount case counted no output tokens: completion_tokens={row.completion_tokens}"
-            )
-            recount: Final = row.prompt_tokens * case.expected.recount.input_cost_per_token + (
-                row.completion_tokens * case.expected.recount.output_cost_per_token
-            )
-            assert row.spend is not None and approx_equal(row.spend, recount), (
-                f"{case.name}: spend {row.spend} != recount {recount} at map rates"
-            )
-            breakdown: Final = row.breakdown
-            assert breakdown is not None, f"{case.name}: no cost_breakdown persisted"
-            assert_total_is_sum_of_components(row, breakdown, case.name)
+        rows: Final = poll_rows(key, len(responses))
+        if isinstance(expected, RecountExpected):
+            row: Final = rows[0]
+            assert_recount(case.name, expected, row)
             return
-        expected: Final = case.expected
         assert isinstance(expected, ExactExpected)
+        if fallback_deployment is not None:
+            assert deployment is not None
+            time.sleep(3)
+            settled_rows: Final = read_rows_now(key)
+            assert len(settled_rows) == 1
+            assert settled_rows[0].status == "success"
+            assert settled_rows[0].model_id == deployment.identity
         if isinstance(case.response, BinaryResponse):
             header: Final = response.headers.get("x-litellm-response-cost")
             if header is not None:
@@ -280,20 +279,30 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
                 assert approx_equal(float(header), expected.spend), (
                     f"{case.name}: x-litellm-response-cost {header} != expected {expected.spend}"
                 )
-        assert row.spend is not None and approx_equal(row.spend, expected.spend), (
-            f"{case.name}: spend {row.spend} != expected {expected.spend} "
-            f"(breakdown {row.breakdown.model_dump() if row.breakdown is not None else None})"
-        )
-        breakdown: Final = row.breakdown
-        if expected.breakdown_persisted:
-            assert breakdown is not None, f"{case.name}: no cost_breakdown persisted"
-        if breakdown is not None:
-            _assert_breakdown(case, expected, breakdown, response)
-        assert row.prompt_tokens == expected.prompt_tokens, (
-            f"{case.name}: prompt_tokens {row.prompt_tokens} != expected {expected.prompt_tokens}"
-        )
-        assert row.completion_tokens == expected.completion_tokens, (
-            f"{case.name}: completion_tokens {row.completion_tokens} != expected {expected.completion_tokens}"
-        )
-        if breakdown is not None:
-            assert_total_is_sum_of_components(row, breakdown, case.name)
+        for row in rows:
+            assert_exact(case.name, case.response.content_type, expected, row, response)
+        if expected.rollups:
+            assert deployment is not None and team_id is not None and user_id is not None
+            assert end_user_id is not None
+            target_spend: Final = expected.spend * 3
+            target_requests: Final = 3
+            rollups: Final = poll_rollups(
+                key,
+                team_id,
+                user_id,
+                end_user_id,
+                target_spend,
+                target_requests,
+            )
+            assert approx_equal(rollups.key_spend, target_spend)
+            assert approx_equal(rollups.team_spend, target_spend)
+            assert approx_equal(rollups.user_spend, target_spend)
+            assert approx_equal(rollups.end_user_spend, target_spend)
+            assert approx_equal(rollups.daily_user.spend, target_spend)
+            assert approx_equal(rollups.daily_team.spend, target_spend)
+            assert rollups.daily_user.prompt_tokens == expected.prompt_tokens * 3
+            assert rollups.daily_user.completion_tokens == expected.completion_tokens * 3
+            assert rollups.daily_user.api_requests == 3
+            assert rollups.daily_team.prompt_tokens == expected.prompt_tokens * 3
+            assert rollups.daily_team.completion_tokens == expected.completion_tokens * 3
+            assert rollups.daily_team.api_requests == 3
