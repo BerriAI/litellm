@@ -2094,11 +2094,15 @@ async def _user_api_key_auth_builder(
 
         ## Check DB
 
+        from litellm.llms.anthropic.common_utils import oauth_key_as_proxy_credential_hint
+
+        _oauth_key_hint: Final = oauth_key_as_proxy_credential_hint(api_key)
+
         if (
             prisma_client is None
         ):  # if both master key + user key submitted, and user key != master key, and no db connected, raise an error
             raise ProxyException(
-                message="No connected db.",
+                message=f"No connected db.{_oauth_key_hint}",
                 type=ProxyErrorTypes.no_db_connection,
                 code=400,
                 param=None,
@@ -2142,7 +2146,7 @@ async def _user_api_key_auth_builder(
                     )
             except ProxyException as e:
                 if e.code == 401 or e.code == "401":
-                    e.message = f"Authentication Error, Invalid proxy server token passed. Received API Key = {abbreviated_api_key}, Key Hash (Token) ={api_key}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`"
+                    e.message = f"Authentication Error, Invalid proxy server token passed. Received API Key = {abbreviated_api_key}, Key Hash (Token) ={api_key}. Unable to find token in cache or `LiteLLM_VerificationTokenTable`{_oauth_key_hint}"
                 raise e
             # update end-user params on valid token
             # These can change per request - it's important to update them here

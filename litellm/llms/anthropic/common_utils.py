@@ -204,6 +204,19 @@ def is_anthropic_oauth_key(value: str | None) -> bool:
     return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
 
 
+OAUTH_KEY_AS_PROXY_CREDENTIAL_HINT: Final = (
+    " This key has the structure of an Anthropic OAuth token rather than a LiteLLM virtual key. To route Claude"
+    " Code through this proxy on a subscription, send the virtual key in the `x-litellm-api-key` header (e.g."
+    ' `ANTHROPIC_CUSTOM_HEADERS="x-litellm-api-key: Bearer sk-..."`) and leave `Authorization` carrying the'
+    " OAuth token so it can be forwarded to Anthropic."
+)
+
+
+def oauth_key_as_proxy_credential_hint(value: str | None) -> str:
+    """Guidance to append when an Anthropic OAuth token is presented as a LiteLLM credential."""
+    return OAUTH_KEY_AS_PROXY_CREDENTIAL_HINT if is_anthropic_oauth_key(value) else ""
+
+
 def _merge_beta_headers(existing: str | None, new_beta: str) -> str:
     """Merge a new beta value into an existing comma-separated anthropic-beta header."""
     if not existing:
