@@ -47,8 +47,8 @@ def fal_images_to_image_objects(images: object) -> tuple[ImageObject, ...]:
             height: Final = image_map.get("height")
             content_type: Final = image_map.get("content_type")
             provider_specific_fields: Final[FalImageProviderSpecificFields] = {
-                **({"width": width} if isinstance(width, int) else {}),
-                **({"height": height} if isinstance(height, int) else {}),
+                **({"width": width} if isinstance(width, int) and type(width) is int and width > 0 else {}),
+                **({"height": height} if isinstance(height, int) and type(height) is int and height > 0 else {}),
                 **({"content_type": content_type} if isinstance(content_type, str) else {}),
             }
             return ImageObject(
