@@ -33,4 +33,7 @@ pub enum Error {
     #[cfg(feature = "azure")]
     #[error(transparent)]
     Azure(#[from] litellm_secrets_azure::Error),
+    #[cfg(feature = "cyberark")]
+    #[error(transparent)]
+    Cyberark(#[from] litellm_secrets_cyberark::Error),
 }
