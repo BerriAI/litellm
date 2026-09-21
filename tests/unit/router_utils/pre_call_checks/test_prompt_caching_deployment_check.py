@@ -1,12 +1,13 @@
 import asyncio
 import copy
-from typing import cast
+import functools
+from typing import Final, cast
 
 import pytest
 
 import litellm
 from litellm.caching.dual_cache import DualCache
-from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+from litellm.constants import DEFAULT_MINIMUM_PROMPT_CACHE_TOKEN_COUNT, PROMPT_CACHE_LOOKBACK_POSITIONS
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
@@ -19,6 +20,23 @@ from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_p
 
 MODEL_GROUP_ALIAS = "my-claude-group"
 OPUS_4_6_MIN_TOKENS = 4096
+CALLBACK_REGISTRIES: Final = (
+    "input_callback",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "callbacks",
+)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_callback_registries(monkeypatch):
+    """`litellm.logging_callback_manager` keeps one callback per class, so a
+    `PromptCachingDeploymentCheck` or `_SentMessagesCapture` left behind by an
+    earlier test would swallow the next test's success events."""
+    for registry in CALLBACK_REGISTRIES:
+        monkeypatch.setattr(litellm, registry, [])
 
 
 @pytest.fixture
@@ -208,6 +226,58 @@ async def test_async_filter_deployments_narrows_for_group_whose_model_minimum_is
 
 
 AUTO_CACHING_MODEL = "anthropic/claude-sonnet-4-5"
+
+
+@pytest.mark.asyncio
+async def test_replayed_redacted_thinking_block_still_records_and_pins():
+    """
+    A model that returns no reasoning summary (gpt-5.x through the /v1/messages bridge, Anthropic with
+    redacted reasoning) hands the client a `redacted_thinking` block, and the client replays it on every
+    later turn. The token count behind `is_prompt_caching_valid_prompt` raised on that block, the helper
+    swallowed it to False, and the check neither recorded the serving deployment nor pinned it, so the
+    conversation bounced across the group and paid a cache write on each deployment.
+    """
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    model = "openai/gpt-5.6-sol"
+    deployments = _deployments(model, model, model)
+    messages = cast(
+        list[AllMessageValues],
+        [
+            *_messages(word_count=3000),
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:" + "Z" * 400},
+                    {"type": "text", "text": "Draw from the box labeled Mixed."},
+                ],
+            },
+            {"role": "user", "content": "Restate that in one sentence."},
+        ],
+    )
+
+    assert is_prompt_caching_valid_prompt(model=model, messages=messages) is True
+
+    await check.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {
+                "call_type": "anthropic_messages",
+                "model": model,
+                "messages": messages,
+                "model_id": "dep-2",
+            }
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS,
+        healthy_deployments=deployments,
+        messages=messages,
+    )
+
+    assert filtered == [deployments[1]]
 
 
 def _auto_caching_messages() -> list[AllMessageValues]:
@@ -552,3 +622,292 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
         "model_id": "dep-1"
     }
     assert_loop_stayed_free(took, lags)
+
+
+LONG_PROMPT = "word " * 3000
+ONE_PIXEL_PNG = (
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+def _turn(*messages: dict) -> list[AllMessageValues]:
+    return cast(list[AllMessageValues], list(messages))
+
+
+def _text(text: str) -> dict:
+    return {"type": "text", "text": text}
+
+
+def _marked(text: str) -> dict:
+    return {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+
+
+@pytest.mark.asyncio
+async def test_pin_survives_the_breakpoint_moving_to_the_next_turn():
+    """
+    The regression. Claude Code marks only the newest user message each turn, so the last breakpoint
+    moves forward every turn. The key hashed the prefix up to that moving breakpoint, markers
+    included, so no turn after the first ever found the pin the previous turn wrote, and a
+    multi-deployment group re-rolled the deployment mid-session, paying a cache write on a
+    deployment whose provider cache held nothing of the conversation.
+    """
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    turn_one = _turn({"role": "user", "content": [_marked(LONG_PROMPT)]})
+    turn_two = _turn(
+        {"role": "user", "content": [_text(LONG_PROMPT)]},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": [_marked("next")]},
+    )
+
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=turn_one, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=turn_two
+    )
+
+    assert filtered == [deployments[1]]
+
+
+@pytest.mark.asyncio
+async def test_pin_survives_the_marked_message_coming_back_as_string_content():
+    """
+    Claude Code sends the message that carries a breakpoint as a one-block content list and re-sends
+    it next turn as plain string content once the marker has moved on. The provider caches both
+    shapes identically, so the key has to as well, or the walk-back never lands on the turn-one write.
+    """
+    cache = DualCache()
+    check = PromptCachingDeploymentCheck(cache=cache)
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+    turn_one = _turn(
+        {"role": "system", "content": [_marked(LONG_PROMPT)]},
+        {"role": "user", "content": [_marked("hello")]},
+    )
+    turn_two = _turn(
+        {"role": "system", "content": LONG_PROMPT},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+        {"role": "user", "content": [_marked("again")]},
+    )
+
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-1", messages=turn_one, tools=None)
+
+    filtered = await check.async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=turn_two
+    )
+
+    assert filtered == [deployments[0]]
+
+
+@pytest.mark.asyncio
+async def test_lookback_stops_where_the_provider_cache_stops():
+    """
+    Anthropic finds a cached prefix at most PROMPT_CACHE_LOOKBACK_POSITIONS block positions behind a
+    breakpoint, the breakpoint block included. Probing further would pin to a deployment whose cache
+    the provider will not consult, and probing less would drop pins the provider still honors.
+    """
+    prompt_cache = PromptCachingCache(cache=DualCache())
+    await prompt_cache.async_add_model_id(
+        model_id="dep-1", messages=_turn({"role": "user", "content": [_marked("block 0")]}), tools=None
+    )
+
+    def turn_with_blocks_after(count: int) -> list[AllMessageValues]:
+        later = [_text(f"block {index}") for index in range(1, count)] + [_marked(f"block {count}")]
+        return _turn({"role": "user", "content": [_text("block 0"), *later]})
+
+    inside_window = turn_with_blocks_after(PROMPT_CACHE_LOOKBACK_POSITIONS - 1)
+    past_window = turn_with_blocks_after(PROMPT_CACHE_LOOKBACK_POSITIONS)
+
+    assert await prompt_cache.async_get_model_id(messages=inside_window, tools=None) == {"model_id": "dep-1"}
+    assert prompt_cache.get_model_id(messages=inside_window, tools=None) == {"model_id": "dep-1"}
+    assert await prompt_cache.async_get_model_id(messages=past_window, tools=None) is None
+    assert prompt_cache.get_model_id(messages=past_window, tools=None) is None
+
+
+@pytest.mark.asyncio
+async def test_a_run_of_tool_blocks_counts_as_one_lookback_position():
+    """
+    The provider counts consecutive tool_use blocks as one lookback position, and consecutive
+    tool_result blocks as one, in both the Anthropic and the OpenAI message shapes. An agent turn that
+    fans out into many tool calls would otherwise push the previous breakpoint out of the window
+    after a single turn, which is exactly when the conversation is longest and the cache matters most.
+    """
+    prompt_cache = PromptCachingCache(cache=DualCache())
+    await prompt_cache.async_add_model_id(
+        model_id="dep-1", messages=_turn({"role": "user", "content": [_marked("task")]}), tools=None
+    )
+    fan_out = PROMPT_CACHE_LOOKBACK_POSITIONS + 5
+
+    def anthropic_shaped(tool_use_type: str, tool_result_type: str) -> list[AllMessageValues]:
+        return _turn(
+            {"role": "user", "content": [_text("task")]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": tool_use_type, "id": f"call-{index}", "name": "read", "input": {"index": index}}
+                    for index in range(fan_out)
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    *(
+                        {"type": tool_result_type, "tool_use_id": f"call-{index}", "content": "ok"}
+                        for index in range(fan_out)
+                    ),
+                    _marked("continue"),
+                ],
+            },
+        )
+
+    openai_shaped = _turn(
+        {"role": "user", "content": [_text("task")]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": f"call-{index}", "type": "function", "function": {"name": "read", "arguments": "{}"}}
+                for index in range(fan_out)
+            ],
+        },
+        *({"role": "tool", "tool_call_id": f"call-{index}", "content": "ok"} for index in range(fan_out)),
+        {"role": "user", "content": [_marked("continue")]},
+    )
+
+    assert await prompt_cache.async_get_model_id(messages=anthropic_shaped("tool_use", "tool_result"), tools=None) == {
+        "model_id": "dep-1"
+    }
+    assert await prompt_cache.async_get_model_id(messages=openai_shaped, tools=None) == {"model_id": "dep-1"}
+    assert await prompt_cache.async_get_model_id(messages=anthropic_shaped("text", "text"), tools=None) is None
+
+
+@pytest.mark.asyncio
+async def test_an_edited_earlier_block_does_not_inherit_the_pin():
+    """
+    Every key must bind the whole prefix before its block, not the block alone, or a conversation
+    that repeats a pinned block after an edit walks back onto a cache the provider no longer holds.
+    """
+    prompt_cache = PromptCachingCache(cache=DualCache())
+    await prompt_cache.async_add_model_id(
+        model_id="dep-1", messages=_turn({"role": "user", "content": [_marked("original")]}), tools=None
+    )
+    edited = _turn(
+        {"role": "user", "content": [_text("edited")]},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": [_marked("original")]},
+    )
+
+    assert await prompt_cache.async_get_model_id(messages=edited, tools=None) is None
+
+
+@pytest.mark.asyncio
+async def test_swapped_roles_do_not_inherit_the_pin():
+    """The message envelope is part of what the provider caches, so the same blocks under other roles key apart."""
+    prompt_cache = PromptCachingCache(cache=DualCache())
+    pinned = _turn(
+        {"role": "user", "content": [_text("question")]},
+        {"role": "assistant", "content": [_marked("answer")]},
+    )
+    swapped = _turn(
+        {"role": "assistant", "content": [_text("question")]},
+        {"role": "user", "content": [_marked("answer")]},
+    )
+    await prompt_cache.async_add_model_id(model_id="dep-1", messages=pinned, tools=None)
+
+    assert await prompt_cache.async_get_model_id(messages=pinned, tools=None) == {"model_id": "dep-1"}
+    assert await prompt_cache.async_get_model_id(messages=swapped, tools=None) is None
+
+
+@pytest.mark.asyncio
+async def test_raw_bytes_in_a_block_hash_instead_of_failing_the_request():
+    """A block carrying raw bytes must key like any other block rather than raising out of the router filter."""
+    prompt_cache = PromptCachingCache(cache=DualCache())
+    binary_block = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b"\xff\xfe"}}
+    turn = _turn({"role": "user", "content": [binary_block, _marked("describe")]})
+    await prompt_cache.async_add_model_id(model_id="dep-1", messages=turn, tools=None)
+
+    assert await prompt_cache.async_get_model_id(messages=turn, tools=None) == {"model_id": "dep-1"}
+
+
+class _BrokenBatchReadCache(DualCache):
+    async def async_batch_get_cache(self, keys, parent_otel_span=None, local_only=False, **kwargs):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_a_failed_batch_read_pins_nothing():
+    """DualCache answers None rather than a list when the batch read raises, and routing must fall through."""
+    prompt_cache = PromptCachingCache(cache=_BrokenBatchReadCache())
+
+    assert (
+        await prompt_cache.async_get_model_id(messages=_turn({"role": "user", "content": [_marked("x")]}), tools=None)
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_pin_matches_when_the_success_event_truncated_an_image_payload(monkeypatch, local_model_cost_map):
+    """
+    The success event only ever sees the standard logging payload, whose long base64 data URIs are
+    replaced by size placeholders, while routing sees the raw request. Hashing the raw bytes on the
+    read side would key every image-carrying session past its own pin.
+    """
+    capture = _SentMessagesCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    image = {"type": "image_url", "image_url": {"url": ONE_PIXEL_PNG}}
+    turn_one = _turn({"role": "user", "content": [image, _marked(LONG_PROMPT)]})
+
+    await litellm.acompletion(
+        model=AUTO_CACHING_MODEL, messages=copy.deepcopy(turn_one), mock_response="ok", api_key="sk-fake"
+    )
+    logged = await _eventually(lambda: capture.messages)
+    assert logged is not None
+    assert logged != turn_one
+
+    cache = DualCache()
+    await PromptCachingCache(cache=cache).async_add_model_id(model_id="dep-2", messages=logged, tools=None)
+    turn_two = _turn(
+        {"role": "user", "content": [image, _text(LONG_PROMPT)]},
+        {"role": "assistant", "content": "ok"},
+        {"role": "user", "content": [_marked("next")]},
+    )
+    deployments = _deployments(AUTO_CACHING_MODEL, AUTO_CACHING_MODEL)
+
+    filtered = await PromptCachingDeploymentCheck(cache=cache).async_filter_deployments(
+        model=MODEL_GROUP_ALIAS, healthy_deployments=deployments, messages=turn_two
+    )
+
+    assert filtered == [deployments[1]]
+
+
+@pytest.mark.asyncio
+async def test_claude_code_style_session_stays_on_one_deployment_across_turns(local_model_cost_map):
+    """
+    End to end over the router with a client that marks only the newest user message each turn, the
+    way Claude Code does. Every turn has to land on the deployment that served the first one.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": MODEL_GROUP_ALIAS,
+                "litellm_params": {"model": AUTO_CACHING_MODEL, "api_key": "sk-fake"},
+                "model_info": {"id": model_id},
+            }
+            for model_id in (f"dep-{number}" for number in range(1, 7))
+        ],
+        optional_pre_call_checks=["prompt_caching"],
+    )
+    user_turns = [LONG_PROMPT, *(f"follow-up {number}" for number in range(1, 9))]
+    history: list[AllMessageValues] = []
+    served: list[str] = []
+    for text in user_turns:
+        request = cast(list[AllMessageValues], [*history, {"role": "user", "content": [_marked(text)]}])
+        response = await router.acompletion(model=MODEL_GROUP_ALIAS, messages=request, mock_response="ok")
+        served.append(response._hidden_params["model_id"])
+        pin_key = PromptCachingCache.get_prompt_caching_cache_key(request, None)
+        assert await _eventually(functools.partial(router.cache.get_cache, key=pin_key)) is not None
+        history = [*history, {"role": "user", "content": [_text(text)]}, {"role": "assistant", "content": "ok"}]
+
+    assert served == [served[0]] * len(user_turns)

@@ -830,6 +830,24 @@ def test_convert_tools_to_responses_format():
     assert result[0]["name"] == "test"
 
 
+def test_convert_tools_to_responses_format_passes_flat_function_tool_through():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    flat_tool = {
+        "type": "function",
+        "name": "shell",
+        "description": "Run a shell command",
+        "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]},
+    }
+
+    converted = handler._convert_tools_to_responses_format([flat_tool])
+
+    assert converted == [flat_tool]
+
+
 def test_extract_extra_body_params_reasoning_effort_override():
     """Test that reasoning_effort from extra_body overrides top-level reasoning_effort"""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
