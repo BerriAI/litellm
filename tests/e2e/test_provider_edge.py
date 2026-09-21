@@ -906,14 +906,14 @@ class TestReplayLeftover:
         with fake_provider() as provider:
             with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
                 call_edge(edge, "POST", CHAT_PATH, body=chat_body("hi"))
-                call_edge(edge, "GET", "/openai/v1/models")
+                call_edge(edge, "GET", "/openai/v1/files/file-1")
         source = replay_source(root)
         with running_edge(ReplayEdge(source=source), REPLAY_MOUNTS) as edge:
             call_edge(edge, "POST", CHAT_PATH, body=chat_body("hi"))
         error = source.leftover_error(current_test_key())
         assert error is not None
         assert "1 of 2 recorded interactions never consumed" in error
-        assert "e.g. get /openai/v1/models #" in error
+        assert "e.g. get /openai/v1/files/file-1 #" in error
         assert "re-record with E2E_FIXTURE_MODE=record" in error
 
     def test_fully_consumed_recording_leaves_nothing(self, tmp_path: Path) -> None:
@@ -935,6 +935,27 @@ class TestReplayLeftover:
         missing = tmp_path / "missing"
         assert replay_leftover_error(mode_raw="", bundle_dir=missing, test_key="k") is None
         assert replay_leftover_error(mode_raw="record", bundle_dir=missing, test_key="k") is None
+
+    def test_the_proxys_scheduled_model_discovery_is_neither_recorded_nor_owed(self, tmp_path: Path) -> None:
+        """The proxy lists `{api_base}/v1/models` on a wall-clock schedule, so whether
+        that call lands inside a test's window is chance: recording it would make
+        replay owe an interaction the schedule may never make, and a miss on it
+        would fail a replay run over housekeeping the proxy itself ignores."""
+        root = tmp_path / "bundle"
+        with fake_provider() as provider:
+            with running_edge(record_backend(root), {"openai": provider_url(provider)}) as edge:
+                call_edge(edge, "POST", CHAT_PATH, body=chat_body("hi"))
+                recorded = call_edge(edge, "GET", "/openai/v1/models")
+            assert provider.hits == ["POST /v1/chat/completions"]
+        assert recorded.status_code == REPLAY_MISS_STATUS
+        assert [file.name for file in this_tests_files(root)] == ["0000-post-openai-v1-chat-completions.json"]
+        source = replay_source(root)
+        with running_edge(ReplayEdge(source=source), REPLAY_MOUNTS) as edge:
+            call_edge(edge, "POST", CHAT_PATH, body=chat_body("hi"))
+            replayed = call_edge(edge, "GET", "/openai/v1/models")
+        assert replayed.status_code == REPLAY_MISS_STATUS
+        assert b"scheduled model discovery" in replayed.body
+        assert source.leftover_error(current_test_key()) is None
 
 
 class TestConcurrentReplay:
