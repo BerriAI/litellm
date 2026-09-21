@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
 
 import httpx
@@ -6,16 +6,13 @@ import httpx
 import litellm
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
+    LiteLLMLoggingObj,
     TextToSpeechRequestData,
 )
 from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.openai import HttpxBinaryResponseContent
-else:
-    LiteLLMLoggingObj: Final = Any
-    HttpxBinaryResponseContent: Final = Any
 
 
 class OpenrouterTextToSpeechConfig(BaseTextToSpeechConfig):
