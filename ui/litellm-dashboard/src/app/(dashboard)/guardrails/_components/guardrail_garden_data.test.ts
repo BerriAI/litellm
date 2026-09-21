@@ -18,7 +18,7 @@ const EXPECTED_PARTNER_LOGO_FILES: Record<string, string> = {
   prompt_security: "prompt_security.png",
   lasso: "lasso.png",
   pangea: "pangea.png",
-  enkryptai: "enkrypt_ai.avif",
+  enkryptai: "enkrypt_ai.png",
   javelin: "javelin.png",
   pillar: "pillar.jpeg",
   akto: "akto.svg",

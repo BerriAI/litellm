@@ -129,3 +129,5 @@ Before implementing:
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify
 
 Before requesting maintainer review, verify the current PR tip passes required CI and code coverage, meets Greptile confidence of at least 4/5, and has acceptable Veria and Bugbot reviews. Inspect warnings and findings, fix actionable issues, and rerun the affected checks and reviewers after changes. Record evidence for any false positive or unavailable review; never treat a pending or missing bot result as a pass. Do not lower coverage thresholds or lint budgets to satisfy a check
+
+GREEN requires zero UI lint, type-check, and build warnings in the PR verification results, including GitHub frontend check annotations. Run changed UI files through ESLint with `--max-warnings 0`, inspect the full frontend build and check output, and fix warnings in touched files even when they predate the PR or fit within existing budgets. Do not raise budgets, add suppressions, or describe a warning-bearing run as green. Report unrelated repository-wide or runner notices separately with evidence

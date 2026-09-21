@@ -68,6 +68,7 @@ describe("guardrail_info_helpers", () => {
         valid_provider: { ui_friendly_name: "Valid Provider" },
         invalid_provider: { some_field: "no ui_friendly_name" },
         string_value: "not an object",
+        invalid_label: { ui_friendly_name: 42 },
       };
 
       const result = populateGuardrailProviders(apiResponse);
@@ -75,6 +76,7 @@ describe("guardrail_info_helpers", () => {
       expect(result.ValidProvider).toBe("Valid Provider");
       expect(result.InvalidProvider).toBeUndefined();
       expect(result.StringValue).toBeUndefined();
+      expect(result.InvalidLabel).toBeUndefined();
     });
   });
 

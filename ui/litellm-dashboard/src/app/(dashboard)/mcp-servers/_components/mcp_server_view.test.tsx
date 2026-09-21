@@ -1,11 +1,12 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MCPServerView } from "./mcp_server_view";
 import * as networking from "@/components/networking";
 import { setSecureItem } from "@/utils/secureStorage";
 import { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
+import { copyToClipboard } from "@/utils/dataUtils";
 import type { MCPServer } from "@/components/mcp_tools/types";
 
 vi.mock(".", () => ({
@@ -13,9 +14,16 @@ vi.mock(".", () => ({
 }));
 
 vi.mock("./mcp_server_edit", () => ({
-  default: () => <div>edit form</div>,
+  default: ({ onCancel, onSuccess }: { onCancel: () => void; onSuccess: () => void }) => (
+    <div>
+      edit form<button onClick={onCancel}>Cancel edit</button>
+      <button onClick={onSuccess}>Save edit</button>
+    </div>
+  ),
   EDIT_OAUTH_UI_STATE_KEY: "litellm-mcp-oauth-edit-state",
 }));
+
+vi.mock("@/utils/dataUtils", () => ({ copyToClipboard: vi.fn() }));
 
 vi.mock("@/components/networking", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/networking")>()),
@@ -68,6 +76,10 @@ const openUserCredentials = async (props: Record<string, unknown>) => {
 };
 
 describe("MCPServerView", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     sessionStorage.clear();
@@ -221,4 +233,122 @@ describe("MCPServerView", () => {
     expect(row).toHaveTextContent("BYOK API key");
     expect(within(row).queryByRole("button", { name: /^Revoke credential/ })).not.toBeInTheDocument();
   });
+  it("keeps URL reveal state shared across Overview and Settings", async () => {
+    renderView({ url: "https://example.com/mcp/private-token" });
+    const overview = within(screen.getByRole("tabpanel", { name: "Overview" }));
+    expect(overview.getByText("https://example.com/mcp/...")).toBeVisible();
+    await userEvent.click(overview.getByRole("button", { name: "Show full URL" }));
+    expect(overview.getByText("https://example.com/mcp/private-token")).toBeVisible();
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+    expect(settings.getByText("https://example.com/mcp/private-token")).toBeVisible();
+    await userEvent.click(settings.getByRole("button", { name: "Hide full URL" }));
+    expect(settings.getByText("https://example.com/mcp/...")).toBeVisible();
+    await userEvent.click(settings.getByRole("button", { name: "Show full URL" }));
+    expect(settings.getByText("https://example.com/mcp/private-token")).toBeVisible();
+  });
+
+  it("does not offer URL reveal or user credentials to a non-admin", () => {
+    renderView({ url: "https://example.com/mcp/private-token" }, { isProxyAdmin: false, userRole: null });
+    expect(screen.queryByRole("button", { name: "Show full URL" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "User Credentials" })).not.toBeInTheDocument();
+  });
+
+  it("renders absent connection and settings values without an editor", () => {
+    const server = {
+      server_name: null,
+      alias: null,
+      description: null,
+      url: null,
+      transport: null,
+      auth_type: null,
+      mcp_access_groups: [],
+    };
+    renderView(server, { initialTabIndex: 2 });
+    const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+    expect(settings.getAllByText("—")).toHaveLength(6);
+    expect(settings.getByText("SSE")).toBeVisible();
+    expect(settings.getByText("none")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Show full URL" })).not.toBeInTheDocument();
+  });
+
+  it("uses the alias as the header name when no server name is stored", () => {
+    renderView({ server_name: null });
+    expect(screen.getByRole("heading", { name: "demo_alias" })).toBeVisible();
+  });
+
+  it.each([true, false])("copies the displayed name and ID, clipboard success=%s", async (success) => {
+    vi.useFakeTimers();
+    vi.mocked(copyToClipboard).mockResolvedValue(success);
+    renderView({ server_name: null });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy server name" }));
+    });
+    expect(copyToClipboard).toHaveBeenNthCalledWith(1, "demo_alias");
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Copy server id" }));
+    });
+    expect(copyToClipboard).toHaveBeenNthCalledWith(2, "srv-1");
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(screen.getByRole("heading", { name: "demo_alias" })).toBeVisible();
+  });
+
+  it("returns to settings on cancel and to the list on successful save", async () => {
+    const onBack = vi.fn();
+    renderView({}, { initialTabIndex: 2, isEditing: true, onBack });
+    await userEvent.click(screen.getByRole("button", { name: "Cancel edit" }));
+    expect(screen.queryByText("edit form")).not.toBeInTheDocument();
+    expect(onBack).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Edit Settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Save edit" }));
+    expect(onBack).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])("shows OAuth delegation state %s without a pass-through row", (enabled) => {
+    renderView(
+      { auth_type: "oauth2", delegate_auth_to_upstream: enabled, extra_headers: ["Authorization"] },
+      { initialTabIndex: 2 },
+    );
+    const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+    expect(settings.getByText("Delegate Auth to Upstream")).toBeVisible();
+    expect(settings.queryByText("OAuth Pass-through")).not.toBeInTheDocument();
+    if (enabled) expect(settings.getByText("Enabled (PKCE passthrough)")).toBeVisible();
+    else expect(settings.getAllByText("Disabled")).toHaveLength(2);
+  });
+
+  it.each([true, false])("shows pass-through state %s and named access groups", (enabled) => {
+    const server = {
+      extra_headers: ["X-Custom", "aUtHoRiZaTiOn"],
+      oauth_passthrough: enabled,
+      available_on_public_internet: true,
+      mcp_access_groups: ["developers", "operators"],
+    };
+    renderView(server, { initialTabIndex: 2 });
+    const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+    expect(settings.getByText("OAuth Pass-through")).toBeVisible();
+    expect(settings.getByText("X-Custom, aUtHoRiZaTiOn")).toBeVisible();
+    expect(settings.getByText("Public")).toBeVisible();
+    expect(settings.getByText("developers")).toBeVisible();
+    expect(settings.getByText("operators")).toBeVisible();
+    if (enabled) expect(settings.getByText("Enabled")).toBeVisible();
+    else expect(settings.getAllByText("Disabled")).toHaveLength(2);
+  });
+
+  it("omits pass-through settings when there is no authorization header", () => {
+    renderView({ extra_headers: ["X-Custom"], server_name: "demo_alias" }, { initialTabIndex: 2 });
+    expect(screen.queryByText("OAuth Pass-through")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "demo_alias" })).toBeVisible();
+  });
+
+  it.each(["invalid json", JSON.stringify({ serverId: "different-server" })])(
+    "ignores unrelated OAuth return state %s",
+    (stored) => {
+      setSecureItem(EDIT_OAUTH_UI_STATE_KEY, stored);
+      renderView();
+      expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute("aria-selected", "true");
+      expect(screen.queryByText("edit form")).not.toBeInTheDocument();
+    },
+  );
 });
