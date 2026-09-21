@@ -14,6 +14,7 @@ import json
 import os
 import posixpath
 import re
+import sys
 from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -102,6 +103,8 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 )
 from litellm.types.passthrough_endpoints.tinyfish import (
     TINYFISH_AUTHENTICATED_RUN_FIELDS,
+    TINYFISH_PASSTHROUGH_TIMEOUT_SECONDS,
+    TINYFISH_REJECTED_ENVELOPE_FIELDS,
     is_allowed_tinyfish_endpoint,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
@@ -3274,17 +3277,28 @@ async def cursor_proxy_route(
     return received_value
 
 
-async def _tinyfish_blocked_body_fields(request: Request) -> tuple[str, ...]:
+async def _tinyfish_body_field_names(request: Request) -> frozenset[str]:
     raw_body: Final = await request.body()
     if not raw_body:
-        return ()
+        return frozenset()
     try:
         parsed: Final[object] = json.loads(raw_body)  # any-ok: json.loads -> Any
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return ()
+        return frozenset()
     if not isinstance(parsed, dict):
-        return ()
-    return tuple(sorted(key for key in parsed if key in TINYFISH_AUTHENTICATED_RUN_FIELDS))
+        return frozenset()
+    return frozenset(parsed)
+
+
+def _tinyfish_route_timeout() -> float | None:
+    # only raise the 600s default to cover legal 1200s runs; an operator's configured timeout still wins
+    proxy_server: Final = sys.modules.get("litellm.proxy.proxy_server")
+    operator_timeout: Final = (
+        getattr(proxy_server, "general_settings", {}).get("pass_through_request_timeout")
+        if proxy_server is not None
+        else None
+    )
+    return None if operator_timeout is not None else TINYFISH_PASSTHROUGH_TIMEOUT_SECONDS
 
 
 @router.api_route(
@@ -3333,9 +3347,22 @@ async def tinyfish_proxy_route(
             "GET /v1/runs/{id}, POST /v1/runs/{id}/cancel.",
         )
 
-    if request.method == "POST" and encoded_endpoint.startswith("/v1/automation/"):
-        blocked_fields: Final = await _tinyfish_blocked_body_fields(request)
-        if blocked_fields and str_to_bool(os.getenv("TINYFISH_ALLOW_AUTHENTICATED_RUNS")) is not True:
+    if request.method == "POST":
+        body_fields: Final = await _tinyfish_body_field_names(request)
+        envelope_fields: Final = tuple(sorted(body_fields & TINYFISH_REJECTED_ENVELOPE_FIELDS))
+        if envelope_fields:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Request fields [{', '.join(envelope_fields)}] are LiteLLM pass-through envelope controls "
+                "and are not accepted on the TinyFish route. Send the native TinyFish request body; streaming is "
+                "determined by the endpoint.",
+            )
+        blocked_fields: Final = tuple(sorted(body_fields & TINYFISH_AUTHENTICATED_RUN_FIELDS))
+        if (
+            blocked_fields
+            and encoded_endpoint.startswith("/v1/automation/")
+            and str_to_bool(os.getenv("TINYFISH_ALLOW_AUTHENTICATED_RUNS")) is not True
+        ):
             raise HTTPException(
                 status_code=403,
                 detail=f"Request fields [{', '.join(blocked_fields)}] run with the shared TinyFish account's saved "
@@ -3364,6 +3391,7 @@ async def tinyfish_proxy_route(
         target=str(updated_url),
         custom_headers=MappingProxyType({"X-API-Key": tinyfish_api_key}),
         custom_llm_provider="tinyfish",
+        timeout=_tinyfish_route_timeout(),
     )
     received_value: Final = await endpoint_func(
         request,

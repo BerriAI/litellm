@@ -18,6 +18,13 @@ TINYFISH_TERMINAL_RUN_STATUSES: Final = frozenset({"COMPLETED", "FAILED", "CANCE
 # these fields use the shared account's saved logins/vault, so they 403 unless TINYFISH_ALLOW_AUTHENTICATED_RUNS=true
 TINYFISH_AUTHENTICATED_RUN_FIELDS: Final = frozenset({"use_profile", "profile_id", "use_vault", "credential_item_ids"})
 
+# litellm's pass-through envelope controls; rejected here or custom_body smuggles past the field gate and
+# a caller stream flag flips the billing mode away from what the endpoint dictates
+TINYFISH_REJECTED_ENVELOPE_FIELDS: Final = frozenset({"custom_body", "stream", "query_params"})
+
+# covers the upstream 1200s max run duration plus response headroom for blocking runs
+TINYFISH_PASSTHROUGH_TIMEOUT_SECONDS: Final = 1500.0
+
 _RUN_SUBMIT_PATHS: Final = frozenset(
     {("v1", "automation", "run"), ("v1", "automation", "run-async"), ("v1", "automation", "run-sse")}
 )

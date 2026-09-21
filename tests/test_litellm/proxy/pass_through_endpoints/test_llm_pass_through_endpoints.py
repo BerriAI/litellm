@@ -7207,3 +7207,50 @@ class TestTinyFishProxyRoute:
             response = tinyfish_client.get("/tinyfish/v1/runs/run-123")
 
         assert (response.status_code, response.json()["status"]) == (200, "RUNNING")
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"custom_body": {"url": "https://scrapeme.live/shop", "goal": "g", "use_vault": True}},
+            {"url": "https://scrapeme.live/shop", "goal": "g", "stream": True},
+            {"url": "https://scrapeme.live/shop", "goal": "g", "query_params": {"x": "1"}},
+        ],
+    )
+    def test_rejects_passthrough_envelope_controls(self, tinyfish_client: TestClient, body: dict) -> None:
+        """custom_body smuggled vault fields past the 403 gate and a stream flag flipped the
+        billing mode, because the generic passthrough honors both from the caller's body."""
+        with respx.mock as upstream:
+            route = upstream.post("https://agent.tinyfish.ai/v1/automation/run").mock(
+                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 1})
+            )
+            response = tinyfish_client.post("/tinyfish/v1/automation/run", json=body)
+
+        assert response.status_code == 400
+        assert "envelope" in response.json()["detail"]
+        assert not route.called
+
+    def test_rejects_envelope_stream_on_cancel(self, tinyfish_client: TestClient) -> None:
+        with respx.mock as upstream:
+            route = upstream.post("https://agent.tinyfish.ai/v1/runs/run-1/cancel").mock(
+                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "CANCELLED"})
+            )
+            response = tinyfish_client.post("/tinyfish/v1/runs/run-1/cancel", json={"stream": True})
+
+        assert response.status_code == 400
+        assert not route.called
+
+
+class TestTinyFishRouteTimeout:
+    def test_default_covers_upstream_run_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _tinyfish_route_timeout
+
+        monkeypatch.setattr(proxy_server, "general_settings", {}, raising=False)
+        assert _tinyfish_route_timeout() == 1500.0
+
+    def test_operator_configured_timeout_wins(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _tinyfish_route_timeout
+
+        monkeypatch.setattr(proxy_server, "general_settings", {"pass_through_request_timeout": 30}, raising=False)
+        assert _tinyfish_route_timeout() is None
