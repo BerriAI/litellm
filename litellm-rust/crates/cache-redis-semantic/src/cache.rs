@@ -17,7 +17,6 @@ use crate::prompt::prompt_from_context;
 
 const REDIS_TIMEOUT: Duration = Duration::from_secs(5);
 const REDIS_POOL_SIZE: u32 = 16;
-const DEFAULT_INDEX_NAME: &str = "litellm_semantic_cache_index";
 const CACHE_KEY_FIELD: &str = "litellm_cache_key";
 const VECTOR_FIELD: &str = "prompt_vector";
 
