@@ -8,6 +8,7 @@ runs every write through ``encrypt_value_helper`` (nacl SecretBox) and
 keeps a plain-base64 fallback on read so existing rows continue to work.
 """
 
+import asyncio
 import base64
 import json
 from datetime import datetime, timedelta, timezone
@@ -1751,3 +1752,64 @@ async def test_unverified_legacy_cache_cannot_bypass_enforcement(monkeypatch):
     await mcp_per_user_token_cache.set("alice", "srv", "bob", 60)
     assert await module.resolve_user_oauth_access_token("alice", server) is None
     assert await mcp_per_user_token_cache.get("alice", "srv") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, RuntimeError("write failed"), asyncio.CancelledError()])
+async def test_config_promotion_commits_update_or_rolls_back_without_publishing(monkeypatch, failure):
+    from contextlib import asynccontextmanager
+    from copy import deepcopy
+
+    from litellm.proxy._experimental.mcp_server.db import promote_config_mcp_server
+
+    table = _MapTable()
+
+    async def create_many(*, data, skip_duplicates):
+        for row in data:
+            if row["server_id"] not in table.rows:
+                await table.create(data=row)
+        return len(data)
+
+    async def find_unique(*, where):
+        row = table.rows.get(where["server_id"])
+        return _prisma_map_row(row) if row else None
+
+    table.create_many = create_many
+    table.find_unique = find_unique
+    publish = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.common_utils.config_sync_pubsub.publish_config_change_for_object_type", publish)
+
+    @asynccontextmanager
+    async def transaction():
+        snapshot = deepcopy(table.rows)
+        try:
+            yield SimpleNamespace(litellm_mcpservertable=table)
+        except BaseException:
+            table.rows = snapshot
+            raise
+
+    prisma = SimpleNamespace(tx=transaction)
+    initial = NewMCPServerRequest(
+        server_id="promoted", url="https://example.com/mcp", transport="http", description="original",
+        credentials={"auth_value": "original-token"},
+    )
+    change = UpdateMCPServerRequest(server_id="promoted", description="edited")
+    if failure is not None:
+        monkeypatch.setattr(table, "update", AsyncMock(side_effect=failure))
+        with pytest.raises(type(failure)):
+            await promote_config_mcp_server(prisma, initial, change, "admin", change.fields_set())
+        assert table.rows == {}
+        publish.assert_not_awaited()
+        return
+
+    result = await promote_config_mcp_server(prisma, initial, change, "admin", change.fields_set())
+    second = UpdateMCPServerRequest(server_id="promoted", timeout=15)
+    again = await promote_config_mcp_server(prisma, initial, second, "other-admin", second.fields_set())
+
+    assert result.description == again.description == "edited"
+    assert again.timeout == 15
+    assert len(table.rows) == 1
+    assert table.rows["promoted"]["created_by"] == "admin"
+    assert table.rows["promoted"]["updated_by"] == "other-admin"
+    assert decrypt_credentials(json.loads(table.rows["promoted"]["credentials"]))["auth_value"] == "original-token"
+    assert publish.await_count == 2

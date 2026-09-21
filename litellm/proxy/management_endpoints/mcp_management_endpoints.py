@@ -149,6 +149,7 @@ if MCP_AVAILABLE:
         list_user_oauth_credentials,
         mcp_oauth_token_identity,
         merge_user_env_vars,
+        promote_config_mcp_server,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
         store_user_credential,
@@ -2853,6 +2854,14 @@ if MCP_AVAILABLE:
             old_server_record = None
             old_server_record_read_failed = True
 
+        config_server: Final = (
+            global_mcp_server_manager.config_server_for_edit(payload.server_id)
+            if old_server_record is None and not old_server_record_read_failed
+            else None
+        )
+        if config_server is not None:
+            old_server_record = LiteLLM_MCPServerTable.model_validate(config_server.model_dump())
+
         if payload.per_server_oauth_discovery and (old_server_record is not None or old_server_record_read_failed):
             relay_eligible: Final = old_server_record is not None and is_per_server_oauth_discovery_eligible(
                 payload.auth_type if "auth_type" in payload_fields_set else old_server_record.auth_type,
@@ -2895,11 +2904,11 @@ if MCP_AVAILABLE:
                 )
 
         # try to update the mcp server
-        mcp_server_record_updated: Final = await update_mcp_server(
-            prisma_client,
-            payload,
-            touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
-            fields_set=payload_fields_set,
+        touched_by: Final = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+        mcp_server_record_updated: Final = (
+            await promote_config_mcp_server(prisma_client, config_server, payload, touched_by, payload_fields_set)
+            if config_server is not None
+            else await update_mcp_server(prisma_client, payload, touched_by=touched_by, fields_set=payload_fields_set)
         )
 
         if mcp_server_record_updated is None:

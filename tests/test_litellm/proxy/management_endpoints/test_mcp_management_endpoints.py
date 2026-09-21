@@ -7725,3 +7725,106 @@ class TestDeleteMCPGatewaySessions:
         assert result.terminated_sessions == 2
         assert {s.user_id for s in result.sessions} == {"bob"}
         assert "sk-live-bob" not in result.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_first_config_server_edit_persists_same_id_and_untouched_settings(monkeypatch):
+    from contextlib import asynccontextmanager
+
+    from prisma.models import LiteLLM_MCPServerTable as PrismaMCPServer
+
+    from litellm.proxy._experimental.mcp_server.db import decrypt_credentials
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    rows = {}
+
+    def as_row(data):
+        return PrismaMCPServer.model_validate({
+            "mcp_access_groups": [], "allowed_tools": [], "extra_headers": [], "args": [],
+            "allow_all_keys": False, "available_on_public_internet": True, "delegate_auth_to_upstream": False,
+            "oauth_passthrough": False, "per_server_oauth_discovery": False, "is_byok": False,
+            "byok_description": [], **data,
+        })
+
+    async def find_unique(*, where):
+        row = rows.get(where["server_id"])
+        return as_row(row) if row else None
+
+    async def create_many(*, data, skip_duplicates):
+        for row in data:
+            rows.setdefault(row["server_id"], row)
+        return len(data)
+
+    async def update(*, where, data):
+        if where["server_id"] not in rows:
+            return None
+        rows[where["server_id"]].update(data)
+        return as_row(rows[where["server_id"]])
+
+    table = SimpleNamespace(find_unique=find_unique, create_many=create_many, update=update)
+
+    @asynccontextmanager
+    async def transaction():
+        yield SimpleNamespace(litellm_mcpservertable=table)
+
+    prisma = SimpleNamespace(db=SimpleNamespace(litellm_mcpservertable=table), tx=transaction)
+    manager = MCPServerManager()
+    server = generate_mock_mcp_server_config_record(server_id="config-id", name="config_server", auth_type="api_key")
+    server.authentication_token = "unchanged-test-token"
+    server.access_groups = ["engineering"]
+    server.allowed_tools = ["read_wiki"]
+    manager.config_mcp_servers = {server.server_id: server}
+    manager.config_mcp_server_definitions = {server.server_id: {"url": server.url}}
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-key-for-config-edit")
+    monkeypatch.setattr(mgmt_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mgmt_endpoints, "get_prisma_client_or_throw", lambda _: prisma)
+    monkeypatch.setattr(manager, "update_server", AsyncMock())
+    monkeypatch.setattr(manager, "reload_servers_from_database", AsyncMock())
+
+    result = await mgmt_endpoints.edit_mcp_server(
+        payload=UpdateMCPServerRequest(server_id=server.server_id, description="edited in UI"),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert result.server_id == "config-id"
+    assert result.description == "edited in UI"
+    assert result.mcp_access_groups == ["engineering"]
+    assert result.allowed_tools == ["read_wiki"]
+    assert result.url == "https://config-server.example.com/mcp"
+    assert decrypt_credentials(json.loads(rows["config-id"]["credentials"]))["auth_value"] == "unchanged-test-token"
+    assert "unchanged-test-token" not in rows["config-id"]["credentials"]
+    assert server.mcp_info["description"] == "Config server description"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role,unsupported,expected_status", [
+    (LitellmUserRoles.INTERNAL_USER, False, 403),
+    (LitellmUserRoles.PROXY_ADMIN, True, 400),
+])
+async def test_rejected_config_edit_does_not_create_or_reload_server(monkeypatch, role, unsupported, expected_status):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager = MCPServerManager()
+    server = generate_mock_mcp_server_config_record(server_id="rejected-config")
+    server.allow_sampling = unsupported
+    manager.config_mcp_servers = {server.server_id: server}
+    manager.config_mcp_server_definitions = {server.server_id: {"url": server.url}}
+    prisma = MagicMock()
+    promote = AsyncMock()
+    reload_servers = AsyncMock()
+    monkeypatch.setattr(mgmt_endpoints, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(mgmt_endpoints, "get_prisma_client_or_throw", lambda _: prisma)
+    monkeypatch.setattr(mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None))
+    monkeypatch.setattr(mgmt_endpoints, "promote_config_mcp_server", promote)
+    monkeypatch.setattr(manager, "reload_servers_from_database", reload_servers)
+
+    with pytest.raises(HTTPException) as error:
+        await mgmt_endpoints.edit_mcp_server(
+            payload=UpdateMCPServerRequest(server_id=server.server_id, description="rejected edit"),
+            user_api_key_dict=UserAPIKeyAuth(user_id="actor", user_role=role),
+        )
+
+    assert error.value.status_code == expected_status
+    promote.assert_not_awaited()
+    reload_servers.assert_not_awaited()
+    prisma.tx.assert_not_called()

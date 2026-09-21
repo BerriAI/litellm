@@ -878,6 +878,28 @@ async def create_mcp_server(
     return LiteLLM_MCPServerTable.model_validate(new_mcp_server.model_dump())
 
 
+async def promote_config_mcp_server(
+    prisma_client: PrismaClient,
+    initial: NewMCPServerRequest,
+    update: UpdateMCPServerRequest,
+    touched_by: str,
+    fields_set: set[str],
+) -> LiteLLM_MCPServerTable:
+    from litellm.proxy.common_utils.config_sync_pubsub import publish_config_change_for_object_type
+
+    data: Final = _prepare_mcp_server_data(initial)
+    data["created_by"] = touched_by
+    data["updated_by"] = touched_by
+    async with prisma_client.tx() as tx:
+        table: Final[TableActions[prisma_db_models.LiteLLM_MCPServerTable]] = tx.litellm_mcpservertable
+        await table.create_many(data=(data,), skip_duplicates=True)
+        result: Final = await update_mcp_server(prisma_client, update, touched_by, fields_set, table=table)
+        if result is None:
+            raise RuntimeError("MCP server disappeared during its first edit")
+    await publish_config_change_for_object_type("litellm_mcpservertable")
+    return result
+
+
 async def create_draft_mcp_server(
     prisma_client: PrismaClient,
     data: NewMCPServerRequest,
@@ -973,11 +995,15 @@ async def update_mcp_server(
     data: UpdateMCPServerRequest,
     touched_by: str,
     fields_set: set[str] | None = None,
+    *,
+    table: "TableActions[prisma_db_models.LiteLLM_MCPServerTable] | None" = None,
 ) -> LiteLLM_MCPServerTable | None:
     """
     Update a new mcp server record in the db
     """
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
+    server_table: Final = table if table is not None else MCPServerRepository(prisma_client).table
 
     # Use helper to prepare data with proper JSON serialization.
     # exclude_unset=True makes this a true partial update: fields the caller did
@@ -994,7 +1020,9 @@ async def update_mcp_server(
     url_provided: Final = "url" in data_dict and data_dict["url"] is not None
     issuer_provided: Final = "issuer" in data_dict
     if data.auth_type or has_credentials or explicit_te_write or url_provided or issuer_provided:
-        existing = await _db_find_mcp_server_row(prisma_client, data.server_id)
+        existing = await server_table.find_unique(
+            where={"server_id": data.server_id}  # mutable-ok: Prisma query builder requires dict inputs
+        )
 
     auth_type_changed: Final = bool(
         data.auth_type
@@ -1084,7 +1112,7 @@ async def update_mcp_server(
 
         data_dict["credentials"] = Json(None)
 
-    updated_mcp_server: Final = await MCPServerRepository(prisma_client).table.update(
+    updated_mcp_server: Final = await server_table.update(
         where={"server_id": data.server_id},
         data=data_dict,
     )

@@ -7,6 +7,7 @@ This is a Proxy
 """
 
 import asyncio
+import copy
 import datetime
 import hashlib
 import json
@@ -163,6 +164,7 @@ from litellm.proxy._types import (
     MCPEnvVar,
     MCPTransport,
     MCPTransportType,
+    NewMCPServerRequest,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
     is_per_server_oauth_discovery_eligible,
@@ -182,6 +184,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
+    MCPCredentials,
     MCPStdioConfig,
     MCPTokenEndpointAuthMethod,
     has_header,
@@ -1778,6 +1781,16 @@ def _mcp_discovery_cache_ttl() -> float:
     return ttl
 
 
+def _contains_config_secret_reference(value: object) -> bool:
+    if isinstance(value, str):
+        return value.startswith("os.environ/")
+    if isinstance(value, Mapping):
+        return any(_contains_config_secret_reference(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_config_secret_reference(item) for item in value)
+    return False
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
 
@@ -1917,6 +1930,7 @@ class MCPServerManager:
         self.registry: dict[str, MCPServer] = {}
         self._openapi_health_probes: Callable[[str], _OpenAPIHealthProbe] = lru_cache(maxsize=128)(_OpenAPIHealthProbe)
         self.config_mcp_servers: dict[str, MCPServer] = {}
+        self.config_mcp_server_definitions: Mapping[str, object] = MappingProxyType({})
         """
         eg.
         [
@@ -2359,6 +2373,8 @@ class MCPServerManager:
         self,
         mcp_servers_config: dict[str, MCPServerConfig],
         mcp_aliases: dict[str, str] | None = None,
+        *,
+        raw_mcp_servers_config: Mapping[str, object] | None = None,
     ):
         """
         Load the MCP Servers from the config
@@ -2643,6 +2659,16 @@ class MCPServerManager:
             _warn_config_id_jag_server_outruns_sso(new_server)
             self._invalidate_discovery_lists(server_id)
             self.config_mcp_servers[server_id] = new_server
+            self.config_mcp_server_definitions = MappingProxyType(
+                {
+                    **self.config_mcp_server_definitions,
+                    server_id: copy.deepcopy(
+                        raw_mcp_servers_config.get(server_name)
+                        if raw_mcp_servers_config is not None
+                        else raw_server_config
+                    ),
+                }
+            )
             self._set_oauth_discovery_deferred(
                 server_id,
                 _requires_oauth_discovery(server_url, use_issuer_anchor, new_server),
@@ -7083,6 +7109,73 @@ class MCPServerManager:
         if env_vars is None:
             return None
         return [MCPEnvVar.model_validate(env_var) for env_var in env_vars]
+
+    def config_server_for_edit(self, server_id: str) -> NewMCPServerRequest | None:
+        server: Final = self.config_mcp_servers.get(server_id)
+        if server is None:
+            return None
+        raw: Final = self.config_mcp_server_definitions.get(server_id)
+        unsupported: Final = tuple(
+            field
+            for field in (
+                "disallowed_tools",
+                "allowed_params",
+                "allow_sampling",
+                "allow_elicitation",
+                "token_validation",
+                "token_storage_ttl_seconds",
+                "oauth_identity_binding",
+            )
+            if getattr(server, field)
+        )
+        if unsupported or not isinstance(raw, Mapping) or _contains_config_secret_reference(raw):
+            raise HTTPException(
+                status_code=400,
+                detail={  # mutable-ok: FastAPI JSON error responses require a dict
+                    "error": "This config-defined MCP server cannot be edited without losing config-only settings "
+                    "or secret references. Update its source configuration instead."
+                },
+            )
+        record: Final = self._build_mcp_server_table(server)
+        values: Final = server.model_dump()
+        credentials: Final = MappingProxyType(
+            {key: values[key] for key in MCPCredentials.__annotations__ if key in values and values[key] is not None}
+        )
+        if raw.get("server_id") is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={  # mutable-ok: FastAPI JSON error responses require a dict
+                    "error": "Config-defined MCP servers with a pinned server_id must be edited in their source "
+                    "configuration. A database copy would conflict with config reload validation."
+                },
+            )
+        try:
+            return NewMCPServerRequest.model_validate(
+                {  # mutable-ok: request validators require isinstance(values, dict)
+                    **record.model_dump(include=frozenset(NewMCPServerRequest.model_fields)),
+                    "issuer": raw.get("issuer"),
+                    "authorization_url": raw.get("authorization_url"),
+                    "token_url": raw.get("token_url"),
+                    "registration_url": raw.get("registration_url"),
+                    "credentials": MappingProxyType(
+                        {
+                            **credentials,
+                            "auth_value": server.authentication_token,
+                            "scopes": self._extract_scopes(
+                                TypeAdapter(str | list[str] | None).validate_python(raw.get("scopes"))
+                            ),
+                        }
+                    ),
+                }
+            )
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail={  # mutable-ok: FastAPI JSON error responses require a dict
+                    "error": "This MCP server configuration cannot be preserved by a database edit. "
+                    "Update its source configuration instead."
+                },
+            ) from None
 
     def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
         return LiteLLM_MCPServerTable(

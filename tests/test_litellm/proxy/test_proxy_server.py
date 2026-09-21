@@ -15069,3 +15069,19 @@ async def test_initialize_jwt_auth_leaves_the_declared_jwtauth_mapping_unresolve
 
     assert declared["team_id_jwt_field"] == "os.environ/JWT_TEAM_FIELD"
     assert proxy_server_module.jwt_handler.litellm_jwtauth.team_id_jwt_field == "resolved-team-field"
+
+
+@pytest.mark.asyncio
+async def test_get_config_keeps_mcp_secret_references_for_edit_preflight(tmp_path, monkeypatch):
+    from litellm.proxy import proxy_server
+
+    config_file = tmp_path / "mcp.yaml"
+    config_file.write_text("mcp_servers:\n  secret_server:\n    url: https://example.com/mcp\n    authentication_token: os.environ/PROOF_MCP_SECRET\n")
+    monkeypatch.setenv("PROOF_MCP_SECRET", "resolved-secret")
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    config = proxy_server.ProxyConfig()
+
+    resolved = await config.get_config(str(config_file))
+
+    assert resolved["mcp_servers"]["secret_server"]["authentication_token"] == "resolved-secret"
+    assert config.raw_mcp_servers["secret_server"]["authentication_token"] == "os.environ/PROOF_MCP_SECRET"
