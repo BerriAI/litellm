@@ -639,12 +639,12 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
             return_value=False,
         ) as mock_has_token,
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
         ),
         patch.object(
@@ -727,12 +727,12 @@ async def test_admitted_subject_missing_stored_token_challenged_with_resource_me
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
             return_value=False,
         ) as mock_has_token,
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
         ),
         patch.object(
@@ -833,11 +833,11 @@ async def test_client_credentials_server_is_not_preemptively_challenged(m2m_fiel
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
         ) as mock_has_token,
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=m2m_server,
         ),
         patch.object(session_manager_stateless, "handle_request", new_callable=AsyncMock) as mock_handle_request,
@@ -929,16 +929,16 @@ async def test_handle_streamable_http_mcp_delegated_server_surfaces_upstream_cha
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            "litellm.proxy._experimental.mcp_server.operations._get_user_oauth_extra_headers_from_db",
             new_callable=AsyncMock,
             return_value=None,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=delegated_server,
         ),
         patch(  # test-quality-ok: registry is empty in unit tests; key owns the delegated server
-            "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+            "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
             new_callable=AsyncMock,
             return_value=[delegated_server],
         ),
@@ -1022,12 +1022,12 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
             return_value=True,
         ) as mock_has_token,
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=oauth_server,
         ),
         patch.object(
@@ -1126,11 +1126,11 @@ async def test_handle_streamable_http_mcp_delegated_server_without_token_returns
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.has_user_oauth_token",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.has_user_oauth_token",
             new_callable=AsyncMock,
         ) as mock_has_token,
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=delegated_server,
         ),
         patch.object(
@@ -1218,7 +1218,7 @@ async def test_handle_streamable_http_mcp_token_exchange_without_subject_returns
             return_value=False,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=obo_server,
         ),
         patch.object(
@@ -1317,7 +1317,7 @@ async def test_handle_streamable_http_mcp_oauth_delegate_without_token_returns_g
             True,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=od_server,
         ),
         patch.object(
@@ -1391,7 +1391,7 @@ async def test_handle_streamable_http_mcp_oauth_delegate_with_forwarded_token_sk
             new_callable=AsyncMock,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=od_server,
         ),
         patch.object(
@@ -1453,7 +1453,7 @@ async def _run_passthrough_connect(
             new_callable=AsyncMock,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=server,
         ),
         patch.object(session_manager_stateless, "handle_request", new_callable=AsyncMock) as mock_handle_request,
@@ -1574,7 +1574,7 @@ async def test_handle_streamable_http_mcp_true_passthrough_without_token_surface
             return_value=probe_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=tp_server,
         ),
         patch.object(
@@ -1642,7 +1642,7 @@ async def test_handle_streamable_http_mcp_true_passthrough_dcr_bridge_challenges
             return_value=probe_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=bridge_server,
         ),
         patch.object(
@@ -1720,7 +1720,7 @@ async def test_handle_streamable_http_mcp_true_passthrough_with_token_skips_prob
             return_value=probe_client,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager.get_mcp_server_by_name",
+            "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager.get_mcp_server_by_name",
             return_value=tp_server,
         ),
         patch.object(

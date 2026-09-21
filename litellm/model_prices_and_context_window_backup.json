@@ -22889,6 +22889,45 @@
             "video"
         ]
     },
+    "fal_ai/minimax/h3/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.06,
+        "output_cost_per_second_2k": 0.13,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://fal.ai/models/minimax/h3/text-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/minimax/h3/reference-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_second": 0.13,
+        "output_cost_per_second_480p": 0.05,
+        "output_cost_per_second_768p": 0.06,
+        "output_cost_per_second_2k": 0.13,
+        "output_cost_per_second_4k": 0.16,
+        "source": "https://fal.ai/models/minimax/h3/reference-to-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
     "fal_ai/bytedance/seedance-2.0/text-to-video": {
         "litellm_provider": "fal_ai",
         "mode": "video_generation",
@@ -24917,10 +24956,11 @@
     "fal_ai/fal-ai/flux/dev": {
         "litellm_provider": "fal_ai",
         "metadata": {
-            "notes": "fal bills FLUX.1 [dev] at $0.025 per megapixel, rounding each image up to the nearest megapixel. Every named fal image_size (including the landscape_4_3 default) rounds up to 1 megapixel, so this flat per-image price is exact for them"
+            "notes": "fal bills FLUX.1 [dev] at $0.025 per megapixel, rounding each image up to the nearest megapixel. The per-pixel rate is used when Fal reports the output size, and the flat per-image price is the fallback when dimensions are unavailable"
         },
         "mode": "image_generation",
         "output_cost_per_image": 0.025,
+        "output_cost_per_pixel": 2.384185791015625e-08,
         "source": "https://fal.ai/models/fal-ai/flux/dev",
         "supported_endpoints": [
             "/v1/images/generations"
@@ -38174,39 +38214,50 @@
     "minimax.minimax-m2": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_converse",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
         "supports_system_messages": true,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "minimax.minimax-m2.1": {
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 196000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "minimax.minimax-m2.5": {
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock_converse",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_input_tokens": 196000,
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
         "mode": "chat",
         "supports_function_calling": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "minimax/speech-02-hd": {
         "input_cost_per_character": 0.0001,
@@ -39665,14 +39716,19 @@
     "moonshot.kimi-k2-thinking": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
-        "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_input_tokens": 256000,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
-        "supports_native_structured_output": true
+        "supports_native_structured_output": true,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "moonshotai.kimi-k2.5": {
         "input_cost_per_token": 6e-07,
@@ -42452,21 +42508,31 @@
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
         "mode": "chat",
         "output_cost_per_token": 6e-07,
-        "supports_system_messages": true
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_vision": false
     },
     "openai.gpt-oss-safeguard-20b": {
         "input_cost_per_token": 7e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
-        "max_output_tokens": 8192,
-        "max_tokens": 8192,
+        "max_output_tokens": 16000,
+        "max_tokens": 16000,
         "mode": "chat",
         "output_cost_per_token": 2e-07,
-        "supports_system_messages": true
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_vision": false
     },
     "openrouter/anthropic/claude-3-haiku": {
         "cache_creation_input_token_cost": 3e-07,
@@ -42971,21 +43037,21 @@
         "supports_web_search": false
     },
     "openrouter/deepseek/deepseek-v4-pro": {
-        "input_cost_per_token": 9.22722e-07,
+        "input_cost_per_token": 8.92272e-07,
         "input_cost_per_token_cache_hit": 4.4e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.845444e-06,
+        "output_cost_per_token": 1.784544e-06,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "cache_read_input_token_cost": 7.68935e-08,
+        "cache_read_input_token_cost": 7.4356e-08,
         "supports_audio_input": false,
         "supports_pdf_input": false,
         "supports_vision": false,
@@ -54441,16 +54507,19 @@
     "zai.glm-4.7": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
-        "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
+        "max_input_tokens": 203000,
+        "max_output_tokens": 4000,
+        "max_tokens": 4000,
         "mode": "chat",
         "output_cost_per_token": 2.2e-06,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "zai.glm-5": {
         "input_cost_per_token": 1e-06,
@@ -54465,21 +54534,27 @@
         "supports_native_structured_output": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "zai.glm-4.7-flash": {
         "input_cost_per_token": 7e-08,
         "litellm_provider": "bedrock_converse",
-        "max_input_tokens": 200000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
+        "max_input_tokens": 203000,
+        "max_output_tokens": 4000,
+        "max_tokens": 4000,
         "mode": "chat",
         "output_cost_per_token": 4e-07,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "zai/glm-5": {
         "cache_creation_input_token_cost": 0,
@@ -60557,6 +60632,34 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "bedrock_mantle/anthropic.claude-haiku-4-5": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 2e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "bedrock_mantle",
+        "supports_tool_search": true,
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "source": "https://aws.amazon.com/about-aws/whats-new/2025/10/claude-4-5-haiku-anthropic-amazon-bedrock",
+        "supports_assistant_prefill": true,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_native_structured_output": true,
+        "supports_parallel_tool_use_config": true,
+        "prompt_cache_min_tokens": 4096,
+        "input_cost_per_token_batches": 5e-07,
+        "output_cost_per_token_batches": 2.5e-06
     },
     "us.xai.grok-4.6": {
         "input_cost_per_token": 2.2e-06,
@@ -68109,13 +68212,13 @@
         "supports_web_search": false
     },
     "openrouter/z-ai/glm-5.3-flash": {
-        "input_cost_per_token": 7.5e-08,
-        "output_cost_per_token": 2.5e-07,
-        "cache_read_input_token_cost": 2e-08,
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 5e-07,
+        "cache_read_input_token_cost": 5e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 102400,
-        "max_tokens": 102400,
+        "max_output_tokens": 943718,
+        "max_tokens": 943718,
         "mode": "chat",
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
@@ -68269,7 +68372,7 @@
     },
     "openrouter/deepseek/deepseek-v4-flash-0731": {
         "input_cost_per_token": 4e-08,
-        "output_cost_per_token": 3.2e-07,
+        "output_cost_per_token": 6.4e-07,
         "cache_read_input_token_cost": 1.6e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1310720,
@@ -72924,7 +73027,7 @@
         "max_output_tokens": 943718,
         "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 3.2e-07,
+        "output_cost_per_token": 6.4e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -73149,14 +73252,14 @@
         "supports_web_search": true
     },
     "openrouter/~z-ai/glm-flash-latest": {
-        "cache_read_input_token_cost": 2e-08,
-        "input_cost_per_token": 7.5e-08,
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1.5e-07,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1310720,
-        "max_output_tokens": 102400,
-        "max_tokens": 102400,
+        "max_output_tokens": 943718,
+        "max_tokens": 943718,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-07,
+        "output_cost_per_token": 5e-07,
         "source": "https://openrouter.ai/api/v1/models",
         "supports_audio_input": false,
         "supports_function_calling": true,
@@ -76803,7 +76906,7 @@
         "max_tokens": 131072,
         "mode": "chat",
         "output_cost_per_token": 1.65e-05,
-        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-moonshot-ai-kimi-k3.html",
+        "source": "https://aws.amazon.com/bedrock/pricing/",
         "supports_audio_input": false,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -76812,5 +76915,65 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "openrouter/xiaomi/mimo-v2.6-flash": {
+        "cache_read_input_token_cost": 2.8e-09,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false
+    },
+    "openrouter/xiaomi/mimo-v2.6-pro": {
+        "cache_read_input_token_cost": 3.6e-09,
+        "input_cost_per_token": 4.35e-07,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 8.7e-07,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false
+    },
+    "openrouter/xiaomi/mimo-v2.6-pro-ultraspeed": {
+        "cache_read_input_token_cost": 3.6e-08,
+        "input_cost_per_token": 4.35e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 8.7e-06,
+        "source": "https://openrouter.ai/api/v1/models",
+        "supports_audio_input": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_web_search": false
     }
 }

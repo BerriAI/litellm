@@ -3534,6 +3534,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cost_optimization/prompt_caching/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Prompt Caching Requests */
+        get: operations["get_prompt_caching_requests_cost_optimization_prompt_caching_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials": {
         parameters: {
             query?: never;
@@ -5294,6 +5311,27 @@ export interface paths {
          *     Returns a structured object with values and descriptions for UI display.
          */
         get: operations["get_internal_user_settings_get_internal_user_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get/latest_release_info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Latest Release Info
+         * @description Latest stable LiteLLM GitHub release with its PR count split into new features, bug fixes and other updates.
+         *     Returns null when GitHub can't be reached so the dashboard upgrade banner simply doesn't render.
+         */
+        get: operations["latest_release_info_get_latest_release_info_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -29814,6 +29852,19 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** LatestReleaseInfo */
+        LatestReleaseInfo: {
+            /** Bug Fixes */
+            bug_fixes: number;
+            /** New Features */
+            new_features: number;
+            /** Other Updates */
+            other_updates: number;
+            /** Release Url */
+            release_url: string;
+            /** Version */
+            version: string;
+        };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
             /** Access Groups */
@@ -31144,12 +31195,16 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 2K */
+            output_cost_per_second_2k?: number | null;
             /** Output Cost Per Second 480P */
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
             /** Output Cost Per Second 720P */
             output_cost_per_second_720p?: number | null;
+            /** Output Cost Per Second 768P */
+            output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -31196,8 +31251,12 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** S3 Access Key Id */
+            s3_access_key_id?: string | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
+            /** S3 Bucket Owner */
+            s3_bucket_owner?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
             /** S3 Endpoint Url */
@@ -31206,6 +31265,8 @@ export interface components {
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
+            /** S3 Secret Access Key */
+            s3_secret_access_key?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
@@ -35229,6 +35290,12 @@ export interface components {
          */
         PolicyAttachmentCreateRequest: {
             /**
+             * Default
+             * @description Apply this attachment only when no non-default attachment matches the request.
+             * @default false
+             */
+            default: boolean;
+            /**
              * Keys
              * @description Key aliases or patterns this attachment applies to.
              */
@@ -35284,6 +35351,12 @@ export interface components {
              * @description Who created the attachment.
              */
             created_by?: string | null;
+            /**
+             * Default
+             * @description Apply this attachment only when no non-default attachment matches the request.
+             * @default false
+             */
+            default: boolean;
             /**
              * Definition Location
              * @description Where this attachment is defined: 'db' (database) or 'config' (config.yaml).
@@ -35883,6 +35956,48 @@ export interface components {
             /** Prompt Id */
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
+        };
+        /** PromptCachingRequest */
+        PromptCachingRequest: {
+            /** Cache Creation Tokens */
+            cache_creation_tokens: number;
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Gateway Injected */
+            gateway_injected: boolean;
+            /** Model */
+            model: string;
+            /** Net Savings */
+            net_savings: number | null;
+            /** Request Id */
+            request_id: string;
+            /** Spend */
+            spend: number;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+        };
+        /** PromptCachingRequestCursor */
+        PromptCachingRequestCursor: {
+            /** Request Id */
+            request_id: string;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+        };
+        /** PromptCachingRequestsResponse */
+        PromptCachingRequestsResponse: {
+            /** Has More */
+            has_more: boolean;
+            next_cursor: components["schemas"]["PromptCachingRequestCursor"] | null;
+            /** Page Size */
+            page_size: number;
+            /** Requests */
+            requests: components["schemas"]["PromptCachingRequest"][];
         };
         /** PromptInfo */
         PromptInfo: {
@@ -41884,12 +41999,16 @@ export interface components {
             output_cost_per_second?: number | null;
             /** Output Cost Per Second 1080P */
             output_cost_per_second_1080p?: number | null;
+            /** Output Cost Per Second 2K */
+            output_cost_per_second_2k?: number | null;
             /** Output Cost Per Second 480P */
             output_cost_per_second_480p?: number | null;
             /** Output Cost Per Second 4K */
             output_cost_per_second_4k?: number | null;
             /** Output Cost Per Second 720P */
             output_cost_per_second_720p?: number | null;
+            /** Output Cost Per Second 768P */
+            output_cost_per_second_768p?: number | null;
             /** Output Cost Per Token */
             output_cost_per_token?: number | null;
             /** Output Cost Per Token Above 128K Tokens */
@@ -41936,8 +42055,12 @@ export interface components {
             regional_processing_uplift_multiplier_us?: number | null;
             /** Rpm */
             rpm?: number | null;
+            /** S3 Access Key Id */
+            s3_access_key_id?: string | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
+            /** S3 Bucket Owner */
+            s3_bucket_owner?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
             /** S3 Endpoint Url */
@@ -41946,6 +42069,8 @@ export interface components {
             s3_output_bucket_name?: string | null;
             /** S3 Region Name */
             s3_region_name?: string | null;
+            /** S3 Secret Access Key */
+            s3_secret_access_key?: string | null;
             /** Search Context Cost Per Query */
             search_context_cost_per_query?: {
                 [key: string]: unknown;
@@ -47339,6 +47464,42 @@ export interface operations {
             };
         };
     };
+    get_prompt_caching_requests_cost_optimization_prompt_caching_requests_get: {
+        parameters: {
+            query: {
+                start_date: string;
+                end_date: string;
+                page_size?: number;
+                filter?: "all" | "injected" | "hits";
+                cursor_start_time?: string | null;
+                cursor_request_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptCachingRequestsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_credentials_credentials_get: {
         parameters: {
             query?: never;
@@ -49797,6 +49958,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InternalUserSettingsResponse"];
+                };
+            };
+        };
+    };
+    latest_release_info_get_latest_release_info_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LatestReleaseInfo"] | null;
                 };
             };
         };
