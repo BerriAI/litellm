@@ -24267,6 +24267,11 @@ export interface components {
              */
             router_name: string;
             /**
+             * Saved Model Id
+             * @description Test this saved deployment's server-side configuration instead of the supplied config and default model
+             */
+            saved_model_id?: string | null;
+            /**
              * System
              * @description The top-level system prompt an Anthropic /v1/messages body carries beside its messages
              */
@@ -36609,24 +36614,24 @@ export interface components {
             classification_prompt?: string | null;
             /**
              * Classifier Context Budget Chars
-             * @description Maximum characters of prior-turn text quoted to the LLM classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and, except for Claude Code requests, the extracted system-role text sit outside this budget and are sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Only applies when classifier_type is 'llm'.
+             * @description Maximum characters of prior-turn text quoted to the LLM or JEV classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and, except for Claude Code requests, the extracted system-role text sit outside this budget and are sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Applies to LLM and JEV classification.
              * @default 8000
              */
             classifier_context_budget_chars: number;
             /**
              * Classifier Context Include Assistant Turns
-             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
+             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Applies to LLM and JEV classification.
              * @default false
              */
             classifier_context_include_assistant_turns: boolean;
             /**
              * Classifier Context Per Turn Chars
-             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Only applies when classifier_type is 'llm'.
+             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Applies to LLM and JEV classification.
              */
             classifier_context_per_turn_chars?: number | null;
             /**
              * Classifier Context Window Size
-             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call carries the current user ask and, except for Claude Code requests, the extracted system-role text in full. Claude Code system text is omitted to avoid classifying harness instructions; the routed completion still receives it. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
+             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM or JEV classifier input, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model (the configured TypeSafe endpoint for JEV), which may be a different deployment or provider than the routed completion model; that call carries the current user ask and, except for Claude Code requests, the extracted system-role text in full. Claude Code system text is omitted to avoid classifying harness instructions; the routed completion still receives it. Set to 0 to omit prior turns and the conversation-depth summary; the current ask and selected system text are still sent. Applies to LLM and JEV classification.
              * @default 3
              */
             classifier_context_window_size: number;
