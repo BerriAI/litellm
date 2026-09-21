@@ -4871,6 +4871,27 @@ export interface paths {
         patch: operations["assemblyai_proxy_route_eu_assemblyai__endpoint__patch"];
         trace?: never;
     };
+    "/fal_ai/{endpoint}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Fal Ai Proxy Route */
+        get: operations["fal_ai_proxy_route_fal_ai__endpoint__get"];
+        /** Fal Ai Proxy Route */
+        put: operations["fal_ai_proxy_route_fal_ai__endpoint__put"];
+        /** Fal Ai Proxy Route */
+        post: operations["fal_ai_proxy_route_fal_ai__endpoint__post"];
+        /** Fal Ai Proxy Route */
+        delete: operations["fal_ai_proxy_route_fal_ai__endpoint__delete"];
+        options?: never;
+        head?: never;
+        /** Fal Ai Proxy Route */
+        patch: operations["fal_ai_proxy_route_fal_ai__endpoint__patch"];
+        trace?: never;
+    };
     "/fallback": {
         parameters: {
             query?: never;
@@ -31175,6 +31196,12 @@ export interface components {
             output_cost_per_character_above_128k_tokens?: number | null;
             /** Output Cost Per Image */
             output_cost_per_image?: number | null;
+            /** Output Cost Per Image 1024 */
+            output_cost_per_image_1024?: number | null;
+            /** Output Cost Per Image 1536 */
+            output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 512 */
+            output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Pixel */
@@ -41979,6 +42006,12 @@ export interface components {
             output_cost_per_character_above_128k_tokens?: number | null;
             /** Output Cost Per Image */
             output_cost_per_image?: number | null;
+            /** Output Cost Per Image 1024 */
+            output_cost_per_image_1024?: number | null;
+            /** Output Cost Per Image 1536 */
+            output_cost_per_image_1536?: number | null;
+            /** Output Cost Per Image 512 */
+            output_cost_per_image_512?: number | null;
             /** Output Cost Per Image Token */
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Pixel */
@@ -49237,6 +49270,161 @@ export interface operations {
         };
     };
     assemblyai_proxy_route_eu_assemblyai__endpoint__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fal_ai_proxy_route_fal_ai__endpoint__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fal_ai_proxy_route_fal_ai__endpoint__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fal_ai_proxy_route_fal_ai__endpoint__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fal_ai_proxy_route_fal_ai__endpoint__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpoint: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fal_ai_proxy_route_fal_ai__endpoint__patch: {
         parameters: {
             query?: never;
             header?: never;
