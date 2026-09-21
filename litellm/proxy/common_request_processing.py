@@ -1374,11 +1374,37 @@ def _override_openai_response_model(
         )
 
 
-def attach_guardrail_information(response: object, request_metadata_bucket: Mapping[str, object]) -> None:
-    recorded: Final = request_metadata_bucket.get("standard_logging_guardrail_information")
-    guardrail_information: Final = (
-        list(recorded) if isinstance(recorded, list) else []  # mutable-ok: response list API
+_METADATA_BUCKET_KEYS: Final = ("metadata", "litellm_metadata")
+
+
+def _request_metadata_buckets(request_data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return tuple(
+        bucket
+        for key in _METADATA_BUCKET_KEYS
+        if isinstance(bucket := request_data.get(key), Mapping)
     )
+
+
+def include_guardrail_response_requested(request_data: Mapping[str, object]) -> bool:
+    return any(
+        bucket.get("include_guardrail_response") is True
+        for bucket in _request_metadata_buckets(request_data)
+    )
+
+
+def attach_guardrail_information(response: object, request_data: Mapping[str, object]) -> None:
+    recorded: Final = next(
+        (
+            entries
+            for bucket in _request_metadata_buckets(request_data)
+            if isinstance(
+                entries := bucket.get("standard_logging_guardrail_information"),
+                list,
+            )
+        ),
+        (),
+    )
+    guardrail_information: Final = list(recorded)  # mutable-ok: response list API
     if isinstance(response, dict):
         response["guardrail_information"] = guardrail_information
         return
@@ -2881,8 +2907,8 @@ class ProxyBaseLLMRequestProcessing:
         if isinstance(response, dict):
             response.pop("_hidden_params", None)
 
-        if request_metadata_bucket.get("include_guardrail_response") is True:
-            attach_guardrail_information(response=response, request_metadata_bucket=request_metadata_bucket)
+        if include_guardrail_response_requested(self.data):
+            attach_guardrail_information(response=response, request_data=self.data)
 
         # Call response headers hook for non-streaming success
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(

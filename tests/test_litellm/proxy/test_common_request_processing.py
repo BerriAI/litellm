@@ -33,6 +33,7 @@ from litellm.proxy.common_request_processing import (
     _get_cost_breakdown_from_logging_obj,
     CostBreakdownHeaderValues,
     _has_attribute_error_in_chain,
+    include_guardrail_response_requested,
     _is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
@@ -64,7 +65,7 @@ def test_attach_guardrail_information_copies_recorded_entries_onto_model_respons
 
     attach_guardrail_information(
         response=response,
-        request_metadata_bucket={"standard_logging_guardrail_information": recorded},
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
     )
 
     assert response.model_dump()["guardrail_information"] == recorded
@@ -73,7 +74,7 @@ def test_attach_guardrail_information_copies_recorded_entries_onto_model_respons
 def test_attach_guardrail_information_reports_empty_list_when_nothing_ran():
     response = litellm.ModelResponse()
 
-    attach_guardrail_information(response=response, request_metadata_bucket={})
+    attach_guardrail_information(response=response, request_data={})
 
     assert response.model_dump()["guardrail_information"] == []
 
@@ -84,10 +85,38 @@ def test_attach_guardrail_information_sets_key_on_dict_response():
 
     attach_guardrail_information(
         response=response,
-        request_metadata_bucket={"standard_logging_guardrail_information": recorded},
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
     )
 
     assert response == {"id": "x", "guardrail_information": recorded}
+
+
+def test_include_guardrail_response_requested_reads_flag_from_metadata_when_router_seeded_litellm_metadata():
+    recorded = [
+        {"guardrail_name": "first", "guardrail_status": "success"},
+        {"guardrail_name": "second", "guardrail_status": "success"},
+    ]
+    request_data = {
+        "metadata": {
+            "include_guardrail_response": True,
+            "standard_logging_guardrail_information": recorded,
+        },
+        "litellm_metadata": {},
+    }
+
+    assert include_guardrail_response_requested(request_data) is True
+
+    response = litellm.ModelResponse()
+    attach_guardrail_information(response=response, request_data=request_data)
+
+    assert response.model_dump()["guardrail_information"] == recorded
+
+
+def test_include_guardrail_response_requested_is_false_without_exact_true():
+    assert include_guardrail_response_requested(
+        {"metadata": {"include_guardrail_response": "true"}, "litellm_metadata": {}}
+    ) is False
+    assert include_guardrail_response_requested({}) is False
 
 
 class TestProxyBaseLLMRequestProcessing:
