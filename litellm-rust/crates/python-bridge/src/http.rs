@@ -7,12 +7,12 @@ use std::{
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_http::{
     HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
-    Unsupported,
+    TlsSource, Unsupported,
     media::{PublicDnsResolver, UrlPolicy},
 };
-use pyo3::{prelude::*, types::PyDict};
+use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
-use crate::{errors::RustBridgeDeclined, python_settings::PythonSettings};
+use crate::{coercion::Field, python_settings::PythonSettings};
 
 static POOL: LazyLock<HttpClientPool> =
     LazyLock::new(|| HttpClientPool::new(Arc::new(PublicDnsResolver)));
@@ -41,6 +41,30 @@ pub(crate) fn call_config(
     Ok(resolution.config)
 }
 
+pub(crate) fn client_error(error: litellm_http::Error) -> PyErr {
+    match error {
+        litellm_http::Error::Read {
+            tls_source: TlsSource::ClientIdentity,
+            ..
+        }
+        | litellm_http::Error::InvalidPem {
+            tls_source: TlsSource::ClientIdentity,
+            ..
+        } => PyValueError::new_err(
+            "http_settings.ssl_certificate: expected a readable PEM certificate and private key",
+        ),
+        litellm_http::Error::Read {
+            tls_source: TlsSource::CaBundle,
+            ..
+        }
+        | litellm_http::Error::InvalidPem {
+            tls_source: TlsSource::CaBundle,
+            ..
+        } => PyValueError::new_err("http_settings.ssl_verify: expected a readable PEM CA bundle"),
+        _ => PyValueError::new_err("http_settings: native HTTP client configuration is invalid"),
+    }
+}
+
 fn unreported(
     reported: &Mutex<HashSet<Unsupported>>,
     unsupported: Vec<Unsupported>,
@@ -53,25 +77,25 @@ fn unreported(
 }
 
 pub(crate) fn url_policy(py: Python<'_>) -> PyResult<UrlPolicy> {
-    let policy: PythonUrlPolicy =
-        PythonSettings::UrlPolicy
-            .read(py)?
-            .extract()
-            .map_err(|error: PyErr| {
-                RustBridgeDeclined::new_err(format!(
-                    "litellm URL policy cannot be used by the Rust route: {error}"
-                ))
-            })?;
+    project_url_policy(&PythonSettings::UrlPolicy.read(py)?)
+}
+
+fn project_url_policy(value: &Bound<'_, PyAny>) -> PyResult<UrlPolicy> {
     Ok(UrlPolicy {
-        validate: policy.user_url_validation,
-        allowed_hosts: policy.user_url_allowed_hosts,
+        validate: Field::read(value, "url_policy.user_url_validation")?
+            .truthy()?
+            .0,
+        allowed_hosts: Field::read(value, "url_policy.user_url_allowed_hosts")?
+            .host_collection()?
+            .0,
     })
 }
 
 fn call_ssl_verify(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<SslVerify>> {
-    Ok(kwargs
-        .get_item("ssl_verify")?
-        .and_then(|value| ssl_verify(&value)))
+    match kwargs.get_item("ssl_verify")? {
+        Some(value) => Ok(Field::new("request.ssl_verify", value).ssl_verify()?.0),
+        None => Ok(None),
+    }
 }
 
 fn for_call(call_ssl_verify: Option<SslVerify>, asynchronous: bool) -> HttpSettingsLayer {
@@ -82,64 +106,47 @@ fn for_call(call_ssl_verify: Option<SslVerify>, asynchronous: bool) -> HttpSetti
     }
 }
 
-#[derive(FromPyObject)]
-struct PythonUrlPolicy {
-    user_url_validation: bool,
-    user_url_allowed_hosts: Vec<String>,
-}
-
-#[derive(FromPyObject)]
-struct PythonHttpSettings<'py> {
-    ssl_verify: Bound<'py, PyAny>,
-    ssl_certificate: Option<String>,
-    ssl_security_level: Option<String>,
-    ssl_ecdh_curve: Option<String>,
-    force_ipv4: bool,
-    http2: bool,
-    aiohttp_trust_env: bool,
-    disable_aiohttp_trust_env: bool,
-    disable_aiohttp_transport: bool,
-    user_agent: String,
-}
-
 fn configured(value: &Bound<'_, PyAny>) -> PyResult<HttpSettingsLayer> {
-    let python: PythonHttpSettings = value.extract().map_err(|error: PyErr| {
-        RustBridgeDeclined::new_err(format!(
-            "litellm HTTP settings cannot be used by the Rust route: {error}"
-        ))
-    })?;
     Ok(HttpSettingsLayer {
-        ssl_verify: ssl_verify(&python.ssl_verify),
-        ssl_certificate: python.ssl_certificate.map(PathBuf::from),
-        ssl_security_level: python.ssl_security_level,
-        ssl_ecdh_curve: python.ssl_ecdh_curve,
-        force_ipv4: Some(python.force_ipv4),
-        http2: Some(python.http2),
-        aiohttp_trust_env: Some(python.aiohttp_trust_env),
-        disable_aiohttp_trust_env: Some(python.disable_aiohttp_trust_env),
-        disable_aiohttp_transport: Some(python.disable_aiohttp_transport),
-        user_agent: Some(python.user_agent),
+        ssl_verify: Field::read(value, "http_settings.ssl_verify")?
+            .ssl_verify()?
+            .0,
+        ssl_certificate: Field::read(value, "http_settings.ssl_certificate")?
+            .optional_strict_string()?
+            .0
+            .map(PathBuf::from),
+        ssl_security_level: Field::read(value, "http_settings.ssl_security_level")?
+            .tuning_string()?
+            .0,
+        ssl_ecdh_curve: Field::read(value, "http_settings.ssl_ecdh_curve")?
+            .tuning_string()?
+            .0,
+        force_ipv4: Some(Field::read(value, "http_settings.force_ipv4")?.truthy()?.0),
+        http2: Some(Field::read(value, "http_settings.http2")?.exact_true().0),
+        aiohttp_trust_env: Some(
+            Field::read(value, "http_settings.aiohttp_trust_env")?
+                .truthy()?
+                .0,
+        ),
+        disable_aiohttp_trust_env: Some(
+            Field::read(value, "http_settings.disable_aiohttp_trust_env")?
+                .truthy()?
+                .0,
+        ),
+        disable_aiohttp_transport: Some(
+            Field::read(value, "http_settings.disable_aiohttp_transport")?
+                .exact_true()
+                .0,
+        ),
+        user_agent: Some(Field::read(value, "http_settings.user_agent")?.schema_string()?),
         ..HttpSettingsLayer::default()
     })
-}
-
-fn ssl_verify(value: &Bound<'_, PyAny>) -> Option<SslVerify> {
-    if let Ok(enabled) = value.extract::<bool>() {
-        return Some(if enabled {
-            SslVerify::Enabled
-        } else {
-            SslVerify::Disabled
-        });
-    }
-    value
-        .extract::<String>()
-        .ok()
-        .map(|path| SslVerify::parse(&path))
 }
 
 #[cfg(test)]
 mod tests {
     use litellm_http::Verify;
+    use pyo3::exceptions::PyRuntimeError;
     use rstest::rstest;
 
     use super::*;
@@ -163,7 +170,7 @@ defaults = dict(
     user_agent='litellm/test',
 )
 defaults.update(dict({overrides}))
-settings = types.SimpleNamespace(**{{name: defaults[name] for name in json.loads(contract)['http_settings']}})
+settings = types.SimpleNamespace(**{{name: defaults[name] for name in json.loads(contract)['http_settings']['fields']}})
 "
         );
         let locals = PyDict::new(py);
@@ -185,6 +192,33 @@ settings = types.SimpleNamespace(**{{name: defaults[name] for name in json.loads
                     user_agent: Some("litellm/test".into()),
                     ..HttpSettings::default()
                 }
+            );
+        });
+    }
+
+    #[test]
+    fn client_error_uses_tls_source_when_paths_match() {
+        Python::initialize();
+        Python::attach(|py| {
+            let path = PathBuf::from("/shared.pem");
+            let ca_error = client_error(litellm_http::Error::InvalidPem {
+                path: path.clone(),
+                message: "invalid".into(),
+                tls_source: TlsSource::CaBundle,
+            });
+            assert_eq!(
+                ca_error.to_string(),
+                "ValueError: http_settings.ssl_verify: expected a readable PEM CA bundle"
+            );
+            let client_error = client_error(litellm_http::Error::InvalidPem {
+                path,
+                message: "invalid".into(),
+                tls_source: TlsSource::ClientIdentity,
+            });
+            assert!(client_error.is_instance_of::<PyValueError>(py));
+            assert_eq!(
+                client_error.to_string(),
+                "ValueError: http_settings.ssl_certificate: expected a readable PEM certificate and private key"
             );
         });
     }
@@ -259,12 +293,16 @@ user_agent='litellm/9.9.9',
         });
     }
 
-    #[test]
-    fn ssl_context_global_is_ignored_so_environment_and_defaults_apply() {
+    #[rstest]
+    #[case("ssl_verify=object()")]
+    #[case("ssl_verify=__import__('ssl').SSLContext(__import__('ssl').PROTOCOL_TLS_CLIENT)")]
+    #[case("ssl_certificate=1")]
+    fn invalid_http_configuration_is_terminal(#[case] overrides: &str) {
         Python::initialize();
         Python::attach(|py| {
-            let layer = configured(&python_settings(py, "ssl_verify=object()")).unwrap();
-            assert_eq!(layer.ssl_verify, None);
+            let error = configured(&python_settings(py, overrides)).unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.to_string().contains("http_settings.ssl_"));
         });
     }
 
@@ -281,11 +319,21 @@ user_agent='litellm/9.9.9',
     }
 
     #[test]
-    fn mistyped_python_settings_decline_instead_of_raising() {
+    fn mutable_globals_use_their_consumer_operations() {
         Python::initialize();
         Python::attach(|py| {
-            let error = configured(&python_settings(py, "force_ipv4='yes'")).unwrap_err();
-            assert!(error.is_instance_of::<RustBridgeDeclined>(py));
+            let layer = configured(&python_settings(py,
+                "force_ipv4='yes', http2=1, disable_aiohttp_transport=1, aiohttp_trust_env=[1], disable_aiohttp_trust_env=[], ssl_security_level=1, ssl_ecdh_curve=[]"
+            )).unwrap();
+            assert_eq!(layer.force_ipv4, Some(true));
+            assert_eq!(layer.http2, Some(false));
+            assert_eq!(layer.disable_aiohttp_transport, Some(false));
+            assert_eq!(layer.aiohttp_trust_env, Some(true));
+            assert_eq!(layer.disable_aiohttp_trust_env, Some(false));
+            assert_eq!(layer.ssl_security_level, None);
+            assert_eq!(layer.ssl_ecdh_curve, None);
+            let error = configured(&python_settings(py, "user_agent=1")).unwrap_err();
+            assert!(error.is_instance_of::<PyRuntimeError>(py));
         });
     }
 
@@ -323,17 +371,36 @@ user_agent='litellm/9.9.9',
     }
 
     #[test]
-    fn live_ssl_context_argument_is_ignored_so_the_configured_value_applies() {
+    fn live_ssl_context_argument_raises_instead_of_using_another_layer() {
         Python::initialize();
         Python::attach(|py| {
             let kwargs = PyDict::new(py);
-            kwargs
-                .set_item("ssl_verify", py.eval(c"object()", None, None).unwrap())
+            let ssl = py.import("ssl").unwrap();
+            let context = ssl
+                .getattr("SSLContext")
+                .unwrap()
+                .call1((ssl.getattr("PROTOCOL_TLS_CLIENT").unwrap(),))
                 .unwrap();
-            let call = for_call(call_ssl_verify(&kwargs).unwrap(), true);
-            let settings =
-                HttpSettings::from_layers([call, configured_ssl_verify(SslVerify::Disabled)]);
-            assert_eq!(settings.ssl_verify, Some(SslVerify::Disabled));
+            kwargs.set_item("ssl_verify", context).unwrap();
+            let error = call_ssl_verify(&kwargs).unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.to_string().contains("request.ssl_verify"));
+            assert!(error.to_string().contains("SSLContext"));
+        });
+    }
+
+    #[test]
+    fn url_policy_uses_truthiness_and_normalized_owned_hosts() {
+        Python::initialize();
+        Python::attach(|py| {
+            let value = py.eval(c"__import__('types').SimpleNamespace(user_url_validation=[], user_url_allowed_hosts=['B.test', 'a.test.', 'b.test'])", None, None).unwrap();
+            assert_eq!(
+                project_url_policy(&value).unwrap(),
+                UrlPolicy {
+                    validate: false,
+                    allowed_hosts: vec!["a.test".into(), "b.test".into()],
+                }
+            );
         });
     }
 

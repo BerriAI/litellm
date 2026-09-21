@@ -5,7 +5,7 @@ import subprocess
 import time
 from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Final
 from uuid import uuid4
@@ -122,6 +122,9 @@ def waiting(replicas: tuple[Replica, ...], seconds: float) -> None:
 class Containers:
     image: str
     output: Path
+
+    def using(self, image: str) -> "Containers":
+        return replace(self, image=image)
 
     @contextmanager
     def start(

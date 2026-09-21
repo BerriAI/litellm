@@ -1,0 +1,20 @@
+[package]
+name = "litellm-cache-valkey-semantic"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+litellm-cache.workspace = true
+litellm-cache-redis.workspace = true
+litellm-cache-response.workspace = true
+redis = { version = "1.7.0", features = ["tls-rustls"] }
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+redis-test = "1.0.4"
+rstest.workspace = true

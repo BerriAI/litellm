@@ -1,34 +1,33 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
 class HttpSettings:
-    ssl_verify: bool | str
-    ssl_certificate: str | None
-    ssl_security_level: str | None
-    ssl_ecdh_curve: str | None
-    force_ipv4: bool
-    http2: bool
-    aiohttp_trust_env: bool
-    disable_aiohttp_trust_env: bool
-    disable_aiohttp_transport: bool
+    ssl_verify: object
+    ssl_certificate: object
+    ssl_security_level: object
+    ssl_ecdh_curve: object
+    force_ipv4: object
+    http2: object
+    aiohttp_trust_env: object
+    disable_aiohttp_trust_env: object
+    disable_aiohttp_transport: object
     user_agent: str
 
 
 @dataclass(frozen=True, slots=True)
 class UrlPolicy:
-    user_url_validation: bool
-    user_url_allowed_hosts: Sequence[str]
+    user_url_validation: object
+    user_url_allowed_hosts: object
 
 
 @dataclass(frozen=True, slots=True)
 class ProviderDefaults:
-    vertex_project: str | None
-    vertex_location: str | None
-    enable_azure_ad_token_refresh: bool | None
+    vertex_project: object
+    vertex_location: object
+    enable_azure_ad_token_refresh: object
 
 
 @dataclass(frozen=True, slots=True)

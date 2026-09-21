@@ -2,10 +2,11 @@
 Polls LiteLLM_ManagedObjectTable to check if the batch job is complete, and if the cost has been tracked.
 """
 
+from collections.abc import Sequence
 from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, List, Literal, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Final, List, Literal, Optional, Protocol, Tuple, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -18,8 +19,8 @@ if TYPE_CHECKING:
     from prisma import models as prisma_models
 
     from litellm.integrations.prometheus import PrometheusLogger
-    from litellm.proxy._types import LiteLLM_ManagedObjectTable
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+    from litellm.repositories.prisma_protocols import TableActions
     from litellm.router import Router
     from litellm.types.router import Deployment
     from litellm.types.utils import LiteLLMBatch
@@ -39,6 +40,42 @@ TERMINAL_MANAGED_OBJECT_STATUSES: Final[Tuple[str, ...]] = (
     *PROVIDER_TERMINAL_BATCH_STATUSES,
     "stale_expired",
 )
+
+
+class _ManagedObjectRow(Protocol):
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def unified_object_id(self) -> str: ...
+
+    @property
+    def created_by(self) -> str | None: ...
+
+    @property
+    def file_object(self) -> object: ...
+
+
+def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
+    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
+    return table
+
+
+def _user_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_UserTable]":
+    table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = prisma_client.db.litellm_usertable
+    return table
+
+
+def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
+    table: Final[TableActions[prisma_models.LiteLLM_VerificationToken]] = (
+        prisma_client.db.litellm_verificationtoken
+    )
+    return table
+
+
+def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
+    table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = prisma_client.db.litellm_teamtable
+    return table
 
 
 class CheckBatchCost:
@@ -73,7 +110,7 @@ class CheckBatchCost:
         inline for a batch the first poll cycle then accounts again.
         """
         try:
-            await self.prisma_client.db.litellm_managedobjecttable.find_first(
+            await _managed_object_table(self.prisma_client).find_first(
                 where={"file_purpose": "batch", "batch_processed": False}
             )
         except Exception as probe_err:
@@ -97,10 +134,8 @@ class CheckBatchCost:
         if not user_id:
             return {}
         try:
-            user_row: prisma_models.LiteLLM_UserTable | None = (
-                await self.prisma_client.db.litellm_usertable.find_unique(
-                    where={"user_id": user_id}
-                )
+            user_row: prisma_models.LiteLLM_UserTable | None = await _user_table(self.prisma_client).find_unique(
+                where={"user_id": user_id}
             )
             if user_row is None:
                 return {}
@@ -117,11 +152,9 @@ class CheckBatchCost:
         if not api_key:
             return None
         try:
-            key_row: prisma_models.LiteLLM_VerificationToken | None = (
-                await self.prisma_client.db.litellm_verificationtoken.find_unique(
-                    where={"token": api_key}
-                )
-            )
+            key_row: prisma_models.LiteLLM_VerificationToken | None = await _token_table(
+                self.prisma_client
+            ).find_unique(where={"token": api_key})
             return getattr(key_row, "key_alias", None) if key_row is not None else None
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up key alias for batch {batch_id}: {e}")
@@ -132,17 +165,15 @@ class CheckBatchCost:
         if not team_id:
             return None
         try:
-            team_row: prisma_models.LiteLLM_TeamTable | None = (
-                await self.prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row: prisma_models.LiteLLM_TeamTable | None = await _team_table(self.prisma_client).find_unique(
+                where={"team_id": team_id}
             )
             return getattr(team_row, "team_alias", None) if team_row is not None else None
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not look up team alias for team {team_id}: {e}")
             return None
 
-    async def _get_org_id(self, job: "LiteLLM_ManagedObjectTable", batch_id: str) -> str | None:
+    async def _get_org_id(self, job: "_ManagedObjectRow", batch_id: str) -> str | None:
         org_id = getattr(job, "org_id", None)
         if org_id:
             return org_id
@@ -150,11 +181,9 @@ class CheckBatchCost:
         team_id = getattr(job, "team_id", None)
         if api_key:
             try:
-                key_row: prisma_models.LiteLLM_VerificationToken | None = (
-                    await self.prisma_client.db.litellm_verificationtoken.find_unique(
-                        where={"token": api_key}
-                    )
-                )
+                key_row: prisma_models.LiteLLM_VerificationToken | None = await _token_table(
+                    self.prisma_client
+                ).find_unique(where={"token": api_key})
                 key_org_id = getattr(key_row, "organization_id", None) if key_row is not None else None
                 if key_org_id:
                     return key_org_id
@@ -166,10 +195,8 @@ class CheckBatchCost:
         if not team_id:
             return None
         try:
-            team_row: prisma_models.LiteLLM_TeamTable | None = (
-                await self.prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": team_id}
-                )
+            team_row: prisma_models.LiteLLM_TeamTable | None = await _team_table(self.prisma_client).find_unique(
+                where={"team_id": team_id}
             )
             return getattr(team_row, "organization_id", None) if team_row is not None else None
         except Exception as e:
@@ -177,7 +204,7 @@ class CheckBatchCost:
             return None
 
     async def _build_creator_attribution_metadata(
-        self, job: "LiteLLM_ManagedObjectTable", batch_id: str
+        self, job: "_ManagedObjectRow", batch_id: str
     ) -> dict[str, object]:
         """
         Rebuild the spend-tracking metadata for the key, team, and tags that created the
@@ -225,7 +252,7 @@ class CheckBatchCost:
         should not be polled.
         """
         cutoff: Final = datetime.now(timezone.utc) - timedelta(days=MANAGED_OBJECT_STALENESS_CUTOFF_DAYS)
-        result: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+        result: Final = await _managed_object_table(self.prisma_client).update_many(
             where={
                 "file_purpose": "batch",
                 "status": {"not_in": list(TERMINAL_MANAGED_OBJECT_STATUSES)},
@@ -244,7 +271,7 @@ class CheckBatchCost:
 
         # A row already in a terminal status is never rewritten by the sweep above, so
         # without this it keeps a poll-page slot forever and starves newer batches.
-        retired: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+        retired: Final = await _managed_object_table(self.prisma_client).update_many(
             where={
                 "file_purpose": "batch",
                 "batch_processed": False,
@@ -259,9 +286,9 @@ class CheckBatchCost:
                 f"{MANAGED_OBJECT_STALENESS_CUTOFF_DAYS} days that were never costed"
             )
 
-    async def _fallback_find_jobs(self) -> list:
+    async def _fallback_find_jobs(self) -> "Sequence[_ManagedObjectRow]":
         """Query batch jobs without the batch_processed filter (for older schemas)."""
-        return await self.prisma_client.db.litellm_managedobjecttable.find_many(
+        return await _managed_object_table(self.prisma_client).find_many(
             where={
                 "file_purpose": "batch",
                 "status": {
@@ -279,7 +306,7 @@ class CheckBatchCost:
             order={"created_at": "asc"},
         )
 
-    async def _retire_job(self, job: "LiteLLM_ManagedObjectTable", reason: str) -> None:
+    async def _retire_job(self, job: "_ManagedObjectRow", reason: str) -> None:
         """
         Take a row that can never be costed out of the poll page. Leaving it selectable
         would burn one of the MAX_OBJECTS_PER_POLL_CYCLE slots on every future cycle, and
@@ -292,7 +319,7 @@ class CheckBatchCost:
             else {"status": "stale_expired"}
         )
         try:
-            await self.prisma_client.db.litellm_managedobjecttable.update(
+            await _managed_object_table(self.prisma_client).update(
                 where={"id": job.id},
                 data=data,
             )
@@ -306,7 +333,7 @@ class CheckBatchCost:
             "so it will no longer be polled"
         )
 
-    async def _claim_job_for_costing(self, job: "LiteLLM_ManagedObjectTable") -> bool:
+    async def _claim_job_for_costing(self, job: "_ManagedObjectRow") -> bool:
         """
         Atomically flip batch_processed from false to true, returning whether this pod won
         the row. Every pod and uvicorn worker schedules its own poller against the shared
@@ -321,7 +348,7 @@ class CheckBatchCost:
         if not self._has_batch_processed_column:
             return True
         try:
-            claimed: Final = await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            claimed: Final = await _managed_object_table(self.prisma_client).update_many(
                 where={"id": job.id, "batch_processed": False},
                 data={"batch_processed": True},
             )
@@ -332,7 +359,7 @@ class CheckBatchCost:
             return False
         return claimed > 0
 
-    async def _release_job_claim(self, job: "LiteLLM_ManagedObjectTable") -> None:
+    async def _release_job_claim(self, job: "_ManagedObjectRow") -> None:
         """Give a claimed row back once billing it failed, so a later poll cycle retries it.
 
         Safe to match on batch_processed=True: while this poller is active the retrieve
@@ -342,7 +369,7 @@ class CheckBatchCost:
         if not self._has_batch_processed_column:
             return
         try:
-            await self.prisma_client.db.litellm_managedobjecttable.update_many(
+            await _managed_object_table(self.prisma_client).update_many(
                 where={"id": job.id, "batch_processed": True},
                 data={"batch_processed": False},
             )
@@ -353,7 +380,7 @@ class CheckBatchCost:
             )
 
     @staticmethod
-    def _has_unified_id_without_model(job: "LiteLLM_ManagedObjectTable") -> bool:
+    def _has_unified_id_without_model(job: "_ManagedObjectRow") -> bool:
         """A unified id that decodes but carries no model_id can never be routed."""
         from litellm.proxy.openai_files_endpoints.common_utils import (
             convert_b64_uid_to_unified_uid,
@@ -402,7 +429,7 @@ class CheckBatchCost:
         return isinstance(error, (NotFoundError, openai.NotFoundError)) and output_file_id in str(error)
 
     async def _finalize_unbilled_terminal_job(
-        self, job: "prisma_models.LiteLLM_ManagedObjectTable", response: "LiteLLMBatch"
+        self, job: "_ManagedObjectRow", response: "LiteLLMBatch"
     ) -> None:
         """Persist a terminal batch that has nothing billable, converting any raw
         provider file ids to managed ids, and take it out of the poll page."""
@@ -426,7 +453,7 @@ class CheckBatchCost:
                 "file_object": response.model_dump_json(),
                 **({"batch_processed": True} if self._has_batch_processed_column else {}),
             }
-            await self.prisma_client.db.litellm_managedobjecttable.update(
+            await _managed_object_table(self.prisma_client).update(
                 where={"id": job.id},
                 data=update_data,
             )
@@ -447,7 +474,7 @@ class CheckBatchCost:
 
     def _resolve_job_routing(
         self,
-        job: "LiteLLM_ManagedObjectTable",
+        job: "_ManagedObjectRow",
         prom_logger: Optional["PrometheusLogger"],
     ) -> Optional[Tuple[str, str]]:
         """
@@ -524,7 +551,7 @@ class CheckBatchCost:
 
     def _resolve_unmanaged_provider_routing(
         self,
-        job: "LiteLLM_ManagedObjectTable",
+        job: "_ManagedObjectRow",
         prom_logger: Optional["PrometheusLogger"],
         llm_provider: str,
         bare_model_name: str,
@@ -620,7 +647,7 @@ class CheckBatchCost:
     @classmethod
     def _get_managed_file_model_name(
         cls,
-        job: "LiteLLM_ManagedObjectTable",
+        job: "_ManagedObjectRow",
         deployment_info: "Deployment",
     ) -> Optional[str]:
         """
@@ -640,7 +667,7 @@ class CheckBatchCost:
         )
 
     @staticmethod
-    def _get_input_file_id(job: "LiteLLM_ManagedObjectTable") -> Optional[str]:
+    def _get_input_file_id(job: "_ManagedObjectRow") -> Optional[str]:
         import json
 
         from litellm.types.utils import LiteLLMBatch
@@ -660,7 +687,7 @@ class CheckBatchCost:
 
     async def _track_completed_batch_cost(
         self,
-        job: "LiteLLM_ManagedObjectTable",
+        job: "_ManagedObjectRow",
         response: "LiteLLMBatch",
         model_id: str,
         batch_id: str,
@@ -936,7 +963,7 @@ class CheckBatchCost:
                 # endpoint may transition a batch to "complete" before
                 # CheckBatchCost runs.  The batch_processed=False filter
                 # already prevents reprocessing finished batches.
-                jobs = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+                jobs = await _managed_object_table(self.prisma_client).find_many(
                     where={
                         "file_purpose": "batch",
                         "batch_processed": False,
@@ -1038,7 +1065,7 @@ class CheckBatchCost:
                     }
                     if self._has_batch_processed_column:
                         update_data["batch_processed"] = True
-                    await self.prisma_client.db.litellm_managedobjecttable.update(
+                    await _managed_object_table(self.prisma_client).update(
                         where={"id": job.id},
                         data=update_data,
                     )
