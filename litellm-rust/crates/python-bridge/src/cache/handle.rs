@@ -1,4 +1,4 @@
-use litellm_host_python::release_gil;
+use litellm_host_python::{release_gil, run_sync_value};
 use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*};
 
 use super::{cache_error, facade::FacadeGuard, native::NativeResponseCache, request::duration};
@@ -44,6 +44,21 @@ impl CacheTestHandle {
         let ttl = Some(duration(ttl_seconds)?);
         let service = release_gil(py, move || NativeResponseCache::redis(&url, ttl, namespace))
             .map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (account_url, container))]
+    fn azure_blob(py: Python<'_>, account_url: String, container: String) -> PyResult<Self> {
+        let service = run_sync_value(py, async move {
+            NativeResponseCache::azure_blob(&account_url, &container)
+                .await
+                .map_err(cache_error)
+        })?;
         Ok(Self {
             service,
             guard: None,
