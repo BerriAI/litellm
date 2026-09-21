@@ -11,9 +11,11 @@
 import asyncio
 import json
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Awaitable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
+from functools import reduce
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
 
 import aiohttp
@@ -693,6 +695,60 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 masked_entity_count[entity_type] = masked_entity_count.get(entity_type, 0) + 1
         return redacted_text["text"]
 
+    @staticmethod
+    def _resolve_overlapping_spans(
+        analyze_results: Sequence[Mapping[str, Any]],
+    ) -> tuple[Mapping[str, Any], ...]:
+        valid_candidates: Final = tuple(
+            c
+            for c in analyze_results
+            if c.get("start") is not None and c.get("end") is not None and int(c["start"]) < int(c["end"])
+        )
+        if not valid_candidates:
+            return ()
+
+        sorted_by_start: Final = sorted(
+            valid_candidates,
+            key=lambda x: (int(x["start"]), int(x["end"])),
+        )
+
+        def _cluster_reducer(
+            acc: tuple[tuple[Mapping[str, Any], ...], ...],
+            item: Mapping[str, Any],
+        ) -> tuple[tuple[Mapping[str, Any], ...], ...]:
+            if not acc:
+                return ((item,),)
+            last_cluster: Final = acc[-1]
+            cluster_max_end: Final = max(int(s["end"]) for s in last_cluster)
+            if int(item["start"]) < cluster_max_end:
+                return acc[:-1] + (last_cluster + (item,),)
+            return acc + ((item,),)
+
+        clusters: Final = reduce(_cluster_reducer, sorted_by_start, ())
+
+        def _resolve_cluster(cluster: tuple[Mapping[str, Any], ...]) -> Mapping[str, Any]:
+            cluster_start: Final = min(int(s["start"]) for s in cluster)
+            cluster_end: Final = max(int(s["end"]) for s in cluster)
+            best_candidate: Final = max(
+                cluster,
+                key=lambda x: (
+                    int(x["start"]) == cluster_start and int(x["end"]) == cluster_end,
+                    float(x.get("score") or 0),
+                    int(x["end"]) - int(x["start"]),
+                ),
+            )
+            resolved: Final = MappingProxyType(
+                {
+                    "entity_type": best_candidate.get("entity_type") or "UNKNOWN",
+                    "start": cluster_start,
+                    "end": cluster_end,
+                    "score": max(float(s.get("score") or 0) for s in cluster),
+                }
+            )
+            return resolved
+
+        return tuple(_resolve_cluster(c) for c in clusters)
+
     def _finalize_presidio_anonymize_numbered_tokens(
         self,
         text: str,
@@ -718,9 +774,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             request_data["metadata"]["pii_tokens"] = {}
         pii_tokens: Final = request_data["metadata"]["pii_tokens"]
 
+        valid_analyze_results = self._resolve_overlapping_spans(analyze_results)
+
         # Assign sequence numbers in forward (left-to-right) order so
         # that <PERSON_1> is the first entity in the text, etc.
-        sorted_forward: Final = sorted(analyze_results, key=lambda x: x["start"])
+        sorted_forward: Final = sorted(valid_analyze_results, key=lambda x: x["start"])
         seq_map: Final = {}
         for idx, ar in enumerate(sorted_forward, start=1):
             seq_map[(ar["start"], ar["end"])] = idx
