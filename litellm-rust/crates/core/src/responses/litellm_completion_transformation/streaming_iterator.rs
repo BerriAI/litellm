@@ -1,5 +1,5 @@
 use litellm_llms::base_llm::base_model_iterator::{
-    ChatCompletions, ResponsesApi, StreamTransformation,
+    ChatCompletions, ResponsesApi, StreamError, StreamTransformation,
 };
 use litellm_types::{
     llms::openai::ChatCompletionToolCallChunk,
@@ -8,8 +8,6 @@ use litellm_types::{
     },
     utils::ChatCompletionChunk,
 };
-
-use crate::responses::streaming_iterator::ResponsesStreamError;
 
 pub struct LiteLlmCompletionStreamingIterator {
     // TODO: Port per-call item/tool associations, request options, bounded accumulators, and reasoning state from Python
@@ -32,7 +30,7 @@ impl LiteLlmCompletionStreamingIterator {
     pub fn queue_tool_call_delta_events(
         &mut self,
         _tool_calls: &[ChatCompletionToolCallChunk],
-    ) -> Result<(), ResponsesStreamError> {
+    ) -> Result<(), StreamError> {
         todo!(
             "Associate fragmented tool indexes and call IDs; preserve custom/namespaced tools, arguments, item IDs and output indexes"
         )
@@ -48,7 +46,7 @@ impl LiteLlmCompletionStreamingIterator {
     pub fn transform_chat_completion_chunk_to_response_api_chunk(
         &mut self,
         _chunk: ChatCompletionChunk,
-    ) -> Result<Vec<ResponsesEvent>, ResponsesStreamError> {
+    ) -> Result<Vec<ResponsesEvent>, StreamError> {
         todo!(
             "Convert text, tools, reasoning, annotations and provider web-search fields while preserving sequence numbers"
         )
@@ -60,15 +58,11 @@ impl LiteLlmCompletionStreamingIterator {
         )
     }
 
-    pub fn return_default_done_events(
-        &mut self,
-    ) -> Result<Vec<ResponsesEvent>, ResponsesStreamError> {
+    pub fn return_default_done_events(&mut self) -> Result<Vec<ResponsesEvent>, StreamError> {
         todo!("Close text, content, reasoning and tool items in order before the terminal response")
     }
 
-    pub fn emit_response_completed_event(
-        &mut self,
-    ) -> Result<ResponsesEvent, ResponsesStreamError> {
+    pub fn emit_response_completed_event(&mut self) -> Result<ResponsesEvent, StreamError> {
         todo!(
             "Build the final response from accumulated chunks and late usage, retaining encoded IDs and request options"
         )
@@ -78,7 +72,7 @@ impl LiteLlmCompletionStreamingIterator {
 impl StreamTransformation for LiteLlmCompletionStreamingIterator {
     type Caller = ResponsesApi;
     type Upstream = ChatCompletions;
-    type Error = ResponsesStreamError;
+    type Error = StreamError;
 
     fn transform_event(
         &mut self,

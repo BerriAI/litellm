@@ -1,6 +1,11 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
+pub struct ResponsesWebSocketRequestDefaults {
+    pub fill_missing: crate::responses::streaming::ProviderFields,
+    pub overrides: crate::responses::streaming::ProviderFields,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResponsesWsEventType {
     ResponseCreate,

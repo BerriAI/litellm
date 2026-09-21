@@ -1,3 +1,6 @@
+use litellm_llms::base_llm::base_model_iterator::{
+    BufferedSource, StreamError, StreamOutcome, StreamPolicy,
+};
 use std::{
     pin::Pin,
     task::{Context, Poll},
@@ -6,36 +9,28 @@ use std::{
 use futures_util::Stream;
 use litellm_types::responses::streaming::{ResponsesEvent, ResponsesResponse};
 
-pub enum ResponsesStreamError {
-    Upstream(String),
-    InvalidEvent(String),
-    UnexpectedEof,
-    BufferLimitExceeded,
-    Cancelled,
-    DeadlineExceeded,
-}
-
 pub enum ResponsesStreamState {
     Pending,
     Active,
-    Terminal(ResponsesResponse),
-    Failed(ResponsesStreamError),
+    Terminal(StreamOutcome<ResponsesResponse>),
+    Failed(StreamError),
 }
 
 pub struct ResponsesApiStreamingIterator<S> {
     source: S,
     state: ResponsesStreamState,
+    policy: StreamPolicy,
 }
 
 impl<S> ResponsesApiStreamingIterator<S> {
-    pub fn new(_source: S) -> Self {
+    pub fn new(_source: S, _policy: StreamPolicy) -> Self {
         todo!("Compose BaseResponsesAPIStreamingIterator lifecycle state with a typed event source")
     }
 
     pub fn process_chunk(
         &mut self,
         _event: ResponsesEvent,
-    ) -> Result<Option<ResponsesEvent>, ResponsesStreamError> {
+    ) -> Result<Option<ResponsesEvent>, StreamError> {
         todo!(
             "Port base _process_chunk after provider decoding: response IDs, completed/failed/incomplete outcomes, usage, and error events"
         )
@@ -50,11 +45,39 @@ impl<S> ResponsesApiStreamingIterator<S> {
     }
 }
 
+pub struct BufferedResponsesStream {
+    _response: ResponsesResponse,
+    _source: BufferedSource,
+    _policy: StreamPolicy,
+}
+
+impl BufferedResponsesStream {
+    pub fn new(
+        _response: ResponsesResponse,
+        _source: BufferedSource,
+        _policy: StreamPolicy,
+    ) -> Self {
+        todo!(
+            "Port cached/mock/simulated response event generation with explicit buffered delivery and stable item IDs"
+        )
+    }
+}
+
+impl Stream for BufferedResponsesStream {
+    type Item = Result<ResponsesEvent, StreamError>;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        todo!(
+            "Emit bounded ordered lifecycle/content/tool events from the retained response, preserving its terminal status and usage"
+        )
+    }
+}
+
 impl<S> Stream for ResponsesApiStreamingIterator<S>
 where
-    S: Stream<Item = Result<ResponsesEvent, ResponsesStreamError>>,
+    S: Stream<Item = Result<ResponsesEvent, StreamError>>,
 {
-    type Item = Result<ResponsesEvent, ResponsesStreamError>;
+    type Item = Result<ResponsesEvent, StreamError>;
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         todo!(
@@ -77,9 +100,9 @@ impl<S> NativeResponsesStream<S> {
 
 impl<S> Stream for NativeResponsesStream<S>
 where
-    S: Stream<Item = Result<ResponsesEvent, ResponsesStreamError>>,
+    S: Stream<Item = Result<ResponsesEvent, StreamError>>,
 {
-    type Item = Result<ResponsesEvent, ResponsesStreamError>;
+    type Item = Result<ResponsesEvent, StreamError>;
 
     fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         todo!(

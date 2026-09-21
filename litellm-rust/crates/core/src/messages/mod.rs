@@ -5,6 +5,7 @@
 //! it in process for a caller that already holds the request and wants the message.
 
 mod error;
+pub mod streaming;
 pub mod types;
 pub use error::Error;
 mod client;

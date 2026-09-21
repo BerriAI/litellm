@@ -7,6 +7,7 @@
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
 mod error;
+pub mod streaming;
 pub mod types;
 pub use error::Error;
 mod client;

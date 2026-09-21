@@ -6,5 +6,6 @@ pub mod messages;
 pub mod ocr;
 mod outbound;
 pub mod responses;
+pub mod streaming;
 
 pub use error::Error;
