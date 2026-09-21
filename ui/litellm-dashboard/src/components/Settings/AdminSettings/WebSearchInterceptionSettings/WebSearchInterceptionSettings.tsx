@@ -5,7 +5,7 @@ import { useUpdateWebSearchInterceptionSettings } from "@/app/(dashboard)/hooks/
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { toast } from "@/lib/toast";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CircleHelp, Info, Save } from "lucide-react";
+import { CircleHelp, Info, Save, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -293,9 +293,22 @@ export default function WebSearchInterceptionSettings() {
   }
 
   const values: WebSearchInterceptionStoredValues = toStoredValues(data?.values ?? NO_STORED_VALUES);
+  const notAppliedHere = values.enabled === true && data?.active_on_this_pod === false;
 
   return (
     <div className="w-full">
+      {notAppliedHere && (
+        <Alert variant="warning" className="mb-6">
+          <TriangleAlert />
+          <AlertTitle>Not running on the proxy that answered this page</AlertTitle>
+          <AlertDescription>
+            Interception is switched on for the cluster, but the proxy serving this page has not applied it. That is
+            expected for about 10 seconds after a change or a restart. If it persists, check that proxy&apos;s logs:
+            requests it handles are not being intercepted.
+          </AlertDescription>
+        </Alert>
+      )}
+
       <Alert variant="info" className="mb-6">
         <Info />
         <AlertTitle>Web Search Interception</AlertTitle>

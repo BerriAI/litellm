@@ -7,7 +7,7 @@ use std::sync::{Arc, LazyLock};
 
 use host::OcrRouteHost;
 use litellm_auth_gcp::VertexAuth;
-use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
+use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
 use litellm_core::ocr::route::ocr_machine;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_llms::base_llm::ocr::{

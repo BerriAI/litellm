@@ -1,12 +1,17 @@
 use std::{collections::BTreeMap, future::Future, path::Path, pin::Pin, sync::Arc};
 
 use gcp_auth::{CustomServiceAccount, TokenProvider};
-use litellm_auth::{
+use litellm_auth_types::{
     CredentialPlacement, Error, InputSource, SecretValue, Sourced, http::apply_credential,
 };
 use moka::future::Cache;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+
+#[cfg(feature = "google-sdk")]
+mod sdk;
+#[cfg(feature = "google-sdk")]
+pub use sdk::GoogleCredentials;
 
 const CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 const GOOGLE_OAUTH_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
@@ -26,19 +31,31 @@ pub struct VertexConfig {
 }
 
 impl VertexConfig {
+    pub fn new(
+        credentials: Option<Sourced<SecretValue>>,
+        project_id: Option<String>,
+        location: Option<String>,
+    ) -> Self {
+        Self {
+            credentials: credentials.filter(|value| !value.value().expose().trim().is_empty()),
+            project_id: project_id.filter(|value| !value.trim().is_empty()),
+            location: location.filter(|value| !value.trim().is_empty()),
+        }
+    }
+
     pub fn from_sourced_optional_params(
         params: &Map<String, Value>,
         sources: &BTreeMap<String, InputSource>,
     ) -> Result<Self, Error> {
-        Ok(Self {
-            credentials: optional_credentials(
+        Ok(Self::new(
+            optional_credentials(
                 params,
                 sources,
                 &["vertex_credentials", "vertex_ai_credentials"],
             )?,
-            project_id: optional_string(params, &["vertex_project", "vertex_ai_project"])?,
-            location: optional_string(params, &["vertex_location", "vertex_ai_location"])?,
-        })
+            optional_string(params, &["vertex_project", "vertex_ai_project"])?,
+            optional_string(params, &["vertex_location", "vertex_ai_location"])?,
+        ))
     }
 
     pub fn or_configured(self, project_id: Option<&str>, location: Option<&str>) -> Self {
@@ -467,6 +484,39 @@ mod tests {
         );
         assert_eq!(config.project_id(), Some("alias-project"));
         assert_eq!(config.location(), Some("alias-location"));
+    }
+
+    #[test]
+    fn typed_config_preserves_source_and_empty_value_fallback() {
+        let configured = VertexConfig::new(
+            Some(Sourced::new(
+                SecretValue::new("inline-json"),
+                InputSource::Request,
+            )),
+            Some("project".into()),
+            Some("location".into()),
+        );
+        assert!(matches!(
+            credential_source(&configured, &|_| Some("environment-json".into())),
+            CredentialSource::Inline(value) if value.expose() == "inline-json"
+        ));
+        let empty = VertexConfig::new(
+            Some(Sourced::new(SecretValue::new(" "), InputSource::Request)),
+            Some(" ".into()),
+            Some(" ".into()),
+        );
+        assert!(matches!(
+            credential_source(&empty, &|_| None),
+            CredentialSource::Adc
+        ));
+        assert_eq!(
+            get_vertex_ai_project(&empty, &|_| Some("env-project".into())).as_deref(),
+            Some("env-project")
+        );
+        assert_eq!(
+            get_vertex_ai_location(&empty, &|_| Some("env-location".into())).as_deref(),
+            Some("env-location")
+        );
     }
 
     #[test]

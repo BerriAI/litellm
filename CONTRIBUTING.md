@@ -268,10 +268,13 @@ If you want to build the Docker image yourself:
 # Build using the non-root Dockerfile
 docker build -f docker/Dockerfile.non_root -t litellm_dev .
 
+# Generate a master key. Requests send it as the bearer token
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
+
 # Run with your config
 docker run \
     -v $(pwd)/proxy_config.yaml:/app/config.yaml \
-    -e LITELLM_MASTER_KEY="sk-1234" \
+    -e LITELLM_MASTER_KEY \
     -p 4000:4000 \
     litellm_dev \
     --config /app/config.yaml --detailed_debug
