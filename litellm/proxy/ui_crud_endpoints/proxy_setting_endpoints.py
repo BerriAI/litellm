@@ -1755,18 +1755,21 @@ async def get_ui_settings():
     ui_settings: Final = {k: v for k, v in parsed.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
 
     apply_runtime_general_settings_flags(ui_settings)
-    proxy_config.settings.apply_db_row("ui_settings", ui_settings)
 
     # Refresh DualCache so other code paths (e.g. /user/filter/ui) see fresh values
     from litellm.proxy.proxy_server import user_api_key_cache
 
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
-    effective_ui_settings: Final = {
-        **{key: proxy_config.settings[key] for key in ALLOWED_UI_SETTINGS_FIELDS if key in proxy_config.settings},
-        **ui_settings,
-    }
-    config: Final[dict[str, object]] = {"litellm_settings": {"ui_settings": effective_ui_settings}}
+    effective_ui_settings: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            **{key: proxy_config.settings[key] for key in ALLOWED_UI_SETTINGS_FIELDS if key in proxy_config.settings},
+            **ui_settings,
+        }
+    )
+    config: Final[Mapping[str, object]] = MappingProxyType(
+        {"litellm_settings": MappingProxyType({"ui_settings": effective_ui_settings})}
+    )
     settings_class: Final = _get_effective_ui_settings_class()
     resolved_settings: Final = _SettingsWithSchema.model_validate(
         await _get_settings_with_schema(
@@ -1775,16 +1778,22 @@ async def get_ui_settings():
             config=config,
         )
     )
-    values: Final = {
-        **resolved_settings.values,
-        ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
-    }
-    source: Final[dict[str, FieldSource]] = {
-        key: (
-            "db" if key in ui_settings else _ui_setting_source(key, values[key], proxy_config.settings, settings_class)
-        )
-        for key in values
-    }
+    values: Final[Mapping[str, object]] = MappingProxyType(
+        {
+            **resolved_settings.values,
+            ENABLE_PTU_COST_ATTRIBUTION_UI_SETTING: is_ptu_cost_attribution_enabled(),
+        }
+    )
+    source: Final[Mapping[str, FieldSource]] = MappingProxyType(
+        {
+            key: (
+                "db"
+                if key in ui_settings
+                else _ui_setting_source(key, values[key], proxy_config.settings, settings_class)
+            )
+            for key in values
+        }
+    )
     return UISettingsResponse(
         values=values,
         field_schema=resolved_settings.field_schema,

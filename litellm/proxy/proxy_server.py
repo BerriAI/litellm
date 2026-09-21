@@ -15991,7 +15991,7 @@ def _nested_setting_source(
     field_default: JsonValue,
 ) -> FieldSource:
     db_value: Final = db_values.get(field_name)
-    if db_value is not None and db_value != []:
+    if db_value is not None and not (isinstance(db_value, list) and len(db_value) == 0):
         return "db"
     parent_value: Final = settings.config_value(parent_key)
     if isinstance(parent_value, Mapping) and field_name in parent_value:
@@ -16036,13 +16036,13 @@ async def alerting_settings(
         where={"param_name": "general_settings"}
     )
 
-    db_general_settings_dict: Final[Mapping[str, JsonValue]] = (
-        dict(db_general_settings.param_value)
+    db_general_settings_dict: Final[Mapping[str, JsonValue]] = MappingProxyType(
+        dict(db_general_settings.param_value)  # mutable-ok: Prisma returns the JSON column as a plain dict
         if db_general_settings is not None and db_general_settings.param_value is not None
         else {}
     )
     alerting_args_value: Final = db_general_settings_dict.get("alerting_args")
-    alerting_args_dict: Final[Mapping[str, JsonValue]] = (
+    alerting_args_dict: Final[Mapping[str, JsonValue]] = MappingProxyType(
         alerting_args_value if isinstance(alerting_args_value, dict) else {}
     )
     alerting_values: Final = cast(  # cast-ok: alerting is stored as a JSON list when present
@@ -16050,7 +16050,6 @@ async def alerting_settings(
     )
 
     settings: Final = proxy_config.settings
-    settings.apply_db_row("general_settings", db_general_settings_dict)
 
     allowed_args: Final = MappingProxyType(
         {

@@ -15,10 +15,22 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     get_router_settings,
 )
+from litellm.proxy.config_resolvers import SettingsStore
 from litellm.proxy.proxy_server import app
 from litellm.router import Router
 
 client = TestClient(app)
+
+
+def _stub_proxy_config(router_settings, config_router_settings):
+    class _StubProxyConfig:
+        def __init__(self):
+            self.router_settings = router_settings
+
+        async def get_config(self, config_file_path=None):
+            return {"router_settings": dict(config_router_settings)}
+
+    return _StubProxyConfig()
 
 
 class TestRouterSettingsEndpoints:
@@ -77,25 +89,18 @@ class TestRouterSettingsEndpoints:
 
     @pytest.mark.asyncio
     async def test_get_router_settings_reports_sources(self, monkeypatch):
-        from litellm.proxy.config_resolvers import SettingsStore
-
         store = SettingsStore("router_settings")
         store.load_yaml({"routing_strategy": "simple-shuffle"})
         store.apply_db_row("router_settings", {"num_retries": 3})
-        monkeypatch.setattr(proxy_server.proxy_config, "router_settings", store)
-        monkeypatch.setattr(proxy_server, "llm_router", None)
-
-        async def fake_get_config(self, config_file_path=None):
-            return {
-                "router_settings": {
-                    "routing_strategy": "simple-shuffle",
-                    "num_retries": 3,
-                }
-            }
-
         monkeypatch.setattr(
-            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
+            proxy_server,
+            "proxy_config",
+            _stub_proxy_config(
+                store,
+                {"routing_strategy": "simple-shuffle", "num_retries": 3},
+            ),
         )
+        monkeypatch.setattr(proxy_server, "llm_router", None)
 
         admin_user = UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x"
@@ -132,12 +137,10 @@ class TestRouterSettingsEndpoints:
         )
 
         monkeypatch.setattr(proxy_server, "llm_router", llm_router)
-
-        async def fake_get_config(self, config_file_path=None):
-            return {}
-
         monkeypatch.setattr(
-            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
+            proxy_server,
+            "proxy_config",
+            _stub_proxy_config(SettingsStore("router_settings"), {}),
         )
 
         admin_user = UserAPIKeyAuth(
