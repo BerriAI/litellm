@@ -820,6 +820,8 @@ def test_redis_semantic_configuration_drift_falls_back_to_python(
         assert resolver.resolve().kind == "python_callback"
     with rebound(facade.cache, "_index_name", "other-index"):
         assert resolver.resolve().kind == "python_callback"
+    with rebound(facade.cache, "CACHE_KEY_FIELD_NAME", "other-field"):
+        assert resolver.resolve().kind == "python_callback"
 
     def patched_embedding(self: object, prompt: str, metadata: object = None) -> list[float]:
         return _semantic_embedding(prompt)
