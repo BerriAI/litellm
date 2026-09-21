@@ -13538,9 +13538,13 @@ class TestHeuristicFirst:
                 ],
                 4,
             ),
+            (
+                [{"role": "user", "content": [{"type": "tool_result", "content": "abcdefghijklmnop"}]}],
+                4,
+            ),
         ],
     )
-    def test_estimated_conversation_tokens_counts_text_parts(self, messages, expected):
+    def test_estimated_conversation_tokens_counts_text_and_tool_result_parts(self, messages, expected):
         assert _estimated_conversation_tokens(messages) == expected
 
     @pytest.mark.asyncio

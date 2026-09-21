@@ -278,7 +278,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
     const parsed: number = Number(raw);
     if (Number.isFinite(parsed)) {
       onChange({ ...value, heuristic_first_max_context_tokens: Math.max(1, Math.round(parsed)) });
+      return;
     }
+    onChange({ ...value, heuristic_first_max_context_tokens: undefined });
   };
 
   const handleHybridBoundaryMarginChange = (raw: string) => {

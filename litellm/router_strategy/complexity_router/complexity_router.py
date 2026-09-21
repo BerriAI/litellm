@@ -460,8 +460,22 @@ def _message_text(content: object) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _estimated_content_characters(content: object) -> int:
+    if isinstance(content, str):
+        return len(content)
+    if isinstance(content, list):
+        return sum(_estimated_content_characters(part) for part in content)
+    if isinstance(content, Mapping):
+        content_type: Final = content.get("type")
+        if content_type == "text":
+            return _estimated_content_characters(content.get("text"))
+        if content_type == "tool_result":
+            return _estimated_content_characters(content.get("content"))
+    return 0
+
+
 def _estimated_conversation_tokens(messages: Sequence[Mapping[str, object]] | None) -> int:
-    return sum(len(_message_text(message.get("content"))) // 4 for message in messages or ())
+    return sum(_estimated_content_characters(message.get("content")) // 4 for message in messages or ())
 
 
 def _reminder_block_spans(lowered: str, open_marker: str, close_marker: str) -> Iterator[tuple[int, int]]:
