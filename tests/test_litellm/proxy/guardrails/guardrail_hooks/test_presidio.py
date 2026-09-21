@@ -4,6 +4,7 @@ Tests PII detection and masking for different message formats
 """
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
@@ -2331,47 +2332,119 @@ async def test_apply_guardrail_masks_on_request():
     assert "John Smith" not in result["texts"][0]
 
 
+def _anthropic_sse(event_type: str, payload: dict) -> bytes:
+    return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
+
+
+def _anthropic_text_deltas(chunks: list[bytes]) -> list[tuple[int, str]]:
+    deltas = []
+    for line in b"".join(chunks).decode().split("\n"):
+        if not line.startswith("data: "):
+            continue
+        event = json.loads(line[6:])
+        if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta":
+            deltas.append((event["index"], event["delta"]["text"]))
+    return deltas
+
+
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_bytes_only_logs_warning():
+async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_across_deltas():
     """
-    Regression test: when apply_to_output=True and the stream contains only
-    bytes chunks (Anthropic native SSE), output masking is skipped.
-    A warning must be logged so operators are aware.
+    Anthropic native /v1/messages streams reach the post_call hook as raw SSE
+    bytes. Output masking must run over the whole content block so a card
+    number split across text_delta events cannot reach the caller.
     """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
     )
 
     byte_chunks = [
-        b'data: {"type":"content_block_delta","delta":{"text":"Hello"}}\n\n',
-        b'data: {"type":"content_block_delta","delta":{"text":" world"}}\n\n',
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111"}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
     ]
 
     async def mock_stream():
         for b in byte_chunks:
             yield b
 
-    mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert all(isinstance(chunk, bytes) for chunk in collected)
+    joined = b"".join(collected).decode()
+    assert "4111" not in joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
+    assert joined.count("event: message_start") == 1
+    assert joined.count("event: message_stop") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_forwarded_unchanged():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "Hello world"},
+    )
+
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
 
     collected = []
-    with patch("litellm.proxy.guardrails.guardrail_hooks.presidio.verbose_proxy_logger") as mock_logger:
-        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=mock_user_api_key,
-            response=mock_stream(),
-            request_data={},
-        ):
-            collected.append(chunk)
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
 
-        # All bytes should be yielded through
-        assert len(collected) == len(byte_chunks)
-        for original, received in zip(byte_chunks, collected):
-            assert original == received
-
-        # Warning must be logged about skipped masking
-        mock_logger.warning.assert_called_once()
-        warning_msg = mock_logger.warning.call_args[0][0]
-        assert "Output PII masking was skipped" in warning_msg
+    assert collected == byte_chunks
 
 
 @pytest.mark.asyncio
