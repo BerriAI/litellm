@@ -73,7 +73,7 @@ fancy-regex = "0.19.2"
 veil = "0.3.0"
 
 [profile.release]
-opt-level = 2
+opt-level = 3
 lto = "thin"
 codegen-units = 1
 panic = "unwind"
