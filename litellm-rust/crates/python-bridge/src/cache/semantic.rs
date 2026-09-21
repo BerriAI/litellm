@@ -3,7 +3,11 @@ use std::collections::VecDeque;
 use litellm_cache::Error;
 use litellm_cache_redis_semantic::prompt_from_context;
 use litellm_host_python::{Execution, ExecutionBody, ExecutionStep, run_async};
-use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*};
+use pyo3::{
+    PyTraverseError, PyVisit,
+    exceptions::{PyException, PyRuntimeError},
+    prelude::*,
+};
 use serde_json::Value;
 
 use super::{
@@ -120,9 +124,16 @@ impl ExecutionBody for SemanticBody {
                                 "semantic execution expected an embedding result",
                             )
                         })?;
-                        let seed = result
-                            .and_then(|value| PythonEmbedder::extract(value.into_bound(py)))
-                            .map_err(|_| Error::Unavailable);
+                        let seed = match result {
+                            Ok(value) => PythonEmbedder::extract(value.into_bound(py))
+                                .map_err(|_| Error::Unavailable),
+                            Err(error) => {
+                                if !error.is_instance_of::<PyException>(py) {
+                                    return Err(error);
+                                }
+                                Err(Error::Unavailable)
+                            }
+                        };
                         return self.backend_step(py, seed);
                     }
                     Phase::AwaitingBackend => {
