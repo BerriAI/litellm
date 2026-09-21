@@ -17,5 +17,7 @@ pub use state::{SecretManagerState, secret_manager_would_be_consulted};
 
 #[cfg(feature = "aws")]
 pub use litellm_secrets_aws as aws;
+#[cfg(feature = "azure")]
+pub use litellm_secrets_azure as azure;
 #[cfg(feature = "google")]
 pub use litellm_secrets_google as google;

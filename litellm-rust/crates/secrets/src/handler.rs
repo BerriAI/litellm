@@ -13,6 +13,8 @@ pub enum SecretManager {
     GoogleKms(crate::google::GoogleKms),
     #[cfg(feature = "google")]
     GoogleSecretManager(crate::google::GoogleSecretManager),
+    #[cfg(feature = "azure")]
+    AzureKeyVault(crate::azure::AzureKeyVault),
 }
 
 impl SecretManager {
@@ -27,6 +29,8 @@ impl SecretManager {
             Self::GoogleKms(_) => KeyManagementSystem::GoogleKms,
             #[cfg(feature = "google")]
             Self::GoogleSecretManager(_) => KeyManagementSystem::GoogleSecretManager,
+            #[cfg(feature = "azure")]
+            Self::AzureKeyVault(_) => KeyManagementSystem::AzureKeyVault,
         }
     }
 }
@@ -76,6 +80,11 @@ pub async fn get_secret_from_manager(
         #[cfg(feature = "google")]
         SecretManager::GoogleSecretManager(client) => client
             .get_secret_from_google_secret_manager(secret_name)
+            .await
+            .map_err(Error::from),
+        #[cfg(feature = "azure")]
+        SecretManager::AzureKeyVault(client) => client
+            .get_secret_from_azure_key_vault(secret_name)
             .await
             .map_err(Error::from),
     }
