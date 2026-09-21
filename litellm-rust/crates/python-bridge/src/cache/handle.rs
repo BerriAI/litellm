@@ -167,6 +167,21 @@ impl CacheTestHandle {
         })
     }
 
+    #[staticmethod]
+    #[pyo3(signature = (account_url, container))]
+    fn azure_blob(py: Python<'_>, account_url: String, container: String) -> PyResult<Self> {
+        let service = run_sync_value(py, async move {
+            NativeResponseCache::azure_blob(&account_url, &container)
+                .await
+                .map_err(cache_error)
+        })?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
     #[getter]
     fn backend(&self) -> &'static str {
         self.service.kind()

@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{CacheCodec, CacheConnectionResult, Error, SemanticCacheContext};
+use litellm_cache_azure_blob::AzureBlobCache;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_qdrant_semantic::{Embedder, OpenAiEmbedder, QdrantSemanticCache};
 use litellm_cache_redis::{RedisCache, RedisTopology};
@@ -19,6 +20,7 @@ pub(super) enum NativeResponseCache {
         buffer: Option<Arc<WriteBuffer>>,
     },
     QdrantSemantic(Arc<ResponseCache<QdrantSemanticCache<OpenAiEmbedder, ResponseCacheCodec>>>),
+    AzureBlob(Arc<ResponseCache<AzureBlobCache<ResponseCacheCodec>>>),
 }
 
 impl NativeResponseCache {
@@ -73,6 +75,29 @@ impl NativeResponseCache {
             Arc::new(cache),
         ))))
     }
+
+    pub async fn azure_blob(account_url: &str, container: &str) -> Result<Self, Error> {
+        let backend = AzureBlobCache::connect(
+            account_url,
+            container,
+            ResponseCacheCodec,
+            tokio::runtime::Handle::current(),
+        )
+        .await?;
+        Ok(Self::AzureBlob(Arc::new(ResponseCache::new(Arc::new(
+            backend,
+        )))))
+    }
+
+    pub fn azure_blob_identity(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::AzureBlob(cache) => Some((
+                cache.backend().account_url(),
+                cache.backend().container_name(),
+            )),
+            Self::Memory(_) | Self::Redis { .. } | Self::QdrantSemantic(_) => None,
+        }
+    }
 }
 
 impl NativeResponseCache {
@@ -81,6 +106,7 @@ impl NativeResponseCache {
             Self::Memory(_) => "memory",
             Self::Redis { .. } => "redis",
             Self::QdrantSemantic(_) => "qdrant_semantic",
+            Self::AzureBlob(_) => "azure-blob",
         }
     }
 
@@ -89,12 +115,13 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
             Self::QdrantSemantic(_) => None,
+            Self::AzureBlob(cache) => cache.default_ttl(),
         }
     }
 
     pub fn namespace(&self) -> Option<&str> {
         match self {
-            Self::Memory(_) => None,
+            Self::Memory(_) | Self::AzureBlob(_) => None,
             Self::Redis { cache, .. } => cache.backend().namespace(),
             Self::QdrantSemantic(_) => None,
         }
@@ -102,7 +129,7 @@ impl NativeResponseCache {
 
     pub fn topology(&self) -> Option<&RedisTopology> {
         match self {
-            Self::Memory(_) => None,
+            Self::Memory(_) | Self::AzureBlob(_) => None,
             Self::Redis { cache, .. } => Some(cache.backend().topology()),
             Self::QdrantSemantic(_) => None,
         }
@@ -113,6 +140,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
             Self::Redis { .. } => None,
             Self::QdrantSemantic(_) => None,
+            Self::AzureBlob(_) => None,
         }
     }
 
@@ -121,6 +149,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.backend().max_entry_bytes(),
             Self::Redis { .. } => None,
             Self::QdrantSemantic(_) => None,
+            Self::AzureBlob(_) => None,
         }
     }
 
@@ -130,7 +159,7 @@ impl NativeResponseCache {
                 cache,
                 buffer: flush_size.map(|flush_size| Arc::new(WriteBuffer::new(flush_size))),
             },
-            memory => memory,
+            other => other,
         }
     }
 
@@ -171,6 +200,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.lookup(&exact(request), now),
             Self::Redis { cache, .. } => cache.lookup(&exact(request), now),
             Self::QdrantSemantic(cache) => cache.lookup(request, now),
+            Self::AzureBlob(cache) => cache.lookup(&exact(request), now),
         }
     }
 
@@ -184,6 +214,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.store(&exact(request), response, now),
             Self::Redis { cache, .. } => cache.store(&exact(request), response, now),
             Self::QdrantSemantic(cache) => cache.store(request, response, now),
+            Self::AzureBlob(cache) => cache.store(&exact(request), response, now),
         }
     }
 
@@ -200,6 +231,9 @@ impl NativeResponseCache {
                 cache.lookup_batch(&requests.iter().map(exact).collect::<Vec<_>>(), now)
             }
             Self::QdrantSemantic(_) => Err(Error::UnsupportedOperation),
+            Self::AzureBlob(cache) => {
+                cache.lookup_batch(&requests.iter().map(exact).collect::<Vec<_>>(), now)
+            }
         }
     }
 
@@ -212,6 +246,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.async_lookup(&exact(request), now).await,
             Self::Redis { cache, .. } => cache.async_lookup(&exact(request), now).await,
             Self::QdrantSemantic(cache) => cache.async_lookup(request, now).await,
+            Self::AzureBlob(cache) => cache.async_lookup(&exact(request), now).await,
         }
     }
 
@@ -235,6 +270,7 @@ impl NativeResponseCache {
                 buffer.async_store(cache, &request, response, now).await
             }
             Self::QdrantSemantic(cache) => cache.async_store(request, response, now).await,
+            Self::AzureBlob(cache) => cache.async_store(&exact(request), response, now).await,
         }
     }
 
@@ -253,6 +289,10 @@ impl NativeResponseCache {
                 cache.async_lookup_batch(&requests, now).await
             }
             Self::QdrantSemantic(_) => Err(Error::UnsupportedOperation),
+            Self::AzureBlob(cache) => {
+                let requests = requests.iter().map(exact).collect::<Vec<_>>();
+                cache.async_lookup_batch(&requests, now).await
+            }
         }
     }
 
@@ -285,6 +325,17 @@ impl NativeResponseCache {
                     .await
             }
             Self::QdrantSemantic(cache) => cache.async_store_batch(entries, now).await,
+            Self::AzureBlob(cache) => {
+                cache
+                    .async_store_batch(
+                        entries
+                            .into_iter()
+                            .map(|(request, value)| (exact(&request), value))
+                            .collect(),
+                        now,
+                    )
+                    .await
+            }
         }
     }
 
@@ -298,6 +349,7 @@ impl NativeResponseCache {
                 cache.async_flush().await
             }
             Self::QdrantSemantic(_) => Err(Error::UnsupportedOperation),
+            Self::AzureBlob(cache) => cache.async_flush().await,
         }
     }
 
@@ -306,6 +358,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.test_connection().await,
             Self::Redis { cache, .. } => cache.test_connection().await,
             Self::QdrantSemantic(_) => Err(Error::UnsupportedOperation),
+            Self::AzureBlob(cache) => cache.test_connection().await,
         }
     }
 }

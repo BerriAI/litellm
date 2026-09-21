@@ -2518,6 +2518,7 @@ async def delete_user(
 
     ## DELETE USERS
     deleted_users: Final = await _user_table(prisma_client).delete_many(where={"user_id": {"in": data.user_ids}})
+    await evict_and_broadcast(cache_keys=tuple(data.user_ids), user_api_key_cache=user_api_key_cache)
 
     return deleted_users
 
