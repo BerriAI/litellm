@@ -152,7 +152,7 @@ export enum Providers {
   PETALS = "Petals",
   PG_VECTOR = "Pg Vector",
   PREDIBASE = "Predibase",
-  Qwen_AI_Platform = "Qwen AI Platform",
+  Qwen_AI_Platform = "Qianwen AI Platform",
   QwenCloud = "QwenCloud",
   RECRAFT = "Recraft",
   REPLICATE = "Replicate",
