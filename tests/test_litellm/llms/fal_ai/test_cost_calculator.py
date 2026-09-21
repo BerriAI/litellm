@@ -2,7 +2,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
-from litellm.llms.fal_ai.cost_calculator import cost_calculator
+from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthrough_cost
 from litellm.types.utils import ImageObject, ImageResponse
 
 
@@ -160,3 +160,32 @@ def test_image_edit_call_type_routes_to_fal_keyed_pricing():
         call_type="aimage_edit",
     )
     assert cost == litellm.model_cost[f"fal_ai/medium/1024-x-1024/{model}"]["output_cost_per_image"] > 0
+
+
+def test_passthrough_trellis_charges_flat_rate():
+    assert (
+        fal_ai_passthrough_cost("fal-ai/trellis", {})
+        == litellm.model_cost["fal_ai/fal-ai/trellis"]["output_cost_per_image"]
+        > 0
+    )
+
+
+@pytest.mark.parametrize("resolution", [512, 1024, 1536])
+def test_passthrough_trellis_2_resolution_picks_keyed_tier(resolution):
+    assert (
+        fal_ai_passthrough_cost("fal-ai/trellis-2", {"resolution": resolution})
+        == litellm.model_cost["fal_ai/fal-ai/trellis-2"][f"output_cost_per_image_{resolution}"]
+        > 0
+    )
+
+
+def test_passthrough_trellis_2_without_resolution_falls_back_to_default_rate():
+    assert (
+        fal_ai_passthrough_cost("fal-ai/trellis-2", {"image_url": "https://a"})
+        == litellm.model_cost["fal_ai/fal-ai/trellis-2"]["output_cost_per_image"]
+        > 0
+    )
+
+
+def test_passthrough_unknown_model_returns_none():
+    assert fal_ai_passthrough_cost("fal-ai/no-such-model", {"resolution": 512}) is None

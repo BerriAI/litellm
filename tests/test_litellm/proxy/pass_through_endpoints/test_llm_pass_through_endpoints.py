@@ -38,6 +38,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     bedrock_proxy_route,
     create_pass_through_route,
     cursor_proxy_route,
+    fal_ai_proxy_route,
     get_azure_ai_search_index_from_endpoint,
     get_vertex_base_url,
     is_azure_ai_search_service_level_index_create,
@@ -7114,3 +7115,68 @@ class TestTypeSafePassthroughRoute:
             custom_llm_provider="typesafe",
             is_streaming_request=False,
         )
+
+
+class TestFalAIPassthroughRoute:
+    @pytest.fixture
+    def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+        from litellm.proxy.proxy_server import app
+
+        monkeypatch.setenv("FAL_AI_API_KEY", "fal-test-key")
+        monkeypatch.delenv("FAL_AI_API_BASE", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+        yield TestClient(app)
+
+    def test_forwards_fal_body_and_key_scheme_upstream(self, client: TestClient) -> None:
+        body: Final = {"image_url": "https://example.com/in.png", "resolution": 1536}
+        with respx.mock(assert_all_called=True) as upstream:
+            route = upstream.post("https://fal.run/fal-ai/trellis-2").mock(
+                return_value=httpx.Response(200, json={"model_glb": {"url": "https://fal.media/model.glb"}})
+            )
+            response = client.post("/fal_ai/fal-ai/trellis-2", json=body)
+
+            assert response.status_code == 200, response.text
+            assert response.json() == {"model_glb": {"url": "https://fal.media/model.glb"}}
+            sent = route.calls.last.request
+            assert sent.headers["authorization"] == "Key fal-test-key"
+            assert json.loads(sent.content or b"{}") == body
+
+    def test_honours_fal_ai_api_base_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("FAL_AI_API_KEY", "fal-test-key")
+        monkeypatch.setenv("FAL_AI_API_BASE", "https://fal.example/base")
+        endpoint_func = AsyncMock(return_value={"ok": True})
+        create_route = Mock(return_value=endpoint_func)
+        monkeypatch.setattr(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            create_route,
+        )
+        request = MagicMock(spec=Request)
+        request.method = "POST"
+        request.query_params = {}
+        request.json = AsyncMock(return_value={})
+
+        result = asyncio.run(
+            fal_ai_proxy_route(
+                endpoint="fal-ai/trellis",
+                request=request,
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
+            )
+        )
+
+        assert result == {"ok": True}
+        create_route.assert_called_once_with(
+            endpoint="fal-ai/trellis",
+            target="https://fal.example/base/fal-ai/trellis",
+            custom_headers={"Authorization": "Key fal-test-key"},
+            custom_llm_provider="fal_ai",
+            is_streaming_request=False,
+        )
+
+    def test_missing_fal_key_returns_401(self, client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("FAL_AI_API_KEY", raising=False)
+        response = client.post("/fal_ai/fal-ai/trellis", json={})
+        assert response.status_code == 401
