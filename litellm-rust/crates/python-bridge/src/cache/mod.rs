@@ -10,7 +10,7 @@ mod resolver;
 
 use litellm_cache::Error;
 use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
+    exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError},
     prelude::*,
 };
 
@@ -21,6 +21,7 @@ pub(crate) use self::{
 fn cache_error(error: Error) -> PyErr {
     match error {
         Error::InvalidEntry => PyValueError::new_err(error.to_string()),
+        Error::UnsupportedOperation => PyNotImplementedError::new_err(error.to_string()),
         _ => PyRuntimeError::new_err(error.to_string()),
     }
 }
