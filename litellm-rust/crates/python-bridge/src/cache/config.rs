@@ -278,6 +278,9 @@ impl NativeCacheConfig {
                 {
                     Some("facade and native backend containers must match")
                 }
+                Some(_) if service.default_ttl().is_some() => {
+                    Some("facade and native backend default TTLs must match")
+                }
                 Some(_) => None,
             },
         }
