@@ -11,12 +11,15 @@ from litellm.llms.fal_ai.videos.transformation import (
     FalAIVideoError,
     _queue_request_base_path,
 )
+from litellm.llms.openai.cost_calculation import video_generation_cost
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.types.videos.utils import decode_video_id_with_provider
 from litellm.utils import ProviderConfigManager
 
 MODEL = "bytedance/seedance-2.5/text-to-video"
+H3_TEXT_MODEL = "minimax/h3/text-to-video"
+H3_REFERENCE_MODEL = "minimax/h3/reference-to-video"
 
 
 class TestFalAIVideoTransformation:
@@ -63,6 +66,24 @@ class TestFalAIVideoTransformation:
     def test_map_openai_params_rejects_non_url_input_reference(self):
         with pytest.raises(ValueError, match="public image URL"):
             self.config.map_openai_params({"input_reference": b"image"}, MODEL, False)
+
+    def test_map_openai_params_supports_h3_profiles(self):
+        url = "https://example.com/image.png"
+
+        assert self.config.map_openai_params({"size": "2k"}, H3_TEXT_MODEL, False) == {"resolution": "2K"}
+        assert self.config.map_openai_params({"size": "1024x768"}, H3_TEXT_MODEL, False) == {
+            "resolution": "768P",
+            "aspect_ratio": "4:3",
+        }
+        mapped = self.config.map_openai_params(
+            {"seconds": 6, "input_reference": url},
+            H3_REFERENCE_MODEL,
+            False,
+        )
+        assert mapped["duration"] == 6
+        assert isinstance(mapped["duration"], int)
+        assert mapped["reference_image_urls"] == [url]
+        assert "image_url" not in mapped
 
     def test_transform_video_create_request(self):
         body, files, url = self.config.transform_video_create_request(
@@ -140,6 +161,20 @@ class TestFalAIVideoTransformation:
         assert auto_video.usage == {"video_resolution": "720p"}
         assert auto_video.seconds is None
         assert auto_video.size is None
+
+    def test_transform_video_create_response_uses_h3_default_resolution(self):
+        response = Mock(spec=httpx.Response)
+        response.json.return_value = {"request_id": "abc"}
+
+        video = self.config.transform_video_create_response(
+            model=H3_TEXT_MODEL,
+            raw_response=response,
+            logging_obj=self.logging_obj,
+            custom_llm_provider="fal_ai",
+            request_data={"duration": 5},
+        )
+
+        assert video.usage == {"duration_seconds": 5.0, "video_resolution": "2K"}
 
     def test_status_request_uses_queue_base_path(self):
         response = Mock(spec=httpx.Response)
@@ -290,9 +325,29 @@ class TestFalAIVideoTransformation:
         }
         assert rows
         for model, row in rows.items():
-            assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution="480p") == (
-                5 * row["output_cost_per_second_480p"]
-            )
-            assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution="720p") == (
+            for key, value in row.items():
+                if key.startswith("output_cost_per_second_") and value is not None:
+                    tier = key.removeprefix("output_cost_per_second_")
+                    assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution=tier) == 5 * value
+            assert default_video_cost_calculator(model, 5, "fal_ai", video_resolution="9999p") == (
                 5 * row["output_cost_per_second"]
             )
+
+    def test_h3_video_cost_uses_model_info_tiers(self, local_model_cost_map):
+        row = litellm.model_cost[f"fal_ai/{H3_TEXT_MODEL}"]
+        model_info = litellm.get_model_info(model=H3_TEXT_MODEL, custom_llm_provider="fal_ai")
+
+        assert video_generation_cost(
+            model=H3_TEXT_MODEL,
+            duration_seconds=5,
+            custom_llm_provider="fal_ai",
+            model_info=model_info,
+            video_resolution="2K",
+        ) == 5 * row["output_cost_per_second_2k"]
+        assert video_generation_cost(
+            model=H3_TEXT_MODEL,
+            duration_seconds=5,
+            custom_llm_provider="fal_ai",
+            model_info=model_info,
+            video_resolution="768p",
+        ) == 5 * row["output_cost_per_second_768p"]

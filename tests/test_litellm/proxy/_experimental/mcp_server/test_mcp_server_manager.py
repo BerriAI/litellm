@@ -13182,6 +13182,8 @@ class _DiscoveryUpstream:
         await self.release.wait()
         if self.outcome == "failure":
             return httpx2.Response(503)
+        if self.outcome == "paged_failure" and (payload.params or {}).get("cursor"):
+            return httpx2.Response(503)
         if self.outcome == "cancelled":
             raise asyncio.CancelledError()
         if self.outcome == "rejected":
@@ -13196,7 +13198,12 @@ class _DiscoveryUpstream:
             },
             "tools/list": {"tools": []},
         }[payload.method]
-        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+        continuation: Final = (
+            {"nextCursor": "last-page"}
+            if self.outcome in ("paged", "paged_failure") and not (payload.params or {}).get("cursor")
+            else {}
+        )
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": {**result, **continuation}})
 
     @property
     def initializes(self) -> int:
@@ -13260,6 +13267,29 @@ async def test_discovery_cache_empty_results_and_failures(kind: str, outcome: st
             upstream.outcome = "supported"
             assert (await operation(_discovery_server(), None))[0].name == "discovery-example"
             assert upstream.initializes == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
+async def test_discovery_cache_retries_failed_pagination_before_caching_complete_list(kind: str) -> None:
+    manager: Final = MCPServerManager()
+    upstream: Final = _DiscoveryUpstream()
+    upstream.outcome = "paged_failure"
+    operation: Final = {
+        "prompts": manager.get_prompts_from_server,
+        "resources": manager.get_resources_from_server,
+        "templates": manager.get_resource_templates_from_server,
+    }[kind]
+    with _mcp_upstream(upstream.respond):
+        assert await operation(_discovery_server(), None) == []
+        assert upstream.initializes == 1
+        upstream.outcome = "paged"
+        recovered: Final = await operation(_discovery_server(), None)
+        assert [item.name for item in recovered] == ["discovery-example", "discovery-example"]
+        assert upstream.initializes == 2
+        requests_after_recovery: Final = upstream.requests
+        assert await operation(_discovery_server(), None) == recovered
+        assert upstream.requests == requests_after_recovery
 
 
 @pytest.mark.asyncio
