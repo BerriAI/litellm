@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from litellm.constants import SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS
 from litellm.proxy.shutdown.scheduled_jobs import (
     AwaitableAsyncIOExecutor,
     pause_scheduled_jobs,
@@ -80,7 +79,7 @@ async def test_a_job_that_is_finishing_is_allowed_to_finish_rather_than_cancelle
     write = _Job(work_seconds=0.2)
     stuck = _Job()
     async with _running_scheduler(write, stuck) as (scheduler, executor):
-        await stop_in_flight_scheduler_jobs(scheduler, executor)
+        await stop_in_flight_scheduler_jobs(scheduler, executor, finish_timeout_seconds=2.0)
 
         assert write.events == ["committed", "finished"]
         assert stuck.events == ["cancelled", "finished"]
@@ -103,13 +102,10 @@ async def test_a_job_that_ignores_cancellation_is_abandoned_after_the_timeout(ca
     job = _Job(swallow_cancellation=True)
     async with _running_scheduler(job) as (scheduler, executor):
         with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-            await stop_in_flight_scheduler_jobs(scheduler, executor)
+            await stop_in_flight_scheduler_jobs(scheduler, executor, cancel_timeout_seconds=0.05)
 
         assert job.events == ["cancelled"]
-        assert (
-            f"1 scheduled job(s) did not finish within {SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS}s of cancellation"
-            in caplog.text
-        )
+        assert "1 scheduled job(s) did not finish within 0.05s of cancellation" in caplog.text
 
 
 @pytest.mark.asyncio

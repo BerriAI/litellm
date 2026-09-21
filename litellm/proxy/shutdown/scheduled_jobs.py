@@ -40,10 +40,16 @@ def pause_scheduled_jobs(scheduler: StoppableScheduler) -> None:
         scheduler.pause()
 
 
-async def stop_in_flight_scheduler_jobs(scheduler: StoppableScheduler, executor: AwaitableAsyncIOExecutor) -> None:
+async def stop_in_flight_scheduler_jobs(
+    scheduler: StoppableScheduler,
+    executor: AwaitableAsyncIOExecutor,
+    *,
+    finish_timeout_seconds: float = SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS,
+    cancel_timeout_seconds: float = SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS,
+) -> None:
     """
-    Let in-flight jobs finish for up to SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS, then stop the scheduler and
-    wait, bounded by SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS, for the jobs it cancels.
+    Let in-flight jobs finish for up to finish_timeout_seconds, then stop the scheduler and wait, bounded by
+    cancel_timeout_seconds, for the jobs it cancels.
 
     Must run before the database is disconnected: a write job that finishes needs its connection,
     and a job's cancellation handler is what records the run's outcome.
@@ -54,11 +60,11 @@ async def stop_in_flight_scheduler_jobs(scheduler: StoppableScheduler, executor:
     if in_flight:
         verbose_proxy_logger.info(
             "Waiting up to %ss for %d in-flight scheduled job(s) to finish",
-            SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS,
+            finish_timeout_seconds,
             len(in_flight),
         )
     still_running: Final = (
-        (await asyncio.wait(in_flight, timeout=SCHEDULED_JOB_SHUTDOWN_FINISH_TIMEOUT_SECONDS))[1]
+        (await asyncio.wait(in_flight, timeout=finish_timeout_seconds))[1]
         if in_flight
         else frozenset()
     )
@@ -66,10 +72,10 @@ async def stop_in_flight_scheduler_jobs(scheduler: StoppableScheduler, executor:
     if not still_running:
         return
     verbose_proxy_logger.info("Cancelling %d in-flight scheduled job(s) for shutdown", len(still_running))
-    _done, pending = await asyncio.wait(still_running, timeout=SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS)
+    _done, pending = await asyncio.wait(still_running, timeout=cancel_timeout_seconds)
     if pending:
         verbose_proxy_logger.warning(
             "%d scheduled job(s) did not finish within %ss of cancellation; giving up on them",
             len(pending),
-            SCHEDULED_JOB_SHUTDOWN_CANCEL_TIMEOUT_SECONDS,
+            cancel_timeout_seconds,
         )
