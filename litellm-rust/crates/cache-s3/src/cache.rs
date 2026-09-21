@@ -42,16 +42,17 @@ pub struct S3Cache<C: CacheCodec> {
 
 impl<C: CacheCodec> S3Cache<C> {
     pub fn new(config: S3CacheConfig, codec: C, runtime: Handle) -> Self {
-        let mut builder = aws_sdk_s3::Config::builder()
+        let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
+        let base = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new(config.region.clone()))
             .credentials_provider(Credentials::new(config.auth))
             .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
             .response_checksum_validation(ResponseChecksumValidation::WhenRequired);
-        let endpoint_url: Option<String> = config.endpoint.map(|endpoint| endpoint.url);
-        if let Some(url) = &endpoint_url {
-            builder = builder.endpoint_url(url).force_path_style(true);
-        }
+        let builder = match &endpoint_url {
+            Some(url) => base.endpoint_url(url).force_path_style(true),
+            None => base,
+        };
         Self {
             client: aws_sdk_s3::Client::from_conf(builder.build()),
             codec,
