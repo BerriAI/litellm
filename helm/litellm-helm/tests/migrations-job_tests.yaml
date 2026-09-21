@@ -342,3 +342,73 @@ tests:
     asserts:
       - notExists:
           path: spec.activeDeadlineSeconds
+
+  - it: should set custom jobLabels and jobAnnotations on Job metadata
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        jobLabels:
+          environment: production
+          team: platform
+        jobAnnotations:
+          example.com/cost-center: "1234"
+    asserts:
+      - equal:
+          path: metadata.labels.environment
+          value: production
+      - equal:
+          path: metadata.labels.team
+          value: platform
+      - equal:
+          path: metadata.annotations['example.com/cost-center']
+          value: "1234"
+
+  - it: should set custom podLabels on Pod template
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        podLabels:
+          custom.io/pod-role: migration
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels['custom.io/pod-role']
+          value: migration
+
+  - it: should override container command and args
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        command:
+          - sh
+        args:
+          - -c
+          - echo migrating
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - sh
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value:
+            - -c
+            - echo migrating
+
+  - it: should clear container args when only command is specified
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+        command:
+          - sh
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - sh
+      - equal:
+          path: spec.template.spec.containers[0].args
+          value: []

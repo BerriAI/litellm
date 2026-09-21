@@ -560,6 +560,11 @@ migrationJob:
   # In that case, pre-install/pre-upgrade hooks run before normal resources, so this defaults to "default".
   serviceAccountName: ""
   annotations: {}
+  jobLabels: {} # Custom labels for the Job metadata
+  jobAnnotations: {} # Custom annotations for the Job metadata
+  podLabels: {} # Custom labels for the Job pod template
+  command: [] # Override container command (defaults to ["python", "litellm/proxy/prisma_migration.py"])
+  args: [] # Override container args
   ttlSecondsAfterFinished: 120
   resources: {}
   #  Unset by default. This job runs the database migration and exits, so it does not
