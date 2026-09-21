@@ -7,7 +7,7 @@ metadata:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: gateway
 spec:
-  {{- if not .Values.gateway.hpa.enabled }}
+  {{- if and (not .Values.gateway.hpa.enabled) (not (kindIs "invalid" .Values.gateway.replicaCount)) }}
   replicas: {{ .Values.gateway.replicaCount }}
   {{- end }}
   {{- with .Values.gateway.strategy }}

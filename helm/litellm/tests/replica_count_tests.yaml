@@ -49,6 +49,22 @@ tests:
           path: spec.replicas
           value: 0
 
+  - it: a component with HPA disabled but no replicaCount set keeps omitting spec.replicas, so upgrades do not reset a hand-scaled Deployment
+    set:
+      gateway.hpa.enabled: false
+      backend.hpa.enabled: false
+      ui.hpa.enabled: false
+    asserts:
+      - notExists:
+          path: spec.replicas
+        template: gateway/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: backend/deployment.yaml
+      - notExists:
+          path: spec.replicas
+        template: ui/deployment.yaml
+
   - it: every component omits spec.replicas when its HPA is enabled, so the autoscaler owns the count
     set:
       gateway.hpa.enabled: true
