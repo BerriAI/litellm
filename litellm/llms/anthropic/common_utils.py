@@ -1005,16 +1005,23 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if container_with_skills_used:
             betas.add("skills-2025-10-02")
 
-        _is_oauth: Final = api_key and api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
+        _is_oauth: Final = bool(
+            (api_key and is_anthropic_oauth_key(api_key))
+            or (auth_token and not api_key and is_anthropic_oauth_key(auth_token))
+        )
         headers: Final = {
             "anthropic-version": anthropic_version or "2023-06-01",
             "accept": "application/json",
             "content-type": "application/json",
         }
         if _is_oauth:
-            headers["authorization"] = f"Bearer {api_key}"
-            headers["anthropic-dangerous-direct-browser-access"] = "true"
-            betas.add(ANTHROPIC_OAUTH_BETA_HEADER)
+            if is_anthropic_api_base(api_base):
+                oauth_token: Final = api_key if (api_key and is_anthropic_oauth_key(api_key)) else auth_token
+                headers["authorization"] = (
+                    oauth_token if oauth_token.startswith("Bearer ") else f"Bearer {oauth_token}"  # pyright: ignore[reportOptionalMemberAccess]  # guarded by _is_oauth
+                )
+                headers["anthropic-dangerous-direct-browser-access"] = "true"
+                betas.add(ANTHROPIC_OAUTH_BETA_HEADER)
         elif auth_token and not api_key:
             headers["authorization"] = f"Bearer {auth_token}"
         elif api_key:
@@ -1052,18 +1059,30 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         use_bearer_for_custom_base: Final[bool] = bool(
             isinstance(litellm_params, dict) and litellm_params.get("use_bearer_for_custom_base", False)
         )
-        # Check for Anthropic OAuth token in headers
-        headers, api_key = optionally_handle_anthropic_oauth(
+        # Check for Anthropic OAuth token in headers and sanitize credentials
+        headers, sanitized_key = optionally_handle_anthropic_oauth(
             headers=headers,
             api_key=api_key,
             api_base=api_base,
         )
-        api_key = AnthropicModelInfo.get_api_key(api_key)
+        resolved_key: Final = AnthropicModelInfo.get_api_key(sanitized_key)
+        active_key: Final = (
+            None
+            if (resolved_key and is_anthropic_oauth_key(resolved_key) and not is_anthropic_api_base(api_base))
+            else resolved_key
+        )
         # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
-        auth_token: str | None = None
-        if api_key is None:
-            auth_token = AnthropicModelInfo.get_auth_token()
-        if api_key is None and auth_token is None:
+        resolved_auth_token: Final = AnthropicModelInfo.get_auth_token() if active_key is None else None
+        active_auth_token: Final = (
+            None
+            if (
+                resolved_auth_token
+                and is_anthropic_oauth_key(resolved_auth_token)
+                and not is_anthropic_api_base(api_base)
+            )
+            else resolved_auth_token
+        )
+        if active_key is None and active_auth_token is None:
             raise litellm.AuthenticationError(
                 message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in your environment vars",
                 llm_provider="anthropic",
@@ -1090,8 +1109,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
-            api_key=api_key,
-            auth_token=auth_token,
+            api_key=active_key,
+            auth_token=active_auth_token,
             file_id_used=file_id_used,
             web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),

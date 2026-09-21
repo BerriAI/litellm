@@ -518,6 +518,60 @@ class TestValidateEnvironmentOAuth:
         header = AnthropicModelInfo.get_auth_header(api_key=FAKE_OAUTH_TOKEN, api_base="https://custom.gateway.com")
         assert header is None
 
+    def test_env_oauth_api_key_stripped_for_third_party(self):
+        import pytest
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": FAKE_OAUTH_TOKEN}):
+            with pytest.raises(litellm.AuthenticationError):
+                config.validate_environment(
+                    headers={},
+                    model="claude-sonnet-4-5-20250929",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={"api_base": "http://127.0.0.1:8899"},
+                    api_key=None,
+                    api_base=None,
+                )
+
+    def test_env_oauth_auth_token_stripped_for_third_party(self):
+        import pytest
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": FAKE_OAUTH_TOKEN}):
+            with pytest.raises(litellm.AuthenticationError):
+                config.validate_environment(
+                    headers={},
+                    model="claude-sonnet-4-5-20250929",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={"api_base": "http://127.0.0.1:8899"},
+                    api_key=None,
+                    api_base=None,
+                )
+
+    def test_env_oauth_key_ignored_when_configured_key_provided_for_third_party(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        config = AnthropicModelInfo()
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": FAKE_OAUTH_TOKEN}):
+            updated_headers = config.validate_environment(
+                headers={},
+                model="claude-sonnet-4-5-20250929",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={"api_base": "http://127.0.0.1:8899"},
+                api_key=FAKE_REGULAR_KEY,
+                api_base=None,
+            )
+            assert updated_headers["x-api-key"] == FAKE_REGULAR_KEY
+            assert "authorization" not in updated_headers
+            assert "Authorization" not in updated_headers
+
     def test_custom_api_base_via_litellm_params(self):
         """validate_environment uses Bearer when api_base and use_bearer_for_custom_base are in litellm_params."""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -2151,7 +2205,6 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
-
 
     @pytest.mark.parametrize(
         "model",
