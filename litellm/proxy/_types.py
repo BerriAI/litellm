@@ -708,6 +708,7 @@ class LiteLLMRoutes(enum.Enum):
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
             "/team/spend/by_user",
+            "/experimental/online-model-experiments/{experiment_id}/metrics",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
             # model

@@ -79,14 +79,16 @@ class OnlineModelExperimentRouter:
         selected_variant: Final = next(
             variant for variant in self.config.variants if variant.name == assignment.variant_name
         )
+        _stamp_experiment_metadata(
+            request_kwargs=request_kwargs,
+            experiment_id=self.config.experiment_id,
+            variant_name=selected_variant.name,
+            assignment_key=assignment_key,
+            bucket=assignment.bucket,
+        )
         return PreRoutingHookResponse(
             model=selected_variant.model_name,
             messages=messages,
-            litellm_params={
-                "online_model_experiment_id": self.config.experiment_id,
-                "online_model_experiment_variant": selected_variant.name,
-                "online_model_experiment_bucket": assignment.bucket,
-            },
         )
 
 
@@ -132,3 +134,21 @@ def _raise_on_assignment_error(result: object) -> None:
         raise ValueError(result.message)
     if not isinstance(result, (str, ExperimentAssignment)):
         raise ValueError("online_model_experiment assignment failed")
+
+
+def _stamp_experiment_metadata(
+    request_kwargs: dict[str, object],
+    experiment_id: str,
+    variant_name: str,
+    assignment_key: str,
+    bucket: int,
+) -> None:
+    metadata: Final = request_kwargs.get("metadata")
+    metadata_values: Final = dict(metadata) if isinstance(metadata, Mapping) else {}
+    request_kwargs["metadata"] = {
+        **metadata_values,
+        "online_model_experiment_id": experiment_id,
+        "online_model_experiment_variant": variant_name,
+        "online_model_experiment_assignment_key": assignment_key,
+        "online_model_experiment_bucket": bucket,
+    }

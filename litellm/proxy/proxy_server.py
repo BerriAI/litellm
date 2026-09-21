@@ -598,6 +598,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     router as model_management_router,
 )
+from litellm.proxy.management_endpoints.online_model_experiments import (
+    router as online_model_experiments_router,
+)
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
@@ -19214,6 +19217,7 @@ app.include_router(ui_sso_router)
 app.include_router(organization_router)
 app.include_router(customer_router)
 app.include_router(management_v1_router)
+app.include_router(online_model_experiments_router)
 app.include_router(spend_management_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)

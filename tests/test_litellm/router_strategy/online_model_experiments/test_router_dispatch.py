@@ -46,14 +46,22 @@ async def test_online_model_experiment_dispatches_stably_for_an_identity():
     router = _router()
     request_kwargs = {"metadata": {"user_id": "user-123"}}
 
-    first = await router.async_pre_routing_hook("support-router", request_kwargs.copy())
-    second = await router.async_pre_routing_hook("support-router", request_kwargs.copy())
+    first_kwargs = {"metadata": {"user_id": "user-123"}}
+    second_kwargs = {"metadata": {"user_id": "user-123"}}
+    first = await router.async_pre_routing_hook("support-router", first_kwargs)
+    second = await router.async_pre_routing_hook("support-router", second_kwargs)
 
     assert first is not None
     assert second is not None
     assert first.model in {"model-a", "model-b"}
     assert second.model == first.model
     assert first.litellm_params == second.litellm_params
+    assert first_kwargs["metadata"]["online_model_experiment_id"] == "support-v1"
+    assert first_kwargs["metadata"]["online_model_experiment_variant"] in {"control", "candidate"}
+    assert first_kwargs["metadata"]["online_model_experiment_variant"] == second_kwargs["metadata"][
+        "online_model_experiment_variant"
+    ]
+    assert "user-123" not in first_kwargs["metadata"]["online_model_experiment_assignment_key"]
 
 
 @pytest.mark.asyncio
