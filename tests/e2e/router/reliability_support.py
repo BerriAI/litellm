@@ -42,7 +42,7 @@ REAL_KEY = "os.environ/OPENAI_API_KEY"
 CACHING_MODEL = "anthropic/claude-haiku-4-5"
 CACHING_KEY = "os.environ/ANTHROPIC_API_KEY"
 
-CONTENT_FILTERED_MODEL = "azure/gpt-5.4-nano"
+AZURE_MODEL = "azure/gpt-5.4-nano"
 AZURE_KEY = "os.environ/AZURE_API_KEY"
 AZURE_BASE = "os.environ/AZURE_API_BASE"
 AZURE_API_VERSION = "2024-10-21"
@@ -111,12 +111,36 @@ def create_content_filtered_deployment(proxy: ProxyClient, name: str) -> str:
     return proxy.create_model(
         name,
         LiteLLMParamsBody(
-            model=CONTENT_FILTERED_MODEL,
+            model=AZURE_MODEL,
             api_key=AZURE_KEY,
             api_base=AZURE_BASE,
             api_version=AZURE_API_VERSION,
             max_retries=0,
         ),
+    )
+
+
+def create_azure_benched_on_first_failure_deployment(proxy: ProxyClient, name: str, cooldown_time: float) -> str:
+    """The live Azure OpenAI deployment holding all of the group's shuffle weight,
+    benched on its first failure of any class, with the client's own retries off.
+    The 500 the proxy used to book against a call the client hung up on carries no
+    provider body, so litellm maps it to a bare APIError that no named
+    allowed_fails_policy class covers; the deployment-wide allowed_fails=0 is the
+    knob that makes that undeserved bench show on the very next call."""
+    return proxy.register_model(
+        ModelNewBody(
+            model_name=name,
+            litellm_params=LiteLLMParamsBody(
+                model=AZURE_MODEL,
+                api_key=AZURE_KEY,
+                api_base=AZURE_BASE,
+                api_version=AZURE_API_VERSION,
+                max_retries=0,
+                weight=1,
+                cooldown_time=cooldown_time,
+            ),
+            model_info=ModelInfoBody(allowed_fails=0),
+        )
     )
 
 

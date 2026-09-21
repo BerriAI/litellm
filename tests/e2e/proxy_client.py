@@ -47,6 +47,8 @@ from models import (
     AnthropicMessagesResponse,
     ChatBody,
     ChatResponse,
+    ConfigFieldList,
+    ConfigListParams,
     CostMap,
     CostMapEntry,
     CountTokensBody,
@@ -627,6 +629,19 @@ class ProxyClient:
             ),
             provider_live=provider_live,
         )
+
+    def general_setting_enabled(self, field_name: str) -> bool:
+        """Whether the proxy is running with the named general_settings flag on, for
+        a test whose behavior only exists under a config flag the stack has to carry."""
+        fields = unwrap(
+            self.transport.get(
+                "/config/list",
+                headers=self.transport.master,
+                params=ConfigListParams(config_type="general_settings"),
+                response_type=ConfigFieldList,
+            )
+        ).root
+        return any(entry.field_name == field_name and entry.field_value is True for entry in fields)
 
     def register_model(
         self, body: ModelNewBody, listed_for: str | None = None, *, provider_live: bool = False
