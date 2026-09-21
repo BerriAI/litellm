@@ -98,6 +98,7 @@ mod tests {
 
     #[tokio::test]
     async fn async_embed_returns_the_seeded_vector_or_unavailable() {
+        Python::initialize();
         let embedder = Python::attach(|py| PythonEmbedder::new(py.None()));
         let metadata = Map::new();
         let embedder_ref = &embedder;
