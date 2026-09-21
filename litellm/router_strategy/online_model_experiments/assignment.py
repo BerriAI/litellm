@@ -20,6 +20,7 @@ AssignmentErrorCode: TypeAlias = Literal[
 class ExperimentVariant:
     name: str
     weight_basis_points: int
+    model_name: str = ""
 
 
 @dataclass(frozen=True, slots=True)

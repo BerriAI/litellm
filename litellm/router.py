@@ -143,7 +143,6 @@ from litellm.router_utils.add_retry_fallback_headers import (
     response_total_token_count,
 )
 from litellm.router_utils.auto_router_model_naming import (
-    AUTO_ROUTER_MODEL_PREFIX,
     GatedAutoRouterCapability,
     capability_limit_violation,
     claimed_capability,
@@ -326,6 +325,9 @@ if TYPE_CHECKING:
     from litellm.router_strategy.complexity_router.complexity_router import (
         ComplexityRouter,
     )
+    from litellm.router_strategy.online_model_experiments.strategy import (
+        OnlineModelExperimentRouter,
+    )
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
     )
@@ -346,6 +348,7 @@ else:
     ComplexityRouter = Any
     AdaptiveRouter = Any
     QualityRouter = Any
+    OnlineModelExperimentRouter = Any
     PreRoutingHookResponse = Any
 
 RouterStrategySelector: TypeAlias = (
@@ -953,6 +956,9 @@ class Router:
         self.complexity_routers: dict[str, list[TaggedPreRoutingStrategy[ComplexityRouter]]] = {}
         self.adaptive_routers: dict[str, list[TaggedPreRoutingStrategy[AdaptiveRouter]]] = {}
         self.quality_routers: dict[str, list[TaggedPreRoutingStrategy[QualityRouter]]] = {}
+        self.online_model_experiment_routers: dict[
+            str, list[TaggedPreRoutingStrategy[OnlineModelExperimentRouter]]
+        ] = {}
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
@@ -9110,7 +9116,12 @@ class Router:
             return
         model_name: Final = deployment.model_name
         tags: Final = self._deployment_tags(deployment)
-        for registry in (self.auto_routers, self.complexity_routers, self.quality_routers):
+        for registry in (
+            self.auto_routers,
+            self.complexity_routers,
+            self.quality_routers,
+            self.online_model_experiment_routers,
+        ):
             self._unregister_pre_routing_strategy(registry, model_name, tags)
         if self._unregister_pre_routing_strategy(self.adaptive_routers, model_name, tags):
             self._sync_adaptive_router_hooks()
@@ -9251,6 +9262,29 @@ class Router:
         """
         return classify_strategy_router_model(litellm_params.model) == "quality"
 
+    def _is_online_model_experiment_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        return classify_strategy_router_model(litellm_params.model) == "online_experiment"
+
+    def init_online_model_experiment_deployment(self, deployment: Deployment) -> None:
+        from litellm.router_strategy.online_model_experiments.strategy import (
+            OnlineModelExperimentConfig,
+            OnlineModelExperimentRouter,
+        )
+
+        raw_config: Final = deployment.litellm_params.online_model_experiment_config
+        if raw_config is None:
+            raise ValueError("online_model_experiment_config is required for online experiment deployments.")
+        if not isinstance(raw_config, dict):
+            raise ValueError("online_model_experiment_config must be a mapping")
+        config: Final = OnlineModelExperimentConfig.from_mapping(raw_config)
+        strategy: Final = OnlineModelExperimentRouter(config=config)
+        self._register_pre_routing_strategy(
+            registry=self.online_model_experiment_routers,
+            deployment=deployment,
+            strategy=strategy,
+            strategy_label="Online model experiment",
+        )
+
     def init_quality_router_deployment(self, deployment: Deployment):
         """
         Initialize the quality-router deployment.
@@ -9319,6 +9353,7 @@ class Router:
         self.quality_routers = {}
         self.complexity_routers = {}
         self.auto_routers = {}
+        self.online_model_experiment_routers = {}
         self._provider_unresolved_deployments = ()
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
@@ -9524,6 +9559,9 @@ class Router:
         #########################################################
         if self._is_quality_router_deployment(litellm_params=deployment.litellm_params):
             self.init_quality_router_deployment(deployment=deployment)
+
+        if self._is_online_model_experiment_deployment(litellm_params=deployment.litellm_params):
+            self.init_online_model_experiment_deployment(deployment=deployment)
 
         return deployment
 
@@ -13366,7 +13404,13 @@ class Router:
         deployments: returning None hands the request to ordinary tag-aware
         deployment selection.
         """
-        registries: Final = (self.auto_routers, self.complexity_routers, self.adaptive_routers, self.quality_routers)
+        registries: Final = (
+            self.auto_routers,
+            self.complexity_routers,
+            self.adaptive_routers,
+            self.quality_routers,
+            self.online_model_experiment_routers,
+        )
         if not any(registries):
             return None
         deployments: Final = self.deployments_for_request(model, request_kwargs)
@@ -13456,7 +13500,15 @@ class Router:
         registered_model_name: str,
         request_kwargs: Mapping[str, object],
     ) -> str:
-        if not any((self.auto_routers, self.complexity_routers, self.adaptive_routers, self.quality_routers)):
+        if not any(
+            (
+                self.auto_routers,
+                self.complexity_routers,
+                self.adaptive_routers,
+                self.quality_routers,
+                self.online_model_experiment_routers,
+            )
+        ):
             return registered_model_name
         cache_key: Final = self._claude_code_session_router_cache_key(request_kwargs)
         if cache_key is None or not isinstance(request_kwargs, dict):
@@ -13661,7 +13713,7 @@ class Router:
             deployment
             for deployment in self.deployments_for_request(model, request_kwargs)
             if "model" in deployment["litellm_params"]
-            and str(deployment["litellm_params"]["model"]).startswith(AUTO_ROUTER_MODEL_PREFIX)
+            and classify_strategy_router_model(str(deployment["litellm_params"]["model"])) is not None
         )
         tag_matched: Final = tuple(
             deployment

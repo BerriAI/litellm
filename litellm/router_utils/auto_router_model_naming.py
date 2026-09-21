@@ -22,7 +22,7 @@ from litellm.router_strategy.complexity_router.config import (
 
 AUTO_ROUTER_MODEL_PREFIX: Final = "auto_router/"
 
-StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality"]
+StrategyRouterKind = Literal["semantic", "complexity", "adaptive", "quality", "online_experiment"]
 
 StrategyRouterDependencyRole: TypeAlias = Literal["tier", "default", "classifier", "embedding"]
 
@@ -47,6 +47,7 @@ STRATEGY_ROUTER_PARAM_FIELDS: Final[frozenset[str]] = frozenset(
         "adaptive_router_config",
         "quality_router_config",
         "quality_router_default_model",
+        "online_model_experiment_config",
     }
 )
 
@@ -59,6 +60,7 @@ _REQUIRED_FIELD_GROUPS: Final[Mapping[StrategyRouterKind, tuple[tuple[str, ...],
     "complexity": (("complexity_router_config", "complexity_router_default_model"),),
     "adaptive": (("adaptive_router_config",),),
     "quality": (("quality_router_config", "quality_router_default_model"),),
+    "online_experiment": (("online_model_experiment_config",),),
 }
 
 
@@ -78,6 +80,8 @@ def classify_strategy_router_model(model: str) -> StrategyRouterKind | None:
         return "adaptive"
     if remainder.startswith("quality_router"):
         return "quality"
+    if remainder.startswith("online_model_experiment"):
+        return "online_experiment"
     return "semantic"
 
 
@@ -146,6 +150,16 @@ def strategy_router_dependencies(
                     litellm_params.get("quality_router_default_model") or quality.get("default_model"),
                     "default",
                 )
+            )
+        )
+    if kind == "online_experiment":
+        experiment: Final = _mapping(litellm_params.get("online_model_experiment_config"))
+        return tuple(
+            dict.fromkeys(
+                dependency
+                for variant in experiment.get("variants", ())
+                if isinstance(variant, Mapping)
+                for dependency in _named(variant.get("model"), "tier")
             )
         )
     complexity: Final = _mapping(litellm_params.get("complexity_router_config"))

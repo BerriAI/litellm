@@ -391,6 +391,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     # quality-router params
     quality_router_config: dict | None = None
     quality_router_default_model: str | None = None
+    online_model_experiment_config: dict | None = None
 
     # Vector Store Params
     vector_store_id: str | None = None
