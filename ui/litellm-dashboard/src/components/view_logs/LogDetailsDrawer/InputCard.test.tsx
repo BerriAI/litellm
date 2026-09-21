@@ -5,16 +5,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { InputCard } from "./InputCard";
 import { ParsedMessage } from "./prettyMessagesTypes";
 
-vi.mock("antd", async () => {
-  const actual = await vi.importActual<typeof import("antd")>("antd");
-  return {
-    ...actual,
-    message: {
-      success: vi.fn(),
-    },
-  };
-});
-
 describe("InputCard", () => {
   const mockWriteText = vi.fn().mockResolvedValue(undefined);
   const mockMessages: ParsedMessage[] = [
@@ -42,7 +32,7 @@ describe("InputCard", () => {
 
   it("should return null when messages array is empty", () => {
     const { container } = render(<InputCard messages={[]} />);
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should display system message when present", () => {
@@ -111,16 +101,12 @@ describe("InputCard", () => {
 
     render(<InputCard messages={messages} />);
 
-    const copyButtons = screen.getAllByRole("button");
-    const copyButton = copyButtons.find((button) => {
-      const icon = button.querySelector('[aria-label="copy"]');
-      return icon !== null;
-    });
+    const copyButton = screen.getByRole("button", { name: /copy/i });
 
     expect(copyButton).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.click(copyButton!);
+      fireEvent.click(copyButton);
     });
 
     await waitFor(() => {
@@ -209,11 +195,7 @@ describe("InputCard", () => {
       },
     ];
     render(<InputCard messages={messages} />);
-    const copyButtons = screen.getAllByRole("button");
-    const copyButton = copyButtons.find((button) => {
-      const icon = button.querySelector('[aria-label="copy"]');
-      return icon !== null;
-    });
+    const copyButton = screen.getByRole("button", { name: /copy/i });
     expect(copyButton).toBeInTheDocument();
   });
 });

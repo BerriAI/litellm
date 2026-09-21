@@ -19,50 +19,50 @@ in plaintext anywhere in the envelope.
 
 Failures are values: :func:`open_envelope` returns one of the frozen
 ``EnvelopeOpenError`` variants (discriminated on ``tag``) for invalid, expired,
-tampered, or undecryptable input, and :func:`mint_envelope` returns
-``EnvelopeTooLarge`` for oversized grants. Error values carry tags and sizes only,
-never token material.
+tampered, or undecryptable input, and :func:`mint_envelope` returns a typed error
+for oversized grants or an unrepresentable provider lifetime. Error values carry
+tags and metadata only, never token material.
 
 The pydantic input models reject programmer errors at construction (e.g. a
 non-positive ``expires_in`` or an empty required field). :func:`open_envelope` is
 additionally total over hostile, attacker-controlled input: it never raises, only
 returns an ``EnvelopeOpenError``. :func:`mint_envelope` operates on a
 gateway-supplied grant (an upstream IdP's UTF-8 JSON token response), so it does not
-defend against non-UTF-8 field content that cannot survive JSON parsing; its only
-value-typed failure is ``EnvelopeTooLarge``.
+defend against non-UTF-8 field content that cannot survive JSON parsing.
 """
 
 from __future__ import annotations
 
 import base64
 from datetime import datetime, timedelta
-from typing import Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 
 import jwt
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError
 
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value, encrypt_value
 
-ENVELOPE_PREFIX = "llm_env_"
+ENVELOPE_PREFIX: Final = "llm_env_"
 """Marker prefix on every serialized ACCESS envelope so the edge can cheaply tell an envelope
 from a raw upstream token before doing any cryptography."""
 
-REFRESH_ENVELOPE_PREFIX = "llm_refresh_"
+REFRESH_ENVELOPE_PREFIX: Final = "llm_refresh_"
 """Marker prefix on every serialized REFRESH envelope. A distinct prefix keeps the two credentials
 routable without crypto and, together with the signed ``kind`` claim, stops one from being presented
 where the other is expected: a refresh envelope carries a long-lived upstream refresh token and is only
 ever presented back to the token endpoint, never forwarded upstream on a tool call."""
 
-ENVELOPE_ISSUER = "litellm-mcp-bridge"
+ENVELOPE_ISSUER: Final = "litellm-mcp-bridge"
 """``iss`` claim stamped into every envelope and required back on open."""
 
-MAX_ENVELOPE_TTL_SECONDS = 3600
-"""Hard ceiling on ACCESS envelope lifetime. ``exp`` is ``min(upstream expires_in, this cap)``
-(the cap alone when the upstream omits ``expires_in``), matching the 1h lifetime of the
-BYOK session bearer this module's signing approach is borrowed from: a client-held
-credential should never outlive a bounded window even when the upstream token does."""
+MAX_ENVELOPE_TTL_SECONDS: Final = 3600
+"""Fallback ACCESS envelope lifetime when the upstream omits ``expires_in``.
 
-MAX_REFRESH_ENVELOPE_TTL_SECONDS = 1209600
+The historical exported name is retained for import compatibility. When the upstream
+reports a positive lifetime, the envelope matches it so a renewal does not consume a
+still-valid provider refresh grant."""
+
+MAX_REFRESH_ENVELOPE_TTL_SECONDS: Final = 1209600
 """Hard ceiling on REFRESH envelope lifetime (14 days). A refresh envelope only renews the short-lived
 access envelope, and each renewal re-validates the sealed litellm key (revocation gates it) and is
 re-minted with a fresh window, so the practical bound is idle time, not a fixed session. ``exp`` is
@@ -71,7 +71,7 @@ upstream refresh token dies first, the next renewal simply fails at the upstream
 re-authenticates. The value is deliberately far shorter than a typical upstream refresh-token lifetime
 so a leaked refresh envelope is bounded even if the upstream would have honoured it for longer."""
 
-MAX_ENVELOPE_BYTES = 12288
+MAX_ENVELOPE_BYTES: Final = 12288
 """Size cap on the final serialized envelope (prefix + JWT, in bytes). Upstream JWTs
 commonly run 2-4KB; base64 plus encryption overhead roughly doubles that inside the
 envelope, and common proxy/server header limits sit around 16KB total. 12288 leaves
@@ -79,7 +79,7 @@ comfortable headroom for a large upstream token while keeping the envelope safel
 transmittable as a single Authorization header. Oversized grants are rejected with a
 typed error, never truncated."""
 
-_ENVELOPE_JWT_ALGORITHM = "HS256"
+_ENVELOPE_JWT_ALGORITHM: Final = "HS256"
 
 EnvelopeKind = Literal["access", "refresh"]
 """Which credential an envelope is. Stamped into the signed claims and required to match on open, so a
@@ -202,7 +202,15 @@ class EnvelopeTooLarge(BaseModel):
     max_bytes: int
 
 
-EnvelopeMintError: TypeAlias = EnvelopeTooLarge
+class EnvelopeLifetimeUnrepresentable(BaseModel):
+    """A positive provider lifetime cannot be represented as a Python datetime."""
+
+    model_config = ConfigDict(frozen=True)
+    tag: Literal["envelope_lifetime_unrepresentable"] = "envelope_lifetime_unrepresentable"
+    expires_in: int
+
+
+EnvelopeMintError: TypeAlias = EnvelopeTooLarge | EnvelopeLifetimeUnrepresentable
 
 
 class NotAnEnvelope(BaseModel):
@@ -307,11 +315,17 @@ def mint_envelope(
 ) -> SealedEnvelope | EnvelopeMintError:
     """Seal ``grant`` for ``identity`` into a client-held envelope.
 
-    ``exp`` is ``min(grant.expires_in, MAX_ENVELOPE_TTL_SECONDS)`` seconds from ``now``
-    (the cap alone when ``expires_in`` is absent). Returns ``EnvelopeTooLarge`` when the
-    serialized envelope exceeds ``MAX_ENVELOPE_BYTES``.
+    ``exp`` is ``grant.expires_in`` seconds from ``now`` when the upstream reports a
+    lifetime, or ``MAX_ENVELOPE_TTL_SECONDS`` when it does not. Returns
+    ``EnvelopeLifetimeUnrepresentable`` when that positive lifetime cannot be represented
+    as a Python datetime, or ``EnvelopeTooLarge`` when the serialized envelope exceeds
+    ``MAX_ENVELOPE_BYTES``.
     """
-    expires_at = now + timedelta(seconds=_envelope_ttl_seconds(grant.expires_in))
+    ttl_seconds: Final = _envelope_ttl_seconds(grant.expires_in)
+    try:
+        expires_at: Final = now + timedelta(seconds=ttl_seconds)
+    except OverflowError:
+        return EnvelopeLifetimeUnrepresentable(expires_in=ttl_seconds)
     return _seal(
         kind="access",
         prefix=ENVELOPE_PREFIX,
@@ -336,10 +350,10 @@ def open_envelope(
     re-derived, so it is stale by up to the envelope's lifetime; callers that need a
     live remaining lifetime should use ``now`` against the upstream, not this field.
     """
-    claims = _open_claims(candidate, prefix=ENVELOPE_PREFIX, expected_kind="access", keys=keys, now=now)
+    claims: Final = _open_claims(candidate, prefix=ENVELOPE_PREFIX, expected_kind="access", keys=keys, now=now)
     if not isinstance(claims, _EnvelopeClaims):
         return claims
-    grant = _decrypt_grant(claims.grant, keys.encryption_key)
+    grant: Final = _decrypt_grant(claims.grant, keys.encryption_key)
     if not isinstance(grant, UpstreamTokenGrant):
         return grant
     return OpenedEnvelope(
@@ -361,7 +375,7 @@ def mint_refresh_envelope(
     is what keeps a refresh envelope from ever opening as an access credential at the MCP edge. Returns
     ``EnvelopeTooLarge`` when the serialized envelope exceeds ``MAX_ENVELOPE_BYTES``.
     """
-    expires_at = now + timedelta(seconds=_refresh_ttl_seconds(refresh.expires_in))
+    expires_at: Final = now + timedelta(seconds=_refresh_ttl_seconds(refresh.expires_in))
     return _seal(
         kind="refresh",
         prefix=REFRESH_ENVELOPE_PREFIX,
@@ -385,10 +399,10 @@ def open_refresh_envelope(
     raise. The ``kind="refresh"`` claim is required, so an access envelope re-prefixed as a refresh one
     is rejected as ``MalformedPayload``.
     """
-    claims = _open_claims(candidate, prefix=REFRESH_ENVELOPE_PREFIX, expected_kind="refresh", keys=keys, now=now)
+    claims: Final = _open_claims(candidate, prefix=REFRESH_ENVELOPE_PREFIX, expected_kind="refresh", keys=keys, now=now)
     if not isinstance(claims, _EnvelopeClaims):
         return claims
-    refresh = _decrypt_refresh(claims.grant, keys.encryption_key)
+    refresh: Final = _decrypt_refresh(claims.grant, keys.encryption_key)
     if not isinstance(refresh, RefreshCredential):
         return refresh
     return OpenedRefreshEnvelope(
@@ -408,7 +422,7 @@ def _seal(
 ) -> SealedEnvelope | EnvelopeTooLarge:
     """Sign the claims for either envelope kind and enforce the size cap. Shared by both mints so the
     JWT shape, issuer, and size guard cannot drift between access and refresh envelopes."""
-    claims = _EnvelopeClaims(
+    claims: Final = _EnvelopeClaims(
         iss=ENVELOPE_ISSUER,
         iat=int(now.timestamp()),
         exp=int(expires_at.timestamp()),
@@ -419,7 +433,7 @@ def _seal(
         grant=grant_blob,
     )
     token = prefix + jwt.encode(claims.model_dump(), signing_key.get_secret_value(), algorithm=_ENVELOPE_JWT_ALGORITHM)
-    size_bytes = len(token.encode("utf-8"))
+    size_bytes: Final = len(token.encode("utf-8"))
     if size_bytes > MAX_ENVELOPE_BYTES:
         return EnvelopeTooLarge(size_bytes=size_bytes, max_bytes=MAX_ENVELOPE_BYTES)
     return SealedEnvelope(token=SecretStr(token), expires_at=expires_at)
@@ -444,7 +458,7 @@ def _open_claims(
         return MalformedPayload()
     if len(candidate.encode("utf-8", "surrogatepass")) > MAX_ENVELOPE_BYTES:
         return MalformedPayload()
-    claims = _decode_claims(candidate.removeprefix(prefix), keys.signing_key)
+    claims: Final = _decode_claims(candidate.removeprefix(prefix), keys.signing_key)
     if not isinstance(claims, _EnvelopeClaims):
         return claims
     if claims.kind != expected_kind:
@@ -457,7 +471,7 @@ def _open_claims(
 def _envelope_ttl_seconds(upstream_expires_in: int | None) -> int:
     if upstream_expires_in is None:
         return MAX_ENVELOPE_TTL_SECONDS
-    return min(upstream_expires_in, MAX_ENVELOPE_TTL_SECONDS)
+    return upstream_expires_in
 
 
 def _refresh_ttl_seconds(upstream_refresh_expires_in: int | None) -> int:
@@ -467,7 +481,7 @@ def _refresh_ttl_seconds(upstream_refresh_expires_in: int | None) -> int:
 
 
 def _grant_plaintext(grant: UpstreamTokenGrant) -> str:
-    wire = _GrantWire(
+    wire: Final = _GrantWire(
         access_token=grant.access_token.get_secret_value(),
         token_type=grant.token_type,
         refresh_token=None if grant.refresh_token is None else grant.refresh_token.get_secret_value(),
@@ -478,7 +492,7 @@ def _grant_plaintext(grant: UpstreamTokenGrant) -> str:
 
 
 def _refresh_plaintext(refresh: RefreshCredential) -> str:
-    wire = _RefreshWire(
+    wire: Final = _RefreshWire(
         refresh_token=refresh.refresh_token.get_secret_value(),
         scope=refresh.scope,
         expires_in=refresh.expires_in,
@@ -503,7 +517,7 @@ def _decode_claims(
     ``InvalidTokenError``. ``_EnvelopeClaims`` is the total type gate for the payload.
     """
     try:
-        payload = jwt.decode(
+        payload: Final = jwt.decode(
             compact,
             signing_key.get_secret_value(),
             algorithms=[_ENVELOPE_JWT_ALGORITHM],
@@ -526,7 +540,7 @@ def _decode_claims(
 
 
 def _encrypt_grant_blob(plaintext: str, encryption_key: SecretStr) -> str:
-    ciphertext = bytes(encrypt_value(value=plaintext, signing_key=encryption_key.get_secret_value()))
+    ciphertext: Final = bytes(encrypt_value(value=plaintext, signing_key=encryption_key.get_secret_value()))
     return base64.urlsafe_b64encode(ciphertext).decode("ascii")
 
 
@@ -537,7 +551,7 @@ def _decrypt_grant(
     from nacl.exceptions import CryptoError
 
     try:
-        plaintext = decrypt_value(
+        plaintext: Final = decrypt_value(
             value=base64.urlsafe_b64decode(blob),
             signing_key=encryption_key.get_secret_value(),
         )
@@ -556,7 +570,7 @@ def _decrypt_refresh(
     from nacl.exceptions import CryptoError
 
     try:
-        plaintext = decrypt_value(
+        plaintext: Final = decrypt_value(
             value=base64.urlsafe_b64decode(blob),
             signing_key=encryption_key.get_secret_value(),
         )

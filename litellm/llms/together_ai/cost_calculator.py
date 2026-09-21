@@ -3,6 +3,8 @@ Handles calculating cost for together ai models
 """
 
 import re
+from collections.abc import Mapping
+from typing import Final
 
 from litellm.constants import (
     TOGETHER_AI_4_B,
@@ -17,6 +19,12 @@ from litellm.constants import (
 from litellm.types.utils import CallTypes
 
 
+def has_together_registry_pricing(model: str, cost_map: Mapping[str, object]) -> bool:
+    stripped: Final = model.removeprefix("together_ai/")
+    entry: Final = cost_map.get(f"together_ai/{stripped}")
+    return isinstance(entry, Mapping) and "input_cost_per_token" in entry
+
+
 # Extract the number of billion parameters from the model name
 # only used for together_computer LLMs
 def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
@@ -29,13 +37,13 @@ def get_model_params_and_category(model_name, call_type: CallTypes) -> str:
     if call_type == CallTypes.embedding or call_type == CallTypes.aembedding:
         return get_model_params_and_category_embeddings(model_name=model_name)
     model_name = model_name.lower()
-    re_params_match = re.search(r"(\d+b)", model_name)  # catch all decimals like 3b, 70b, etc
+    re_params_match: Final = re.search(r"(\d+b)", model_name)  # catch all decimals like 3b, 70b, etc
     category = None
     if re_params_match is not None:
         params_match = str(re_params_match.group(1))
         params_match = params_match.replace("b", "")
         if params_match is not None:
-            params_billion = float(params_match)
+            params_billion: Final = float(params_match)
         else:
             return model_name
         # Determine the category based on the number of parameters
@@ -65,13 +73,13 @@ def get_model_params_and_category_embeddings(model_name) -> str:
     - str - model pricing category if mapped else received model name
     """
     model_name = model_name.lower()
-    re_params_match = re.search(r"(\d+m)", model_name)  # catch all decimals like 100m, 200m, etc.
+    re_params_match: Final = re.search(r"(\d+m)", model_name)  # catch all decimals like 100m, 200m, etc.
     category = None
     if re_params_match is not None:
         params_match = str(re_params_match.group(1))
         params_match = params_match.replace("m", "")
         if params_match is not None:
-            params_million = float(params_match)
+            params_million: Final = float(params_match)
         else:
             return model_name
         # Determine the category based on the number of parameters

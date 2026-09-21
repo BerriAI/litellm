@@ -9,14 +9,11 @@ Tests use a fake/mocked HTTP layer to verify the full request pipeline:
 """
 
 import json
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler

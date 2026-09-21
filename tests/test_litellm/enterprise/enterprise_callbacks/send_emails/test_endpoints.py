@@ -1,13 +1,10 @@
 import json
-import os
-import sys
 import unittest.mock as mock
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm_enterprise.enterprise_callbacks.send_emails.endpoints import (
     _get_email_settings,
@@ -263,3 +260,90 @@ async def test_endpoint_with_no_prisma_client(mock_user_api_key_auth):
         with pytest.raises(HTTPException) as exc_info:
             await reset_event_settings(user_api_key_dict=mock_user_api_key_auth)
         assert exc_info.value.status_code == 500
+
+
+def _prisma_recording_upserts(upserts):
+    client = mock.MagicMock()
+
+    async def find_unique(*args, **kwargs):
+        return None
+
+    async def upsert(*args, **kwargs):
+        upserts.append(kwargs)
+        return None
+
+    client.db.litellm_config.find_unique = find_unique
+    client.db.litellm_config.upsert = upsert
+    return client
+
+
+def _proxy_config_owning(general_settings):
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    proxy_config._load_yaml_settings_stores({"general_settings": general_settings})
+    return proxy_config
+
+
+@pytest.mark.asyncio
+async def test_save_email_settings_refuses_a_config_owned_email_settings():
+    upserts = []
+    client = _prisma_recording_upserts(upserts)
+    proxy_config = _proxy_config_owning({"email_settings": {EmailEvent.new_user_invitation.value: True}})
+
+    with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        with pytest.raises(HTTPException) as refused:
+            await _save_email_settings(client, {EmailEvent.new_user_invitation.value: False})
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail["keys"] == ["email_settings"]
+    assert upserts == []
+
+
+@pytest.mark.asyncio
+async def test_update_event_settings_surfaces_the_config_owned_refusal(mock_user_api_key_auth):
+    upserts = []
+    client = _prisma_recording_upserts(upserts)
+    proxy_config = _proxy_config_owning({"email_settings": {EmailEvent.virtual_key_created.value: False}})
+    request = EmailEventSettingsUpdateRequest(
+        settings=[EmailEventSettings(event=EmailEvent.virtual_key_created, enabled=True)]
+    )
+
+    with mock.patch("litellm.proxy.proxy_server.prisma_client", client):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+            with pytest.raises(HTTPException) as refused:
+                await update_event_settings(request=request, user_api_key_dict=mock_user_api_key_auth)
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail["keys"] == ["email_settings"]
+    assert upserts == []
+
+
+@pytest.mark.asyncio
+async def test_save_email_settings_still_writes_when_the_config_file_is_silent():
+    upserts = []
+    client = _prisma_recording_upserts(upserts)
+    proxy_config = _proxy_config_owning({})
+
+    with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        await _save_email_settings(client, {EmailEvent.new_user_invitation.value: False})
+
+    assert len(upserts) == 1
+    written = json.loads(upserts[0]["data"]["create"]["param_value"])
+    assert written["email_settings"] == {EmailEvent.new_user_invitation.value: False}
+
+
+@pytest.mark.asyncio
+async def test_reset_event_settings_surfaces_the_config_owned_refusal(mock_user_api_key_auth):
+    upserts = []
+    client = _prisma_recording_upserts(upserts)
+    proxy_config = _proxy_config_owning({"email_settings": {EmailEvent.new_user_invitation.value: True}})
+
+    with mock.patch("litellm.proxy.proxy_server.prisma_client", client):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+        with mock.patch("litellm.proxy.proxy_server.proxy_config", proxy_config):  # test-quality-ok: the endpoint reads these proxy_server module globals at call time; there is no injection seam
+            with pytest.raises(HTTPException) as refused:
+                await reset_event_settings(user_api_key_dict=mock_user_api_key_auth)
+
+    assert refused.value.status_code == 400
+    assert refused.value.detail["keys"] == ["email_settings"]
+    assert upserts == []

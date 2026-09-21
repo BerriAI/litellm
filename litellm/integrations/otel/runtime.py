@@ -7,13 +7,17 @@ V2 is not the active logger — so a call site can wrap a request phase or seed
 identity unconditionally.
 """
 
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from functools import cache
-from typing import Any, Callable, Iterator, Optional
+from typing import TYPE_CHECKING, Final
+
+if TYPE_CHECKING:
+    from opentelemetry.trace import Span
 
 
 @cache
-def _otel_runtime() -> "Optional[tuple[Callable[[str], Any], Callable[..., None]]]":
+def _otel_runtime() -> "tuple[Callable[[str], AbstractContextManager[Span | None]], Callable[..., None]] | None":
     """Resolve the SDK-backed hooks once and cache the outcome, absence included.
 
     CPython never caches a failed import, so without this memoization every call
@@ -28,13 +32,13 @@ def _otel_runtime() -> "Optional[tuple[Callable[[str], Any], Callable[..., None]
 
 
 @contextmanager
-def phase_span(name: str) -> "Iterator[Any]":
+def phase_span(name: str) -> "Iterator[Span | None]":
     """Run a request phase inside a live active span so its DB/service calls nest.
 
     Yields ``None`` (a plain no-op) when the OTel SDK is unavailable or V2 is not
     the active logger.
     """
-    runtime = _otel_runtime()
+    runtime: Final = _otel_runtime()
     if runtime is None:
         yield None
         return
@@ -42,9 +46,9 @@ def phase_span(name: str) -> "Iterator[Any]":
         yield span
 
 
-def seed_request_identity(user_api_key_dict: Any, model: Any = None) -> None:
+def seed_request_identity(user_api_key_dict: object, model: object = None) -> None:
     """Seed request-identity Baggage at the auth boundary (no-op without V2)."""
-    runtime = _otel_runtime()
+    runtime: Final = _otel_runtime()
     if runtime is None:
         return
     runtime[1](user_api_key_dict, model=model)

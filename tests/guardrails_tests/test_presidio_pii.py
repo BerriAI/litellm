@@ -1,10 +1,8 @@
-import sys
 import os
 import pytest
 from litellm import mock_completion
 from unittest.mock import patch
 
-sys.path.insert(0, os.path.abspath("../.."))
 import litellm
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,

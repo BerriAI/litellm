@@ -51,7 +51,7 @@ async def test_get_usage_data_rejects_invalid_limit(monkeypatch: pytest.MonkeyPa
     """limit must coerce to int or raise ValueError before hitting the DB."""
     db, query_mock = _setup_db(monkeypatch, [])
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match='limit must be an integer'):
         await db.get_usage_data(limit="invalid")
 
     assert query_mock.await_count == 0

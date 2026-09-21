@@ -17,12 +17,9 @@ response and assert:
    raising ``AttributeError``.
 """
 
-import os
-import sys
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 from litellm import completion_cost, stream_chunk_builder
 from litellm.types.utils import (

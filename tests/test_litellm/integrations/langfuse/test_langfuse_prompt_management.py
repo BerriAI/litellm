@@ -1,4 +1,8 @@
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
@@ -106,3 +110,30 @@ class TestLangfusePromptManagement:
             mock_get_ssl.assert_called_once()
 
         langfuse_client_init.cache_clear()
+
+
+class _RecordingLangfuseForEnv:
+    last_environment: str | None = None
+
+    def __init__(self, *, environment: str | None = None, **parameters: object) -> None:  # kwargs-ok: records only environment out of whatever langfuse_client_init forwards
+        type(self).last_environment = environment
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected"),
+    (("Production", "default"), ("production ", "production"), ("prod", "prod")),
+)
+def test_langfuse_client_init_resolves_deployment_environment(monkeypatch, env_value, expected):
+    mock_langfuse_module: Final = MagicMock()
+    mock_langfuse_module.version.__version__ = "2.60.0"
+    mock_langfuse_module.Langfuse = _RecordingLangfuseForEnv
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("LANGFUSE_HOST", "https://test.langfuse.com")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", env_value)
+    monkeypatch.setattr(_RecordingLangfuseForEnv, "last_environment", None)
+    with patch.dict("sys.modules", MappingProxyType({"langfuse": mock_langfuse_module})):
+        langfuse_client_init.cache_clear()
+        langfuse_client_init()
+    langfuse_client_init.cache_clear()
+    assert _RecordingLangfuseForEnv.last_environment == expected

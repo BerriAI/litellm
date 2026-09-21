@@ -1,7 +1,7 @@
 import json
 import sys
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -242,110 +242,156 @@ async def test_should_not_reassign_existing_container_to_different_owner(monkeyp
     table.update.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_should_filter_container_list_to_owned_records(monkeypatch):
+def _owned_containers_in_db(monkeypatch, *model_object_ids: str) -> AsyncMock:
     table = AsyncMock()
-    table.find_many.return_value = [
-        SimpleNamespace(model_object_id="container:openai:cntr_owned"),
-    ]
-    prisma_client = SimpleNamespace(
-        db=SimpleNamespace(litellm_managedobjecttable=table)
-    )
+    table.find_many.return_value = [SimpleNamespace(model_object_id=object_id) for object_id in model_object_ids]
     monkeypatch.setattr(
         ownership,
         "_get_prisma_client",
-        AsyncMock(return_value=prisma_client),
+        AsyncMock(return_value=SimpleNamespace(db=SimpleNamespace(litellm_managedobjecttable=table))),
     )
-    auth = UserAPIKeyAuth(user_id="user-1")
-    response = ContainerListResponse(
+    return table
+
+
+def _upstream(pages_by_after):
+    calls = []
+
+    async def fetch_page(after, limit):
+        calls.append((after, limit))
+        return pages_by_after[after]
+
+    return fetch_page, calls
+
+
+def _page(*container_ids: str, has_more: bool) -> ContainerListResponse:
+    return ContainerListResponse(
         object="list",
-        data=[_container("cntr_owned"), _container("cntr_other")],
-        has_more=True,
+        data=[_container(container_id) for container_id in container_ids],
+        has_more=has_more,
     )
 
-    filtered = await ownership.filter_container_list_response(
-        response=response,
-        user_api_key_dict=auth,
+
+async def _list_owned(fetch_page, after=None, limit=None):
+    return await ownership.list_owned_containers(
+        fetch_page=fetch_page,
+        after=after,
+        limit=limit,
+        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
         custom_llm_provider="openai",
     )
 
-    assert [item.id for item in filtered.data] == ["cntr_owned"]
-    assert filtered.first_id == "cntr_owned"
-    assert filtered.last_id == "cntr_owned"
-    assert filtered.has_more is False
+
+@pytest.mark.asyncio
+async def test_should_page_upstream_until_owned_containers_fill_the_limit(monkeypatch):
+    table = _owned_containers_in_db(monkeypatch, "container:openai:cntr_owned")
+    fetch_page, calls = _upstream(
+        {
+            None: _page("cntr_other_1", "cntr_other_2", has_more=True),
+            "cntr_other_2": _page("cntr_owned", has_more=False),
+        }
+    )
+
+    listed = await _list_owned(fetch_page, limit=1)
+
+    assert [item.id for item in listed.data] == ["cntr_owned"]
+    assert listed.first_id == "cntr_owned"
+    assert listed.last_id == "cntr_owned"
+    assert listed.has_more is False
+    assert calls == [(None, 100), ("cntr_other_2", 100)]
     where = table.find_many.await_args.kwargs["where"]
     assert where["file_purpose"] == ownership.CONTAINER_OBJECT_PURPOSE
     assert where["created_by"]["in"] == ["user-1", "user:user-1"]
 
 
 @pytest.mark.asyncio
-async def test_should_clear_has_more_when_filtered_container_list_is_empty(
-    monkeypatch,
-):
-    table = AsyncMock()
-    table.find_many.return_value = [
-        SimpleNamespace(model_object_id="container:openai:cntr_owned"),
-    ]
-    prisma_client = SimpleNamespace(
-        db=SimpleNamespace(litellm_managedobjecttable=table)
-    )
-    monkeypatch.setattr(
-        ownership,
-        "_get_prisma_client",
-        AsyncMock(return_value=prisma_client),
-    )
-    auth = UserAPIKeyAuth(user_id="user-1")
-    response = ContainerListResponse(
-        object="list",
-        data=[_container("cntr_other")],
-        has_more=True,
-    )
+async def test_should_trim_owned_containers_to_the_limit_without_mutating_the_upstream_page(monkeypatch):
+    _owned_containers_in_db(monkeypatch, "container:openai:cntr_owned_1", "container:openai:cntr_owned_2")
+    upstream_page = _page("cntr_owned_1", "cntr_other", "cntr_owned_2", has_more=False)
+    fetch_page, calls = _upstream({None: upstream_page})
 
-    filtered = await ownership.filter_container_list_response(
-        response=response,
-        user_api_key_dict=auth,
-        custom_llm_provider="openai",
-    )
+    listed = await _list_owned(fetch_page, limit=1)
 
-    assert filtered.data == []
-    assert filtered.first_id is None
-    assert filtered.last_id is None
-    assert filtered.has_more is False
+    assert [item.id for item in listed.data] == ["cntr_owned_1"]
+    assert listed.first_id == "cntr_owned_1"
+    assert listed.last_id == "cntr_owned_1"
+    assert listed.has_more is True
+    assert calls == [(None, 100)]
+    assert [item.id for item in upstream_page.data] == ["cntr_owned_1", "cntr_other", "cntr_owned_2"]
+    assert upstream_page.has_more is False
 
 
 @pytest.mark.asyncio
-async def test_should_clear_dict_has_more_when_filtered_container_list_is_empty(
-    monkeypatch,
-):
-    table = AsyncMock()
-    table.find_many.return_value = [
-        SimpleNamespace(model_object_id="container:openai:cntr_owned"),
-    ]
-    prisma_client = SimpleNamespace(
-        db=SimpleNamespace(litellm_managedobjecttable=table)
+async def test_should_start_paging_from_the_requested_cursor(monkeypatch):
+    _owned_containers_in_db(monkeypatch, "container:openai:cntr_owned_2")
+    fetch_page, calls = _upstream({"cntr_owned_1": _page("cntr_other", "cntr_owned_2", has_more=False)})
+
+    listed = await _list_owned(fetch_page, after="cntr_owned_1", limit=1)
+
+    assert [item.id for item in listed.data] == ["cntr_owned_2"]
+    assert listed.has_more is False
+    assert calls == [("cntr_owned_1", 100)]
+
+
+@pytest.mark.asyncio
+async def test_should_default_to_twenty_owned_containers_per_page(monkeypatch):
+    owned_ids = tuple(f"cntr_owned_{index}" for index in range(21))
+    _owned_containers_in_db(monkeypatch, *(f"container:openai:{container_id}" for container_id in owned_ids))
+    fetch_page, _ = _upstream({None: _page(*owned_ids, has_more=False)})
+
+    listed = await _list_owned(fetch_page)
+
+    assert [item.id for item in listed.data] == list(owned_ids[:20])
+    assert listed.last_id == "cntr_owned_19"
+    assert listed.has_more is True
+
+
+@pytest.mark.asyncio
+async def test_should_stop_after_five_upstream_pages_and_keep_has_more(monkeypatch):
+    _owned_containers_in_db(monkeypatch, "container:openai:cntr_owned")
+    fetch_page, calls = _upstream(
+        {
+            None: _page("cntr_other_0", has_more=True),
+            **{f"cntr_other_{index}": _page(f"cntr_other_{index + 1}", has_more=True) for index in range(6)},
+        }
     )
-    monkeypatch.setattr(
-        ownership,
-        "_get_prisma_client",
-        AsyncMock(return_value=prisma_client),
-    )
-    auth = UserAPIKeyAuth(user_id="user-1")
-    response = {
+
+    listed = await _list_owned(fetch_page, limit=1)
+
+    assert listed.data == []
+    assert listed.first_id is None
+    assert listed.last_id is None
+    assert listed.has_more is True
+    assert len(calls) == 5
+
+
+@pytest.mark.asyncio
+async def test_should_stop_when_upstream_has_no_more_pages(monkeypatch):
+    _owned_containers_in_db(monkeypatch, "container:openai:cntr_owned")
+    fetch_page, calls = _upstream({None: _page("cntr_other", has_more=False)})
+
+    listed = await _list_owned(fetch_page, limit=1)
+
+    assert listed.data == []
+    assert listed.has_more is False
+    assert calls == [(None, 100)]
+
+
+@pytest.mark.asyncio
+async def test_should_build_dict_pages_without_mutating_the_upstream_page(monkeypatch):
+    _owned_containers_in_db(monkeypatch, "container:openai:cntr_owned")
+    upstream_page = {"object": "list", "data": [{"id": "cntr_other"}, {"id": "cntr_owned"}], "has_more": False}
+    fetch_page, _ = _upstream({None: upstream_page})
+
+    listed = await _list_owned(fetch_page, limit=1)
+
+    assert listed == {
         "object": "list",
-        "data": [{"id": "cntr_other"}],
-        "has_more": True,
+        "data": [{"id": "cntr_owned"}],
+        "first_id": "cntr_owned",
+        "last_id": "cntr_owned",
+        "has_more": False,
     }
-
-    filtered = await ownership.filter_container_list_response(
-        response=response,
-        user_api_key_dict=auth,
-        custom_llm_provider="openai",
-    )
-
-    assert filtered["data"] == []
-    assert filtered["first_id"] is None
-    assert filtered["last_id"] is None
-    assert filtered["has_more"] is False
+    assert [item["id"] for item in upstream_page["data"]] == ["cntr_other", "cntr_owned"]
 
 
 @pytest.mark.asyncio
@@ -647,7 +693,7 @@ async def test_should_return_response_when_owner_recording_raises_unexpected(
 
 
 @pytest.mark.asyncio
-async def test_should_filter_container_list_inside_list_endpoint(monkeypatch):
+async def test_should_list_owned_containers_inside_list_endpoint(monkeypatch):
     from litellm.proxy.container_endpoints import endpoints
 
     proxy_server_stub = SimpleNamespace(
@@ -665,42 +711,37 @@ async def test_should_filter_container_list_inside_list_endpoint(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_stub)
 
-    response = ContainerListResponse(
-        object="list",
-        data=[_container("cntr_provider")],
-        has_more=False,
+    upstream_page = _page("cntr_provider", has_more=False)
+    processor_cls = MagicMock(
+        side_effect=lambda data: SimpleNamespace(base_process_llm_request=AsyncMock(return_value=upstream_page))
     )
-
-    class FakeProcessor:
-        def __init__(self, data):
-            pass
-
-        async def base_process_llm_request(self, **kwargs):
-            return response
-
-        async def _handle_llm_api_exception(self, **kwargs):
-            raise kwargs["e"]
-
-    filter_response = AsyncMock(return_value=response)
-    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", FakeProcessor)
-    monkeypatch.setattr(
-        endpoints,
-        "filter_container_list_response",
-        filter_response,
-    )
+    monkeypatch.setattr(endpoints, "ProxyBaseLLMRequestProcessing", processor_cls)
+    list_owned = AsyncMock(return_value=upstream_page)
+    monkeypatch.setattr(endpoints, "list_owned_containers", list_owned)
 
     result = await endpoints.list_containers(
         request=SimpleNamespace(query_params={}, headers={}),
         fastapi_response=SimpleNamespace(),
         user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
+        after="cntr_prev",
+        limit=2,
+        order="desc",
     )
 
-    assert result == response
-    filter_response.assert_awaited_once_with(
-        response=response,
-        user_api_key_dict=UserAPIKeyAuth(user_id="user-1"),
-        custom_llm_provider="openai",
-    )
+    assert result == upstream_page
+    kwargs = list_owned.await_args.kwargs
+    assert kwargs["after"] == "cntr_prev"
+    assert kwargs["limit"] == 2
+    assert kwargs["user_api_key_dict"] == UserAPIKeyAuth(user_id="user-1")
+    assert kwargs["custom_llm_provider"] == "openai"
+    processor_cls.assert_not_called()
+
+    assert await kwargs["fetch_page"]("cntr_page_cursor", 100) == upstream_page
+    forwarded = processor_cls.call_args.kwargs["data"]
+    assert forwarded["after"] == "cntr_page_cursor"
+    assert forwarded["limit"] == 100
+    assert forwarded["order"] == "desc"
+    assert forwarded["custom_llm_provider"] == "openai"
 
 
 @pytest.mark.asyncio

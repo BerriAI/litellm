@@ -61,7 +61,7 @@ def test_user_email_in_required_metrics():
         print(f"✅ {metric_name} contains user_email label")
 
 
-def test_model_id_in_required_metrics():
+def test_model_id_in_extended_metric_set():
     """
     Test that model_id label is present in all the metrics that should have it
     """
@@ -714,6 +714,77 @@ async def test_failure_hook_emits_api_provider_value_on_failed_requests_metric()
         )
     finally:
         _clear_prometheus_registry()
+
+
+async def _failed_requests_api_provider_labels(
+    request_data: dict[str, object],
+    original_exception: Exception,
+) -> list[str]:
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=original_exception,
+            user_api_key_dict=UserAPIKeyAuth(token="tok"),
+        )
+        return [
+            s.labels.get("api_provider")
+            for s in _collected_samples("litellm_proxy_failed_requests_metric_total")
+        ]
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_emits_api_provider_from_pre_call_rate_limit_error_for_router_alias():
+    """
+    Pre-call limiters reject before a deployment lands on request_data and a
+    router alias cannot be inferred from its name, so the provider the limiter
+    resolved onto the exception is the only source for the label.
+    """
+    from litellm.exceptions import RateLimitType
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    err = ProxyRateLimitError(
+        detail={"error": "rpm exceeded"},
+        rate_limit_type=RateLimitType.REQUESTS,
+        model="openai/gpt-5.4-mini",
+        llm_provider="openai",
+    )
+
+    assert await _failed_requests_api_provider_labels(
+        {"model": "team-chat-model", "metadata": {}}, err
+    ) == ["openai"]
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_leaves_api_provider_unset_when_rate_limiter_could_not_resolve_provider():
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    err = ProxyRateLimitError(detail={"error": "rpm exceeded"}, model="unknown-alias")
+
+    assert await _failed_requests_api_provider_labels(
+        {"model": "unknown-alias", "metadata": {}}, err
+    ) == ["None"]
+
+
+@pytest.mark.asyncio
+async def test_failure_hook_prefers_request_data_provider_over_exception_provider():
+    from litellm.exceptions import RateLimitError
+
+    err = RateLimitError(message="upstream 429", llm_provider="openai", model="gpt-4o")
+
+    assert await _failed_requests_api_provider_labels(
+        {
+            "model": "gpt-4o",
+            "metadata": {},
+            "litellm_params": {"custom_llm_provider": "azure"},
+        },
+        err,
+    ) == ["azure"]
 
 
 if __name__ == "__main__":

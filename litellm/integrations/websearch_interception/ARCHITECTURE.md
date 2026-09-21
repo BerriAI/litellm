@@ -207,6 +207,59 @@ response = await litellm.messages.acreate(
 
 ---
 
+## Loop Ceiling
+
+One intercepted request can chain several follow-up model calls, since the model often searches again after
+reading the first set of results. `max_agentic_loops` caps how many of those follow-ups run, and it defaults
+to 3. LiteLLM also breaks the loop early when the model asks for the exact same tool call twice in a row.
+
+Set the ceiling on the feature, which the interceptor applies to `/v1/messages` requests:
+
+```yaml
+litellm_settings:
+  websearch_interception_params:
+    enabled_providers: ["bedrock"]
+    max_agentic_loops: 5
+```
+
+Or per deployment, which wins over the feature-level setting:
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      max_agentic_loops: 5
+```
+
+Clients cannot set it. `max_agentic_loops` is on the proxy's untrusted-field list, so a request body that
+carries it is ignored and one request can never drive an unbounded number of upstream model calls.
+
+Both places are validated at config load, and a value that is not an integer of at least 1 stops the proxy
+from starting rather than surfacing later. The per-deployment one is checked while the model list is read,
+not on `LiteLLM_Params`, because the proxy builds its router with `ignore_invalid_deployments=True` and a
+validator down there would drop the deployment silently instead of refusing to start.
+
+When the ceiling is reached on a non-streaming `/v1/messages` request, the turn ends there and the client gets
+the last response back with the internal `litellm_web_search` tool call removed and `stop_reason: end_turn`.
+The client never declared that tool, so leaving the block in would hand it a tool call it has no way to answer.
+The answer can be less complete than it would have been with more loops, which is the tradeoff the ceiling
+buys. Where the refused call was the only block left, the turn comes back with no text in it at all.
+
+Non-streaming is not a limitation on the client here, because a client that asked for a stream gets the same
+treatment. Interception converts an intercepted `stream=True` request to non-streaming before the loop runs and
+rebuilds the SSE stream from the finalized turn afterwards, so the ceiling is always reached on a response the
+client has not seen yet. `AgenticStreamingIterator` is the one caller that reaches the loop with its events
+already on the wire, and it keeps raising, because a finalized turn would arrive there as a second message
+rather than as a replacement.
+
+Two other surfaces do not get that treatment yet. `/v1/responses` returns its own shape that the finalizer does
+not rewrite, so it still hands back the internal call. And `/v1/chat/completions` runs its own copy of these
+rails in `litellm_core_utils/chat_completion_agentic_loop.py`, which still raises rather than ending the turn.
+Both are tracked separately
+
+---
+
 ## Streaming Support
 
 WebSearch interception works transparently with both streaming and non-streaming requests.

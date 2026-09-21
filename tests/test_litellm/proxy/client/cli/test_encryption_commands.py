@@ -1,4 +1,4 @@
-"""CLI tests for the ``litellm-proxy encryption migrate`` command.
+"""CLI tests for the ``lite encryption migrate`` command.
 
 The HTTP client is mocked, so these assert the command's request routing (GET
 check vs POST migrate, dry-run param) and its residual-state messaging without a

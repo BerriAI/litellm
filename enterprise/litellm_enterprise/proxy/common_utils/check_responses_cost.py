@@ -1,22 +1,30 @@
 """
 Polls LiteLLM_ManagedObjectTable to check if the response is complete.
-Cost tracking is handled automatically by litellm.aget_responses().
+Cost tracking is handled by the get-responses call, which prices normally only because the
+poll stamps itself with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN; user-facing reads of the
+same route are non-inference and free.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Dict, Optional, cast
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
     STALE_OBJECT_CLEANUP_BATCH_SIZE,
 )
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
+
+TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
 
 
 class CheckResponsesCost:
@@ -32,6 +40,28 @@ class CheckResponsesCost:
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
+
+    async def _get_response(
+        self,
+        response_id: str,
+        litellm_metadata: Dict[str, str],
+    ) -> ResponsesAPIResponse:
+        """Fetch the upstream response, using deployment credentials when available.
+
+        LiteLLM-encoded response IDs carry the ``model_id`` of the deployment that
+        served the original request, so routing through ``llm_router`` applies that
+        deployment's ``api_base`` / ``api_key`` / ``api_version``, exactly like
+        ``GET /v1/responses/{id}`` does. ``litellm.aget_responses`` on its own only
+        sees provider env vars, so it fails for every deployment whose credentials
+        live in the config; the row then never leaves ``queued``.
+        """
+        model_id: Optional[str] = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
+        if model_id is None or self.llm_router.get_deployment(model_id=model_id) is None:
+            return await litellm.aget_responses(response_id=response_id, litellm_metadata=litellm_metadata)
+        router_response = await self.llm_router.aget_responses(
+            response_id=response_id, litellm_metadata=litellm_metadata
+        )
+        return cast(ResponsesAPIResponse, router_response)
 
     async def _expire_stale_rows(
         self, cutoff: datetime, batch_size: int
@@ -87,8 +117,9 @@ class CheckResponsesCost:
         Check if background responses are complete and track their cost.
         - Get all status="queued" or "in_progress" and file_purpose="response" jobs
         - Query the provider to check if response is complete
-        - Cost is automatically tracked by litellm.aget_responses()
-        - Mark completed/failed/cancelled responses as complete in the database
+        - Cost is tracked by the get-responses call, billed because the poll is stamped
+          with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+        - Mark responses in a terminal state as complete in the database
         """
         try:
             await self._cleanup_stale_managed_objects()
@@ -127,6 +158,7 @@ class CheckResponsesCost:
                 # Prepare metadata with model information for cost tracking
                 litellm_metadata = {
                     "user_api_key_user_id": job.created_by or "default-user-id",
+                    INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
                 }
                 
                 # Add model information if available
@@ -134,7 +166,7 @@ class CheckResponsesCost:
                     litellm_metadata["model"] = model_name
                     litellm_metadata["model_group"] = model_name  # Use same value for model_group
                 
-                response = await litellm.aget_responses(
+                response = await self._get_response(
                     response_id=responses_id_security,
                     litellm_metadata=litellm_metadata,
                 )
@@ -144,21 +176,14 @@ class CheckResponsesCost:
                 )
                 
             except Exception as e:
-                verbose_proxy_logger.info(
+                verbose_proxy_logger.warning(
                     f"Skipping job {unified_object_id} due to error: {e}"
                 )
                 continue
 
-            # Check if response is in a terminal state
-            if response.status == "completed":
+            if response.status in TERMINAL_RESPONSE_STATUSES:
                 verbose_proxy_logger.info(
-                    f"Response {unified_object_id} is complete. Cost automatically tracked by aget_responses."
-                )
-                completed_jobs.append(job)
-                
-            elif response.status in ["failed", "cancelled"]:
-                verbose_proxy_logger.info(
-                    f"Response {unified_object_id} has status {response.status}, marking as complete"
+                    f"Response {unified_object_id} has terminal status {response.status}, marking as complete"
                 )
                 completed_jobs.append(job)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Final, Optional
 
 import jsonschema
 
@@ -19,6 +19,10 @@ NONNEG_NUMBER: JsonSchema = {"type": "number", "minimum": 0}
 NONNEG_INTEGER: JsonSchema = {"type": "integer", "minimum": 0}
 BOOLEAN: JsonSchema = {"type": "boolean"}
 STRING: JsonSchema = {"type": "string"}
+TIME_WINDOW: Final[JsonSchema] = {"type": "string", "pattern": r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"}
+WEEKDAY_PATTERN: Final = (
+    r"(?i)^(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)$"
+)
 
 EXTRA_BOOLEAN_KEYS = frozenset(
     {
@@ -27,10 +31,55 @@ EXTRA_BOOLEAN_KEYS = frozenset(
         "uses_embed_content",
         "use_openai_responses_path",
         "bedrock_converse_supports_strict_tools",
+        "thinking_always_on",
     }
 )
 
+HOURS_UTC: Final[JsonSchema] = {
+    "description": 'UTC "HH:MM-HH:MM" window, or a list of them; a window may wrap past midnight.',
+    "oneOf": [TIME_WINDOW, {"type": "array", "items": TIME_WINDOW, "minItems": 1}],
+}
+
+OFF_PEAK_WINDOW: Final[JsonSchema] = {
+    "type": "object",
+    "properties": {
+        "hours_utc": HOURS_UTC,
+        "weekdays": {
+            "type": "array",
+            "description": "ISO-8601 weekday numbers (1 = Monday .. 7 = Sunday) or English day names the window applies on.",
+            "items": {
+                "oneOf": [
+                    {"type": "integer", "minimum": 1, "maximum": 7},
+                    {"type": "string", "pattern": WEEKDAY_PATTERN},
+                ]
+            },
+            "minItems": 1,
+        },
+    },
+    "required": ["hours_utc"],
+    "additionalProperties": False,
+}
+
 OBJECT_KEYS: dict[str, JsonSchema] = {
+    "off_peak_pricing": {
+        "type": "object",
+        "description": "Rates that replace the same-named base fields while the request falls inside the stated UTC windows.",
+        "properties": {
+            "hours_utc": HOURS_UTC,
+            "windows": {"type": "array", "items": OFF_PEAK_WINDOW, "minItems": 1},
+            "weekday_timezone": {
+                "type": "string",
+                "description": "IANA zone the weekdays of each window are read on; defaults to UTC.",
+            },
+            "input_cost_per_token": NONNEG_NUMBER,
+            "output_cost_per_token": NONNEG_NUMBER,
+            "output_cost_per_reasoning_token": NONNEG_NUMBER,
+            "cache_read_input_token_cost": NONNEG_NUMBER,
+            "cache_creation_input_token_cost": NONNEG_NUMBER,
+        },
+        "anyOf": [{"required": ["hours_utc"]}, {"required": ["windows"]}],
+        "additionalProperties": False,
+    },
     "search_context_cost_per_query": {
         "type": "object",
         "description": "USD cost per web search query, keyed by search context size.",
@@ -40,6 +89,11 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
             "search_context_size_high": NONNEG_NUMBER,
         },
         "additionalProperties": False,
+    },
+    "guardrail_cost_per_unit": {
+        "type": "object",
+        "description": "USD cost per billable guardrail unit, keyed by the provider's usage counter name (e.g. Bedrock's contentPolicyUnits).",
+        "additionalProperties": NONNEG_NUMBER,
     },
     "metadata": {
         "type": "object",
@@ -52,6 +106,11 @@ OBJECT_KEYS: dict[str, JsonSchema] = {
 }
 
 ARRAY_KEYS: dict[str, JsonSchema] = {
+    "supported_audio_formats": {
+        "type": "array",
+        "description": "Audio container formats the model can return.",
+        "items": {"type": "string", "enum": ["mp3", "wav"]},
+    },
     "supported_endpoints": {
         "type": "array",
         "description": "OpenAI-style API routes this model can be called through, e.g. /v1/chat/completions.",
@@ -66,6 +125,11 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
         "type": "array",
         "description": "Output modalities the model can produce.",
         "items": {"type": "string", "enum": ["text", "image", "audio", "video", "code"]},
+    },
+    "reasoning_effort_levels": {
+        "type": "array",
+        "description": "Exact reasoning_effort levels this deployment accepts; wins over supports_* flags.",
+        "items": {"type": "string", "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]},
     },
     "supported_regions": {
         "type": "array",
@@ -96,6 +160,7 @@ ARRAY_KEYS: dict[str, JsonSchema] = {
                 "output_cost_per_token": NONNEG_NUMBER,
                 "output_cost_per_reasoning_token": NONNEG_NUMBER,
                 "cache_read_input_token_cost": NONNEG_NUMBER,
+                "cache_creation_input_token_cost": NONNEG_NUMBER,
                 "input_cost_per_query": NONNEG_NUMBER,
             },
             "additionalProperties": False,
@@ -139,12 +204,20 @@ NUMBER_KEYS: dict[str, JsonSchema] = {
         "minimum": 1,
         "description": "Multiplier applied to all token costs for US data residency (e.g. 1.10 = +10%).",
     },
+    "regional_endpoint_uplift_multiplier": {
+        "type": "number",
+        "minimum": 1,
+        "description": "Multiplier applied to all token costs when served from a non-global Vertex AI endpoint (e.g. 1.10 = +10%).",
+    },
 }
 
 COST_DESCRIPTIONS: dict[str, str] = {
     "input_cost_per_token": "USD per prompt token.",
     "output_cost_per_token": "USD per generated token.",
     "output_cost_per_reasoning_token": "USD per reasoning/thinking token, when billed separately.",
+    "google_maps_grounding_cost_per_query": (
+        "USD per Grounding with Google Maps request; billed per query or per prompt per web_search_billing_unit."
+    ),
     "cache_creation_input_token_cost": "USD per token written to the provider's prompt cache.",
     "cache_read_input_token_cost": "USD per prompt token served from the provider's prompt cache.",
     "input_cost_per_token_batches": "USD per prompt token via the provider's batch API.",
@@ -200,8 +273,21 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
             "description": "Highest reasoning effort the Bedrock output_config accepts for this model.",
             "enum": ["low", "medium", "high", "max", "xhigh"],
         },
+        "default_reasoning_effort": {
+            "type": "string",
+            "description": (
+                "Reasoning effort the provider applies when the request omits reasoning_effort. "
+                "Gates whether a non-default temperature or the top_p/logprobs sampling params are "
+                "accepted, which hold only when the effort resolves to 'none'."
+            ),
+            "enum": ["none", "minimal", "low", "medium", "high", "xhigh"],
+        },
         "comment": STRING,
         "audio_transcription_config": STRING,
+        "vertex_ai_audio_api": {
+            "type": "string",
+            "enum": ["lyria_predict", "lyria_interactions"],
+        },
     }
 
 
@@ -289,9 +375,7 @@ def render(schema: JsonSchema) -> str:
 
 
 def validation_errors(prices: dict, schema: JsonSchema) -> tuple:
-    validator = jsonschema.Draft202012Validator(
-        schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER
-    )
+    validator = jsonschema.Draft202012Validator(schema, format_checker=jsonschema.Draft202012Validator.FORMAT_CHECKER)
     return tuple(
         f"{'.'.join(str(part) for part in error.absolute_path)}: {error.message}"
         for error in validator.iter_errors(prices)

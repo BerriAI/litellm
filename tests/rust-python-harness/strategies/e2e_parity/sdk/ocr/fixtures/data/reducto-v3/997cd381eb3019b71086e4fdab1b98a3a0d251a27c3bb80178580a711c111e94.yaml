@@ -1,0 +1,100 @@
+interactions:
+- request:
+    body: "--22b7cb49f85a1ae5113a6328b0381ffb\r\nContent-Disposition: form-data; name=\"file\";
+      filename=\"document\"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.4\n1 0
+      obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids
+      [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /Resources
+      4 0 R /MediaBox [0 0 612 792] /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Font
+      << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>\nendobj\n5
+      0 obj\n<< /Length 44 >>\nstream\nBT\n/F1 12 Tf\n100 700 Td\n(Test PDF File)
+      Tj\nET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000
+      n \n0000000058 00000 n \n0000000115 00000 n \n0000000214 00000 n \n0000000293
+      00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n385\n%%EOF\n\r\n--22b7cb49f85a1ae5113a6328b0381ffb--\r\n"
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - multipart/form-data; boundary=22b7cb49f85a1ae5113a6328b0381ffb
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/upload
+  response:
+    body:
+      string: '{"file_id":"reducto://5df745f4-2877-4cf6-9bde-a2f829c93eea.pdf","presigned_url":null}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - Tue, 01 Sep 2026 19:54:48 GMT
+    status:
+      code: 200
+      message: ''
+- request:
+    body: '{"input":"reducto://5df745f4-2877-4cf6-9bde-a2f829c93eea.pdf","formatting":{"add_page_markers":false,"table_output_format":"json","merge_tables":true,"include":["signatures","ignore_watermarks"]},"retrieval":{"chunking":{"chunk_mode":"variable","chunk_size":1500,"chunk_overlap":32},"filter_blocks":["Figure","Table","Key
+      Value"],"embedding_optimized":false},"settings":{"ocr_system":"legacy","extraction_mode":"hybrid","force_url_result":false,"return_ocr_data":false,"return_images":[],"embed_pdf_metadata":false,"embed_pdf_metadata_dpi":100,"persist_results":false,"timeout":900.0,"page_range":[1]}}'
+    headers:
+      Accept:
+      - '*/*'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - litellm/1.101.0
+    method: POST
+    uri: http://parity-provider.invalid/parse
+  response:
+    body:
+      string: '{"response_type":"parse","job_id":"7ca67242-1677-484e-b2ef-b256dcdd1ea4","duration":1.3359308242797852,"pdf_url":"https://prod-storage20241010144745140900000001.s3.amazonaws.com/org/8bd983d1-47dd-440b-93d8-431412d819bf/5df745f4-2877-4cf6-9bde-a2f829c93eea.pdf?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA2UOK6OVBOUYL7WYA%2F20260901%2Fus-west-2%2Fs3%2Faws4_request&X-Amz-Date=20260901T195449Z&X-Amz-Expires=43200&X-Amz-SignedHeaders=host&X-Amz-Signature=077a6551201d2562fd1543fd5c391541cffe606d64307a3f6d103cf18219f80a","studio_link":"https://studio.reducto.ai/job/7ca67242-1677-484e-b2ef-b256dcdd1ea4","usage":{"num_pages":1,"credits":1.0,"credit_breakdown":{"page":1.0},"page_billing_breakdown":{"1":["page"]},"non_empty_cell_count":null},"result":{"type":"full","chunks":[{"content":"#
+        Test PDF File","embed":"# Test PDF File","enriched":null,"enrichment_success":false,"blocks":[{"type":"Title","bbox":{"left":0.16189574527182748,"top":0.09479295553814121,"width":0.11946290650820875,"height":0.02146414301710507,"page":1,"original_page":1},"content":"Test
+        PDF File","image_url":null,"chart_data":null,"confidence":"high","granular_confidence":{"extract_confidence":null,"parse_confidence":0.7185355693101882},"extra":null}]}],"ocr":null,"custom":null},"parse_mode":null,"document_properties":null}'
+    headers:
+      Content-Type:
+      - application/json
+      Date:
+      - Tue, 01 Sep 2026 19:54:50 GMT
+    status:
+      code: 200
+      message: ''
+recorded_at: '2026-09-01T19:54:50.708637+00:00'
+ttl_seconds: 0
+version: 1
+x-litellm:
+  case:
+    litellm_input:
+      contract: reducto_v3
+      custom_llm_provider: null
+      document:
+        document_url: data:application/pdf;base64,JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvUmVzb3VyY2VzIDQgMCBSIC9NZWRpYUJveCBbMCAwIDYxMiA3OTJdIC9Db250ZW50cyA1IDAgUiA+PgplbmRvYmoKNCAwIG9iago8PCAvRm9udCA8PCAvRjEgPDwgL1R5cGUgL0ZvbnQgL1N1YnR5cGUgL1R5cGUxIC9CYXNlRm9udCAvSGVsdmV0aWNhID4+ID4+ID4+CmVuZG9iago1IDAgb2JqCjw8IC9MZW5ndGggNDQgPj4Kc3RyZWFtCkJUCi9GMSAxMiBUZgoxMDAgNzAwIFRkCihUZXN0IFBERiBGaWxlKSBUagpFVAplbmRzdHJlYW0KZW5kb2JqCnhyZWYKMCA2CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAwOSAwMDAwMCBuIAowMDAwMDAwMDU4IDAwMDAwIG4gCjAwMDAwMDAxMTUgMDAwMDAgbiAKMDAwMDAwMDIxNCAwMDAwMCBuIAowMDAwMDAwMjkzIDAwMDAwIG4gCnRyYWlsZXIKPDwgL1NpemUgNiAvUm9vdCAxIDAgUiA+PgpzdGFydHhyZWYKMzg1CiUlRU9GCg==
+        type: document_url
+      formatting:
+        add_page_markers: false
+        include:
+        - signatures
+        - ignore_watermarks
+        merge_tables: true
+        table_output_format: json
+      model: reducto/parse-v3
+      retrieval:
+        chunking:
+          chunk_mode: variable
+          chunk_overlap: 32
+          chunk_size: 1500
+        embedding_optimized: false
+        filter_blocks:
+        - Figure
+        - Table
+        - Key Value
+      settings:
+        embed_pdf_metadata: false
+        embed_pdf_metadata_dpi: 100
+        extraction_mode: hybrid
+        force_url_result: false
+        ocr_system: legacy
+        page_range:
+        - 1
+        persist_results: false
+        return_images: []
+        return_ocr_data: false
+        timeout: 900.0
+  request_source: python_replay
+  schema_version: 1

@@ -4,7 +4,7 @@ resource "google_redis_instance" "this" {
   memory_size_gb = var.redis_memory_size_gb
   region         = var.region
 
-  authorized_network = google_compute_network.this.id
+  authorized_network = local.network_id
   connect_mode       = "PRIVATE_SERVICE_ACCESS"
 
   redis_version = "REDIS_7_0"
@@ -16,7 +16,7 @@ resource "google_redis_instance" "this" {
   # and passed to the proxy as REDIS_CA_PEM_B64); the proxy decodes it to
   # /tmp/redis-ca.pem at startup and uses it to validate the rediss://
   # handshake. Mirrors `transit_encryption_enabled = true` on AWS.
-  transit_encryption_mode = "SERVER_AUTHENTICATION"
+  transit_encryption_mode = var.redis_transit_encryption ? "SERVER_AUTHENTICATION" : "DISABLED"
 
   depends_on = [google_service_networking_connection.psa]
 }

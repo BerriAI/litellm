@@ -143,7 +143,7 @@ async def test_team_blocking_behavior_multi_instance():
         assert team_info_4001["blocked"] is True, "Team should be blocked after update"
 
         # 8. Make a chat completion request on port 4000 with a new prompt; expect it to be blocked.
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match=r"(?i)blocked") as excinfo:
             await chat_completion_on_port(
                 session,
                 key=key,
@@ -157,7 +157,7 @@ async def test_team_blocking_behavior_multi_instance():
         ), f"Expected error indicating team blocked, got: {error_msg}"
 
         # 9. Make a chat completion request on port 4000 with a new prompt; expect it to be blocked.
-        with pytest.raises(Exception) as excinfo:
+        with pytest.raises(Exception, match=r"(?i)blocked") as excinfo:
             await chat_completion_on_port(
                 session,
                 key=key,
@@ -171,7 +171,7 @@ async def test_team_blocking_behavior_multi_instance():
         ), f"Expected error indicating team blocked, got: {error_msg}"
 
         # 9. Repeat the chat completion request with another new prompt; expect it to be blocked.
-        with pytest.raises(Exception) as excinfo_second:
+        with pytest.raises(Exception, match=r"(?i)blocked") as excinfo_second:
             await chat_completion_on_port(
                 session,
                 key=key,

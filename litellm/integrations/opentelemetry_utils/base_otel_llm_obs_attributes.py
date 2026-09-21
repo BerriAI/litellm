@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import TYPE_CHECKING, Any, Dict, Union
+from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
@@ -7,7 +7,7 @@ if TYPE_CHECKING:
 
 class BaseLLMObsOTELAttributes(ABC):
     @staticmethod
-    def set_messages(span: "Span", kwargs: Dict[str, Any]):
+    def set_messages(span: "Span", kwargs: dict[str, Any]):
         pass
 
     @staticmethod
@@ -15,7 +15,7 @@ class BaseLLMObsOTELAttributes(ABC):
         pass
 
 
-def cast_as_primitive_value_type(value) -> Union[str, bool, int, float]:
+def cast_as_primitive_value_type(value) -> str | bool | int | float:
     """
     Converts a value to an OTEL-supported primitive for Arize/Phoenix observability.
     """
@@ -33,5 +33,5 @@ def safe_set_attribute(span: "Span", key: str, value: Any):
     """
     Sets a span attribute safely with OTEL-compliant primitive typing for Arize/Phoenix.
     """
-    primitive_value = cast_as_primitive_value_type(value)
+    primitive_value: Final = cast_as_primitive_value_type(value)
     span.set_attribute(key, primitive_value)

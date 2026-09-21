@@ -36,7 +36,7 @@ function MemoryEmptyState({ hasActiveSearch }: { hasActiveSearch: boolean }) {
       </div>
       <div className="text-sm text-muted-foreground">
         {hasActiveSearch
-          ? "No memories have keys starting with your search."
+          ? "No memories match your search."
           : "Memories your agents store under /v1/memory will appear here."}
       </div>
     </div>
@@ -81,7 +81,7 @@ export function MemoryTable({
           table={table}
           searchValue={searchValue}
           onSearchChange={onSearchChange}
-          searchPlaceholder='Filter by key prefix, e.g. "user:"'
+          searchPlaceholder="Search by key prefix or memory ID…"
           onRefresh={onRefresh}
           isRefreshing={isRefreshing}
           showViewOptions={false}

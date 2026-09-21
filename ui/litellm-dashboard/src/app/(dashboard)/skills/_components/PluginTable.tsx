@@ -42,6 +42,7 @@ const PluginTable: React.FC<PluginTableProps> = ({ pluginsList, isLoading, onDel
   return (
     <DataTable
       data={pluginsList}
+      paginationMode="client"
       columns={columns}
       getRowId={(plugin, index) => plugin.id || String(index)}
       sortingMode="client"

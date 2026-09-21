@@ -4,11 +4,9 @@ Test Arize health check functionality and proxy integration.
 
 import json
 import os
-import sys
 from unittest.mock import patch, MagicMock
 
 # Adds the grandparent directory to sys.path to allow importing project modules
-sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
 import pytest
