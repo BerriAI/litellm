@@ -10,16 +10,14 @@ from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import CredentialCreateBody, LiteLLMParamsBody
 from proxy_client import ProxyClient
-from sdk_clients import SdkClients
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
 
 class TestCredentialBackedMessages:
     @pytest.mark.covers("mgmt.credential.new.serves_request")
-    def test_credential_backed_messages(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_credential_backed_messages(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         marker = unique_marker()
         credential_name = f"e2e-cred-{marker}"
         model = f"e2e-cred-messages-{marker}"
@@ -48,6 +46,7 @@ class TestCredentialBackedMessages:
             model=model,
             max_tokens=64,
             messages=[{"role": "user", "content": "reply with one word"}],
+            extra_body=NO_PROXY_CACHE,
         )
         assert message.role == "assistant", f"unexpected role: {message.role!r}"
         text = "".join(block.text for block in message.content if block.type == "text")

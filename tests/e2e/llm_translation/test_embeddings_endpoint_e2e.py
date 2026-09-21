@@ -17,7 +17,7 @@ from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel
-from sdk_clients import SdkClients
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -39,7 +39,9 @@ def _openai_embeddings_params() -> LiteLLMParamsBody:
     )
 
 
-def _register(proxy: ProxyClient, resources: ResourceManager, prefix: str, params: LiteLLMParamsBody) -> tuple[str, str]:
+def _register(
+    proxy: ProxyClient, resources: ResourceManager, prefix: str, params: LiteLLMParamsBody
+) -> tuple[str, str]:
     model = f"{prefix}-{unique_marker()}"
     model_id = proxy.create_model(model, params)
     resources.defer(lambda: proxy.delete_model(model_id))
@@ -56,7 +58,7 @@ def _assert_embedding_vector(
     model, key = _register(proxy, resources, prefix, params)
     client = sdk.openai(key)
 
-    embeddings = client.embeddings.create(model=model, input="Say this is a test!")
+    embeddings = client.embeddings.create(model=model, input="Say this is a test!", extra_body=NO_PROXY_CACHE)
     assert embeddings.data, f"/embeddings returned no data: {embeddings!r}"
     vector = embeddings.data[0].embedding
     assert vector, f"/embeddings returned no vector: {embeddings!r}"
@@ -66,9 +68,7 @@ def _assert_embedding_vector(
 class TestEmbeddingsEndpoint:
     @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.works")
-    def test_embeddings_returns_vector(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_embeddings_returns_vector(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         _assert_embedding_vector(proxy, resources, sdk, "e2e-embeddings", _openai_embeddings_params())
 
     @pytest.mark.covers("llm.embeddings.bedrock.basic.nonstream.works")
@@ -118,11 +118,11 @@ class TestEmbeddingsEndpoint:
 
     @pytest.mark.replayable
     @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.works")
-    def test_array_input_returns_vectors(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_array_input_returns_vectors(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model, key = _register(proxy, resources, "e2e-embeddings-array", _openai_embeddings_params())
-        embeddings = sdk.openai(key).embeddings.create(model=model, input=["Hello", "World", "Test"])
+        embeddings = sdk.openai(key).embeddings.create(
+            model=model, input=["Hello", "World", "Test"], extra_body=NO_PROXY_CACHE
+        )
         assert len(embeddings.data) == 3, f"expected 3 vectors: {embeddings!r}"
 
     @pytest.mark.replayable

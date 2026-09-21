@@ -45,7 +45,7 @@ from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel
-from sdk_clients import SdkClients
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -83,7 +83,9 @@ def _cacheable_system_block(marker: str) -> TextBlockParam:
 
 def _user_turn(text: str, *, cached: bool = False) -> MessageParam:
     block: TextBlockParam = (
-        {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}} if cached else {"type": "text", "text": text}
+        {"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+        if cached
+        else {"type": "text", "text": text}
     )
     return {"role": "user", "content": [block]}
 
@@ -107,7 +109,9 @@ def _text(message: Message) -> str:
 
 
 def _send(client: Anthropic, model: str, system_block: TextBlockParam, messages: Sequence[MessageParam]) -> Message:
-    return client.messages.create(model=model, max_tokens=64, system=[system_block], messages=messages)
+    return client.messages.create(
+        model=model, max_tokens=64, system=[system_block], messages=messages, extra_body=NO_PROXY_CACHE
+    )
 
 
 def _register_deployment(proxy: ProxyClient, resources: ResourceManager, params: LiteLLMParamsBody) -> str:

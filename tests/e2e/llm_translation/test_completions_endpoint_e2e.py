@@ -15,7 +15,7 @@ from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from sdk_clients import SdkClients
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -40,6 +40,7 @@ class TestCompletionsEndpoint:
             model=model,
             prompt="Finish this sentence in a few words: the capital of France is",
             max_tokens=32,
+            extra_body=NO_PROXY_CACHE,
         )
         assert completion.choices, f"/v1/completions returned no choices: {completion!r}"
         text = (completion.choices[0].text or "").strip()

@@ -39,7 +39,7 @@ from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from sdk_clients import SdkClients
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -83,6 +83,7 @@ class TestBedrockWebSearchServerTool:
             max_tokens=512,
             tools=[WEB_SEARCH_TOOL],
             messages=[{"role": "user", "content": SEARCH_PROMPT}],
+            extra_body=NO_PROXY_CACHE,
         )
 
         assert response.content, f"no content blocks in response: {response!r}"

@@ -13,11 +13,20 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final
 
 from anthropic import Anthropic
 from openai import OpenAI
 
 from e2e_config import PROXY_BASE_URL, REQUEST_TIMEOUT
+
+NO_PROXY_CACHE: Final = MappingProxyType({"cache": {"no-cache": True}})
+"""``extra_body`` for every cacheable SDK call (messages, responses, completions,
+embeddings): the gateway under test caches those call types, so an identical
+re-send would otherwise be served from Redis instead of reaching the provider,
+which hides provider-side behavior such as prompt-cache warm-up. The SDKs
+themselves cannot bypass it (``Cache-Control`` only sets a TTL on the proxy)."""
 
 
 def response_header(headers: Mapping[str, str], name: str) -> str | None:
