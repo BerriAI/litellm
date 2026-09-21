@@ -61,11 +61,15 @@ def secret_manager() -> SecretManager:
     import litellm
     from litellm.types.secret_managers.main import KeyManagementSettings
 
-    settings: Final = litellm._key_management_settings or KeyManagementSettings()
+    configured_system: Final = (
+        litellm._key_management_system  # pyright: ignore[reportPrivateUsage]  # canonical key management globals are private
+    )
+    configured_settings: Final = (
+        litellm._key_management_settings  # pyright: ignore[reportPrivateUsage]  # canonical key management globals are private
+    )
+    settings: Final = configured_settings or KeyManagementSettings()
     system: Final = (
-        litellm._key_management_system.value
-        if litellm.secret_manager_client is not None and litellm._key_management_system is not None
-        else None
+        configured_system.value if litellm.secret_manager_client is not None and configured_system is not None else None
     )
     return SecretManager(
         system=system,
