@@ -736,6 +736,8 @@ class DeterministicEmbedding(litellm.CustomLLM):
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
         self.async_calls: list[dict[str, object]] = []
+        self.entered = asyncio.Event()
+        self.gate: asyncio.Event | None = None
 
     def _respond(
         self,
@@ -790,6 +792,9 @@ class DeterministicEmbedding(litellm.CustomLLM):
             }
         )
         SEMANTIC_CONTEXT.set("written-in-aembedding")
+        self.entered.set()
+        if self.gate is not None:
+            await self.gate.wait()
         return self._respond(model, input, model_response)
 
 
@@ -1034,6 +1039,36 @@ async def test_native_semantic_async_embedding_runs_inline_in_the_callers_task(
             "context": "written-in-aembedding",
         },
     ], semantic_embedding.async_calls
+
+
+async def test_native_semantic_cancellation_during_embedding_skips_the_backend(
+    redis_stack: tuple[str, str], semantic_embedding: DeterministicEmbedding
+) -> None:
+    url, index = redis_stack
+    facade: Final = semantic_facade(url, index)
+    binding: Final = _CacheTestResolver(SimpleNamespace(cache=facade)).resolve()
+    assert binding.kind == "native"
+    semantic_embedding.gate = asyncio.Event()
+
+    async def lookup() -> object:
+        return await binding.async_lookup(
+            semantic_request("cancel", "cancelled prompt")
+        )
+
+    task: Final = asyncio.create_task(lookup())
+    await semantic_embedding.entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    semantic_embedding.gate.set()
+
+    assert len(semantic_embedding.async_calls) == 1
+    assert (
+        await cast(RedisSemanticCache, facade.cache).async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # **kwargs stays unknown on the backend class
+            "cancel", messages=semantic_messages("cancelled prompt")
+        )
+        is None
+    )
 
 
 def test_redis_semantic_similarity_tag_and_threshold_boundaries(
