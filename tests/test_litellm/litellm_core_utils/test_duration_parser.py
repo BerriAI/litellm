@@ -357,7 +357,7 @@ class TestWordFormBudgetDurations(unittest.TestCase):
 
     def test_word_forms_match_canonical_int_unit_forms(self):
         base_time = datetime(2023, 5, 17, 15, 20, 30, tzinfo=timezone.utc)
-        for word, canonical in (("hourly", "1h"), ("daily", "24h"), ("weekly", "7d"), ("monthly", "30d")):
+        for word, canonical in (("hourly", "1h"), ("daily", "1d"), ("weekly", "7d"), ("monthly", "30d")):
             self.assertEqual(
                 get_next_standardized_reset_time(word, base_time, "UTC"),
                 get_next_standardized_reset_time(canonical, base_time, "UTC"),
@@ -369,6 +369,41 @@ class TestWordFormBudgetDurations(unittest.TestCase):
             get_next_standardized_reset_time("  Monthly ", base_time, "UTC"),
             datetime(2023, 6, 1, 0, 0, 0, tzinfo=timezone.utc),
         )
+    def test_daily_word_form_honours_reset_time_of_day(self):
+        """'daily' is a day-level duration, so a configured reset_time_of_day
+        must apply to it exactly as it does to '1d'."""
+        now = datetime(2023, 5, 15, 8, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time(
+                "daily", now, "UTC", reset_time_of_day=time(12, 0)
+            ),
+            datetime(2023, 5, 15, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_daily_word_form_after_offset_rolls_to_tomorrow(self):
+        now = datetime(2023, 5, 15, 14, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time(
+                "daily", now, "UTC", reset_time_of_day=time(12, 0)
+            ),
+            datetime(2023, 5, 16, 12, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_word_forms_match_int_unit_forms_with_reset_time_of_day(self):
+        """The word forms must not diverge from their numeric equivalents once a
+        non-midnight reset_time_of_day is configured."""
+        base_time = datetime(2023, 5, 17, 15, 20, 30, tzinfo=timezone.utc)
+        offset = time(9, 30)
+        for word, canonical in (("daily", "1d"), ("weekly", "7d"), ("monthly", "30d")):
+            with self.subTest(word=word):
+                self.assertEqual(
+                    get_next_standardized_reset_time(
+                        word, base_time, "UTC", reset_time_of_day=offset
+                    ),
+                    get_next_standardized_reset_time(
+                        canonical, base_time, "UTC", reset_time_of_day=offset
+                    ),
+                )
 
     def test_duration_in_seconds_accepts_word_forms(self):
         self.assertEqual(duration_in_seconds("hourly"), 3600)
