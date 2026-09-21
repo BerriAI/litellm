@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -15,8 +15,11 @@ from litellm.types.utils import ModelResponse, StandardPassThroughResponseObject
 
 
 class _TypeSafeUsage(BaseModel):
-    input_tokens: int = 0
-    output_tokens: int = 0
+    model_config = ConfigDict(populate_by_name=True)
+
+    input_tokens: int = Field(default=0, validation_alias=AliasChoices("input_tokens", "prompt_tokens"))
+    output_tokens: int = Field(default=0, validation_alias=AliasChoices("output_tokens", "completion_tokens"))
+    cost: float | None = None
 
 
 class _TypeSafeResponse(BaseModel):
@@ -29,6 +32,7 @@ class _RegistryPricing(BaseModel):
     output_cost_per_token: float = 0.0
 
 
+_TYPESAFE_NAMESPACE: Final = "typesafe/"
 _TYPESAFE_RESPONSE_ADAPTER: Final = TypeAdapter(_TypeSafeResponse)
 _REGISTRY_PRICING_ADAPTER: Final = TypeAdapter(_RegistryPricing)
 
@@ -40,7 +44,11 @@ def _parse_typesafe_response(response_body: Mapping[str, object]) -> _TypeSafeRe
         return _TypeSafeResponse()
 
 
-def _pricing_for(model_keys: tuple[str, ...]) -> _RegistryPricing:
+def _namespaced(model: str) -> str:
+    return model if model.startswith(_TYPESAFE_NAMESPACE) else f"{_TYPESAFE_NAMESPACE}{model}"
+
+
+def _pricing_for(model_keys: tuple[str, ...]) -> _RegistryPricing | None:
     for model_key in model_keys:
         if model_key not in litellm.model_cost:  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
             continue
@@ -50,7 +58,7 @@ def _pricing_for(model_keys: tuple[str, ...]) -> _RegistryPricing:
             )
         except ValidationError:
             continue
-    return _RegistryPricing()
+    return None
 
 
 class TypeSafePassthroughLoggingHandler:
@@ -72,16 +80,18 @@ class TypeSafePassthroughLoggingHandler:
         request_model_value: Final = request_body.get("model")
         request_model: Final = request_model_value if isinstance(request_model_value, str) else None
         logged_model: Final = response_model or request_model or "unknown"
-        model_name: Final = f"typesafe/{logged_model}"
+        model_name: Final = _namespaced(logged_model)
         usage: Final = response.usage or _TypeSafeUsage()
         input_tokens: Final = usage.input_tokens
         output_tokens: Final = usage.output_tokens
         candidate_model_keys: Final = tuple(
-            f"typesafe/{model}" for model in (response_model, request_model) if model is not None
+            _namespaced(model) for model in (response_model, request_model) if model is not None
         )
         pricing: Final = _pricing_for(candidate_model_keys)
         response_cost: Final = (
             input_tokens * pricing.input_cost_per_token + output_tokens * pricing.output_cost_per_token
+            if pricing is not None
+            else usage.cost or 0.0
         )
         usage_object: Final = Usage(
             prompt_tokens=input_tokens,
