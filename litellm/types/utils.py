@@ -315,6 +315,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
+    output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
@@ -2550,6 +2551,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     """
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    @field_serializer("data")
+    def _serialize_image_data(self, data: Sequence[OpenAIImage] | None) -> Sequence[Mapping[str, object]] | None:
+        return None if data is None else [image.model_dump() for image in data]
 
     def __init__(
         self,
