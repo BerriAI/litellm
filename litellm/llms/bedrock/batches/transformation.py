@@ -33,6 +33,7 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     CommonBatchFilesUtils,
     merge_bedrock_aws_request_params,
+    resolve_s3_bucket_owner,
     resolve_s3_encryption_key_id,
 )
 
@@ -49,6 +50,26 @@ _S3_BATCH_FILE_UUID_SUFFIX_PATTERN: Final = re.compile(
 )
 
 _BEDROCK_TAGS_ADAPTER: Final[TypeAdapter[list[BedrockTag]]] = TypeAdapter(list[BedrockTag])
+
+
+def _build_s3_input_config(s3_uri: str, s3_bucket_owner: str | None) -> BedrockS3InputDataConfig:
+    if s3_bucket_owner is None:
+        return BedrockS3InputDataConfig(s3Uri=s3_uri)
+    return BedrockS3InputDataConfig(s3Uri=s3_uri, s3BucketOwner=s3_bucket_owner)
+
+
+def _build_s3_output_config(
+    s3_uri: str, s3_bucket_owner: str | None, s3_encryption_key_id: str | None
+) -> BedrockS3OutputDataConfig:
+    if s3_bucket_owner is None:
+        if s3_encryption_key_id is None:
+            return BedrockS3OutputDataConfig(s3Uri=s3_uri)
+        return BedrockS3OutputDataConfig(s3Uri=s3_uri, s3EncryptionKeyId=s3_encryption_key_id)
+    if s3_encryption_key_id is None:
+        return BedrockS3OutputDataConfig(s3Uri=s3_uri, s3BucketOwner=s3_bucket_owner)
+    return BedrockS3OutputDataConfig(
+        s3Uri=s3_uri, s3BucketOwner=s3_bucket_owner, s3EncryptionKeyId=s3_encryption_key_id
+    )
 
 
 def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
@@ -214,25 +235,23 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         job_name: Final = self.common_utils.generate_unique_job_name(model, prefix="litellm")
         output_key: Final = f"litellm-batch-outputs/{job_name}/"
 
-        # Build input data config
-        input_data_config: Final[BedrockInputDataConfig] = {
-            "s3InputDataConfig": BedrockS3InputDataConfig(s3Uri=f"s3://{input_bucket}/{input_key}")
-        }
-
-        # Build output data config
-        s3_output_config: Final[BedrockS3OutputDataConfig] = BedrockS3OutputDataConfig(
-            s3Uri=f"s3://{output_bucket}/{output_key}"
-        )
-
-        # Add optional KMS encryption key ID if provided
-        s3_encryption_key_id = resolve_s3_encryption_key_id(
+        s3_bucket_owner: Final = resolve_s3_bucket_owner(litellm_params=litellm_params, optional_params=optional_params)
+        s3_encryption_key_id: Final = resolve_s3_encryption_key_id(
             litellm_params=litellm_params,
             optional_params=optional_params,
         )
-        if s3_encryption_key_id:
-            s3_output_config["s3EncryptionKeyId"] = s3_encryption_key_id
-
-        output_data_config: Final[BedrockOutputDataConfig] = {"s3OutputDataConfig": s3_output_config}
+        input_data_config: Final[BedrockInputDataConfig] = {
+            "s3InputDataConfig": _build_s3_input_config(
+                s3_uri=f"s3://{input_bucket}/{input_key}", s3_bucket_owner=s3_bucket_owner
+            )
+        }
+        output_data_config: Final[BedrockOutputDataConfig] = {
+            "s3OutputDataConfig": _build_s3_output_config(
+                s3_uri=f"s3://{output_bucket}/{output_key}",
+                s3_bucket_owner=s3_bucket_owner,
+                s3_encryption_key_id=s3_encryption_key_id,
+            )
+        }
 
         # Create Bedrock batch request with proper typing
         bedrock_request: Final[BedrockCreateBatchRequest] = {

@@ -15,7 +15,7 @@ import traceback
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, TypeVar, cast, overload
 from urllib.parse import quote, unquote
 
 from pydantic import TypeAdapter
@@ -134,6 +134,25 @@ class _SpendBatch(Protocol):
     litellm_tagtable: BatchTable
     litellm_agentstable: BatchTable
     litellm_modelaccessgroupbudgettable: BatchTable
+
+
+_EntitySpendTable: TypeAlias = Literal[
+    "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
+]
+
+
+_ENTITY_SPEND_TABLES: Final[Mapping[_EntitySpendTable, Callable[[_SpendBatch], BatchTable]]] = MappingProxyType(
+    {
+        "litellm_tagtable": lambda batcher: batcher.litellm_tagtable,
+        "litellm_agentstable": lambda batcher: batcher.litellm_agentstable,
+        "litellm_modelaccessgroupbudgettable": lambda batcher: batcher.litellm_modelaccessgroupbudgettable,
+        "litellm_projecttable": lambda batcher: batcher.litellm_projecttable,
+    }
+)
+
+
+def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable) -> BatchTable:
+    return _ENTITY_SPEND_TABLES[table_accessor](batcher)
 
 
 class _SpendBatchManager(Protocol):
@@ -2159,9 +2178,7 @@ class DBSpendUpdateWriter:
     async def _update_entity_spend_in_db(
         entity_name: str,
         transactions: dict[str, float] | None,
-        table_accessor: Literal[
-            "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
-        ],
+        table_accessor: _EntitySpendTable,
         where_field: str,
         n_retry_times: int,
         prisma_client: PrismaClient,
@@ -2195,7 +2212,7 @@ class DBSpendUpdateWriter:
                                     entity_id,
                                     response_cost,
                                 )
-                                getattr(batcher, table_accessor).update_many(
+                                _entity_spend_table(batcher, table_accessor).update_many(
                                     where={where_field: entity_id},
                                     data={"spend": {"increment": response_cost}},
                                 )

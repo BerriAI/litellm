@@ -31,10 +31,30 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.ptu_pricing import ptu_terms
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
+from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
     from litellm.proxy.utils import PrismaClient
+
+
+class _DailyTeamSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_DailyTeamSpend"]):
+    table_name = "litellm_dailyteamspend"
+
+
+def _daily_team_spend_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_DailyTeamSpend]":
+    """The sentinel rows this rollup writes, reads back and prunes."""
+    return _DailyTeamSpendRepository(prisma_client).table
+
+
+def _proxy_model_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_ProxyModelTable]":
+    """The stored deployments the rollup scans for PTU config."""
+    return ModelRepository(prisma_client).table
+
 
 _HOURS_PER_DAY: Final = 24
 _PRUNE_ID_CHUNK_SIZE: Final = 5_000
@@ -97,7 +117,7 @@ def _decode_model_info(raw: object) -> "Mapping[str, object] | None":
     """
     if isinstance(raw, str):
         try:
-            decoded: Final = json.loads(raw)
+            decoded: Final[object] = json.loads(raw)
         except (TypeError, ValueError):
             return None
         return decoded if isinstance(decoded, dict) else None
@@ -240,7 +260,7 @@ async def _upsert_ptu_daily_row(
         }
     }
     now: Final = datetime.now(timezone.utc)
-    await prisma_client.db.litellm_dailyteamspend.upsert(
+    await _daily_team_spend_table(prisma_client).upsert(
         where=where,
         data={  # mutable-ok: prisma upsert data payload
             "create": {  # mutable-ok: prisma create payload
@@ -353,7 +373,7 @@ async def _load_ptu_models(prisma_client: "PrismaClient", *, router: object | No
     The router is handed in rather than read off the proxy module, so a run prices exactly
     the deployments its caller declares and nothing a co-resident process left behind.
     """
-    rows: Final = await prisma_client.db.litellm_proxymodeltable.find_many()
+    rows: Final = await _proxy_model_table(prisma_client).find_many()
     db_ids: Final = frozenset(model_id for row in rows if (model_id := str(getattr(row, "model_id", "") or "")))
     config_records: Final = _config_deployments(router, owned_by_db=db_ids)
     models: Final = tuple(
@@ -503,7 +523,7 @@ async def _existing_sentinel_keys(
     survives a rename. Nothing here reads the display name.
     """
     date_range: Final = {"gte": start.isoformat(), "lte": end.isoformat()}  # mutable-ok: prisma range filter
-    rows: Final = await prisma_client.db.litellm_dailyteamspend.find_many(
+    rows: Final = await _daily_team_spend_table(prisma_client).find_many(
         where={"api_key": PTU_SENTINEL_API_KEY, "date": date_range}  # mutable-ok: prisma find filter
     )
     return frozenset(
@@ -771,7 +791,7 @@ async def _prune_unrefreshed_sentinel_rows(
     )
     filters: Final = tuple(_prune_filter(date_str=date_str, cutoff=cutoff, chunk=chunk) for chunk in chunks)
     deletions: Final = tuple(
-        [await prisma_client.db.litellm_dailyteamspend.delete_many(where=where) for where in filters]
+        [await _daily_team_spend_table(prisma_client).delete_many(where=where) for where in filters]
     )
     deleted: Final = sum(deletions)
     if deleted:
