@@ -184,6 +184,8 @@ describe("MCPServers", () => {
 
   it.each(["cancel", "success", "failure", "unnamed"])("preserves delete confirmation on %s", async (outcome) => {
     const server: MCPServer = {
+      created_at: "",
+      updated_at: "",
       server_id: "delete-server",
       server_name: outcome === "unnamed" ? null : "Delete fixture",
       alias: "delete-alias",
@@ -220,7 +222,7 @@ describe("MCPServers", () => {
       await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
       expect(networking.deleteMCPServer).not.toHaveBeenCalled();
     } else {
-      await userEvent.click(within(dialog).getByRole("button", { name: "Delete", exact: true }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
       expect(within(dialog).getByRole("button", { name: "Deleting..." })).toBeDisabled();
       expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
       expect(networking.deleteMCPServer).toHaveBeenCalledWith("123", "delete-server");
@@ -262,7 +264,7 @@ describe("MCPServers", () => {
     );
     await screen.findByText("String group");
     await userEvent.click(screen.getByRole("combobox", { name: "Access Group" }));
-    await userEvent.click(await screen.findByRole("option", { name: "shared", exact: true }));
+    await userEvent.click(await screen.findByRole("option", { name: "shared" }));
     expect(screen.getByText("String group")).toBeVisible();
     expect(screen.getByText("Legacy group")).toBeVisible();
     expect(screen.queryByText("Other group")).not.toBeInTheDocument();
@@ -270,6 +272,8 @@ describe("MCPServers", () => {
 
   it.each(["server_name", "alias", "url", "server_id"] as const)("searches by %s case-insensitively", async (field) => {
     const server: MCPServer = {
+      created_at: "",
+      updated_at: "",
       server_id: "search-server",
       server_name: "Search fixture",
       created_by: "user",
