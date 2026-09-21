@@ -2,16 +2,29 @@
 
 from __future__ import annotations
 
-import os
-from collections.abc import Awaitable
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from collections.abc import Awaitable, Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import Final, Protocol, cast  # noqa: TID251  # native extension exposes dynamically typed callables
 
 import httpx
 
+from litellm.llms.base_llm.ocr.transformation import PROVIDER_NATIVE_RESPONSE_KEY, OCRResponse
+from litellm.rust_bridge.bindings import NativeBinding
 from litellm.rust_bridge.timeouts import timeout_to_seconds as _timeout_to_seconds
 
-if TYPE_CHECKING:
-    from litellm.rust_bridge.messages import RustAmessages, RustMessages
+
+@dataclass(frozen=True, slots=True)
+class LiteLLMOcrRequest:
+    model: str
+    document: Mapping[str, object]
+    api_key: str | None
+    api_base: str | None
+    timeout: float | httpx.Timeout | None
+    custom_llm_provider: str | None
+    extra_headers: dict[str, object] | None
+    kwargs: Mapping[str, object]
+    input_sources: Mapping[str, str] | None = None
 
 
 class RustOcr(Protocol):
@@ -24,6 +37,7 @@ class RustOcr(Protocol):
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
+        input_sources: dict[str, str],
         timeout_seconds: float | None,
     ) -> dict[str, object]:
         raise NotImplementedError
@@ -39,103 +53,40 @@ class RustAocr(Protocol):
         custom_llm_provider: str | None,
         extra_headers: dict[str, object] | None,
         optional_params: dict[str, object],
+        input_sources: dict[str, str],
         timeout_seconds: float | None,
     ) -> Awaitable[dict[str, object]]:
         raise NotImplementedError
 
 
-class _Unset:
-    pass
+def _as_ocr(value: object) -> RustOcr | None:
+    return cast(RustOcr, value) if callable(value) else None
 
 
-_UNSET: Final[_Unset] = _Unset()
+def _as_aocr(value: object) -> RustAocr | None:
+    return cast(RustAocr, value) if callable(value) else None
 
 
-def _env_enables_rust_ocr() -> bool:
-    return os.getenv("LITELLM_USE_RUST_OCR", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-_rust_ocr_enabled = _env_enables_rust_ocr()
-_rust_ocr_impl: RustOcr | None = None
-_rust_aocr_impl: RustAocr | None = None
-
-
-def use_litellm_rust(
-    enabled: bool = True,
-    *,
-    ocr: RustOcr | None | _Unset = _UNSET,
-    aocr: RustAocr | None | _Unset = _UNSET,
-    messages: RustMessages | None | _Unset = _UNSET,
-    amessages: RustAmessages | None | _Unset = _UNSET,
-    responses_websocket: Any | None | _Unset = _UNSET,
-    transcription: Any | None | _Unset = _UNSET,
-    atranscription: Any | None | _Unset = _UNSET,
-) -> None:
-    global _rust_ocr_enabled, _rust_ocr_impl, _rust_aocr_impl
-    configuring_ocr: Final = not isinstance(ocr, _Unset) or not isinstance(aocr, _Unset)
-    configuring_messages: Final = not isinstance(messages, _Unset) or not isinstance(amessages, _Unset)
-    configuring_responses_websocket: Final = not isinstance(responses_websocket, _Unset)
-    configuring_transcription: Final = not isinstance(transcription, _Unset) or not isinstance(atranscription, _Unset)
-    if configuring_ocr or (not configuring_messages and not configuring_responses_websocket):
-        _rust_ocr_enabled = enabled
-    if not isinstance(ocr, _Unset):
-        _rust_ocr_impl = ocr
-    if not isinstance(aocr, _Unset):
-        _rust_aocr_impl = aocr
-    if configuring_transcription:
-        from litellm.rust_bridge.transcription import configure_rust_transcription
-
-        configure_rust_transcription(
-            enabled=enabled,
-            transcription=transcription,
-            atranscription=atranscription,
-        )
-    if not configuring_messages and not configuring_responses_websocket:
-        return
-    if configuring_messages:
-        from litellm.rust_bridge.messages import set_rust_messages
-
-        if not isinstance(messages, _Unset) and not isinstance(amessages, _Unset):
-            set_rust_messages(messages=messages, amessages=amessages)
-        elif not isinstance(messages, _Unset):
-            set_rust_messages(messages=messages)
-        else:
-            set_rust_messages(amessages=amessages)
-    if configuring_responses_websocket:
-        from litellm.rust_bridge.responses_websocket import set_rust_responses_websocket
-
-        set_rust_responses_websocket(connection=responses_websocket)
-
-
-def rust_ocr_enabled() -> bool:
-    return _rust_ocr_enabled
+_OCR: Final = NativeBinding("ocr", validate=_as_ocr)
+_AOCR: Final = NativeBinding("aocr", validate=_as_aocr)
 
 
 def load_rust_ocr() -> RustOcr | None:
-    if _rust_ocr_impl is not None:
-        return _rust_ocr_impl
-    from litellm.rust_bridge import get_native_bridge
-
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustOcr, native_bridge.ocr)
+    return _OCR.load()
 
 
 def load_rust_aocr() -> RustAocr | None:
-    if _rust_aocr_impl is not None:
-        return _rust_aocr_impl
-    from litellm.rust_bridge import get_native_bridge
+    return _AOCR.load()
 
-    native_bridge: Final = get_native_bridge()
-    if native_bridge is None:
-        return None
-    return cast(RustAocr, getattr(native_bridge, "aocr", None))
+
+def _response(response: Mapping[str, object]) -> OCRResponse:
+    provider_native_response: Final = response.get(PROVIDER_NATIVE_RESPONSE_KEY)
+    normalized: Final = OCRResponse.model_validate(
+        MappingProxyType({key: value for key, value in response.items() if key != PROVIDER_NATIVE_RESPONSE_KEY})
+    )
+    if isinstance(provider_native_response, Mapping):
+        normalized.set_provider_native_response(provider_native_response)
+    return normalized
 
 
 def ocr(
@@ -148,6 +99,7 @@ def ocr(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    input_sources: Mapping[str, str] | None = None,
 ) -> dict[str, object] | None:
     rust_ocr: Final = load_rust_ocr()
     if rust_ocr is None:
@@ -160,6 +112,7 @@ def ocr(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         optional_params=optional_params,
+        input_sources=dict(input_sources or {}),  # mutable-ok: native boundary requires a concrete dict
         timeout_seconds=_timeout_to_seconds(timeout),
     )
 
@@ -174,6 +127,7 @@ async def aocr(
     extra_headers: dict[str, object] | None,
     optional_params: dict[str, object],
     timeout: float | httpx.Timeout | None,
+    input_sources: Mapping[str, str] | None = None,
 ) -> dict[str, object] | None:
     rust_aocr: Final = load_rust_aocr()
     if rust_aocr is None:
@@ -186,5 +140,6 @@ async def aocr(
         custom_llm_provider=custom_llm_provider,
         extra_headers=extra_headers,
         optional_params=optional_params,
+        input_sources=dict(input_sources or {}),  # mutable-ok: native boundary requires a concrete dict
         timeout_seconds=_timeout_to_seconds(timeout),
     )

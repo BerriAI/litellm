@@ -2,7 +2,10 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-from typing import Final
+from typing import (
+    Final,
+    cast,  # noqa: TID251  # jsonify_object in proxy/utils.py is annotated with a bare dict
+)
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 
@@ -88,7 +91,9 @@ async def create_credential(
         )
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
         credentials_dict: Final = encrypted_credential.model_dump()
-        credentials_dict_jsonified: Final = jsonify_object(credentials_dict)
+        credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
+            "dict[str, object]", jsonify_object(credentials_dict)
+        )
         await CredentialsRepository(prisma_client).create(
             data={
                 **credentials_dict_jsonified,
@@ -130,7 +135,7 @@ async def get_credentials(
         ]
         return {"success": True, "credentials": masked_credentials}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 @router.get(
@@ -234,13 +239,18 @@ async def delete_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        await CredentialsRepository(prisma_client).delete_by_name(credential_name)
+        deleted: Final = await CredentialsRepository(prisma_client).delete_by_name(credential_name)
+        if deleted is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Credential not found. Got credential name: " + credential_name,
+            )
 
         ## DELETE FROM LITELLM ##
         litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
-        return handle_exception_on_proxy(e)
+        raise handle_exception_on_proxy(e)
 
 
 def update_db_credential(
@@ -310,7 +320,9 @@ async def update_credential(
         if db_credential is None:
             raise HTTPException(status_code=404, detail="Credential not found in DB.")
         merged_credential: Final = update_db_credential(db_credential, credential)
-        credential_object_jsonified: Final = jsonify_object(merged_credential.model_dump())
+        credential_object_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
+            "dict[str, object]", jsonify_object(merged_credential.model_dump())
+        )
         await credentials_repository.update_by_name(
             credential_name,
             data={

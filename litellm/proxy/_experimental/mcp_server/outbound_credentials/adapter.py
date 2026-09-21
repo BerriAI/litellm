@@ -12,14 +12,18 @@ every other mode so the caller defers to v1 (parity-safe); it grows one branch p
 from __future__ import annotations
 
 import base64
+import os
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
 
 from fastapi import HTTPException
 from pydantic import SecretStr
 from typing_extensions import assert_never
 
+from litellm.experimental_mcp_client.client import strip_auth_scheme, to_basic_credentials
+from litellm.proxy._experimental.mcp_server.exceptions import MCPServerURLCredentialsError
 from litellm.proxy._experimental.mcp_server.oauth_utils import resolve_upstream_resource
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    DEFAULT_CREDENTIAL_HEADER,
     ApiKeyConfig,
     AuthorizationCodeConfig,
     ClientAuth,
@@ -43,6 +47,15 @@ if TYPE_CHECKING:
 
 _TOKEN_EXCHANGE_SUBJECT_TOKEN_DEFAULT: Final = "urn:ietf:params:oauth:token-type:access_token"
 _ID_JAG_SUBJECT_TOKEN_DEFAULT: Final = "urn:ietf:params:oauth:token-type:id_token"
+
+
+def token_header(server: MCPServer) -> str:
+    """The upstream header this server's resolved credential occupies.
+
+    One owner for every arm, so no spec builder spells the default itself and a server can never
+    hand two arms different answers.
+    """
+    return server.upstream_token_header or DEFAULT_CREDENTIAL_HEADER
 
 
 def to_subject(user_api_key_auth: UserAPIKeyAuth | None, subject_token: str | None) -> Subject:
@@ -122,7 +135,7 @@ def _oauth2_spec(server: MCPServer, resource: str) -> ServerSpec | None:
         return ServerSpec(
             server_id=server.server_id,
             resource=resource,
-            config=AuthorizationCodeConfig(),
+            config=AuthorizationCodeConfig(header_name=token_header(server)),
         )
     return None
 
@@ -140,9 +153,10 @@ def _client_credentials_spec(server: MCPServer, resource: str) -> ServerSpec:
         server_id=server.server_id,
         resource=resource,
         config=ClientCredentialsConfig(
+            header_name=token_header(server),
             client_id=server.client_id,
             client_secret=SecretStr(server.client_secret) if server.client_secret else None,
-            token_url=server.token_url,
+            token_url=server.effective_token_url,
             scopes=tuple(server.scopes or ()),
             audience=server.audience,
             upstream_resource=resolve_upstream_resource(server),
@@ -163,7 +177,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
     normalizes to ``rfc8693`` so a bad config value cannot crash spec-building. ``audience`` is
     forwarded only when the operator set it; a missing one is omitted, not derived.
     """
-    endpoint: Final = server.token_exchange_endpoint or server.token_url
+    endpoint: Final = server.token_exchange_endpoint or server.effective_token_url
     if not server.client_id or not server.client_secret:
         return None
     profile: Final[Literal["rfc8693", "entra_obo"]] = (
@@ -173,6 +187,7 @@ def _token_exchange_spec(server: MCPServer, resource: str) -> ServerSpec | None:
         server_id=server.server_id,
         resource=resource,
         config=TokenExchangeConfig(
+            header_name=token_header(server),
             profile=profile,
             subject_token_type=server.subject_token_type or DEFAULT_SUBJECT_TOKEN_TYPE,
             token_exchange_endpoint=endpoint,
@@ -201,12 +216,14 @@ def _shared_key_spec(
     token: Final = server.authentication_token
     if not token:
         return None  # no key configured -> defer to v1 (parity-safe)
-    value: Final = base64.b64encode(token.encode("utf-8")).decode() if encode else token
+    value: Final = (
+        to_basic_credentials(token) if encode else strip_auth_scheme(token, value_prefix) if value_prefix else token
+    )
     return ServerSpec(
         server_id=server.server_id,
         resource=resource,
         config=ApiKeyConfig(
-            header_name=header_name,
+            header_name=server.upstream_token_header or header_name,
             value_prefix=value_prefix,
             key_source=SharedKey(value=SecretStr(value)),
         ),
@@ -231,6 +248,7 @@ def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
         server_id=server.server_id,
         resource=resource,
         config=IdJagConfig(
+            header_name=token_header(server),
             org_token_endpoint=org_token_endpoint,
             resource_token_endpoint=resource_token_endpoint,
             client_id=client_id,
@@ -277,6 +295,8 @@ def raise_public(error: CredError) -> NoReturn:
             )
         case "misconfigured":
             raise HTTPException(status_code=500, detail=error.summary)
+        case "url_credentials_not_allowed":
+            raise MCPServerURLCredentialsError()
         case "upstream_unavailable":
             raise HTTPException(status_code=503, detail=error.summary)
         case "unsupported_mode":
@@ -291,13 +311,30 @@ def raise_public(error: CredError) -> NoReturn:
 def oauth_protected_resource_path(root_path: str, server: MCPServer) -> str:
     """The server's RFC 9728 Protected Resource Metadata path, the shared anchor of both challenges.
 
-    ``root_path`` is the proxy's ``SERVER_ROOT_PATH``, resolved by the caller (the imperative shell)
-    so this stays a pure function of its inputs; ``"/"`` and ``""`` both mean no prefix. The path is
-    relative, so it resolves against the caller's own host (correct even behind a reverse proxy).
+    ``root_path`` is the prefix the request was routed under, resolved by the caller (the imperative
+    shell); ``"/"`` and ``""`` both mean no prefix. The path is relative, so it resolves against the
+    caller's own host (correct even behind a reverse proxy).
+
+    URL structure depends on how the prefix is served:
+
+    - The scalar ``SERVER_ROOT_PATH`` deployment registers the well-known routes with the prefix
+      *inserted* into the path (via :func:`well_known_root_suffix` at import time), matching RFC 8414
+      §3 well-known path insertion. When ``root_path`` equals ``SERVER_ROOT_PATH`` the URL must use
+      the same insertion or a client fetching it 404s.
+    - The per-request ``SERVER_ROOT_PATHS`` deployment can't register routes per prefix (the prefix
+      set is dynamic and could contain many entries); the middleware strips the prefix from
+      ``scope["path"]`` and the router matches the un-inserted well-known route. The URL must place
+      the prefix *before* ``.well-known`` so the strip leaves a matching path.
+
+    Picking the wrong form 404s the client's discovery fetch — the discovery document and the 401
+    challenge would then disagree on where the resource metadata lives.
     """
     prefix: Final = "" if root_path == "/" else root_path
     name: Final = server.alias or server.server_name or server.name or server.server_id
-    return f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    scalar_env: Final = os.getenv("SERVER_ROOT_PATH", "").rstrip("/")
+    if not prefix or (scalar_env and prefix == scalar_env):
+        return f"/.well-known/oauth-protected-resource{prefix}/mcp/{name}"
+    return f"{prefix}/.well-known/oauth-protected-resource/mcp/{name}"
 
 
 def raise_user_oauth_challenge(server: MCPServer, *, root_path: str) -> NoReturn:

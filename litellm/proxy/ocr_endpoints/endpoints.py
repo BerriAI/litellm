@@ -15,7 +15,7 @@ from litellm.llms.base_llm.ocr.transformation import (
     OCRResponse,
     parse_ocr_request_format,
 )
-from litellm.ocr.main import convert_file_document_to_url_document, get_mime_type
+from litellm.ocr.input import convert_upload_to_url_document, get_max_file_bytes
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -28,24 +28,7 @@ def _build_document_from_upload(
     filename: str | None,
     content_type: str | None,
 ) -> dict[str, str]:
-    """
-    Convert uploaded file bytes into a Mistral-format document dict with base64 data URI.
-
-    Delegates to convert_file_document_to_url_document after resolving MIME type
-    from the upload's content_type header or filename.
-    """
-    mime_type = content_type.split(";")[0].strip() if content_type else None
-    if not mime_type or mime_type == "application/octet-stream":
-        if filename:
-            mime_type = get_mime_type(filename)
-
-    return convert_file_document_to_url_document(
-        {
-            "type": "file",
-            "file": file_content,
-            "mime_type": mime_type or "application/octet-stream",
-        }
-    )
+    return convert_upload_to_url_document(file_content, filename, content_type)
 
 
 def _with_request_format(data: Mapping[str, Any], request: Request) -> Mapping[str, Any]:
@@ -120,7 +103,7 @@ async def _parse_multipart_form(request: Request) -> dict[str, Any]:
 
     # Seek to start in case the file was already partially read by middleware
     await uploaded_file.seek(0)
-    file_content: Final = await uploaded_file.read()
+    file_content: Final = await uploaded_file.read(get_max_file_bytes() + 1)
     if not file_content:
         raise ValueError("Uploaded file is empty")
 

@@ -306,7 +306,7 @@ func auditCalls(calls []endpointCall, specPaths map[string]map[string]json.RawMe
 	return violations
 }
 
-func run(providerDir, specPath string) error {
+func run(providerDir, specPath, coverageAllowlistPath string) error {
 	extracted, err := extractProviderCalls(providerDir)
 	if err != nil {
 		return err
@@ -326,6 +326,16 @@ func run(providerDir, specPath string) error {
 		sort.Strings(violations)
 		return fmt.Errorf("provider/proxy endpoint drift:\n  %s", strings.Join(violations, "\n  "))
 	}
+	if coverageAllowlistPath != "" {
+		allowlist, err := parseAllowlist(coverageAllowlistPath)
+		if err != nil {
+			return err
+		}
+		coverageViolations := auditCoverage(extracted.Calls, specPaths, allowlist)
+		if len(coverageViolations) > 0 {
+			return fmt.Errorf("provider coverage gaps:\n  %s", strings.Join(coverageViolations, "\n  "))
+		}
+	}
 	fmt.Printf("OK: %d request call sites verified against %d proxy OpenAPI paths\n", len(extracted.Calls), len(specPaths))
 	return nil
 }
@@ -333,12 +343,13 @@ func run(providerDir, specPath string) error {
 func main() {
 	providerDir := flag.String("provider-dir", "./litellm", "directory containing the provider Go source")
 	specPath := flag.String("spec", "", "path to the proxy OpenAPI schema JSON")
+	coverageAllowlist := flag.String("coverage-allowlist", "", "path to the coverage allowlist; when set, also fail on management endpoints with no provider coverage")
 	flag.Parse()
 	if *specPath == "" {
 		fmt.Fprintln(os.Stderr, "error: -spec is required")
 		os.Exit(2)
 	}
-	if err := run(*providerDir, *specPath); err != nil {
+	if err := run(*providerDir, *specPath, *coverageAllowlist); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

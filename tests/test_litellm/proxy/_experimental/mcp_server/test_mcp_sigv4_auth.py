@@ -15,6 +15,11 @@ import httpx
 
 from litellm.experimental_mcp_client.client import MCPSigV4Auth, MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
+from prisma import models
+
+
+def _updated_row() -> models.LiteLLM_MCPServerTable:
+    return models.LiteLLM_MCPServerTable.model_construct(server_id="test-server", transport="http", env={}, env_vars=[])
 
 
 class TestMCPSigV4Auth:
@@ -600,7 +605,7 @@ class TestCredentialMergeOnUpdate:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -639,7 +644,7 @@ class TestCredentialMergeOnUpdate:
         from litellm.proxy._types import UpdateMCPServerRequest
 
         mock_prisma = MagicMock()
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -667,7 +672,7 @@ class TestCredentialMergeOnUpdate:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -709,7 +714,7 @@ class TestCredentialMergeOnUpdate:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -752,7 +757,7 @@ class TestCredentialMergeOnUpdate:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",
@@ -1083,7 +1088,7 @@ class TestAuthTypeSwitchClearsCredentials:
 
         mock_prisma = MagicMock()
         mock_prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=existing_record)
-        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=MagicMock())
+        mock_prisma.db.litellm_mcpservertable.update = AsyncMock(return_value=_updated_row())
 
         data = UpdateMCPServerRequest(
             server_id="test-server",

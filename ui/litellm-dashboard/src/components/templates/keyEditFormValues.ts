@@ -22,6 +22,7 @@ export interface KeyEditFormValues {
   models?: string[];
   allowed_routes?: string;
   max_budget?: number | string | null;
+  soft_budget?: number | string | null;
   budget_duration?: string | null;
   tpm_limit?: number | string | null;
   tpm_limit_type?: string | null;
@@ -45,8 +46,10 @@ export interface KeyEditFormValues {
   mcp_servers_and_groups?: McpServersAndGroups;
   mcp_tool_permissions?: Record<string, string[]>;
   agents_and_groups?: AgentsAndGroups;
+  skills?: string[];
   organization_id?: string | null;
   team_id?: string | null;
+  project_id?: string | null;
   logging_settings?: unknown[];
   metadata?: string;
   duration?: string | null;
@@ -67,6 +70,8 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
   allowed_routes:
     Array.isArray(keyData.allowed_routes) && keyData.allowed_routes.length > 0 ? keyData.allowed_routes.join(", ") : "",
   max_budget: keyData.max_budget,
+  soft_budget:
+    (keyData.litellm_budget_table as { soft_budget?: number | null } | null | undefined)?.soft_budget ?? null,
   budget_duration: canonicalBudgetDuration(keyData.budget_duration),
   tpm_limit: keyData.tpm_limit,
   tpm_limit_type: (keyData as { tpm_limit_type?: string | null }).tpm_limit_type ?? null,
@@ -99,8 +104,10 @@ export const toKeyEditFormValues = (keyData: KeyResponse): KeyEditFormValues => 
     agents: keyData.object_permission?.agents || [],
     accessGroups: keyData.object_permission?.agent_access_groups || [],
   },
+  skills: keyData.object_permission?.skills || [],
   organization_id: keyData.organization_id,
   team_id: keyData.team_id,
+  project_id: keyData.project_id,
   logging_settings: extractLoggingSettings(keyData.metadata),
   metadata: formatMetadataForDisplay(stripTagsFromMetadata(keyData.metadata)),
   duration: (keyData as { duration?: string }).duration ?? "",
@@ -117,6 +124,7 @@ export const keyEditFormSchema = z.object({
   models: z.custom<string[] | undefined>(),
   allowed_routes: z.custom<string | undefined>(),
   max_budget: z.custom<number | string | null | undefined>(),
+  soft_budget: z.custom<number | string | null | undefined>(),
   budget_duration: z.custom<string | null | undefined>(),
   tpm_limit: z.custom<number | string | null | undefined>(),
   tpm_limit_type: z.custom<string | null | undefined>(),
@@ -144,8 +152,10 @@ export const keyEditFormSchema = z.object({
   mcp_servers_and_groups: z.custom<McpServersAndGroups | undefined>(),
   mcp_tool_permissions: z.custom<Record<string, string[]> | undefined>(),
   agents_and_groups: z.custom<AgentsAndGroups | undefined>(),
+  skills: z.custom<string[] | undefined>(),
   organization_id: z.custom<string | null | undefined>(),
   team_id: z.custom<string | null | undefined>(),
+  project_id: z.string().nullable().optional(),
   logging_settings: z.custom<unknown[] | undefined>(),
   metadata: z.custom<string | undefined>(),
   duration: z.custom<string | null | undefined>(),
@@ -168,6 +178,7 @@ export const toSubmittedValues = (
   models: values.models,
   allowed_routes: values.allowed_routes,
   max_budget: values.max_budget,
+  soft_budget: values.soft_budget,
   budget_duration: values.budget_duration,
   tpm_limit: values.tpm_limit,
   tpm_limit_type: values.tpm_limit_type,
@@ -191,6 +202,7 @@ export const toSubmittedValues = (
   mcp_servers_and_groups: values.mcp_servers_and_groups,
   mcp_tool_permissions: values.mcp_tool_permissions,
   agents_and_groups: values.agents_and_groups,
+  skills: values.skills,
   organization_id: values.organization_id,
   team_id: values.team_id,
   logging_settings: values.logging_settings,

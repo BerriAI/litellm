@@ -19,6 +19,19 @@ class PromptManagementClient(TypedDict):
     completed_messages: list[AllMessageValues] | None
 
 
+def resolve_prompt_manager_ignore_flags(
+    prompt_spec: PromptSpec | None,
+    ignore_prompt_manager_model: bool | None,
+    ignore_prompt_manager_optional_params: bool | None,
+) -> tuple[bool, bool]:
+    spec_params: Final = prompt_spec.litellm_params if prompt_spec is not None else None
+    return (
+        bool(ignore_prompt_manager_model) or bool(spec_params is not None and spec_params.ignore_prompt_manager_model),
+        bool(ignore_prompt_manager_optional_params)
+        or bool(spec_params is not None and spec_params.ignore_prompt_manager_optional_params),
+    )
+
+
 class PromptManagementBase(ABC):
     @property
     @abstractmethod
@@ -182,13 +195,18 @@ class PromptManagementBase(ABC):
             prompt_version=prompt_version,
         )
 
+        resolved_ignore_model, resolved_ignore_optional_params = resolve_prompt_manager_ignore_flags(
+            prompt_spec=prompt_spec,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+        )
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,
             messages=messages,
             non_default_params=non_default_params,
             model=model,
-            ignore_prompt_manager_model=ignore_prompt_manager_model,
-            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+            ignore_prompt_manager_model=resolved_ignore_model,
+            ignore_prompt_manager_optional_params=resolved_ignore_optional_params,
         )
 
     async def async_get_chat_completion_prompt(
@@ -224,11 +242,16 @@ class PromptManagementBase(ABC):
             prompt_version=prompt_version,
         )
 
+        resolved_ignore_model, resolved_ignore_optional_params = resolve_prompt_manager_ignore_flags(
+            prompt_spec=prompt_spec,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+        )
         return self.post_compile_prompt_processing(
             prompt_template=prompt_template,
             messages=messages,
             non_default_params=non_default_params,
             model=model,
-            ignore_prompt_manager_model=ignore_prompt_manager_model,
-            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
+            ignore_prompt_manager_model=resolved_ignore_model,
+            ignore_prompt_manager_optional_params=resolved_ignore_optional_params,
         )

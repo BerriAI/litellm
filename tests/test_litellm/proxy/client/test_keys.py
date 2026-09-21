@@ -1,3 +1,4 @@
+import time
 import traceback
 
 import pytest
@@ -509,3 +510,17 @@ def test_not_found_error_redacts_wrapped_key():
     assert "REDACTED" in str(wrapped)
     assert LEAKY_KEY not in str(wrapped.orig_exception)
     assert wrapped.orig_exception.response.status_code == 404
+
+
+def test_list_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
+    """
+    A proxy that accepts the connection but never answers used to pin the caller's
+    process forever, since the request carried no timeout at all.
+    """
+    client = KeysManagementClient(base_url=hanging_server, api_key="sk-test", timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        client.list()
+
+    assert time.monotonic() - started < 10

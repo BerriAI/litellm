@@ -1,11 +1,14 @@
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from litellm.repositories.table_repositories import PrismaTableRepository
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models  # noqa: F401  # resolved only from the quoted base-class subscript below
 
 USER_BANNER_ROW_ID: Final = "user_banner"
 
 
-class UserBannerRepository(PrismaTableRepository):
+class UserBannerRepository(PrismaTableRepository["prisma_models.LiteLLM_UISettings"]):
     table_name = "litellm_uisettings"
 
     async def get_raw_settings(self) -> object:

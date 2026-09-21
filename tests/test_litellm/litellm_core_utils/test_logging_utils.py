@@ -2,12 +2,16 @@
 Tests for litellm.litellm_core_utils.logging_utils — base64 truncation helpers.
 """
 
+import threading
+
 import pytest
 
+from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.logging_utils import (
     _format_base64_size,
     _truncate_base64_in_string,
     truncate_base64_in_messages,
+    truncate_base64_in_messages_async,
 )
 
 # ---------------------------------------------------------------------------
@@ -157,3 +161,70 @@ class TestTruncateBase64InMessages:
             result[0]["content"][0]["image_url"]["url"]
             == f"data:image/png;base64,{short}"
         )
+
+
+# ---------------------------------------------------------------------------
+# truncate_base64_in_messages_async
+# ---------------------------------------------------------------------------
+
+
+def _image_messages(payload: str) -> list:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{payload}"}},
+            ],
+        }
+    ]
+
+
+@pytest.fixture
+def scan_threads(monkeypatch):
+    """Record the thread that runs every base64 regex scan."""
+    threads: list[int] = []
+    original = logging_utils._truncate_base64_in_string
+
+    def recording_scan(value: str) -> str:
+        threads.append(threading.get_ident())
+        return original(value)
+
+    monkeypatch.setattr(logging_utils, "_truncate_base64_in_string", recording_scan)
+    return threads
+
+
+class TestTruncateBase64InMessagesAsync:
+    @pytest.mark.asyncio
+    async def test_large_payload_is_scanned_off_the_event_loop(self, monkeypatch, scan_threads):
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+        payload = "I" * 20_000
+        messages = _image_messages(payload)
+
+        result = await truncate_base64_in_messages_async(messages)
+        offload_threads = tuple(scan_threads)
+
+        assert result == truncate_base64_in_messages(messages)
+        assert payload not in result[0]["content"][1]["image_url"]["url"]
+        assert payload in messages[0]["content"][1]["image_url"]["url"]
+        assert offload_threads
+        assert threading.get_ident() not in offload_threads
+
+    @pytest.mark.asyncio
+    async def test_small_payload_stays_on_the_calling_thread(self, monkeypatch, scan_threads):
+        monkeypatch.setattr(logging_utils, "BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS", 1_000)
+        messages = _image_messages("J" * 200)
+
+        result = await truncate_base64_in_messages_async(messages)
+
+        assert result == truncate_base64_in_messages(messages)
+        assert scan_threads
+        assert set(scan_threads) == {threading.get_ident()}
+
+    @pytest.mark.asyncio
+    async def test_none_and_disabled_truncation_short_circuit(self, monkeypatch, scan_threads):
+        assert await truncate_base64_in_messages_async(None) is None
+        monkeypatch.setattr(logging_utils, "MAX_BASE64_LENGTH_FOR_LOGGING", 0)
+        messages = _image_messages("K" * 20_000)
+        assert await truncate_base64_in_messages_async(messages) is messages
+        assert scan_threads == []

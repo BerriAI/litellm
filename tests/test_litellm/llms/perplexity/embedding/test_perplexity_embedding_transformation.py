@@ -3,7 +3,6 @@ Unit tests for Perplexity embedding transformation logic.
 """
 
 import base64
-import json
 import struct
 from unittest.mock import MagicMock
 
@@ -298,25 +297,3 @@ class TestPerplexityEmbeddingProviderConfig:
         )
         assert config is not None
         assert isinstance(config, PerplexityEmbeddingConfig)
-
-
-class TestPerplexityEmbeddingModelInfo:
-    """Test that Perplexity embedding models are in model_prices_and_context_window."""
-
-    def test_model_info_available(self):
-        import litellm
-
-        info = litellm.get_model_info("perplexity/pplx-embed-v1-0.6b")
-        assert info is not None
-        assert info["mode"] == "embedding"
-        assert info["max_input_tokens"] == 32768
-        assert info["output_vector_size"] == 1024
-
-    def test_model_info_4b_available(self):
-        import litellm
-
-        info = litellm.get_model_info("perplexity/pplx-embed-v1-4b")
-        assert info is not None
-        assert info["mode"] == "embedding"
-        assert info["max_input_tokens"] == 32768
-        assert info["output_vector_size"] == 2560

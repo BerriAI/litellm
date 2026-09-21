@@ -12,6 +12,7 @@ from typing_extensions import TypedDict
 from litellm import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.constants import DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 if TYPE_CHECKING:
@@ -36,10 +37,19 @@ _MAX_CORRECTED_IN_MEMORY_TTL_SECONDS: Final = 60.0
 
 
 class CooldownCache:
-    def __init__(self, cache: DualCache, default_cooldown_time: float):
+    def __init__(
+        self,
+        cache: DualCache,
+        default_cooldown_time: float,
+        redis_read_interval_seconds: float = DEFAULT_COOLDOWN_REDIS_READ_INTERVAL_SECONDS,
+    ):
         self.cache = cache
         self.default_cooldown_time = default_cooldown_time
         self.in_memory_cache = InMemoryCache()
+        self._cooldown_store = DualCache(
+            in_memory_cache=self.in_memory_cache,
+            default_redis_batch_cache_expiry=redis_read_interval_seconds,
+        )
         # Initialize the masker with custom settings for exception strings
         self.exception_masker = SensitiveDataMasker(
             visible_prefix=50,  # Show first 50 characters
@@ -47,6 +57,21 @@ class CooldownCache:
             mask_char="*",  # Use * for masking
             mask_short_values=False,  # Truncate long messages only; keep short ones readable
         )
+
+    @property
+    def cooldown_store(self) -> DualCache:
+        """
+        The cache cooldown entries live in, with the router's Redis attached on first use.
+
+        It is kept separate from the router-wide cache so that a key missing from memory is
+        re-read from Redis every `redis_read_interval_seconds` rather than on the router
+        cache's much longer batch interval, which is what lets a sibling replica see a
+        cooldown another replica wrote, and so that unrelated router keys cannot evict a
+        cooldown from the in-memory tier before it expires. Redis is attached lazily because
+        the router builds its cooldown cache before it wires up the shared Redis client.
+        """
+        self._cooldown_store.attach_redis_cache(self.cache.redis_cache)
+        return self._cooldown_store
 
     def _common_add_cooldown_logic(
         self, model_id: str, original_exception, exception_status, cooldown_time: float
@@ -93,7 +118,7 @@ class CooldownCache:
             )
 
             # Set the cache with a TTL equal to the cooldown time
-            self.cache.set_cache(
+            self.cooldown_store.set_cache(
                 value=cooldown_data,
                 key=cooldown_key,
                 ttl=_cooldown_time,
@@ -122,13 +147,13 @@ class CooldownCache:
         cooldown_cache_value: Final = CooldownCacheValue(**result)  # pyright: ignore[reportUnknownArgumentType] - result comes from an untyped cache read, not from our own code
         remaining: Final = (cooldown_cache_value["timestamp"] + cooldown_cache_value["cooldown_time"]) - current_time
         if remaining <= 0:
-            self.cache.in_memory_cache.delete_cache(key)
+            self.in_memory_cache.delete_cache(key)
             return None
-        current_expiry: Final = self.cache.in_memory_cache.ttl_dict.get(key)
+        current_expiry: Final = self.in_memory_cache.ttl_dict.get(key)
         if current_expiry is not None and current_expiry > current_time + remaining + 5:
             corrected_ttl: Final = min(remaining, _MAX_CORRECTED_IN_MEMORY_TTL_SECONDS)
-            self.cache.in_memory_cache.delete_cache(key)
-            self.cache.in_memory_cache.set_cache(key, result, ttl=corrected_ttl)
+            self.in_memory_cache.delete_cache(key)
+            self.in_memory_cache.set_cache(key, result, ttl=corrected_ttl)
         return cooldown_cache_value
 
     async def async_get_active_cooldowns(
@@ -137,12 +162,7 @@ class CooldownCache:
         # Generate the keys for the deployments
         keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
 
-        # Retrieve the values for the keys using mget
-        ## more likely to be none if no models ratelimited. So just check redis every 1s
-        ## each redis call adds ~100ms latency.
-
-        ## check in memory cache first
-        results: Final = await self.cache.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
+        results: Final = await self.cooldown_store.async_batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)
         active_cooldowns: Final[list[tuple[str, CooldownCacheValue]]] = []
 
         if results is None or all(v is None for v in results):
@@ -164,7 +184,7 @@ class CooldownCache:
         # Generate the keys for the deployments
         keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         # Retrieve the values for the keys using mget
-        results: Final = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
+        results: Final = self.cooldown_store.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
         active_cooldowns: Final = []
         current_time: Final = time.time()
@@ -184,7 +204,7 @@ class CooldownCache:
         keys: Final = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
 
         # Retrieve the values for the keys using mget
-        results: Final = self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
+        results: Final = self.cooldown_store.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span) or []
 
         min_cooldown_time: float | None = None
         # Process the results

@@ -3,6 +3,7 @@ import React from "react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 
 import { MountedFormField } from "@/components/common_components/MountedFormField";
+import UpstreamTokenHeaderField from "./UpstreamTokenHeaderField";
 import { requiredRule } from "@/components/common_components/formRules";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { PasswordInput } from "@/components/shared/PasswordInput";
@@ -205,6 +206,7 @@ const IdJagFormFields: React.FC<IdJagFormFieldsProps> = ({ isEditing = false }) 
       >
         {(control) => <MultiSelect {...tagsControl(control)} placeholder="Add scopes" className="rounded-lg" />}
       </MountedFormField>
+      <UpstreamTokenHeaderField />
     </>
   );
 };

@@ -44,7 +44,7 @@ class AsyncBridge:
 
 def test_enabled_sync_bridge_receives_audio() -> None:
     bridge = SyncBridge()
-    rust_bridge.configure_rust_transcription(True, transcription=bridge)
+    rust_bridge.configure_rust_transcription(transcription=bridge)
     result = rust_bridge.transcription(
         model="mistral.voxtral-mini-3b-2507",
         audio={"data": "AQI=", "format": "wav", "filename": "audio.wav"},
@@ -61,7 +61,7 @@ def test_enabled_sync_bridge_receives_audio() -> None:
 
 @pytest.mark.asyncio
 async def test_enabled_async_bridge() -> None:
-    rust_bridge.configure_rust_transcription(True, atranscription=AsyncBridge())
+    rust_bridge.configure_rust_transcription(atranscription=AsyncBridge())
     result = await rust_bridge.atranscription(
         model="mistral.voxtral-mini-3b-2507",
         audio={"data": "AQI=", "format": "wav", "filename": "audio.wav"},

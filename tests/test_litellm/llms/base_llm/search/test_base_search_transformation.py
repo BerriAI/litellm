@@ -16,6 +16,7 @@ import pytest
 
 import litellm
 from litellm.llms.apiserpent.search.transformation import APISerpentSearchConfig
+from litellm.llms.azure.search.transformation import BingGroundingSearchConfig
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     _is_trusted_search_api_base,
@@ -59,6 +60,7 @@ _BASE_ENV_VARS = (
     "TINYFISH_API_BASE",
     "CRW_API_BASE",
     "NIMBLE_API_BASE",
+    "BING_GROUNDING_PROJECT_ENDPOINT",
 )
 
 
@@ -99,6 +101,7 @@ PROVIDERS: Tuple[ProviderSpec, ...] = (
     (TinyfishSearchConfig, {"TINYFISH_API_KEY": "srv"}, "caller-key", {}),
     (FastCRWSearchConfig, {"CRW_API_KEY": "srv"}, "caller-key", {}),
     (NimbleSearchConfig, {"NIMBLE_API_KEY": "srv"}, "caller-key", {}),
+    (BingGroundingSearchConfig, {"BING_GROUNDING_TOKEN": "srv"}, "caller-key", {}),
 )
 
 _IDS = tuple(spec[0].__name__ for spec in PROVIDERS)

@@ -12,7 +12,7 @@ from urllib.parse import quote, unquote
 import httpx
 from httpx import Headers, Response
 from openai.types.file_deleted import FileDeleted
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, Required
 
 import litellm
 from litellm._uuid import uuid
@@ -39,6 +39,7 @@ from litellm.llms.base_llm.files.transformation import (
 )
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
+    get_vertex_ai_fine_tuned_endpoint_id,
 )
 from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -104,6 +105,27 @@ class _VertexBatchRow(TypedDict, total=False):
     processed_time: ReadOnly[str]
 
 
+class _VertexEmbeddingVector(TypedDict):
+    values: ReadOnly[list[float]]
+
+
+class _VertexEmbeddingUsageMetadata(TypedDict, total=False):
+    promptTokenCount: ReadOnly[int]
+
+
+class _VertexEmbeddingResponse(TypedDict, total=False):
+    embedding: ReadOnly[Required[_VertexEmbeddingVector]]
+    usageMetadata: ReadOnly[_VertexEmbeddingUsageMetadata]
+    tokenCount: ReadOnly[int]
+
+
+class _VertexEmbeddingBatchRow(TypedDict, total=False):
+    key: ReadOnly[str]
+    request: ReadOnly[Mapping[str, object]]
+    status: ReadOnly[Required[str]]
+    response: ReadOnly[Required[_VertexEmbeddingResponse]]
+
+
 class _OpenAIBatchOutputError(TypedDict):
     code: ReadOnly[str]
     message: ReadOnly[str]
@@ -111,7 +133,7 @@ class _OpenAIBatchOutputError(TypedDict):
 
 class _OpenAIBatchOutputResponse(TypedDict):
     status_code: ReadOnly[int]
-    request_id: ReadOnly[str]
+    request_id: ReadOnly[object]
     body: ReadOnly[Mapping[str, object]]
 
 
@@ -218,7 +240,7 @@ def _get_litellm_batch_custom_id_from_labels(labels: Mapping[str, object] | None
     return str(labels.get("litellm_custom_id", "unknown"))
 
 
-def _is_vertex_embeddings_batch_output_row(vertex_output_row: Mapping[str, Any]) -> bool:
+def _is_vertex_embeddings_batch_output_row(vertex_output_row: Mapping[str, object]) -> bool:
     """
     Whether a Vertex batch output row came from an `EmbedContentRequest`.
 
@@ -237,7 +259,7 @@ def _is_vertex_embeddings_batch_output_row(vertex_output_row: Mapping[str, Any])
 
 def _openai_batch_output_row(
     custom_id: str,
-    body: Mapping[str, Any] | None = None,
+    body: Mapping[str, object] | None = None,
     error_code: str | None = None,
     error_message: str = "",
 ) -> _OpenAIBatchOutputRow:
@@ -259,7 +281,7 @@ def _openai_batch_output_row(
     }
 
 
-def _split_vertex_batch_key(vertex_output_row: Mapping[str, Any]) -> tuple[str, int, int]:
+def _split_vertex_batch_key(vertex_output_row: Mapping[str, object]) -> tuple[str, int, int]:
     """
     Resolve `(custom_id, index within that custom_id, group size)` for a Vertex batch
     output row.
@@ -278,7 +300,7 @@ def _split_vertex_batch_key(vertex_output_row: Mapping[str, Any]) -> tuple[str, 
     return unquote(match["custom_id"]), int(match["index"]), int(match["total"])
 
 
-def _embedding_prompt_token_count(vertex_response: Mapping[str, Any]) -> int:
+def _embedding_prompt_token_count(vertex_response: _VertexEmbeddingResponse) -> int:
     """
     Prompt tokens billed for one Vertex Gemini Embedding batch row.
 
@@ -293,7 +315,7 @@ def _embedding_prompt_token_count(vertex_response: Mapping[str, Any]) -> int:
 
 def _vertex_embeddings_rows_to_openai_batch_output_row(
     custom_id: str,
-    vertex_output_rows: tuple[Mapping[str, Any], ...],
+    vertex_output_rows: tuple[_VertexEmbeddingBatchRow, ...],
     element_indices: tuple[int, ...],
     element_count: int,
     model: str | None,
@@ -348,7 +370,7 @@ def _vertex_embeddings_rows_to_openai_batch_output_row(
 
 
 def _transform_vertex_embeddings_batch_output_to_openai(
-    vertex_output_rows: Iterable[Mapping[str, Any]],
+    vertex_output_rows: Iterable[_VertexEmbeddingBatchRow],
     model: str | None,
 ) -> tuple[_OpenAIBatchOutputRow, ...]:
     """
@@ -388,7 +410,7 @@ def _model_from_managed_gcs_url(url: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _is_embeddings_batch_entry(openai_entry: Mapping[str, Any]) -> bool:
+def _is_embeddings_batch_entry(openai_entry: Mapping[str, object]) -> bool:
     """
     Whether an OpenAI batch JSONL line targets the embeddings endpoint.
 
@@ -431,7 +453,7 @@ def _vertex_batch_embeddings_key(custom_id: str, index: int, total: int) -> str:
     return encoded_custom_id if total < 2 else f"{encoded_custom_id}#{index}/{total}"
 
 
-def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, Any]) -> Mapping[str, Any]:
+def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, object]) -> Mapping[str, object]:
     """
     One Vertex Gemini Embedding batch input row.
 
@@ -453,8 +475,8 @@ def _vertex_embeddings_row(key: str | None, embed_content_request: Mapping[str, 
 
 
 def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
-    openai_entry: Mapping[str, Any],
-) -> tuple[Mapping[str, Any], ...]:
+    openai_entry: Mapping[str, object],
+) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI `/v1/embeddings` batch entry into Vertex Gemini Embedding
     batch rows, one per requested embedding.
@@ -512,7 +534,7 @@ def _openai_batch_jsonl_entry_to_vertex_embeddings_rows(
 def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_entry: dict[str, Any],
     map_openai_to_vertex_params: Callable[[dict[str, Any]], dict[str, Any]],
-) -> tuple[Mapping[str, Any], ...]:
+) -> tuple[Mapping[str, object], ...]:
     """
     Transforms a single OpenAI JSONL batch entry into the Vertex rows it maps to.
 
@@ -533,7 +555,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         cached_content=None,
     )
 
-    custom_id: Final = openai_entry.get("custom_id")
+    custom_id: Final[object] = openai_entry.get("custom_id")
     if custom_id is not None:
         if "labels" not in vertex_request_body:
             vertex_request_body["labels"] = {}
@@ -686,20 +708,39 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def _get_gcs_object_name_from_batch_jsonl(
         self,
         openai_jsonl_content: list[dict[str, Any]],
+        deployment_model: str | None = None,
     ) -> str:
         """
         Gets a unique GCS object name for the VertexAI batch prediction job
 
         named as: litellm-vertex-{model}-{uuid}
+
+        The stored model path decides which Vertex model the batch job later executes against, so
+        `deployment_model` (the deployment's own configured model) wins over the user-supplied
+        JSONL `body.model`; the JSONL value is only a fallback for direct SDK calls that carry no
+        deployment config.
+
+        Fine-tuned Gemini deployments (numeric endpoint ids) are stored under
+        `endpoints/<id>` so the batch transformation can round-trip them into a
+        `projects/../locations/../endpoints/<id>` batch job model instead of a
+        nonexistent publisher model.
         """
-        _model = openai_jsonl_content[0].get("body", {}).get("model", "")
-        if "publishers/google/models" not in _model:
-            _model = f"publishers/google/models/{_model}"
-        safe_model_path: Final = sanitize_cloud_object_path(_model, fallback="model")
+        raw_model: Final = (
+            deployment_model.removeprefix("vertex_ai/")
+            if deployment_model
+            else openai_jsonl_content[0].get("body", {}).get("model", "")
+        )
+        endpoint_id: Final = get_vertex_ai_fine_tuned_endpoint_id(raw_model)
+        model_path: Final = (
+            f"endpoints/{endpoint_id}"
+            if endpoint_id is not None
+            else (raw_model if "publishers/google/models" in raw_model else f"publishers/google/models/{raw_model}")
+        )
+        safe_model_path: Final = sanitize_cloud_object_path(model_path, fallback="model")
         object_name: Final = f"{VERTEX_AI_MANAGED_GCS_PREFIX}{safe_model_path}/{uuid.uuid4()}"
         return object_name
 
-    def get_object_name(self, file_data: FileTypes, purpose: str) -> str:
+    def get_object_name(self, file_data: FileTypes, purpose: str, deployment_model: str | None = None) -> str:
         """
         Get the object name for the request.
 
@@ -707,10 +748,10 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         upload is never materialized just to derive the GCS object name.
         """
         if purpose == "batch":
-            ## 1. If jsonl, derive the object name from the first entry's model
+            ## 1. If jsonl, derive the object name from the deployment model (or the first entry's)
             first_entry: Final = next(_iter_openai_jsonl_entries(file_data), None)
             if first_entry is not None:
-                return self._get_gcs_object_name_from_batch_jsonl([first_entry])
+                return self._get_gcs_object_name_from_batch_jsonl([first_entry], deployment_model=deployment_model)
 
         ## 2. If not jsonl, store under a server-generated managed object name
         filename, _ = extract_file_metadata(file_data)
@@ -740,6 +781,16 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         Get the complete url for the request
         """
+        if data.get("purpose") == "batch" and litellm_params.get("custom_endpoint"):
+            raise VertexAIError(
+                status_code=400,
+                message=(
+                    "Vertex AI batch prediction is not supported for `custom_endpoint` deployments. "
+                    "The OpenAI-compatible custom endpoint path has no batch surface in LiteLLM; "
+                    "remove this deployment from the batch request (e.g. `target_model_names`) or "
+                    "use a publisher model / fine-tuned Gemini endpoint instead."
+                ),
+            )
         bucket_name = self._get_configured_bucket_name(litellm_params)
         bucket_name, object_prefix = split_configured_cloud_bucket_name(bucket_name)
         file_data: Final = data.get("file")
@@ -748,7 +799,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         if purpose is None:
             raise ValueError("purpose is required")
-        object_name = self.get_object_name(file_data, purpose)
+        configured_model: Final = litellm_params.get("model")
+        object_name = self.get_object_name(
+            file_data,
+            purpose,
+            deployment_model=configured_model if isinstance(configured_model, str) else None,
+        )
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name: Final = encode_gcs_object_name_for_url(object_name)

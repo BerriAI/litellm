@@ -7,6 +7,42 @@ import pytest
 import json
 
 import litellm
+from litellm.types.llms.openai import HttpxBinaryResponseContent
+
+
+@pytest.mark.parametrize("stream", (False, True))
+def test_completion_response_reasoning_summary_round_trip(stream: bool) -> None:
+    from typing import Final
+
+    from litellm.types.llms.openai import (
+        ChatCompletionReasoningItem,
+        ChatCompletionReasoningSummaryTextBlock,
+    )
+    from litellm.types.utils import (
+        Choices,
+        Delta,
+        Message,
+        ModelResponse,
+        ModelResponseStream,
+        StreamingChoices,
+    )
+
+    reasoning_item: Final = ChatCompletionReasoningItem(
+        type="reasoning",
+        id="rs_123",
+        encrypted_content="encrypted",
+        summary=[ChatCompletionReasoningSummaryTextBlock(type="summary_text", text="Reasoning summary")],
+    )
+    response: Final = (
+        ModelResponseStream(choices=[StreamingChoices(delta=Delta(reasoning_items=[reasoning_item]))])
+        if stream
+        else ModelResponse(choices=[Choices(message=Message(reasoning_items=[reasoning_item]))])
+    )
+    message_key: Final = "delta" if stream else "message"
+    assert response.model_dump()["choices"][0][message_key]["reasoning_items"] == [reasoning_item]
+
+    restored: Final = type(response).model_validate_json(response.model_dump_json())
+    assert restored.model_dump()["choices"][0][message_key]["reasoning_items"] == [reasoning_item]
 
 
 def test_generic_event():
@@ -522,3 +558,34 @@ class TestOpenAIFileObjectBatchGuardrailSerialization:
 
         page = FileListPage(object="list", data=[self._file_object()], has_more=False)
         assert "litellm_batch_guardrail" not in page.model_dump(mode="json")["data"][0]
+
+
+def _binary_content(payload: bytes) -> HttpxBinaryResponseContent:
+    import httpx
+
+    return HttpxBinaryResponseContent(httpx.Response(200, content=payload))
+
+
+def test_httpx_binary_response_content_hidden_params_are_per_instance():
+    first = _binary_content(b"first")
+    second = _binary_content(b"second")
+
+    first._hidden_params["response_cost"] = 0.5
+
+    assert second._hidden_params == {}
+
+
+def test_set_response_cost_none_leaves_hidden_params_empty():
+    binary_response = _binary_content(b"audio")
+
+    binary_response.set_response_cost(None)
+
+    assert "response_cost" not in binary_response._hidden_params
+
+    binary_response.set_response_cost(0.25)
+
+    assert binary_response._hidden_params["response_cost"] == 0.25
+
+    binary_response.set_response_cost(None)
+
+    assert "response_cost" not in binary_response._hidden_params

@@ -8,6 +8,7 @@
 import json
 import os
 import uuid
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 
 try:
@@ -128,7 +129,7 @@ class LassoGuardrail(CustomGuardrail):
 
     @staticmethod
     def _extract_tool_call_fields(
-        call: Any,
+        call: object,
     ) -> tuple[str | None, str | None, dict[str, object] | None]:
         """Extract (call_id, name, parsed_input) from a tool call.
 
@@ -476,7 +477,7 @@ class LassoGuardrail(CustomGuardrail):
     def _map_masked_messages_back(
         self,
         original_messages: list[dict[str, Any]],
-        masked_messages: list[dict[str, Any]],
+        masked_messages: Sequence[Mapping[str, object]],
     ) -> list[dict[str, object]]:
         """Map Lasso-format masked messages back onto the original OpenAI-format messages.
 
@@ -638,7 +639,7 @@ class LassoGuardrail(CustomGuardrail):
             },
         )
 
-    def _expand_messages_for_classification(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _expand_messages_for_classification(self, messages: list[dict[str, Any]]) -> list[dict[str, object]]:
         """
         Convert raw OpenAI-format messages to Lasso API format with content blocks.
 
@@ -646,7 +647,7 @@ class LassoGuardrail(CustomGuardrail):
         - role=tool messages → developer role + tool_result block
         - plain text messages pass through unchanged
         """
-        expanded: Final[list[dict[str, Any]]] = []
+        expanded: Final[list[dict[str, object]]] = []
         for msg in messages:
             role = msg.get("role", "")
             content = msg.get("content")
@@ -917,7 +918,7 @@ class LassoGuardrail(CustomGuardrail):
     def _apply_masking_to_model_response(
         self,
         model_response: litellm.ModelResponse,
-        masked_messages: list[dict[str, Any]],
+        masked_messages: Sequence[Mapping[str, object]],
     ) -> None:
         """Apply masking to the actual model response when mask=True and masked content is available."""
         # Index masked tool_use blocks by id for O(1) lookup.

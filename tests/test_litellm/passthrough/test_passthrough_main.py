@@ -645,13 +645,14 @@ async def test_allm_passthrough_route_429_streaming_raises():
     Regression test: Azure 429 during streaming must raise HTTPStatusError,
     not be silently forwarded as raw bytes under HTTP 200.
 
-    Before the fix, _async_streaming() would yield the 429 error JSON as
-    chunks and allm_passthrough_route returned an async generator.  The
-    caller (azure_proxy_route) wrapped it in StreamingResponse(status_code=200),
+    Before the fix, the async passthrough streaming path would yield the 429
+    error JSON as chunks and allm_passthrough_route returned a streaming
+    iterator. The caller (azure_proxy_route) wrapped it in
+    StreamingResponse(status_code=200),
     so the client saw HTTP 200 + unparseable SSE body → silent task_complete(null).
 
-    After the fix, raise_for_status() fires inside _async_streaming() before
-    any chunks are yielded, so the exception propagates all the way up.
+    After the fix, raise_for_status() fires before the streaming wrapper is
+    returned, so the exception propagates all the way up.
     """
     mock_provider_config = MagicMock()
     mock_provider_config.get_complete_url.return_value = (
@@ -679,6 +680,7 @@ async def test_allm_passthrough_route_429_streaming_raises():
     mock_logging_obj = MagicMock()
     mock_logging_obj.update_environment_variables = MagicMock()
     mock_logging_obj.async_flush_passthrough_collected_chunks = AsyncMock()
+    mock_logging_obj.async_failure_handler = AsyncMock()
 
     with (
         patch(
@@ -701,29 +703,101 @@ async def test_allm_passthrough_route_429_streaming_raises():
         patch.object(async_client.client, "send", mock_send),
         patch.object(async_client.client, "build_request", mock_build_request),
     ):
-        result = await allm_passthrough_route(
-            model="azure/gpt-4",
-            endpoint="openai/deployments/gpt-4/responses",
-            method="POST",
-            custom_llm_provider="azure",
-            api_base="https://my-azure.openai.azure.com",
-            api_key="fake-azure-key",
-            json={"model": "gpt-4", "input": "hello", "stream": True},
-            client=async_client,
-            litellm_logging_obj=mock_logging_obj,
-        )
-
-        # result is an async generator — consuming it must raise, not silently yield error bytes
-        chunks = []
-        async def _drain():
-            async for chunk in result:  # type: ignore[union-attr]
-                chunks.append(chunk)
-
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
-            await _drain()
+            await allm_passthrough_route(
+                model="azure/gpt-4",
+                endpoint="openai/deployments/gpt-4/responses",
+                method="POST",
+                custom_llm_provider="azure",
+                api_base="https://my-azure.openai.azure.com",
+                api_key="fake-azure-key",
+                json={"model": "gpt-4", "input": "hello", "stream": True},
+                client=async_client,
+                litellm_logging_obj=mock_logging_obj,
+            )
 
     assert exc_info.value.response.status_code == 429
-    assert len(chunks) == 0, "No chunks should be yielded before the 429 raises"
+
+
+def test_llm_passthrough_route_sync_streaming_error_maps_upstream_status():
+    """
+    Regression test: a sync streaming passthrough whose upstream answers an
+    error status must surface the mapped provider error, not
+    httpx.ResponseNotRead.
+
+    Before the fix, raise_for_status() raised on the still-unread streamed
+    response, and _handle_error then touched e.response.text, which raises
+    ResponseNotRead on a streamed-but-unread body, masking the real upstream
+    error entirely.
+    """
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    error_body = json.dumps(
+        {
+            "error": {
+                "code": "429",
+                "message": "Rate limit exceeded. Retry after 10 seconds.",
+            }
+        }
+    ).encode()
+
+    class _UnreadErrorStream(httpx.SyncByteStream):
+        def __iter__(self):
+            yield error_body
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            stream=_UnreadErrorStream(),
+            headers={"content-type": "application/json"},
+        )
+
+    sync_client = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_handler))
+    )
+
+    mock_provider_config = MagicMock()
+    mock_provider_config.get_complete_url.return_value = (
+        httpx.URL("https://gigachat.devices.sberbank.ru/api/v1/chat/completions"),
+        "https://gigachat.devices.sberbank.ru/api/v1",
+    )
+    mock_provider_config.get_api_key.return_value = "fake-key"
+    mock_provider_config.validate_environment.return_value = {
+        "Authorization": "Bearer fake-key"
+    }
+    mock_provider_config.sign_request.return_value = (
+        {"Authorization": "Bearer fake-key"},
+        None,
+    )
+    mock_provider_config.is_streaming_request.return_value = True
+    mock_provider_config.get_error_class.side_effect = (
+        lambda error_message, status_code, headers: BaseLLMException(
+            status_code=status_code, message=error_message, headers=headers
+        )
+    )
+
+    mock_logging_obj = MagicMock()
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        llm_passthrough_route(
+            model="gigachat/GigaChat-2",
+            endpoint="chat/completions",
+            method="POST",
+            custom_llm_provider="gigachat",
+            api_base="https://gigachat.devices.sberbank.ru/api/v1",
+            api_key="fake-key",
+            json={
+                "model": "GigaChat-2",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+            },
+            client=sync_client,
+            litellm_logging_obj=mock_logging_obj,
+            provider_config=mock_provider_config,
+        )
+
+    assert exc_info.value.status_code == 429
+    assert "Rate limit exceeded" in str(exc_info.value)
 
 
 def test_llm_passthrough_route_propagates_allm_passthrough_route_to_logging_obj():
@@ -799,3 +873,118 @@ def test_llm_passthrough_route_propagates_allm_passthrough_route_to_logging_obj(
 
     assert captured_litellm_params.get("allm_passthrough_route") is True
     assert LitellmLogging._is_sync_litellm_request(captured_litellm_params) is False
+
+
+FOUNDRY_BASE = "https://my-resource.services.ai.azure.com"
+
+
+def _foundry_parse_response() -> httpx.Response:
+    return httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        content=b'{"id":"parse-1","pages":[]}',
+        request=httpx.Request("POST", f"{FOUNDRY_BASE}/providers/cohere/v2/parse"),
+    )
+
+
+def test_azure_ai_relay_reaches_the_deployment_with_its_own_credential():
+    """
+    Regression for LIT-7022: azure_ai had no passthrough config, so every
+    /azure_ai/<router-model>/<native-path> relay raised "Provider azure_ai not found"
+    before a request was built.
+    """
+    client = HTTPHandler()
+
+    with patch.object(client.client, "send", return_value=_foundry_parse_response()) as mock_send:
+        response = llm_passthrough_route(
+            model="azure_ai/Cohere-parse-v5",
+            endpoint="Cohere-parse-v5/providers/cohere/v2/parse",
+            method="POST",
+            custom_llm_provider="azure_ai",
+            api_base=FOUNDRY_BASE,
+            api_key="deployment-key",
+            json={"model": "Cohere-parse-v5", "document": {"type": "image_url", "image_url": "https://x/y.png"}},
+            client=client,
+            litellm_logging_obj=MagicMock(),
+        )
+
+    sent = mock_send.call_args.kwargs["request"]
+    assert str(sent.url) == f"{FOUNDRY_BASE}/providers/cohere/v2/parse"
+    assert sent.headers["api-key"] == "deployment-key"
+    assert json.loads(sent.content)["model"] == "Cohere-parse-v5"
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_router_relays_azure_ai_model_through_the_deployment_api_base():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "foundry-parse",
+                "litellm_params": {
+                    "model": "azure_ai/Cohere-parse-v5",
+                    "api_base": FOUNDRY_BASE,
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+    async_client = AsyncHTTPHandler()
+
+    with patch.object(async_client.client, "send", AsyncMock(return_value=_foundry_parse_response())) as mock_send:
+        response = await router.allm_passthrough_route(
+            model="foundry-parse",
+            method="POST",
+            endpoint="foundry-parse/providers/cohere/v2/parse",
+            json={"model": "foundry-parse", "document": {"type": "image_url", "image_url": "https://x/y.png"}},
+            client=async_client,
+        )
+
+    sent = mock_send.call_args.kwargs["request"]
+    assert str(sent.url) == f"{FOUNDRY_BASE}/providers/cohere/v2/parse"
+    assert sent.headers["api-key"] == "deployment-key"
+    assert json.loads(sent.content)["model"] == "Cohere-parse-v5"
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_router_relays_an_openai_model_on_a_foundry_base_as_azure_ai(monkeypatch):
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://unrelated.openai.azure.com")
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "foundry-gpt",
+                "litellm_params": {
+                    "model": "azure_ai/gpt-5.4-mini",
+                    "api_base": FOUNDRY_BASE,
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+    async_client = AsyncHTTPHandler()
+    upstream = httpx.Response(
+        status_code=200,
+        headers={"content-type": "application/json"},
+        content=(
+            b'{"id":"chatcmpl-1","object":"chat.completion","model":"gpt-5.4-mini",'
+            b'"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"hi"}}],'
+            b'"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+        ),
+        request=httpx.Request("POST", f"{FOUNDRY_BASE}/models/chat/completions"),
+    )
+
+    with patch.object(async_client.client, "send", AsyncMock(return_value=upstream)) as mock_send:
+        await router.allm_passthrough_route(
+            model="foundry-gpt",
+            method="POST",
+            endpoint="foundry-gpt/models/chat/completions",
+            request_query_params={"api-version": "2024-05-01-preview"},
+            json={"model": "foundry-gpt", "messages": [{"role": "user", "content": "hi"}]},
+            client=async_client,
+        )
+
+    sent = mock_send.call_args.kwargs["request"]
+    assert str(sent.url) == f"{FOUNDRY_BASE}/models/chat/completions?api-version=2024-05-01-preview"
+    assert sent.headers["api-key"] == "deployment-key"
+    assert json.loads(sent.content)["model"] == "gpt-5.4-mini"
