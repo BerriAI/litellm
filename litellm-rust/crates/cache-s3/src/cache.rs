@@ -134,11 +134,13 @@ impl<C: CacheCodec> S3Cache<C> {
             Ok(output) => output,
             Err(error) => {
                 if let SdkError::ServiceError(service) = &error {
+                    let status = error
+                        .raw_response()
+                        .map(|response| response.status().as_u16());
                     let not_found = service.err().is_no_such_key()
-                        || error
-                            .raw_response()
-                            .map(|response| response.status().as_u16())
-                            == Some(404);
+                        || service.err().meta().code() == Some("AccessDenied")
+                        || status == Some(404)
+                        || status == Some(403);
                     if not_found {
                         return Ok(None);
                     }
