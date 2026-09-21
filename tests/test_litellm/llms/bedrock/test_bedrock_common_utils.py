@@ -926,3 +926,80 @@ def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
 
 def test_bedrock_get_error_class_audit_covers_every_surface():
     assert len(_bedrock_configs_with_get_error_class()) >= 30
+
+
+_AWS_CREDENTIAL_KWARGS = {
+    "aws_region_name": "us-west-2",
+    "aws_access_key_id": "AKIATEST",
+    "aws_secret_access_key": "secret-test",
+    "aws_session_token": "session-test",
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "response_json"),
+    [
+        (
+            "bedrock/converse/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            {
+                "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+            },
+        ),
+        (
+            "bedrock/invoke/anthropic.claude-3-5-sonnet-20240620-v1:0",
+            {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-3-5-sonnet",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        ),
+        (
+            "bedrock/claude_platform/claude-sonnet-4-6",
+            {
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        ),
+    ],
+)
+def test_aws_credential_kwargs_are_used_for_signing_but_never_serialized_into_body(monkeypatch, model, response_json):
+    import json
+    from unittest.mock import patch
+
+    import httpx
+
+    import litellm
+
+    for env_key in ("AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_AWS_API_KEY", "AWS_PROFILE"):
+        monkeypatch.delenv(env_key, raising=False)
+    requests = []
+
+    def mock_post(self, url, data=None, headers=None, **kwargs):
+        requests.append({"body": json.loads(data), "headers": headers or {}})
+        return httpx.Response(status_code=200, json=response_json, request=httpx.Request("POST", url))
+
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post):
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=10,
+            workspace_id="wrkspc_test",
+            **_AWS_CREDENTIAL_KWARGS,
+        )
+
+    assert len(requests) == 1
+    assert requests[0]["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIATEST/"), requests[0]
+    assert not (_AWS_CREDENTIAL_KWARGS.keys() | {"workspace_id"}) & requests[0]["body"].keys(), requests[0]["body"]

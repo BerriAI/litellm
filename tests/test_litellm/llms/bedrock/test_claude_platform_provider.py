@@ -119,8 +119,8 @@ def test_claude_platform_api_key_auth_sets_workspace_and_key_headers():
         headers={"anthropic-beta": "skills-2025-10-02"},
         model="claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
-        optional_params={"workspace_id": "wrkspc_test"},
-        litellm_params={},
+        optional_params={},
+        litellm_params={"workspace_id": "wrkspc_test"},
     )
 
     assert headers["x-api-key"] == "fake-platform-key"
@@ -141,8 +141,8 @@ def test_claude_platform_does_not_use_standard_anthropic_api_key(monkeypatch):
         headers={},
         model="claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
-        optional_params={"workspace_id": "wrkspc_test"},
-        litellm_params={},
+        optional_params={},
+        litellm_params={"workspace_id": "wrkspc_test"},
     )
 
     assert "x-api-key" not in headers
@@ -274,7 +274,45 @@ def test_chat_completion_routes_bedrock_claude_platform_to_messages_api():
     assert requests[0]["path"] == "/v1/messages"
     assert requests[0]["headers"]["x-api-key"] == "fake-platform-key"
     assert requests[0]["headers"]["anthropic-workspace-id"] == "wrkspc_test"
-    assert requests[0]["body"]["model"] == "claude-sonnet-4-6"
+    assert requests[0]["body"] == {
+        "model": "claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
+        "max_tokens": 10,
+    }
+
+
+def test_chat_completion_keeps_workspace_and_aws_credentials_out_of_body_but_in_headers(monkeypatch):
+    import litellm
+
+    for env_key in ("AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_AWS_API_KEY", "AWS_PROFILE"):
+        monkeypatch.delenv(env_key, raising=False)
+    requests = []
+
+    def mock_post(self, url, data=None, headers=None, **kwargs):
+        requests.append(_capture_request(url=url, headers=headers or {}, data=data))
+        return _anthropic_response(url)
+
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post):
+        litellm.completion(
+            model="bedrock/claude_platform/claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=10,
+            workspace_id="wrkspc_test",
+            aws_region_name="us-west-2",
+            aws_access_key_id="AKIATEST",
+            aws_secret_access_key="secret-test",
+        )
+
+    assert len(requests) == 1
+    assert requests[0]["path"] == "/v1/messages"
+    assert requests[0]["headers"]["anthropic-workspace-id"] == "wrkspc_test"
+    assert requests[0]["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIATEST/")
+    assert "/us-west-2/aws-external-anthropic/aws4_request" in requests[0]["headers"]["Authorization"]
+    assert requests[0]["body"] == {
+        "model": "claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
+        "max_tokens": 10,
+    }
 
 
 @pytest.mark.asyncio
@@ -308,9 +346,12 @@ async def test_anthropic_messages_routes_bedrock_claude_platform_to_messages_api
     assert requests[0]["path"] == "/v1/messages"
     assert requests[0]["headers"]["x-api-key"] == "fake-platform-key"
     assert requests[0]["headers"]["anthropic-workspace-id"] == "wrkspc_test"
-    assert requests[0]["body"]["messages"] == [{"role": "user", "content": "hello"}]
-    assert requests[0]["body"]["max_tokens"] == 10
-    assert requests[0]["body"]["model"] == "claude-sonnet-4-6"
+    assert requests[0]["body"] == {
+        "model": "claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+        "stream": False,
+    }
 
 
 @pytest.mark.asyncio

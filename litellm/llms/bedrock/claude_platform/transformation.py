@@ -30,7 +30,7 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
-        workspace_id: Final = self._get_workspace_id(optional_params, litellm_params)
+        workspace_id: Final = self._get_workspace_id(litellm_params)
         if workspace_id is None:
             raise litellm.AuthenticationError(
                 message=(
@@ -65,6 +65,22 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         )
         anthropic_headers["anthropic-workspace-id"] = workspace_id
         return {**headers, **anthropic_headers}
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=self._strip_aws_params(optional_params),
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def get_model_response_iterator(
         self,

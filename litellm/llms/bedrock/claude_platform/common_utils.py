@@ -3,6 +3,7 @@ from typing import Final
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.secret_managers.main import get_secret_str
@@ -27,20 +28,15 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     @staticmethod
-    def _get_workspace_id(optional_params: dict, litellm_params: dict) -> str | None:
-        workspace_id = (
-            optional_params.get("workspace_id")
-            or litellm_params.get("workspace_id")
-            or optional_params.get("aws_workspace_id")
-            or litellm_params.get("aws_workspace_id")
-            or optional_params.get("anthropic-workspace-id")
-            or litellm_params.get("anthropic-workspace-id")
-        )
-        if workspace_id is None:
-            workspace_id = optional_params.get("anthropic_workspace_id") or litellm_params.get("anthropic_workspace_id")
+    def _get_workspace_id(litellm_params: dict) -> str | None:
+        workspace_id: Final = litellm_params.get("workspace_id")
         if workspace_id is not None:
             return str(workspace_id)
         return get_secret_str("ANTHROPIC_AWS_WORKSPACE_ID") or get_secret_str("ANTHROPIC_WORKSPACE_ID")
+
+    @staticmethod
+    def _strip_aws_params(optional_params: dict) -> dict:
+        return {key: value for key, value in optional_params.items() if key not in AWS_CREDENTIAL_KWARGS_KEYS}
 
     def _get_required_aws_region_name(self, optional_params: dict) -> str:
         aws_region_name: Final = (

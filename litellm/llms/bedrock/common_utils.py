@@ -1199,20 +1199,6 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return model.replace("claude_platform/", "", 1)
 
     @staticmethod
-    def map_claude_platform_auth_params(passed_params: dict, optional_params: dict) -> dict:
-        """
-        Map Claude Platform route auth params that are not OpenAI request params.
-        """
-        for key in (
-            "workspace_id",
-            "aws_workspace_id",
-            "anthropic_workspace_id",
-        ):
-            if key in passed_params:
-                optional_params[key] = passed_params[key]
-        return optional_params
-
-    @staticmethod
     def _explicit_invoke_route(model: str) -> bool:
         """
         Check if the model is an explicit invoke route.

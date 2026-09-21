@@ -86,6 +86,7 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
+from litellm.litellm_core_utils.get_litellm_params import HEADER_ONLY_KWARGS_KEYS
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 
 _CachingHandlerResponse = None
@@ -4091,9 +4092,9 @@ class PreProcessNonDefaultParams:
         additional_endpoint_specific_params: list[str],
     ) -> dict:
         for k, v in special_params.items():
-            if k == "aws_bedrock_project_id":
+            if k in HEADER_ONLY_KWARGS_KEYS:
                 # sent as a request header (read from litellm_params by the
-                # bedrock-mantle configs), never as a request body field
+                # bedrock-mantle and claude_platform configs), never as a request body field
                 continue
             if (
                 k.startswith("aws_")
@@ -4614,10 +4615,6 @@ def get_optional_params(
                 model=model,
                 drop_params=bool(drop_params),
             )
-            if bedrock_route == "claude_platform":
-                optional_params = BedrockModelInfo.map_claude_platform_auth_params(
-                    passed_params=passed_params, optional_params=optional_params
-                )
     elif custom_llm_provider == "cloudflare":
         optional_params = litellm.CloudflareChatConfig().map_openai_params(
             model=model,
