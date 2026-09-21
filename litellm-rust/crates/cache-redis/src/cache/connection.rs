@@ -113,7 +113,7 @@ impl r2d2::ManageConnection for ClusterConnectionManager {
     }
 
     fn has_broken(&self, connection: &mut Self::Connection) -> bool {
-        connection.failed || !connection.connection.check_connection()
+        connection.failed || !redis::ConnectionLike::is_open(&connection.connection)
     }
 }
 
@@ -250,6 +250,24 @@ impl ConnectionRef<'_> {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn ping(&mut self) -> Result<bool, redis::RedisError> {
+        let command = redis::cmd("PING");
+        match self {
+            Self::Node(connection) => command
+                .query::<String>(*connection)
+                .map(|response| response == "PONG"),
+            Self::Cluster(connection) => connection
+                .route_command(
+                    &command,
+                    RoutingInfo::MultiNode((
+                        MultipleNodeRoutingInfo::AllNodes,
+                        Some(ResponsePolicy::AllSucceeded),
+                    )),
+                )
+                .map(|_| true),
+        }
     }
 
     pub(crate) fn node_text(&mut self, command: &redis::Cmd) -> Result<String, Error> {

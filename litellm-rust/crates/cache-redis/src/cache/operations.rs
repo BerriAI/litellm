@@ -183,20 +183,13 @@ where
     }
 
     pub fn sync_ping(&self) -> Result<bool, Error> {
-        self.connections.execute(|connection| {
-            redis::cmd("PING")
-                .query::<String>(connection)
-                .map(|response| response == "PONG")
-                .map_err(|_| Error::Unavailable)
-        })
+        self.connections
+            .execute(|connection| connection.ping().map_err(|_| Error::Unavailable))
     }
 
     pub async fn ping(&self) -> Result<bool, Error> {
         Self::run_blocking(Arc::clone(&self.connections), |connection| {
-            redis::cmd("PING")
-                .query::<String>(connection)
-                .map(|response| response == "PONG")
-                .map_err(|_| Error::Unavailable)
+            connection.ping().map_err(|_| Error::Unavailable)
         })
         .await
     }

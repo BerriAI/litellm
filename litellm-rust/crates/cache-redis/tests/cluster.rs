@@ -330,6 +330,53 @@ async fn scan_and_scoped_flush_cover_every_primary() {
     other.async_flush_cache().await.unwrap();
 }
 
+fn ping_calls_per_node(startup: &redis::Client) -> Vec<(String, u64)> {
+    let mut connection = startup.get_connection().unwrap();
+    let nodes: String = redis::cmd("CLUSTER")
+        .arg("NODES")
+        .query(&mut connection)
+        .unwrap();
+    let mut counts: Vec<(String, u64)> = nodes
+        .lines()
+        .map(|line| {
+            let address = line.split_whitespace().nth(1).unwrap();
+            let address = address.split('@').next().unwrap();
+            let mut node = redis::Client::open(format!("redis://{address}"))
+                .unwrap()
+                .get_connection()
+                .unwrap();
+            let stats: String = redis::cmd("INFO")
+                .arg("commandstats")
+                .query(&mut node)
+                .unwrap();
+            let calls = stats
+                .lines()
+                .find_map(|stat| stat.strip_prefix("cmdstat_ping:calls="))
+                .and_then(|rest| rest.split(',').next())
+                .map_or(0, |calls| calls.parse().unwrap());
+            (address.to_string(), calls)
+        })
+        .collect();
+    counts.sort();
+    counts
+}
+
+#[tokio::test]
+async fn ping_reaches_every_node() {
+    let cache = cluster_or_skip!("ping");
+    let startup = redis::Client::open(cluster_url()).unwrap();
+    let before = ping_calls_per_node(&startup);
+    assert!(before.len() >= 2, "{before:?}");
+    assert!(cache.ping().await.unwrap());
+    let after = ping_calls_per_node(&startup);
+    for ((node, calls_before), (_, calls_after)) in before.iter().zip(&after) {
+        assert!(calls_after > calls_before, "{node} was not pinged");
+    }
+    assert!(cache.sync_ping().unwrap());
+    let result = cache.test_connection().await.unwrap();
+    assert_eq!(result.status, CacheConnectionStatus::Success);
+}
+
 #[tokio::test]
 async fn counters_claims_scripts_and_sets_work_on_the_cluster() {
     let Some(counter) = counter_cache("counter") else {
