@@ -307,6 +307,12 @@ class TestProcessEmbedContentResponseUsage:
 
     MODEL = "gemini-embedding-2"
 
+    @pytest.fixture(autouse=True)
+    def _use_local_model_cost_map(self, local_model_cost_map):
+        """Test pins per-image / per-second rates that the fetched-from-``main`` cost map has
+        migrated to per-token pricing, so drive the assertion against the in-repo cost map."""
+        return local_model_cost_map
+
     def test_multimodal_image_preserves_usage_metadata(self):
         response_json = {
             "embedding": {"values": [0.1, 0.2, 0.3]},
