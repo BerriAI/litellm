@@ -4394,6 +4394,43 @@ async def _team_member_granted_models(
     return () if team_membership is None else _member_allowed_models(team_membership)
 
 
+async def team_member_allowed_models(
+    valid_token: UserAPIKeyAuth,
+    team_object: LiteLLM_TeamTable | None,
+    prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> Sequence[str]:
+    """The member's own ``allowed_models`` scope for callers outside this module; empty when not narrowed."""
+    return await _team_member_granted_models(
+        valid_token=valid_token,
+        team_object=team_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
+def team_member_can_call_model(
+    model: str,
+    llm_router: Router | None,
+    member_allowed_models: Sequence[str],
+    team_id: str | None,
+) -> bool:
+    """Non-raising form of the per-member model check that request-time authorization enforces."""
+    try:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=list(member_allowed_models),  # mutable-ok: _can_object_call_model takes list[str]
+            object_type="team",
+            team_id=team_id,
+        )
+    except ProxyException:
+        return False
+    return True
+
+
 async def _org_granted_models(
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
