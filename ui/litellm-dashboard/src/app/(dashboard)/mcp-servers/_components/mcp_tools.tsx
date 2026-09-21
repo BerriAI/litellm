@@ -201,27 +201,28 @@ const MCPToolsViewer = ({
     },
   });
 
-  const {
-    data: mcpPromptsResponse,
-    isLoading: isLoadingPrompts,
-    refetch: refetchPrompts,
-  } = useQuery({
-    queryKey: ["mcpPrompts", serverId, passthroughHeaders, oauthToken],
-    queryFn: () => listMCPPrompts(accessToken ?? "", serverId, buildCustomHeaders()),
+  const catalogQueryOptions = <T,>(name: "mcpPrompts" | "mcpResources", fetchCatalog: () => Promise<T>) => ({
+    queryKey: [name, serverId, passthroughHeaders, oauthToken],
+    queryFn: fetchCatalog,
     enabled: catalogQueriesEnabled,
     staleTime: 30000,
   });
 
   const {
+    data: mcpPromptsResponse,
+    isLoading: isLoadingPrompts,
+    refetch: refetchPrompts,
+  } = useQuery(
+    catalogQueryOptions("mcpPrompts", () => listMCPPrompts(accessToken ?? "", serverId, buildCustomHeaders())),
+  );
+
+  const {
     data: mcpResourcesResponse,
     isLoading: isLoadingResources,
     refetch: refetchResources,
-  } = useQuery({
-    queryKey: ["mcpResources", serverId, passthroughHeaders, oauthToken],
-    queryFn: () => listMCPResources(accessToken ?? "", serverId, buildCustomHeaders()),
-    enabled: catalogQueriesEnabled,
-    staleTime: 30000,
-  });
+  } = useQuery(
+    catalogQueryOptions("mcpResources", () => listMCPResources(accessToken ?? "", serverId, buildCustomHeaders())),
+  );
 
   const refetchCatalog = useCallback(() => {
     refetchTools();
