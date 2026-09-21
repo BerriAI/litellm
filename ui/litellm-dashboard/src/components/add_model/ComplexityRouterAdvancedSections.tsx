@@ -28,7 +28,7 @@ interface ComplexityRouterAdvancedSectionsProps {
   onChange: (value: ComplexityRouterConfigValue) => void;
   forecast: boolean;
   modelOptions: { value: string; label: string }[];
-  classifierEffortOptionsByModel: Record<string, string[]>;
+  classifierEffortOptionsByModel: Record<string, string[] | null | undefined>;
   customTechnicalKeywords?: string[];
   onCustomTechnicalKeywordsChange?: (keywords: string[]) => void;
   showValidationErrors: boolean;

@@ -26,13 +26,15 @@ import {
 
 const isReminderMarkerPair = (
   input: unknown,
-): input is { open: string; close: string } =>
-  typeof input === "object" &&
-  input !== null &&
-  "open" in input &&
-  "close" in input &&
-  typeof input.open === "string" &&
-  typeof input.close === "string";
+): input is { open: string; close: string } => {
+  if (typeof input !== "object" || input === null) {
+    return false;
+  }
+  if (!("open" in input) || !("close" in input)) {
+    return false;
+  }
+  return typeof input.open === "string" && typeof input.close === "string";
+};
 
 const stringList = (input: unknown): string[] | undefined =>
   Array.isArray(input) ? input.filter((item): item is string => typeof item === "string") : undefined;
