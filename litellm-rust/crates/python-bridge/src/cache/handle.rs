@@ -1,6 +1,8 @@
 use litellm_host_python::release_gil;
 use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*};
 
+use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
+
 use super::{cache_error, facade::FacadeGuard, native::NativeResponseCache, request::duration};
 
 #[pyclass(frozen, name = "_CacheTestHandle")]
@@ -43,6 +45,31 @@ impl CacheTestHandle {
     ) -> PyResult<Self> {
         let ttl = Some(duration(ttl_seconds)?);
         let service = release_gil(py, move || NativeResponseCache::redis(&url, ttl, namespace))
+            .map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (bucket_name, *, gcs_path=None, path_service_account=None, endpoint=None, token=None))]
+    fn gcs(
+        py: Python<'_>,
+        bucket_name: String,
+        gcs_path: Option<String>,
+        path_service_account: Option<String>,
+        endpoint: Option<String>,
+        token: Option<String>,
+    ) -> PyResult<Self> {
+        let config = GcsConfig {
+            bucket_name,
+            gcs_path,
+            path_service_account,
+            endpoint: endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+        };
+        let service = release_gil(py, move || NativeResponseCache::gcs(config, token))
             .map_err(cache_error)?;
         Ok(Self {
             service,
