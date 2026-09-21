@@ -2507,8 +2507,8 @@ name = "litellm-cache-valkey-semantic"
 version = "0.1.0"
 dependencies = [
  "litellm-cache",
+ "litellm-cache-redis",
  "litellm-cache-response",
- "r2d2",
  "redis",
  "redis-test",
  "rstest",

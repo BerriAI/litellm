@@ -5,6 +5,7 @@ use std::{
 };
 
 use litellm_cache::{BaseCache, CacheCodec, CacheConnectionResult, Error, SemanticCacheContext};
+use litellm_cache_redis::connection::{ConnectionRef, Connections};
 use litellm_cache_response::CacheEntry;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -28,40 +29,6 @@ pub struct ValkeySemanticConfig {
 
 pub const DEFAULT_INDEX_NAME: &str = "litellm_semantic_cache_index";
 
-struct PooledConnection {
-    connection: redis::Connection,
-    failed: bool,
-}
-
-struct ConnectionManager(redis::Client);
-
-impl r2d2::ManageConnection for ConnectionManager {
-    type Connection = PooledConnection;
-    type Error = redis::RedisError;
-
-    fn connect(&self) -> Result<Self::Connection, Self::Error> {
-        let connection = self.0.get_connection()?;
-        Ok(PooledConnection {
-            connection,
-            failed: false,
-        })
-    }
-
-    fn is_valid(&self, connection: &mut Self::Connection) -> Result<(), Self::Error> {
-        redis::cmd("PING").query::<String>(&mut connection.connection)?;
-        Ok(())
-    }
-
-    fn has_broken(&self, connection: &mut Self::Connection) -> bool {
-        connection.failed || !redis::ConnectionLike::is_open(&connection.connection)
-    }
-}
-
-enum Connections<C> {
-    Pool(r2d2::Pool<ConnectionManager>),
-    Fixed(Mutex<C>),
-}
-
 #[derive(Clone)]
 struct IndexState {
     name: String,
@@ -70,61 +37,8 @@ struct IndexState {
     similarity_threshold: f64,
 }
 
-struct ConnectionRef<'a>(&'a mut dyn redis::ConnectionLike);
-
-impl redis::ConnectionLike for ConnectionRef<'_> {
-    fn req_packed_command(&mut self, cmd: &[u8]) -> redis::RedisResult<redis::Value> {
-        self.0.req_packed_command(cmd)
-    }
-
-    fn req_packed_commands(
-        &mut self,
-        cmd: &[u8],
-        offset: usize,
-        count: usize,
-    ) -> redis::RedisResult<Vec<redis::Value>> {
-        self.0.req_packed_commands(cmd, offset, count)
-    }
-
-    fn get_db(&self) -> i64 {
-        self.0.get_db()
-    }
-
-    fn supports_pipelining(&self) -> bool {
-        self.0.supports_pipelining()
-    }
-
-    fn check_connection(&mut self) -> bool {
-        self.0.check_connection()
-    }
-
-    fn is_open(&self) -> bool {
-        self.0.is_open()
-    }
-}
-
-impl<C> Connections<C>
-where
-    C: redis::ConnectionLike + Send + 'static,
-{
-    fn execute<T>(
-        &self,
-        operation: impl FnOnce(&mut ConnectionRef<'_>) -> Result<T, Error>,
-    ) -> Result<T, Error> {
-        match self {
-            Self::Pool(pool) => {
-                let mut pooled = pool.get().map_err(|_| Error::Unavailable)?;
-                let result = operation(&mut ConnectionRef(&mut pooled.connection));
-                pooled.failed = matches!(result, Err(Error::Unavailable));
-                result
-            }
-            Self::Fixed(connection) => {
-                let mut connection = connection.lock().map_err(|_| Error::Unavailable)?;
-                operation(&mut ConnectionRef(&mut *connection))
-            }
-        }
-    }
-}
+const REDIS_TIMEOUT: Duration = Duration::from_secs(5);
+const REDIS_POOL_SIZE: u32 = 16;
 
 pub struct ValkeySemanticCache<
     E: Embedder,
@@ -149,15 +63,8 @@ where
         codec: S,
         config: ValkeySemanticConfig,
     ) -> Result<Self, Error> {
-        let client = redis::Client::open(url).map_err(|_| Error::Unavailable)?;
-        let pool = r2d2::Pool::builder()
-            .max_size(16)
-            .min_idle(Some(0))
-            .test_on_check_out(false)
-            .build(ConnectionManager(client))
-            .map_err(|_| Error::Unavailable)?;
         Ok(Self {
-            connections: Arc::new(Connections::Pool(pool)),
+            connections: Arc::new(Connections::pooled(url, REDIS_TIMEOUT, REDIS_POOL_SIZE)?),
             embedder,
             codec,
             config,
@@ -179,7 +86,7 @@ where
         config: ValkeySemanticConfig,
     ) -> Self {
         Self {
-            connections: Arc::new(Connections::Fixed(Mutex::new(connection))),
+            connections: Arc::new(Connections::fixed(connection)),
             embedder,
             codec,
             config,
@@ -232,15 +139,17 @@ where
         let response = self.codec.encode(&value)?;
         let vector = embedding_bytes(&embedding);
         let index = self.index_state();
-        write_document(
-            &self.connections,
-            &index,
-            &scope,
-            &prompt,
-            response,
-            vector,
-            self.get_ttl(context),
-        )
+        self.connections.execute(|connection| {
+            write_document(
+                connection,
+                &index,
+                &scope,
+                &prompt,
+                response,
+                vector,
+                self.get_ttl(context),
+            )
+        })
     }
 
     fn get_cache(&self, key: &str, context: &Self::Context) -> Result<Option<Self::Value>, Error> {
@@ -251,9 +160,10 @@ where
         let scope = scope_tag(key);
         let vector = embedding_bytes(&embedding);
         let index = self.index_state();
-        let Some(response) =
-            search_document(&self.connections, &index, &scope, vector, embedding.len())?
-        else {
+        let response = self.connections.execute(|connection| {
+            search_document(connection, &index, &scope, vector, embedding.len())
+        })?;
+        let Some(response) = response else {
             return Ok(None);
         };
         self.codec.decode(&response).map(Some)
@@ -282,11 +192,10 @@ where
             let vector = embedding_bytes(&embedding);
             let scope = scope_tag(&key);
             let ttl = context.ttl;
-            tokio::task::spawn_blocking(move || {
-                write_document(&connections, &index, &scope, &prompt, response, vector, ttl)
+            Connections::run_blocking(connections, move |connection| {
+                write_document(connection, &index, &scope, &prompt, response, vector, ttl)
             })
             .await
-            .map_err(|_| Error::Unavailable)?
         }
     }
 
@@ -308,13 +217,12 @@ where
                 .await?;
             let connections = Arc::clone(&self.connections);
             let index = self.index_state();
-            tokio::task::spawn_blocking(move || {
+            Connections::run_blocking(connections, move |connection| {
                 let scope = scope_tag(&key);
                 let vector = embedding_bytes(&embedding);
-                search_document(&connections, &index, &scope, vector, embedding.len())
+                search_document(connection, &index, &scope, vector, embedding.len())
             })
             .await
-            .map_err(|_| Error::Unavailable)?
             .and_then(|response| response.map(|bytes| self.codec.decode(&bytes)).transpose())
         }
     }
@@ -437,66 +345,58 @@ fn embedding_bytes(embedding: &[f32]) -> Vec<u8> {
         .collect()
 }
 
-fn write_document<C>(
-    connections: &Connections<C>,
+fn write_document(
+    connection: &mut ConnectionRef<'_>,
     index: &IndexState,
     scope: &str,
     prompt: &str,
     response: Vec<u8>,
     vector: Vec<u8>,
     ttl: Option<Duration>,
-) -> Result<(), Error>
-where
-    C: redis::ConnectionLike + Send + 'static,
-{
+) -> Result<(), Error> {
     let dimension = vector.len() / std::mem::size_of::<f32>();
     ensure_index(
-        connections,
+        connection,
         &index.name,
         &index.prefix,
         &index.dimension,
         dimension,
     )?;
     let document = format!("{}{scope}:{}", index.prefix, Uuid::new_v4());
-    connections.execute(|connection| {
-        let mut pipeline = redis::pipe();
+    let mut pipeline = redis::pipe();
+    pipeline
+        .cmd("HSET")
+        .arg(&document)
+        .arg("litellm_cache_key")
+        .arg(scope)
+        .arg("prompt")
+        .arg(prompt)
+        .arg("response")
+        .arg(response)
+        .arg("embedding")
+        .arg(vector)
+        .ignore();
+    if let Some(ttl) = ttl {
         pipeline
-            .cmd("HSET")
+            .cmd("EXPIRE")
             .arg(&document)
-            .arg("litellm_cache_key")
-            .arg(scope)
-            .arg("prompt")
-            .arg(prompt)
-            .arg("response")
-            .arg(response)
-            .arg("embedding")
-            .arg(vector)
+            .arg(ttl.as_secs())
             .ignore();
-        if let Some(ttl) = ttl {
-            pipeline
-                .cmd("EXPIRE")
-                .arg(&document)
-                .arg(ttl.as_secs())
-                .ignore();
-        }
-        pipeline
-            .query::<()>(connection)
-            .map_err(|_| Error::Unavailable)
-    })
+    }
+    pipeline
+        .query::<()>(connection)
+        .map_err(|_| Error::Unavailable)
 }
 
-fn search_document<C>(
-    connections: &Connections<C>,
+fn search_document(
+    connection: &mut ConnectionRef<'_>,
     index: &IndexState,
     scope: &str,
     vector: Vec<u8>,
     dimension: usize,
-) -> Result<Option<Vec<u8>>, Error>
-where
-    C: redis::ConnectionLike + Send + 'static,
-{
+) -> Result<Option<Vec<u8>>, Error> {
     ensure_index(
-        connections,
+        connection,
         &index.name,
         &index.prefix,
         &index.dimension,
@@ -504,23 +404,21 @@ where
     )?;
     let query =
         format!("(@litellm_cache_key:{{{scope}}})=>[KNN 1 @embedding $vec AS vector_distance]");
-    let response = connections.execute(|connection| {
-        redis::cmd("FT.SEARCH")
-            .arg(&index.name)
-            .arg(query)
-            .arg("PARAMS")
-            .arg(2)
-            .arg("vec")
-            .arg(vector)
-            .arg("RETURN")
-            .arg(2)
-            .arg("response")
-            .arg("vector_distance")
-            .arg("DIALECT")
-            .arg(2)
-            .query::<redis::Value>(connection)
-            .map_err(|_| Error::Unavailable)
-    })?;
+    let response = redis::cmd("FT.SEARCH")
+        .arg(&index.name)
+        .arg(query)
+        .arg("PARAMS")
+        .arg(2)
+        .arg("vec")
+        .arg(vector)
+        .arg("RETURN")
+        .arg(2)
+        .arg("response")
+        .arg("vector_distance")
+        .arg("DIALECT")
+        .arg(2)
+        .query::<redis::Value>(connection)
+        .map_err(|_| Error::Unavailable)?;
     let Some(fields) = search_fields(response)? else {
         return Ok(None);
     };
@@ -539,16 +437,13 @@ where
     Ok(Some(response))
 }
 
-fn ensure_index<C>(
-    connections: &Connections<C>,
+fn ensure_index(
+    connection: &mut ConnectionRef<'_>,
     index_name: &str,
     prefix: &str,
     index_dimension: &Mutex<Option<usize>>,
     dimension: usize,
-) -> Result<(), Error>
-where
-    C: redis::ConnectionLike + Send + 'static,
-{
+) -> Result<(), Error> {
     if index_dimension
         .lock()
         .map_err(|_| Error::Unavailable)?
@@ -556,41 +451,37 @@ where
     {
         return Ok(());
     }
-    let create = connections.execute(|connection| {
-        Ok(redis::cmd("FT.CREATE")
-            .arg(index_name)
-            .arg("ON")
-            .arg("HASH")
-            .arg("PREFIX")
-            .arg(1)
-            .arg(prefix)
-            .arg("SCHEMA")
-            .arg("litellm_cache_key")
-            .arg("TAG")
-            .arg("embedding")
-            .arg("VECTOR")
-            .arg("HNSW")
-            .arg(6)
-            .arg("TYPE")
-            .arg("FLOAT32")
-            .arg("DIM")
-            .arg(dimension)
-            .arg("DISTANCE_METRIC")
-            .arg("COSINE")
-            .query::<String>(connection)
-            .map(|_| ())
-            .map_err(|error| error.to_string()))
-    })?;
+    let create = redis::cmd("FT.CREATE")
+        .arg(index_name)
+        .arg("ON")
+        .arg("HASH")
+        .arg("PREFIX")
+        .arg(1)
+        .arg(prefix)
+        .arg("SCHEMA")
+        .arg("litellm_cache_key")
+        .arg("TAG")
+        .arg("embedding")
+        .arg("VECTOR")
+        .arg("HNSW")
+        .arg(6)
+        .arg("TYPE")
+        .arg("FLOAT32")
+        .arg("DIM")
+        .arg(dimension)
+        .arg("DISTANCE_METRIC")
+        .arg("COSINE")
+        .query::<String>(connection)
+        .map(|_| ())
+        .map_err(|error| error.to_string());
     if let Err(message) = create {
         if !message.to_ascii_lowercase().contains("already exists") {
             return Err(Error::Unavailable);
         }
-        let info = connections.execute(|connection| {
-            redis::cmd("FT.INFO")
-                .arg(index_name)
-                .query::<redis::Value>(connection)
-                .map_err(|_| Error::Unavailable)
-        })?;
+        let info = redis::cmd("FT.INFO")
+            .arg(index_name)
+            .query::<redis::Value>(connection)
+            .map_err(|_| Error::Unavailable)?;
         let existing = index_dimension_from_info(&info).ok_or(Error::Unavailable)?;
         if existing != dimension {
             return Err(Error::Unavailable);

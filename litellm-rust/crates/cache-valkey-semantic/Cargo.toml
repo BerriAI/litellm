@@ -7,8 +7,8 @@ repository.workspace = true
 
 [dependencies]
 litellm-cache.workspace = true
+litellm-cache-redis.workspace = true
 litellm-cache-response.workspace = true
-r2d2 = "0.8.10"
 redis = { version = "1.7.0", features = ["tls-rustls"] }
 serde_json.workspace = true
 sha2.workspace = true
