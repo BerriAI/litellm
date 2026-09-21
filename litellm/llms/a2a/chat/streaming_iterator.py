@@ -64,7 +64,6 @@ class A2AModelResponseIterator(BaseModelResponseIterator):
             json_mode=json_mode,
         )
         self.model = model
-        # Text already emitted downstream, used to collapse cumulative snapshots.
         self._emitted_text: str = ""
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
