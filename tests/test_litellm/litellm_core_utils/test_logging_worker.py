@@ -207,10 +207,29 @@ class TestLoggingWorker:
         assert (worker._queue.qsize(), len(worker._unstarted_dequeued_tasks())) == expected_shape
         assert fired == [], "precondition: the callback never ran before the first loop closed"
 
-        async def flush_on_second_loop():
+        async def flush_twice_on_second_loop():
+            await asyncio.wait_for(worker.flush(), timeout=5)
             await asyncio.wait_for(worker.flush(), timeout=5)
 
-        asyncio.run(flush_on_second_loop())
+        asyncio.run(flush_twice_on_second_loop())
+
+        assert fired == [True]
+
+    def test_flush_starts_a_worker_when_the_queue_has_none(self):
+        """``flush()`` must drain a queue that exists on the current loop without a running worker."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        fired = []
+
+        async def marker():
+            fired.append(True)
+
+        async def enqueue_then_flush():
+            worker._ensure_queue()
+            worker.enqueue(marker())
+            assert worker._worker_task is None, "precondition: nothing is draining the queue yet"
+            await asyncio.wait_for(worker.flush(), timeout=3)
+
+        asyncio.run(enqueue_then_flush())
 
         assert fired == [True]
 
