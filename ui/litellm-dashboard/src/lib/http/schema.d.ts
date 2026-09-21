@@ -8938,7 +8938,7 @@ export interface paths {
          *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
-         *         Returns a dictionary containing information about each model.
+         *         A JSON response whose `data` list holds one entry per model.
          *
          *     Example Response:
          *     ```json
@@ -16781,7 +16781,6 @@ export interface paths {
          *     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *     - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *     - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *     - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -16798,6 +16797,7 @@ export interface paths {
          *     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
          *     - organizations: List[str] - List of organization id's the user is a member of
          *     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+         *     - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
          *     Returns:
          *     - key: (str) The generated api key for the user
          *     - expires: (datetime) Datetime object for when key expires.
@@ -16814,6 +16814,36 @@ export interface paths {
          *     ```
          */
         post: operations["new_user_user_new_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/password/change": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change Password
+         * @description Change the calling user's own password.
+         *
+         *     Requires the current password. The new password must satisfy the
+         *     configured password policy (`general_settings.password_policy_*`: minimum
+         *     length, character classes, and, when enabled, breached-password screening
+         *     via haveibeenpwned.com). A successful change lifts any pending forced
+         *     password reset (`password_reset_required`) on the account.
+         *
+         *     Parameters:
+         *     - current_password: str - The user's current password.
+         *     - new_password: str - The password to change to.
+         */
+        post: operations["change_password_user_password_change_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16867,7 +16897,7 @@ export interface paths {
          *     Parameters:
          *         - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
          *         - user_email: Optional[str] - Specify a user email.
-         *         - password: Optional[str] - Specify a user password.
+         *         - password: Optional[str] - Set the user's password (admin only). Must satisfy the configured password policy. The user is required to change it at their next login. Users change their own password with POST /user/password/change.
          *         - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
          *         - teams: Optional[list] - specify a list of team id's a user belongs to.
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
@@ -16887,7 +16917,6 @@ export interface paths {
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
          *         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
-         *         - soft_budget: Optional[float] - Get alerts when user crosses given budget, doesn't block requests.
          *         - model_max_budget: Optional[dict] - Model-specific max budget for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-budgets-to-keys)
          *         - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
          *         - model_rpm_limit: Optional[float] - Model-specific rpm limit for user. [Docs](https://docs.litellm.ai/docs/proxy/users#add-model-specific-limits-to-keys)
@@ -19086,7 +19115,7 @@ export interface paths {
          *     `model_info.direct_access` when the proxy database is connected.
          *
          *     Returns:
-         *         Returns a dictionary containing information about each model.
+         *         A JSON response whose `data` list holds one entry per model.
          *
          *     Example Response:
          *     ```json
@@ -24905,6 +24934,20 @@ export interface components {
              */
             status: "cancelled";
         };
+        /** ChangePasswordRequest */
+        ChangePasswordRequest: {
+            /** Current Password */
+            current_password: string;
+            /** New Password */
+            new_password: string;
+        };
+        /** ChangePasswordResponse */
+        ChangePasswordResponse: {
+            /** Message */
+            message: string;
+            /** User Id */
+            user_id: string;
+        };
         /** ChatCompletionAnnotation */
         ChatCompletionAnnotation: {
             /**
@@ -30307,6 +30350,8 @@ export interface components {
             budget_reset_at?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Last Breach Check At */
+            last_breach_check_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -30341,6 +30386,8 @@ export interface components {
             organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /** Password Reset Required */
+            password_reset_required?: boolean | null;
             /**
              * Policies
              * @default []
@@ -30400,6 +30447,8 @@ export interface components {
              * @default 0
              */
             key_count: number;
+            /** Last Breach Check At */
+            last_breach_check_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max Parallel Requests */
@@ -30434,6 +30483,8 @@ export interface components {
             organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /** Password Reset Required */
+            password_reset_required?: boolean | null;
             /**
              * Policies
              * @default []
@@ -32081,6 +32132,8 @@ export interface components {
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Output"])[] | null;
+            /** Description */
+            description?: string | null;
             /** Health Checked At */
             health_checked_at?: string | null;
             /** Health Response Time */
@@ -32869,6 +32922,8 @@ export interface components {
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
             /** Organizations */
             organizations?: string[] | null;
+            /** Password */
+            password?: string | null;
             /**
              * Permissions
              * @default {}
@@ -60939,6 +60994,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["NewUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    change_password_user_password_change_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePasswordRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangePasswordResponse"];
                 };
             };
             /** @description Validation Error */

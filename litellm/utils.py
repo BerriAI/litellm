@@ -1260,15 +1260,6 @@ async def _client_async_logging_helper(
             async_coroutine=logging_obj.async_success_handler(result=result, start_time=start_time, end_time=end_time)
         )
 
-        ################################################
-        # Sync Logging Worker
-        ################################################
-        logging_obj.handle_sync_success_callbacks_for_async_calls(
-            result=result,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
 
 def _get_wrapper_num_retries(kwargs: dict[str, Any], exception: Exception) -> tuple[int | None, dict[str, Any]]:
     """

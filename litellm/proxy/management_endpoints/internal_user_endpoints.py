@@ -27,9 +27,14 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
-from litellm.proxy.auth.password_policy import validate_password_policy
+from litellm.proxy.auth.password_policy import (
+    validate_password_not_breached,
+    validate_password_policy,
+    validate_passwords_bulk,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -162,11 +167,23 @@ def _team_membership_table(
     return team_membership_table
 
 
-def _hash_password_in_dict(data: dict, general_settings: Mapping[str, object]) -> None:
-    """Validate and hash password field in-place if present."""
+async def _hash_password_in_dict(
+    data: dict, general_settings: Mapping[str, object], password_prevalidated: bool = False
+) -> None:
+    """Validate and hash password field in-place if present.
+
+    ``password_prevalidated`` skips the policy checks for callers that already
+    validated the password (the bulk path screens its whole batch upfront).
+
+    An admin-set password is known to whoever set it, so the user is also
+    flagged for a forced password change at next login."""
     if "password" in data and data["password"] is not None:
-        validate_password_policy(data["password"], general_settings)
+        if not password_prevalidated:
+            validate_password_policy(data["password"], general_settings)
+            await validate_password_not_breached(data["password"], general_settings)
         data["password"] = hash_password(data["password"])
+        data["password_reset_required"] = True
+        data["last_breach_check_at"] = None
 
 
 def _strip_password_from_response(response) -> None:
@@ -494,6 +511,7 @@ async def new_user(
     - prompts: Optional[List[str]] - List of allowed prompts for the user. If specified, the user will only be able to use these specific prompts.
     - organizations: List[str] - List of organization id's the user is a member of
     - budget_limits: Optional[list] - List of concurrent budget windows for the user. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - password: Optional[str] - Not supported; any value is rejected with a 422. Users set their own password through an invitation link (POST /invitation/new).
     Returns:
     - key: (str) The generated api key for the user
     - expires: (datetime) Datetime object for when key expires.
@@ -513,7 +531,7 @@ async def new_user(
     ```
     """
     try:
-        from litellm.proxy.proxy_server import _license_check, general_settings, prisma_client
+        from litellm.proxy.proxy_server import _license_check, prisma_client
 
         if prisma_client is None:
             raise HTTPException(status_code=400, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -561,7 +579,7 @@ async def new_user(
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
         data_json = await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
-        _hash_password_in_dict(data_json, general_settings)
+        data_json.pop("password", None)
         teams = data.teams
         if teams is None:
             teams = check_if_default_team_set()
@@ -1427,6 +1445,7 @@ async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
+    password_prevalidated: bool = False,
 ) -> dict[str, Any]:
     """
     Helper function to update a single user.
@@ -1449,7 +1468,7 @@ async def _update_single_user_helper(
 
     data_json: Final[dict] = user_request.model_dump(exclude_unset=True)
     non_default_values = _update_internal_user_params(data_json=data_json, data=user_request)
-    _hash_password_in_dict(non_default_values, general_settings)
+    await _hash_password_in_dict(non_default_values, general_settings, password_prevalidated=password_prevalidated)
 
     existing_user_row: BaseModel | None = None
     if user_request.user_id:
@@ -1630,7 +1649,7 @@ async def user_update(
     Parameters:
         - user_id: Optional[str] - Specify a user id. If not set, a unique id will be generated.
         - user_email: Optional[str] - Specify a user email.
-        - password: Optional[str] - Specify a user password.
+        - password: Optional[str] - Set the user's password (admin only). Must satisfy the configured password policy. The user is required to change it at their next login. Users change their own password with POST /user/password/change.
         - user_alias: Optional[str] - A descriptive name for you to know who this user id refers to.
         - teams: Optional[list] - specify a list of team id's a user belongs to.
         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
@@ -1698,19 +1717,38 @@ async def bulk_update_processed_users(
     users_to_update: list[UpdateUserRequest],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_changed_by: str | None = None,
+    hibp_client: AsyncHTTPHandler | None = None,
 ) -> BulkUpdateUserResponse:
+    from litellm.proxy.proxy_server import general_settings
+
     results: Final[list[UserUpdateResult]] = []
     successful_updates = 0
     failed_updates = 0
+
+    # Screen the batch's passwords upfront and concurrently: done per-user
+    # inside the loop below, each HIBP lookup would be awaited serially and a
+    # degraded-slow HIBP could stretch a full batch to minutes, timing out the
+    # request after some updates already persisted.
+    password_verdicts: Final = await validate_passwords_bulk(
+        tuple(u.password for u in users_to_update if u.password is not None),
+        general_settings,
+        client=hibp_client,
+    )
 
     # Process each user update independently
     try:
         for user_request in users_to_update:
             try:
+                if (
+                    user_request.password is not None
+                    and (password_error := password_verdicts.get(user_request.password)) is not None
+                ):
+                    raise password_error
                 response = await _update_single_user_helper(
                     user_request=user_request,
                     user_api_key_dict=user_api_key_dict,
                     litellm_changed_by=litellm_changed_by,
+                    password_prevalidated=True,
                 )
                 # Record success
                 results.append(
@@ -1848,6 +1886,14 @@ async def bulk_user_update(
                 status_code=403,
                 detail="Only proxy admins can update all users at once.",
             )
+        if data.user_updates.password is not None:
+            bulk_password_error: Final[HTTPExceptionErrorDetail] = {
+                "error": (
+                    "Setting one password for all users is not supported. "
+                    "Use per-user updates via the 'users' list instead."
+                )
+            }
+            raise HTTPException(status_code=400, detail=bulk_password_error)
         # Optimized path for updating all users directly in database
         all_users_in_db: Final = await _user_table(prisma_client).find_many(order={"created_at": "desc"})
 

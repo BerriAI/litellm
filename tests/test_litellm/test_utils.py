@@ -7,8 +7,8 @@ import os
 import queue
 import threading
 from datetime import datetime, timedelta, timezone
-from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,6 +29,7 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.thread_pool_executor import executor as logging_executor
 from litellm.proxy.utils import is_valid_api_key
 from litellm.types.utils import (
     CallTypes,
@@ -6442,6 +6443,53 @@ async def test_acompletion_finishes_response_metadata_before_handing_the_respons
     assert snapshot["litellm_call_id"]
     assert snapshot["response_cost"] is not None
     assert snapshot["api_base"]
+
+
+class _GatedSyncLoggingHookRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: Final = queue.SimpleQueue[str | None]()
+        self.release: Final = threading.Event()
+
+    def logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        self.seen.put(result.id if isinstance(result, litellm.ModelResponse) else None)
+        self.release.wait(timeout=5)
+        return kwargs, result
+
+
+@pytest.mark.asyncio
+async def test_acompletion_runs_a_custom_logger_sync_logging_hook_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    def legacy_sync_callback(
+        kwargs: dict[str, object], response: litellm.ModelResponse, start_time: datetime, end_time: datetime
+    ) -> None:
+        pass
+
+    recorder: Final = _GatedSyncLoggingHookRecorder()
+    monkeypatch.setattr(litellm, "success_callback", [legacy_sync_callback, recorder])
+    logging_futures: Final = queue.SimpleQueue[Future[object]]()
+    real_submit: Final = logging_executor.submit
+
+    def submit_and_track(fn: Callable[..., object], *args: object, **kwargs: object) -> Future[object]:
+        future: Final = real_submit(fn, *args, **kwargs)
+        logging_futures.put(future)
+        return future
+
+    with patch(  # test-quality-ok: wraps the real submit only to collect the futures to join, the pool still runs
+        "litellm.litellm_core_utils.litellm_logging.executor.submit", side_effect=submit_and_track
+    ):
+        response: Final = await litellm.acompletion(
+            model="gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="Hello there!",
+            num_retries=0,
+        )
+        await asyncio.sleep(0)
+    recorder.release.set()
+    for _ in range(logging_futures.qsize()):
+        logging_futures.get_nowait().result(timeout=5)
+    assert [recorder.seen.get_nowait() for _ in range(recorder.seen.qsize())] == [response.id]
 
 
 def test_completion_finishes_response_metadata_before_handing_the_response_to_the_logging_thread():

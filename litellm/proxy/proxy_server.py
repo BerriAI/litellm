@@ -331,7 +331,7 @@ from litellm.proxy.auth.model_checks import (
     get_mcp_server_ids,
     get_team_models,
 )
-from litellm.proxy.auth.password_policy import validate_password_policy
+from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
 from litellm.proxy.auth.user_api_key_auth import (
     _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
@@ -548,6 +548,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
+)
+from litellm.proxy.management_endpoints.password_endpoints import (
+    router as password_management_router,
 )
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
@@ -15033,6 +15036,13 @@ def _get_proxy_model_info(model: dict) -> dict:
     return _translate_model_name_for_response(model)
 
 
+def _model_info_json_response(data: Sequence[Mapping[str, object]] | Mapping[str, object]) -> Response:
+    return Response(
+        content=orjson.dumps({"data": data}, default=jsonable_encoder, option=orjson.OPT_NON_STR_KEYS),
+        media_type="application/json",
+    )
+
+
 @router.get(
     "/model/info",
     tags=["model management"],
@@ -15080,7 +15090,7 @@ async def model_info_v1(
     `model_info.direct_access` when the proxy database is connected.
 
     Returns:
-        Returns a dictionary containing information about each model.
+        A JSON response whose `data` list holds one entry per model.
 
     Example Response:
     ```json
@@ -15128,7 +15138,7 @@ async def model_info_v1(
             deployment_dict=_deployment_info_dict,
             excluded_keys={"litellm_credential_name"},
         )
-        return {"data": _deployment_info_dict}
+        return _model_info_json_response(_deployment_info_dict)
 
     if llm_model_list is None:
         raise HTTPException(
@@ -15179,7 +15189,7 @@ async def model_info_v1(
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
-        return {"data": single_model_list}
+        return _model_info_json_response(single_model_list)
 
     # Return router deployments (same source as /v2/model/info), not wildcard-
     # expanded model names from get_complete_model_list(). Team-scoped rows
@@ -15247,7 +15257,7 @@ async def model_info_v1(
     visible_models: Final = [model for model in all_models if model.get("model_name") not in hidden_names]
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
-    return {"data": visible_models}
+    return _model_info_json_response(visible_models)
 
 
 @router.get(
@@ -16190,6 +16200,7 @@ async def onboarding(invite_link: str, request: Request):
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        password_reset_required=False,
     )
     jwt_token: Final = jwt.encode(
         cast(dict, returned_ui_token_object),
@@ -16299,6 +16310,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
         auth_header_name=general_settings.get("litellm_key_header_name", "Authorization"),
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
+        password_reset_required=False,
     )
     assert master_key is not None
     return jwt.encode(
@@ -16369,6 +16381,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
         )
 
     validate_password_policy(data.password, general_settings)
+    await validate_password_not_breached(data.password, general_settings)
     hashed_pw: Final = hash_password(data.password)
     current_time = litellm.utils.get_utc_datetime()
     async with prisma_client.db.tx() as tx:
@@ -16388,7 +16401,12 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
 
         ### UPDATE USER OBJECT ###
         user_obj: Final[_UserTableRow | None] = await tx.litellm_usertable.update(
-            where={"user_id": invite_obj.user_id}, data={"password": hashed_pw}
+            where={"user_id": invite_obj.user_id},
+            data={
+                "password": hashed_pw,
+                "password_reset_required": False,
+                "last_breach_check_at": None,
+            },
         )
 
         if user_obj is None:
@@ -18764,6 +18782,7 @@ app.include_router(pass_through_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
+app.include_router(password_management_router)
 app.include_router(team_router)
 app.include_router(ui_sso_router)
 app.include_router(organization_router)
