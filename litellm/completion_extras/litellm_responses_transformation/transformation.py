@@ -1115,7 +1115,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
         for tool in tools:
             # convert function tool from chat completion to responses API format
-            if tool.get("type") == "function":
+            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
                 function_tool = cast(ChatCompletionToolParamFunctionChunk, tool.get("function"))
                 responses_tools.append(
                     FunctionToolParam(
