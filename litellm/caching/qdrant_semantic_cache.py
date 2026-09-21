@@ -313,6 +313,7 @@ class QdrantSemanticCache(BaseCache):
         self.sync_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params={"wait": "true"},
             json=data,
         )
 
@@ -422,6 +423,7 @@ class QdrantSemanticCache(BaseCache):
         await self.async_client.put(
             url=f"{self.qdrant_api_base}/collections/{self.collection_name}/points",
             headers=self.headers,
+            params={"wait": "true"},
             json=data,
         )
 

@@ -10,8 +10,10 @@ use qdrant_client::qdrant::{
     CollectionOperationResponse, CreateCollection, CreateFieldIndexCollection, Filter, PointId,
     PointsOperationResponse, ScoredPoint, SearchPoints, SearchResponse, Value, Vector, Vectors,
     collections_server::Collections,
+    value::Kind,
     points_server::{Points, PointsServer},
 };
+use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic::{Request, Response, Status, transport::Server};
@@ -23,12 +25,33 @@ pub struct StoredPoint {
     pub payload: HashMap<String, Value>,
 }
 
+fn qdrant_value_to_json(value: Value) -> JsonValue {
+    match value.kind {
+        Some(Kind::NullValue(_)) | None => JsonValue::Null,
+        Some(Kind::DoubleValue(value)) => serde_json::json!(value),
+        Some(Kind::IntegerValue(value)) => serde_json::json!(value),
+        Some(Kind::StringValue(value)) => JsonValue::String(value),
+        Some(Kind::BoolValue(value)) => JsonValue::Bool(value),
+        Some(Kind::StructValue(value)) => JsonValue::Object(
+            value
+                .fields
+                .into_iter()
+                .map(|(key, value)| (key, qdrant_value_to_json(value)))
+                .collect(),
+        ),
+        Some(Kind::ListValue(value)) => {
+            JsonValue::Array(value.values.into_iter().map(qdrant_value_to_json).collect())
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct FakeState {
     pub collections: HashSet<String>,
     pub created_collections: Vec<CreateCollection>,
     pub field_indexes: Vec<CreateFieldIndexCollection>,
     pub points: Vec<StoredPoint>,
+    pub upsert_waits: Vec<Option<bool>>,
     pub index_creations: usize,
     pub fail_field_index: bool,
 }
@@ -205,8 +228,10 @@ impl Points for FakeService {
         &self,
         request: Request<qdrant::UpsertPoints>,
     ) -> Result<Response<PointsOperationResponse>, Status> {
+        let request = request.into_inner();
         let mut state = self.state.lock().unwrap();
-        for point in request.into_inner().points {
+        state.upsert_waits.push(request.wait);
+        for point in request.points {
             let stored = StoredPoint {
                 id: point.id.clone(),
                 vector: dense_vector(point.vectors)?,
@@ -241,7 +266,7 @@ impl Points for FakeService {
                         .payload
                         .get(field)
                         .and_then(|value| {
-                            let value: serde_json::Value = value.clone().into();
+                            let value = qdrant_value_to_json(value.clone());
                             value
                                 .as_str()
                                 .map(str::to_owned)

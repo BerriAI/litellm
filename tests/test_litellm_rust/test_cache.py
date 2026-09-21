@@ -605,15 +605,7 @@ async def test_qdrant_semantic_async_parity(
         messages=messages,
     )
 
-    async def lookup_after_commit() -> object:
-        for _ in range(20):
-            value: Final = await binding.async_lookup(semantic_request("python-key", messages))
-            if value is not None:
-                return value
-            await asyncio.sleep(0.1)
-        return None
-
-    assert await lookup_after_commit() == {"id": "py"}
+    assert await binding.async_lookup(semantic_request("python-key", messages)) == {"id": "py"}
     await binding.async_store(semantic_request("native-key", messages), {"id": "native"})
     python_value: Final = await facade.cache.async_get_cache("native-key", messages=messages)
     assert isinstance(python_value, dict)
@@ -705,6 +697,8 @@ def test_qdrant_semantic_mutation_and_projection_fallback(
         vector_size=8,
     )
     handle._bind_facade(facade)
+    facade.cache.qdrant_api_key = "rotated"
+    assert _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "python_callback"
     facade.cache.similarity_threshold = 0.5
     assert _native._CacheTestResolver(SimpleNamespace(cache=facade)).resolve().kind == "python_callback"
     unsupported: Final = qdrant_facade(qdrant_url, f"cache_{uuid4().hex}")
