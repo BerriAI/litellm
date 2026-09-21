@@ -9,6 +9,7 @@ from typing import Any, Final
 
 import httpx
 
+from litellm._uuid import uuid
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -127,7 +128,7 @@ class VoyageRerankConfig(BaseRerankConfig):
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         return RerankResponse(
-            id=_json_response.get("id", f"voyage-rerank-{model}"),
+            id=_json_response.get("id") or str(uuid.uuid4()),
             results=transformed_results,
             meta=rerank_meta,
         )

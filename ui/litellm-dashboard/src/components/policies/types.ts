@@ -44,6 +44,7 @@ export interface PolicyAttachment {
   keys: string[];
   models: string[];
   tags: string[];
+  priority?: number | null;
   created_at?: string;
   updated_at?: string;
   created_by?: string;
@@ -78,6 +79,7 @@ export interface PolicyAttachmentCreateRequest {
   keys?: string[];
   models?: string[];
   tags?: string[];
+  priority?: number;
 }
 
 export interface PolicyListResponse {

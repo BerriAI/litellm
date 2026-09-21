@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -10,7 +11,9 @@ from typing import Final
 import jsonschema
 import pytest
 
+import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
 REPO_ROOT = Path(__file__).parents[2]
@@ -124,6 +127,55 @@ def test_schema_accepts_cache_creation_cost_inside_a_pricing_tier(committed_sche
     assert validator.is_valid({"some-model": entry})
 
 
+OFF_PEAK_ENTRY: Final = MappingProxyType(
+    {
+        "litellm_provider": "openrouter",
+        "mode": "chat",
+        "input_cost_per_token": 2e-6,
+        "output_cost_per_token": 8e-6,
+        "off_peak_pricing": {
+            "hours_utc": "16:30-00:30",
+            "windows": [{"hours_utc": ["00:30-02:00"], "weekdays": [6, "Sunday", "mon", "THURS"]}],
+            "weekday_timezone": "Asia/Shanghai",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 4e-6,
+            "cache_read_input_token_cost": 1e-7,
+        },
+    }
+)
+
+
+def test_generator_classifies_off_peak_pricing_as_a_windowed_rate_block():
+    generator = load_generator()
+    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(OFF_PEAK_ENTRY)})))
+    validator = build_validator(schema)
+    assert validator.is_valid({"some-model": dict(OFF_PEAK_ENTRY)})
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"hours_utc": "16:30-00:30", "input_cost_per_token": "1e-6"},
+        {"hours_utc": "16:30-00:30", "input_cost_per_token": -1e-6},
+        {"hours_utc": 1630, "input_cost_per_token": 1e-6},
+        {"hours_utc": "16:30-00:30", "discount": 0.5},
+        {"windows": [{"weekdays": [6]}], "input_cost_per_token": 1e-6},
+        {"windows": [{"hours_utc": "00:30-02:00", "weekdays": [0]}], "input_cost_per_token": 1e-6},
+        {"windows": [], "input_cost_per_token": 1e-6},
+        {"input_cost_per_token": 1e-6},
+        {"hours_utc": "16:30", "input_cost_per_token": 1e-6},
+        {"hours_utc": "25:00-01:00", "input_cost_per_token": 1e-6},
+        {"hours_utc": ["16:30-00:30", "4pm-midnight"], "input_cost_per_token": 1e-6},
+        {"windows": [{"hours_utc": "00:30-02:00", "weekdays": ["Funday"]}], "input_cost_per_token": 1e-6},
+    ],
+)
+def test_generated_off_peak_schema_rejects_malformed_blocks(block: dict):
+    generator = load_generator()
+    schema = json.loads(generator.render(generator.build_schema({"some-model": dict(OFF_PEAK_ENTRY)})))
+    validator = build_validator(schema)
+    assert not validator.is_valid({"some-model": {**OFF_PEAK_ENTRY, "off_peak_pricing": block}})
+
+
 def find_duplicate_keys(path: Path) -> list[str]:
     duplicates: list[str] = []
 
@@ -221,6 +273,14 @@ def test_chat_latest_declares_the_one_effort_openai_accepts(prices: dict):
     assert resolve_supported_reasoning_efforts(prices["chat-latest"], deployment_is_mapped=True) == ("medium",)
 
 
+@pytest.mark.parametrize("key", ["azure/gpt-chat-latest", "azure/chat-latest", "azure/us/gpt-chat-latest"])
+def test_azure_gpt_chat_latest_declares_the_one_effort_azure_accepts(prices: dict, key: str):
+    """Azure answers every reasoning_effort on a gpt-chat-latest deployment except medium with
+    "Unsupported value ... Supported values are: 'medium'", the same fixed level OpenAI's chat-latest
+    carries, so the Foundry product name and the OpenAI API name both declare that one level."""
+    assert resolve_supported_reasoning_efforts(prices[key], deployment_is_mapped=True) == ("medium",)
+
+
 BEDROCK_OPENAI_GPT_MARKERS: Final = ("openai.gpt-5.4", "openai.gpt-5.5", "openai.gpt-5.6", "openai.gpt-6-astra")
 BEDROCK_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse", "bedrock_mantle"))
 BEDROCK_ROW_PREFIXES: Final = ("bedrock_mantle/", "us.", "global.")
@@ -266,3 +326,155 @@ def test_every_bedrock_openai_gpt_row_advertises_xhigh(prices: dict):
         and "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
     ]
     assert missing == []
+
+
+def is_active_priced_mistral_chat_row(name: str, entry: Mapping[str, object]) -> bool:
+    input_cost: Final = entry.get("input_cost_per_token")
+    return (
+        name.startswith("mistral/")
+        and entry.get("mode") == "chat"
+        and entry.get("deprecation_date") is None
+        and isinstance(input_cost, (int, float))
+        and input_cost > 0
+    )
+
+
+def cache_read_is_tenth_of_input(entry: Mapping[str, object]) -> bool:
+    cache_read: Final = entry.get("cache_read_input_token_cost")
+    input_cost: Final = entry.get("input_cost_per_token")
+    return (
+        isinstance(cache_read, float)
+        and isinstance(input_cost, (int, float))
+        and 0 < cache_read < input_cost
+        and cache_read == pytest.approx(input_cost / 10)
+    )
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_active_mistral_chat_rows_price_cache_reads_below_input(path: Path):
+    """A Mistral chat row without a cache-read rate bills cached prompt tokens at zero, so every
+    active priced row must carry one, and it must be cheaper than a fresh input token. Mistral
+    bills cached tokens at 10% of the input price for every model (docs.mistral.ai/studio/
+    conversations/advanced/prompt-caching, read 2026-09-18), so the ratio is checked as well."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    drifted: Final = [
+        f"{name}: cache_read={entry.get('cache_read_input_token_cost')} input={entry.get('input_cost_per_token')}"
+        for name, entry in rows.items()
+        if isinstance(entry, dict)
+        and is_active_priced_mistral_chat_row(name, entry)
+        and not cache_read_is_tenth_of_input(entry)
+    ]
+    assert drifted == []
+
+
+DEEPSEEK_PRICED_ROWS: Final = tuple(
+    f"{prefix}{name}"
+    for name in ("deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro")
+    for prefix in ("", "deepseek/")
+)
+DEEPSEEK_OFF_PEAK_WINDOWS: Final = (
+    {"hours_utc": ["00:00-01:00", "04:00-06:00", "10:00-00:00"], "weekdays": [1, 2, 3, 4, 5]},
+    {"hours_utc": "00:00-00:00", "weekdays": [6, 7]},
+)
+DEEPSEEK_HALVED_RATES: Final = ("input_cost_per_token", "output_cost_per_token", "cache_read_input_token_cost")
+
+
+def deepseek_off_peak_drift(entry: Mapping[str, object]) -> str | None:
+    block: Final = entry.get("off_peak_pricing")
+    if not isinstance(block, dict):
+        return "no off_peak_pricing block"
+    if tuple(block.get("windows", ())) != DEEPSEEK_OFF_PEAK_WINDOWS:
+        return f"windows={block.get('windows')}"
+    halved: Final = {rate: block.get(rate) for rate in DEEPSEEK_HALVED_RATES}
+    expected: Final = {rate: float(str(entry[rate])) / 2 for rate in DEEPSEEK_HALVED_RATES}
+    mismatched: Final = {
+        rate for rate in DEEPSEEK_HALVED_RATES if halved[rate] != pytest.approx(expected[rate], rel=1e-9)
+    }
+    return f"off-peak rates {halved} are not half of the listed rates" if mismatched else None
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
+    """DeepSeek charges half its listed rate outside 01:00-04:00 and 06:00-10:00 UTC Monday to
+    Friday (api-docs.deepseek.com/quick_start/pricing, read 2026-09-19), so every row on that
+    pricing page carries an off_peak_pricing block with those windows and the halved rates."""
+    rows: Mapping[str, object] = json.loads(path.read_text())
+    drifted: Final = {
+        name: deepseek_off_peak_drift(entry)
+        for name in DEEPSEEK_PRICED_ROWS
+        if isinstance(entry := rows.get(name), dict) and deepseek_off_peak_drift(entry) is not None
+    }
+    assert drifted == {}
+    assert all(name in rows for name in DEEPSEEK_PRICED_ROWS)
+
+
+PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
+MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
+VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
+    {
+        "vertex_ai-ai21_models",
+        "vertex_ai-embedding-models",
+        "vertex_ai-image-models",
+        "vertex_ai-llama_models",
+        "vertex_ai-mistral_models",
+        "vertex_ai-openai_models",
+        "vertex_ai-qwen_models",
+        "vertex_ai-video-models",
+    }
+)
+
+
+def is_registered_provider(label: str, model_names: tuple[str, ...]) -> bool:
+    if label in litellm.models_by_provider or JSONProviderRegistry.exists(label):
+        return True
+    family_root: Final = label.split("-", 1)[0]
+    wildcard_models: Final = litellm.models_by_provider.get(family_root, ())
+    return any(
+        name in wildcard_models or name.removeprefix(f"{family_root}/") in wildcard_models for name in model_names
+    )
+
+
+def unregistered_providers(rows: Mapping[str, object]) -> list[str]:
+    labelled_rows: Final = tuple(
+        (name, entry["litellm_provider"])
+        for name, entry in rows.items()
+        if name != "sample_spec"
+        and isinstance(entry, dict)
+        and "litellm_provider" in entry
+        and entry.get("mode") not in MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY
+        and entry["litellm_provider"] not in PROVIDER_LABELS_WITHOUT_A_MODEL_SET
+        and entry["litellm_provider"] not in VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST
+    )
+    return sorted(
+        label
+        for label in {label for _, label in labelled_rows}
+        if not is_registered_provider(label, tuple(name for name, row_label in labelled_rows if row_label == label))
+    )
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_every_cost_map_provider_is_registered(path: Path):
+    assert unregistered_providers(json.loads(path.read_text())) == [], (
+        f"{path.name} carries a litellm_provider whose models a `<provider>/*` grant does not list. A new provider "
+        "needs a `<provider>_models` set in litellm/__init__.py, filled in _populate_provider_model_sets and listed "
+        "in _build_models_by_provider. A new `<provider>-<family>` label needs its rows added to a set that "
+        "`models_by_provider[<provider>]` includes"
+    )
+
+
+def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
+    wired_vertex_model: Final = sorted(litellm.vertex_language_models)[0]
+    rows: Final = {
+        "sample_spec": {"litellm_provider": "one of the supported providers", "mode": "chat"},
+        "nobody_registered/StartJob": {"litellm_provider": "nobody_registered", "mode": "audio_transcription"},
+        "gpt-4o": {"litellm_provider": "openai", "mode": "chat"},
+        wired_vertex_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"},
+        "vertex_ai/new-family-model": {"litellm_provider": "vertex_ai-new_family_models", "mode": "chat"},
+        "unknown_root/model": {"litellm_provider": "unknown_root-new_family_models", "mode": "chat"},
+        "some_search/search": {"litellm_provider": "some_search", "mode": "search"},
+    }
+    assert unregistered_providers(rows) == [
+        "nobody_registered",
+        "unknown_root-new_family_models",
+        "vertex_ai-new_family_models",
+    ]

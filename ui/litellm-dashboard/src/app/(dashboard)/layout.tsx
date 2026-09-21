@@ -7,7 +7,7 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { NoRedisWarningBanner } from "@/components/NoRedisWarningBanner";
 import { EnvCredentialLoginWarningBanner } from "@/components/EnvCredentialLoginWarningBanner";
@@ -146,8 +146,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
 function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const pathname = usePathname();
-  const { accessToken, authLoading, passwordResetRequired } = useAuth();
+  const { accessToken, authLoading } = useAuth();
   const isInvitationFlow = Boolean(searchParams.get("invitation_id"));
 
   // Legacy invitation links point at /ui/?invitation_id=; the onboarding form now lives at its own
@@ -157,14 +156,6 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
       router.replace(`${uiHref("onboarding")}?${searchParams.toString()}`);
     }
   }, [authLoading, isInvitationFlow, router, searchParams]);
-
-  // A session flagged for a forced password reset can only reach the change-password
-  // endpoint server-side; keep the UI on the matching page.
-  useEffect(() => {
-    if (!authLoading && passwordResetRequired && !pathname?.endsWith("/change-password")) {
-      router.replace(uiHref("change-password"));
-    }
-  }, [authLoading, passwordResetRequired, pathname, router]);
 
   if (authLoading || isInvitationFlow) {
     return <LoadingScreen />;

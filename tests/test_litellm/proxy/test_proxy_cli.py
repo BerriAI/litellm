@@ -21,6 +21,15 @@ from uvicorn.importer import import_from_string
 from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
 
 
+@pytest.fixture(autouse=True)
+def fork_reservation():
+    """Reserving is irreversible: it would forbid native routes in this pytest worker for good"""
+    with patch(  # test-quality-ok: process-global native state, a real reservation would poison every later test in the worker
+        "litellm.rust_bridge.fork_guard.reserve_process_for_forking"
+    ) as reserve:
+        yield reserve
+
+
 @pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
     @patch("importlib.metadata.version")
@@ -138,6 +147,35 @@ class TestProxyInitializationHelpers:
                 "localhost", 8000, timeout_worker_healthcheck=15
             )
             assert args["timeout_worker_healthcheck"] == 15
+
+    @staticmethod
+    def _uvicorn_access_info_enabled(args: dict) -> bool:
+        import logging
+
+        loggers = tuple(logging.getLogger(n) for n in ("uvicorn", "uvicorn.error", "uvicorn.access", "uvicorn.asgi"))
+        saved = tuple((lg, lg.handlers[:], lg.level, lg.propagate) for lg in loggers)
+        try:
+            uvicorn.Config(**args).configure_logging()
+            return logging.getLogger("uvicorn.access").isEnabledFor(logging.INFO)
+        finally:
+            for lg, handlers, level, propagate in saved:
+                lg.handlers[:] = handlers
+                lg.setLevel(level)
+                lg.propagate = propagate
+
+    def test_litellm_log_error_silences_uvicorn_info_lines(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_LOG", "ERROR")
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_config" not in args
+        assert self._uvicorn_access_info_enabled(args) is False
+
+    def test_unset_litellm_log_keeps_uvicorn_default_info_lines(self, monkeypatch):
+        monkeypatch.delenv("LITELLM_LOG", raising=False)
+        args = ProxyInitializationHelpers._get_default_unvicorn_init_args("localhost", 8000)
+
+        assert "log_level" not in args
+        assert self._uvicorn_access_info_enabled(args) is True
 
     def test_installed_uvicorn_supports_worker_flags(self):
         params = inspect.signature(uvicorn.Config.__init__).parameters
@@ -578,6 +616,15 @@ class TestProxyInitializationHelpers:
             ), f"exit_code={result.exit_code}, output={result.output}"
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
+
+            result = runner.invoke(
+                run_server, ["--local", "--skip_server_startup", "--telemetry", "False"]
+            )
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            assert "Skipping server startup" in result.output
+            assert "telemetry" not in runner.invoke(run_server, ["--help"]).output
 
             # --- normal startup ---
             mock_uvicorn_run.reset_mock()
@@ -1546,6 +1593,32 @@ class TestProxyInitializationHelpers:
         assert captured["options"]["max_requests_jitter"] == 50
 
     @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
+    def test_gunicorn_master_is_reserved_for_forking_before_it_runs(self, fork_reservation):
+        """preload forks workers from the master, so native routes are forbidden there first"""
+        pytest.importorskip("gunicorn")
+        reserved_before_run: list = []
+
+        def capture_run(self):
+            reserved_before_run.append(fork_reservation.call_args)
+
+        with (
+            patch("gunicorn.app.base.BaseApplication.run", capture_run),
+            patch(  # test-quality-ok: option tests must not start a thread or change the pytest worker's child ownership
+                "litellm.proxy.proxy_cli.start_query_engine_reaper"
+            ),
+        ):
+            ProxyInitializationHelpers._run_gunicorn_server(
+                host="127.0.0.1",
+                port=4012,
+                app=MagicMock(),
+                num_workers=2,
+                ssl_certfile_path=None,
+                ssl_keyfile_path=None,
+            )
+
+        assert [call.args for call in reserved_before_run] == [("the gunicorn master",)]
+
+    @pytest.mark.skipif(os.name == "nt", reason="gunicorn server path skips Windows")
     def test_gunicorn_jitter_without_base_warns(self):
         """gunicorn path warns when jitter is set without --max_requests_before_restart"""
         pytest.importorskip("gunicorn")
@@ -1922,7 +1995,7 @@ class TestRunServerDbSetup:
             # use_prisma_db_push should be False (default), so use_migrate should be True
             run_server.main(["--local", "--skip_server_startup"], standalone_mode=False)
             mock_setup_database.assert_called_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
             # Reset mocks
@@ -1937,7 +2010,7 @@ class TestRunServerDbSetup:
                 standalone_mode=False,
             )
             mock_setup_database.assert_called_with(
-                use_migrate=False, use_v2_resolver=False
+                use_migrate=False, use_v2_resolver=True
             )
 
     @patch("atexit.register")
@@ -1997,7 +2070,7 @@ class TestRunServerDbSetup:
 
         assert "prisma CLI is neither on PATH" not in capsys.readouterr().out
         mock_setup_database.assert_called_once_with(
-            use_migrate=True, use_v2_resolver=False
+            use_migrate=True, use_v2_resolver=True
         )
 
     @patch("subprocess.run")
@@ -2064,7 +2137,7 @@ class TestRunServerDbSetup:
                 )
             assert exc_info.value.code == 1
             mock_setup_database.assert_called_once_with(
-                use_migrate=True, use_v2_resolver=False
+                use_migrate=True, use_v2_resolver=True
             )
 
     @patch("subprocess.run")
@@ -2130,12 +2203,13 @@ class TestRunServerDbSetup:
         mock_setup_database,
         mock_atexit_register,
         mock_subprocess_run,
+        capsys,
     ):
-        """USE_V2_MIGRATION_RESOLVER must select the v2 resolver.
+        """USE_V2_MIGRATION_RESOLVER=true must select the v2 resolver.
 
         The Helm migrations Job runs `python litellm/proxy/prisma_migration.py`,
-        which calls run_server with a fixed argv, so a deployment has no way to
-        pass --use_v2_migration_resolver and an env var is the only route in.
+        which calls run_server with a fixed argv, so a deployment reaches the
+        resolver through the env var rather than a CLI flag.
         """
         from litellm.proxy.proxy_cli import run_server
 
@@ -2174,6 +2248,100 @@ class TestRunServerDbSetup:
 
         mock_setup_database.assert_called_once_with(
             use_migrate=True, use_v2_resolver=True
+        )
+        assert "--use_v2_migration_resolver is deprecated" not in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        "use_legacy_flag, env_value, expected",
+        [
+            (False, None, True),
+            (False, "true", True),
+            (False, "false", False),
+            (True, None, False),
+            (True, "true", False),
+        ],
+        ids=[
+            "unset-env-defaults-to-v2",
+            "env-true-selects-v2",
+            "env-false-selects-v1",
+            "legacy-flag-selects-v1",
+            "legacy-flag-beats-env-true",
+        ],
+    )
+    def test_resolve_v2_migration_resolver(self, use_legacy_flag, env_value, expected):
+        from litellm.proxy.proxy_cli import resolve_v2_migration_resolver
+
+        assert (
+            resolve_v2_migration_resolver(
+                use_legacy_flag=use_legacy_flag, env_value=env_value
+            )
+            is expected
+        )
+
+    def test_deprecated_v2_flag_not_reported_outside_a_cli_invocation(self):
+        from litellm.proxy.proxy_cli import deprecated_v2_flag_passed_on_cli
+
+        assert deprecated_v2_flag_passed_on_cli() is False
+
+    @patch("subprocess.run")
+    @patch("atexit.register")
+    @patch("litellm.proxy.db.prisma_client.PrismaManager.setup_database")
+    @patch("litellm.proxy.db.check_migration.check_prisma_schema_diff")
+    @patch("litellm.proxy.db.prisma_client.should_update_prisma_schema")
+    def test_legacy_resolver_flag_reaches_database_setup(
+        self,
+        mock_should_update_schema,
+        mock_check_schema_diff,
+        mock_setup_database,
+        mock_atexit_register,
+        mock_subprocess_run,
+    ):
+        """--use_legacy_migration_resolver must reach the database setup call.
+
+        The resolver decision itself is covered mock-free above; this is the
+        one wiring check that the flag is threaded through run_server.
+        """
+        from litellm.proxy.proxy_cli import run_server
+
+        mock_subprocess_run.return_value = MagicMock(returncode=0)
+        mock_should_update_schema.return_value = True
+        mock_setup_database.return_value = True
+
+        mock_proxy_module = MagicMock(
+            app=MagicMock(),
+            ProxyConfig=MagicMock(),
+            KeyManagementSettings=MagicMock(),
+            save_worker_config=MagicMock(),
+        )
+
+        clean_env = {
+            k: v
+            for k, v in os.environ.items()
+            if k not in ("DATABASE_URL", "DIRECT_URL", "USE_V2_MIGRATION_RESOLVER")
+        }
+        clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
+
+        with (
+            patch.dict(os.environ, clean_env, clear=True),
+            patch.dict(
+                "sys.modules",
+                {
+                    "proxy_server": mock_proxy_module,
+                    "litellm.proxy.proxy_server": mock_proxy_module,
+                },
+            ),
+        ):
+            run_server.main(
+                [
+                    "--local",
+                    "--skip_server_startup",
+                    "--use_legacy_migration_resolver",
+                ],
+                standalone_mode=False,
+            )
+
+        mock_setup_database.assert_called_once_with(
+            use_migrate=True, use_v2_resolver=False
         )
 
 

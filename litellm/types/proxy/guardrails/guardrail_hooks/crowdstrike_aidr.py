@@ -4,6 +4,14 @@ from .base import GuardrailConfigModel
 
 
 class CrowdStrikeAIDRGuardrailConfigModelOptionalParams(BaseModel):
+    streaming_buffer_until_moderated: bool | None = Field(
+        default=None,
+        description="When True, withhold streamed chunks until moderation passes. Defaults to False when unset.",
+    )
+    streaming_buffer_release_on_scan: bool | None = Field(
+        default=None,
+        description="When buffering, release withheld chunks after each passing scan. Defaults to False when unset.",
+    )
     streaming_end_of_stream_only: bool | None = Field(
         default=None,
         description="If False (default when unset), post_call scans the accumulated streamed response every "
