@@ -11,7 +11,7 @@ Pins (PR2):
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from unittest.mock import AsyncMock, MagicMock
 
@@ -22,6 +22,7 @@ import litellm
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.config_resolvers.settings_rules import JsonValue
+from litellm.proxy.config_resolvers.settings_store import SettingsStore
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -183,9 +184,13 @@ def test_model_settings_method_not_allowed(client, auth_as):
 # ---------------------------------------------------------------------------
 
 
-def _alerting_client(monkeypatch, *, yaml_values, db_row, live_args):
-    from litellm.proxy.config_resolvers import SettingsStore
-
+def _alerting_client(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    yaml_values: Mapping[str, JsonValue],
+    db_row: Mapping[str, JsonValue],
+    live_args: Mapping[str, JsonValue],
+) -> "SettingsStore":
     pc = MagicMock()
     row = MagicMock()
     row.param_value = db_row
@@ -206,7 +211,11 @@ def _alerting_client(monkeypatch, *, yaml_values, db_row, live_args):
     return store
 
 
-def test_alerting_settings_reports_sources(client, auth_as, monkeypatch):
+def test_alerting_settings_reports_sources(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _alerting_client(
         monkeypatch,
         yaml_values={
@@ -230,11 +239,21 @@ def test_alerting_settings_reports_sources(client, auth_as, monkeypatch):
     assert by_name["budget_alert_ttl"]["source"] == "default"
 
 
-def test_alerting_settings_reports_db_source_when_the_file_omits_alerting_args(client, auth_as, monkeypatch):
+def test_alerting_settings_reports_db_source_when_the_file_omits_alerting_args(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     store = _alerting_client(
         monkeypatch,
         yaml_values={"alerting": ["slack"]},
-        db_row={"alerting_args": {"outage_alert_ttl": 4242, "region_outage_alert_ttl": []}},
+        db_row={
+            "alerting_args": {
+                "outage_alert_ttl": 4242,
+                "region_outage_alert_ttl": [],
+                "report_check_interval": None,
+            }
+        },
         live_args={"outage_alert_ttl": 4242},
     )
 
@@ -244,13 +263,18 @@ def test_alerting_settings_reports_db_source_when_the_file_omits_alerting_args(c
     assert response.status_code == 200
     by_name = {entry["field_name"]: entry for entry in response.json()}
 
-    assert store.owned_by_config("alerting_args") is False
+    assert store.source("alerting_args") == "db"
     assert by_name["outage_alert_ttl"]["source"] == "db"
-    assert by_name["region_outage_alert_ttl"]["source"] == "default"
+    assert by_name["region_outage_alert_ttl"]["source"] == "db"
+    assert by_name["report_check_interval"]["source"] == "db"
     assert by_name["budget_alert_ttl"]["source"] == "default"
 
 
-def test_alerting_settings_reports_config_source_when_db_disagrees(client, auth_as, monkeypatch):
+def test_alerting_settings_reports_config_source_when_db_disagrees(
+    client: TestClient,
+    auth_as: Callable[..., AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy.config_resolvers import SettingsStore
 
     db_alerting_args = {"daily_report_frequency": 7}
@@ -289,7 +313,7 @@ def test_alerting_settings_handles_empty_db_args(
     auth_as: Callable[..., AbstractContextManager[None]],
     monkeypatch: pytest.MonkeyPatch,
     db_alerting_args: JsonValue,
-):
+) -> None:
     from litellm.proxy.config_resolvers import SettingsStore
 
     pc = MagicMock()
@@ -316,6 +340,19 @@ def test_alerting_settings_handles_empty_db_args(
     by_name = {entry["field_name"]: entry for entry in response.json()}
     assert by_name["report_check_interval"]["source"] == "config"
     assert by_name["budget_alert_ttl"]["source"] == "default"
+
+
+@pytest.mark.parametrize(
+    ("field_default", "expected"),
+    [(43200, "default"), (None, "unset")],
+)
+def test_nested_setting_source_without_a_config_or_db_value(field_default: JsonValue, expected: str) -> None:
+    store = SettingsStore("general_settings")
+    store.load_yaml({})
+
+    assert (
+        proxy_server._nested_setting_source(store, {}, "alerting_args", "budget_alert_ttl", field_default) == expected
+    )
 
 
 def test_alerting_settings_no_db_error(client, auth_as, no_prisma):
