@@ -1714,6 +1714,16 @@ async def _user_api_key_auth_builder(
                     jwt_claims = result.get("jwt_claims", None)
                     agent_id: Final[str | None] = result.get("agent_id")
 
+                    if (
+                        user_object is not None
+                        and isinstance(user_object.metadata, dict)
+                        and user_object.metadata.get("scim_active") is False
+                    ):
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail=f"User={user_id} has been deactivated via SCIM. Keys owned by this user cannot be used.",
+                        )
+
                     if is_proxy_admin:
                         # Proxy admins authenticate via auth_builder (full
                         # access), not via a mapped virtual key. If

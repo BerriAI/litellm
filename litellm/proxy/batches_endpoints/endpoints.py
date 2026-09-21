@@ -6,7 +6,7 @@
 ######################################################################
 import asyncio
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
@@ -139,6 +139,20 @@ async def _raise_when_input_file_must_be_managed(model: str, credentials: Mappin
         f"Batches for {model} run inside LiteLLM, so the input file must be a LiteLLM managed file: "
         f"{LITELLM_EXECUTED_BATCH_UPLOAD_GUIDANCE}",
     )
+
+
+def _litellm_metadata_of(data: MutableMapping[str, object]) -> MutableMapping[str, object]:
+    """The request's litellm_metadata mapping, created on the request when it carries none.
+
+    The success handler reads this mapping, so a flag or a model group set here has to live
+    inside it rather than beside it.
+    """
+    existing: Final = data.get("litellm_metadata")
+    if isinstance(existing, MutableMapping):
+        return existing
+    created: Final[dict[str, object]] = {}  # mutable-ok: the logging layer copies and extends this mapping
+    data["litellm_metadata"] = created  # rebind-ok: the success handler reads the request's own mapping
+    return created
 
 
 def _raise_not_found_when_openai_fallback_unservable(
@@ -668,11 +682,7 @@ async def retrieve_batch(
 
         poller_owns_accounting: Final = bool(unified_batch_id) and batch_cost_poller_is_active()
         if poller_owns_accounting:
-            litellm_metadata = data.get("litellm_metadata")
-            if not isinstance(litellm_metadata, dict):
-                litellm_metadata = {}  # mutable-ok: the suppression flag must live inside litellm_metadata for the success handler to read it, and this request carried no mapping to extend
-                data["litellm_metadata"] = litellm_metadata
-            litellm_metadata["batch_ignore_default_logging"] = True
+            _litellm_metadata_of(data)["batch_ignore_default_logging"] = True
 
         # Retrieve from provider (for non-terminal states or if DB lookup failed)
         # SCENARIO 1: Batch ID is encoded with model info
@@ -697,6 +707,7 @@ async def retrieve_batch(
             # it the call falls into the legacy provider switch and 400s.
             data["model"] = model_from_id
             add_deployment_model_info(data=data, llm_router=llm_router, model_id=model_from_id)
+            _litellm_metadata_of(data).setdefault("model_group", model_from_id)
 
             # Retrieve batch using model credentials
             response = await litellm.aretrieve_batch(

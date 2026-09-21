@@ -680,6 +680,17 @@ describe("autorouter_presets", () => {
   });
 
   describe("buildPresetPrefill", () => {
+    it.each([undefined, 0, 0.95])("carries a preset's success threshold %s into the form", (threshold) => {
+      const preset = getPresetByKey("anthropic_family")!;
+      const config = {
+        ...preset.complexity_router_config,
+        classifier_type: "heuristic_v2" as const,
+        heuristic_v2_success_threshold: threshold,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(getRequiredModelsInPreset(preset)));
+      expect(prefill.complexityRouterConfig.heuristic_v2_success_threshold).toBe(threshold);
+    });
+
     it("prefills a real bundled preset's tiers into the config", () => {
       const preset = getPresetByKey("anthropic_family")!;
       const prefill = buildPresetPrefill(

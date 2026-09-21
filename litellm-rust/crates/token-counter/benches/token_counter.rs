@@ -42,7 +42,7 @@ fn inputs(tokenizer: &Tokenizer) -> Vec<(&'static str, String)> {
 }
 
 fn token_counter(c: &mut Criterion) {
-    let counter = TokenCounter::from_json(TOKENIZER_JSON).expect("token counter should load");
+    let counter = TokenCounter::from_json_fast(TOKENIZER_JSON).expect("token counter should load");
     let tokenizer = TOKENIZER_JSON
         .parse::<Tokenizer>()
         .expect("reference tokenizer should load");
