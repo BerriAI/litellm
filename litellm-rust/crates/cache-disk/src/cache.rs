@@ -8,28 +8,42 @@ use litellm_cache::{
     BaseCache, BatchCache, BatchEntry, CacheCodec, CacheConnectionResult, CacheConnectionStatus,
     CounterCache, DeleteCache, Error, ExactCacheContext, FlushCache,
 };
-use serde_json::Value;
 
-use crate::{DiskStore, DiskcacheSqliteStore, StoredValue, pickle};
+use crate::{DiskStore, DiskcacheSqliteStore, PythonDiskCacheAdapter, StoredValue, ValueAdapter};
 
-pub struct DiskCache<S, D = DiskcacheSqliteStore> {
+pub struct DiskCache<S, D = DiskcacheSqliteStore, A = PythonDiskCacheAdapter> {
     store: Arc<D>,
+    adapter: Arc<A>,
     codec: S,
 }
 
 impl<S: CacheCodec> DiskCache<S> {
+    #[allow(clippy::default_constructed_unit_structs)]
     pub fn open(directory: impl AsRef<Path>, codec: S) -> Result<Self, Error> {
         Ok(Self {
             store: Arc::new(DiskcacheSqliteStore::open(directory)?),
+            adapter: Arc::new(PythonDiskCacheAdapter::default()),
             codec,
         })
     }
 }
 
-impl<S: CacheCodec, D: DiskStore> DiskCache<S, D> {
+impl<S: CacheCodec, D: DiskStore> DiskCache<S, D, PythonDiskCacheAdapter> {
+    #[allow(clippy::default_constructed_unit_structs)]
     pub fn with_store(store: D, codec: S) -> Self {
         Self {
             store: Arc::new(store),
+            adapter: Arc::new(PythonDiskCacheAdapter::default()),
+            codec,
+        }
+    }
+}
+
+impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> DiskCache<S, D, A> {
+    pub fn with_adapter(store: D, adapter: A, codec: S) -> Self {
+        Self {
+            store: Arc::new(store),
+            adapter: Arc::new(adapter),
             codec,
         }
     }
@@ -39,7 +53,7 @@ impl<S: CacheCodec, D: DiskStore> DiskCache<S, D> {
     }
 
     fn decode_stored(&self, value: StoredValue) -> Result<Option<S::Value>, Error> {
-        let Some(bytes) = payload(value)? else {
+        let Some(bytes) = self.adapter.read(value)? else {
             return Ok(None);
         };
         self.codec.decode(&bytes).map(Some)
@@ -56,7 +70,7 @@ impl<S: CacheCodec, D: DiskStore> DiskCache<S, D> {
     }
 }
 
-impl<S: CacheCodec, D: DiskStore> BaseCache for DiskCache<S, D> {
+impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> BaseCache for DiskCache<S, D, A> {
     type Value = S::Value;
     type Context = ExactCacheContext;
 
@@ -70,7 +84,7 @@ impl<S: CacheCodec, D: DiskStore> BaseCache for DiskCache<S, D> {
         value: Self::Value,
         context: &Self::Context,
     ) -> Result<(), Error> {
-        let value = StoredValue::Bytes(self.codec.encode(&value)?);
+        let value = self.adapter.write(self.codec.encode(&value)?);
         let expire_time = context.ttl.map(|ttl| unix_now() + ttl.as_secs_f64());
         self.store.set(key, value, expire_time, unix_now())
     }
@@ -89,7 +103,7 @@ impl<S: CacheCodec, D: DiskStore> BaseCache for DiskCache<S, D> {
         value: Self::Value,
         context: ExactCacheContext,
     ) -> Result<(), Error> {
-        let value = StoredValue::Bytes(self.codec.encode(&value)?);
+        let value = self.adapter.write(self.codec.encode(&value)?);
         let expire_time = context.ttl.map(|ttl| unix_now() + ttl.as_secs_f64());
         let key = key.to_string();
         Self::run_blocking(Arc::clone(&self.store), move |store| {
@@ -124,7 +138,7 @@ impl<S: CacheCodec, D: DiskStore> BaseCache for DiskCache<S, D> {
             .map(|(key, value)| {
                 self.codec
                     .encode(&value)
-                    .map(|value| (key, StoredValue::Bytes(value)))
+                    .map(|value| (key, self.adapter.write(value)))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let expire_after = context.ttl;
@@ -162,7 +176,7 @@ impl<S: CacheCodec, D: DiskStore> BaseCache for DiskCache<S, D> {
     }
 }
 
-impl<S: CacheCodec, D: DiskStore> BatchCache for DiskCache<S, D> {
+impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> BatchCache for DiskCache<S, D, A> {
     fn batch_get_cache(
         &self,
         keys: &[String],
@@ -204,7 +218,7 @@ impl<S: CacheCodec, D: DiskStore> BatchCache for DiskCache<S, D> {
     }
 }
 
-impl<S: CacheCodec, D: DiskStore> DeleteCache for DiskCache<S, D> {
+impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> DeleteCache for DiskCache<S, D, A> {
     fn delete_cache(&self, key: &str) -> Result<(), Error> {
         self.store.pop(key, unix_now()).map(|_| ())
     }
@@ -218,7 +232,7 @@ impl<S: CacheCodec, D: DiskStore> DeleteCache for DiskCache<S, D> {
     }
 }
 
-impl<S: CacheCodec, D: DiskStore> FlushCache for DiskCache<S, D> {
+impl<S: CacheCodec, D: DiskStore, A: ValueAdapter> FlushCache for DiskCache<S, D, A> {
     fn flush_cache(&self) -> Result<(), Error> {
         self.store.clear()
     }
@@ -228,14 +242,22 @@ impl<S: CacheCodec, D: DiskStore> FlushCache for DiskCache<S, D> {
     }
 }
 
-impl<S: CacheCodec<Value = f64>, D: DiskStore> CounterCache for DiskCache<S, D> {
+impl<S: CacheCodec<Value = f64>, D: DiskStore, A: ValueAdapter> CounterCache
+    for DiskCache<S, D, A>
+{
     fn increment_cache(
         &self,
         key: &str,
         amount: f64,
         context: ExactCacheContext,
     ) -> Result<f64, Error> {
-        increment(self.store.as_ref(), key, amount, context.ttl)
+        increment(
+            self.adapter.as_ref(),
+            self.store.as_ref(),
+            key,
+            amount,
+            context.ttl,
+        )
     }
 
     async fn async_increment(
@@ -245,14 +267,16 @@ impl<S: CacheCodec<Value = f64>, D: DiskStore> CounterCache for DiskCache<S, D> 
         context: ExactCacheContext,
     ) -> Result<f64, Error> {
         let key = key.to_string();
+        let adapter = Arc::clone(&self.adapter);
         Self::run_blocking(Arc::clone(&self.store), move |store| {
-            increment(store, &key, amount, context.ttl)
+            increment(adapter.as_ref(), store, &key, amount, context.ttl)
         })
         .await
     }
 }
 
-fn increment<D: DiskStore>(
+fn increment<A: ValueAdapter, D: DiskStore>(
+    adapter: &A,
     store: &D,
     key: &str,
     amount: f64,
@@ -260,66 +284,14 @@ fn increment<D: DiskStore>(
 ) -> Result<f64, Error> {
     let mut result = None;
     let mut apply = |current: Option<StoredValue>| {
-        let initial = match current {
-            Some(StoredValue::Integer(value)) => value as f64,
-            Some(StoredValue::Pickle(value)) => match pickle::decode(&value)? {
-                Value::Number(value) => value
-                    .as_i64()
-                    .map(|value| value as f64)
-                    .or_else(|| value.as_u64().map(|value| value as f64))
-                    .unwrap_or_default(),
-                _ => 0.0,
-            },
-            _ => 0.0,
-        };
+        let initial = adapter.counter_seed(current)?;
         let value = initial + amount;
-        let stored = if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64
-        {
-            StoredValue::Integer(value as i64)
-        } else {
-            StoredValue::Float(value)
-        };
+        let stored = adapter.counter_value(value);
         result = Some(value);
         Ok((stored, ttl.map(|ttl| unix_now() + ttl.as_secs_f64())))
     };
     store.update(key, unix_now(), &mut apply)?;
     result.ok_or(Error::InvalidEntry)
-}
-
-fn payload(value: StoredValue) -> Result<Option<Vec<u8>>, Error> {
-    match value {
-        StoredValue::Bytes(value) if value.is_empty() => Ok(None),
-        StoredValue::Bytes(value) => Ok(Some(value)),
-        StoredValue::Text(value) if value.is_empty() => Ok(None),
-        StoredValue::Text(value) => Ok(Some(value.into_bytes())),
-        StoredValue::Integer(0) => Ok(None),
-        StoredValue::Integer(value) => Ok(Some(value.to_string().into_bytes())),
-        StoredValue::Float(0.0) => Ok(None),
-        StoredValue::Float(value) => serde_json::to_vec(&value)
-            .map(Some)
-            .map_err(|_| Error::InvalidEntry),
-        StoredValue::Pickle(value) => {
-            let value = pickle::decode(&value)?;
-            if is_falsy(&value) {
-                Ok(None)
-            } else {
-                serde_json::to_vec(&value)
-                    .map(Some)
-                    .map_err(|_| Error::InvalidEntry)
-            }
-        }
-    }
-}
-
-fn is_falsy(value: &Value) -> bool {
-    match value {
-        Value::Null | Value::Bool(false) => true,
-        Value::Number(value) => value.as_f64().is_some_and(|value| value == 0.0),
-        Value::String(value) => value.is_empty(),
-        Value::Array(value) => value.is_empty(),
-        Value::Object(value) => value.is_empty(),
-        Value::Bool(true) => false,
-    }
 }
 
 fn unix_now() -> f64 {

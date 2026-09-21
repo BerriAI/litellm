@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 litellm-cache.workspace = true
+py_literal = "0.4.0"
 rand.workspace = true
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde-pickle = "1.2"
@@ -14,4 +15,5 @@ serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+rstest.workspace = true
 tempfile = "3.27.0"

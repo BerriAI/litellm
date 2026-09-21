@@ -7,46 +7,92 @@ use std::{
 };
 
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CounterCache, DeleteCache, ExactCacheContext, FlushCache,
-    JsonCodec,
+    BaseCache, BatchCache, BatchEntry, CacheCodec, CounterCache, DeleteCache, ExactCacheContext,
+    FlushCache, JsonCodec,
 };
-use litellm_cache_disk::{DiskCache, DiskStore, DiskcacheSqliteStore, StoredValue};
+use litellm_cache_disk::{DiskCache, DiskStore, DiskcacheSqliteStore, StoredValue, ValueAdapter};
+use rstest::{fixture, rstest};
 use rusqlite::Connection;
-use serde_json::json;
+use serde_json::{Value, json};
 use tempfile::TempDir;
 
-fn store() -> (TempDir, DiskcacheSqliteStore) {
-    let directory = tempfile::tempdir().unwrap();
-    let store = DiskcacheSqliteStore::open(directory.path()).unwrap();
-    (directory, store)
+struct Sandbox {
+    directory: TempDir,
 }
 
-fn cache(directory: &Path) -> DiskCache<JsonCodec<serde_json::Value>> {
-    DiskCache::open(directory, JsonCodec::new()).unwrap()
+#[fixture]
+fn sandbox() -> Sandbox {
+    Sandbox {
+        directory: tempfile::tempdir().unwrap(),
+    }
 }
 
-fn value_files(directory: &Path) -> Vec<PathBuf> {
-    fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
-        for entry in fs::read_dir(directory).unwrap() {
-            let path = entry.unwrap().path();
-            if path.is_dir() {
-                visit(&path, files);
-            } else if path.extension().is_some_and(|extension| extension == "val") {
-                files.push(path);
+impl Sandbox {
+    fn store(&self) -> DiskcacheSqliteStore {
+        DiskcacheSqliteStore::open(self.directory.path()).unwrap()
+    }
+
+    fn cache<V>(&self) -> DiskCache<JsonCodec<V>>
+    where
+        JsonCodec<V>: CacheCodec,
+    {
+        DiskCache::open(self.directory.path(), JsonCodec::new()).unwrap()
+    }
+
+    fn db(&self) -> Connection {
+        Connection::open(self.directory.path().join("cache.db")).unwrap()
+    }
+
+    fn value_files(&self) -> Vec<PathBuf> {
+        fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
+            for entry in fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    visit(&path, files);
+                } else if path.extension().is_some_and(|extension| extension == "val") {
+                    files.push(path);
+                }
             }
+        }
+
+        let mut files = Vec::new();
+        visit(self.directory.path(), &mut files);
+        files
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct TextAdapter;
+
+impl ValueAdapter for TextAdapter {
+    fn read(&self, value: StoredValue) -> Result<Option<Vec<u8>>, litellm_cache::Error> {
+        match value {
+            StoredValue::Text(value) => Ok(Some(value.into_bytes())),
+            _ => Ok(None),
         }
     }
 
-    let mut files = Vec::new();
-    visit(directory, &mut files);
-    files
+    fn write(&self, payload: Vec<u8>) -> StoredValue {
+        StoredValue::Text(String::from_utf8(payload).unwrap())
+    }
+
+    fn counter_seed(&self, _: Option<StoredValue>) -> Result<f64, litellm_cache::Error> {
+        Ok(0.0)
+    }
+
+    fn counter_value(&self, value: f64) -> StoredValue {
+        if value.fract() == 0.0 {
+            StoredValue::Integer(value as i64)
+        } else {
+            StoredValue::Float(value)
+        }
+    }
 }
 
-#[test]
-fn roundtrip_persists_and_reopens() {
-    let directory = tempfile::tempdir().unwrap();
+#[rstest]
+fn roundtrip_persists_and_reopens(sandbox: Sandbox) {
     let context = ExactCacheContext::default();
-    let opened = cache(directory.path());
+    let opened = sandbox.cache::<Value>();
     opened
         .set_cache("key", json!({"answer": 42}), &context)
         .unwrap();
@@ -55,16 +101,16 @@ fn roundtrip_persists_and_reopens() {
         Some(json!({"answer": 42}))
     );
     drop(opened);
-    let reopened = cache(directory.path());
+    let reopened = sandbox.cache::<Value>();
     assert_eq!(
         reopened.get_cache("key", &context).unwrap(),
         Some(json!({"answer": 42}))
     );
 }
 
-#[test]
-fn ttl_and_expired_culling_match_cache_contract() {
-    let (directory, store) = store();
+#[rstest]
+fn ttl_and_expired_culling_match_cache_contract(sandbox: Sandbox) {
+    let store = sandbox.store();
     store
         .set(
             "expired",
@@ -77,15 +123,16 @@ fn ttl_and_expired_culling_match_cache_contract() {
     store
         .set("new", StoredValue::Bytes(b"new".to_vec()), None, 11.0)
         .unwrap();
-    let connection = Connection::open(directory.path().join("cache.db")).unwrap();
     assert_eq!(
-        connection
+        sandbox
+            .db()
             .query_row("SELECT COUNT(*) FROM Cache", [], |row| row.get::<_, i64>(0))
             .unwrap(),
         1
     );
     assert_eq!(
-        connection
+        sandbox
+            .db()
             .query_row(
                 "SELECT value FROM Settings WHERE key = 'count'",
                 [],
@@ -96,9 +143,9 @@ fn ttl_and_expired_culling_match_cache_contract() {
     );
 }
 
-#[test]
-fn batch_preserves_order_and_classifies_misses_and_invalid_values() {
-    let (directory, store) = store();
+#[rstest]
+fn batch_preserves_order_and_classifies_misses_and_invalid_values(sandbox: Sandbox) {
+    let store = sandbox.store();
     store
         .set(
             "hit",
@@ -115,8 +162,8 @@ fn batch_preserves_order_and_classifies_misses_and_invalid_values() {
             0.0,
         )
         .unwrap();
-    let cache = cache(directory.path());
-    let entries = cache
+    let entries = sandbox
+        .cache::<Value>()
         .batch_get_cache(
             &["hit".into(), "missing".into(), "invalid".into()],
             &ExactCacheContext::default(),
@@ -132,117 +179,74 @@ fn batch_preserves_order_and_classifies_misses_and_invalid_values() {
     );
 }
 
-#[test]
-fn falsy_values_are_misses_and_protocol_five_pickle_decodes() {
-    let (directory, store) = store();
-    for (key, value) in [
-        ("empty-bytes", StoredValue::Bytes(Vec::new())),
-        ("empty-text", StoredValue::Text(String::new())),
-        ("zero-int", StoredValue::Integer(0)),
-        ("zero-float", StoredValue::Float(0.0)),
-        (
-            "empty-pickle",
-            StoredValue::Pickle(vec![0x80, 0x05, 0x7d, 0x94, 0x2e]),
-        ),
-    ] {
-        store.set(key, value, None, 0.0).unwrap();
-    }
-    store
-        .set(
-            "pickle",
-            StoredValue::Pickle(
-                b"\x80\x05\x95\x30\x00\x00\x00\x00\x00\x00\x00\x7d\x94\x28\x8c\x09timestamp\x94G\x3f\xf8\x00\x00\x00\x00\x00\x00\x8c\x08response\x94\x8c\x08{\"a\": 1}\x94u."
-                    .to_vec(),
-            ),
-            None,
-            0.0,
-        )
-        .unwrap();
-    let cache = cache(directory.path());
-    for key in [
-        "empty-bytes",
-        "empty-text",
-        "zero-int",
-        "zero-float",
-        "empty-pickle",
-    ] {
-        assert_eq!(
-            cache.get_cache(key, &ExactCacheContext::default()).unwrap(),
-            None
-        );
-    }
+#[rstest]
+#[case(StoredValue::Bytes(Vec::new()))]
+#[case(StoredValue::Text(String::new()))]
+#[case(StoredValue::Integer(0))]
+#[case(StoredValue::Float(0.0))]
+#[case(StoredValue::Pickle(vec![0x80, 0x05, 0x4e, 0x2e]))]
+#[case(StoredValue::Pickle(vec![0x80, 0x05, 0x89, 0x2e]))]
+#[case(StoredValue::Pickle(vec![0x80, 0x05, 0x4b, 0x00, 0x2e]))]
+#[case(StoredValue::Pickle(vec![0x80, 0x05, 0x95, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x47, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2e]))]
+#[case(StoredValue::Pickle(vec![0x80, 0x05, 0x95, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8c, 0x00, 0x94, 0x2e]))]
+#[case(StoredValue::Pickle(vec![0x80, 0x05, 0x5d, 0x94, 0x2e]))]
+#[case(StoredValue::Pickle(vec![0x80, 0x05, 0x7d, 0x94, 0x2e]))]
+#[case(StoredValue::Pickle(vec![0x80, 0x05, 0x29, 0x2e]))]
+fn falsy_values_are_misses(sandbox: Sandbox, #[case] value: StoredValue) {
+    sandbox.store().set("key", value, None, 0.0).unwrap();
     assert_eq!(
-        cache
-            .get_cache("pickle", &ExactCacheContext::default())
+        sandbox
+            .cache::<Value>()
+            .get_cache("key", &ExactCacheContext::default())
             .unwrap(),
-        Some(json!({"timestamp": 1.5, "response": "{\"a\": 1}"}))
+        None
     );
 }
 
-#[test]
-fn counters_use_atomic_native_values_and_ignore_invalid_initial_values() {
-    let (directory, store) = store();
-    store
-        .set("counter", StoredValue::Integer(2), None, 0.0)
-        .unwrap();
-    store
-        .set(
-            "invalid",
-            StoredValue::Text("not a number".into()),
-            None,
-            0.0,
-        )
-        .unwrap();
-    store
-        .set(
-            "pickle-counter",
-            StoredValue::Pickle(vec![0x80, 0x05, 0x4b, 0x02, 0x2e]),
-            None,
-            0.0,
-        )
-        .unwrap();
-    let cache = DiskCache::open(directory.path(), JsonCodec::<f64>::new()).unwrap();
+#[rstest]
+#[case(Some(StoredValue::Integer(2)), 1.5, 3.5, "real")]
+#[case(Some(StoredValue::Integer(2)), 1.0, 3.0, "integer")]
+#[case(Some(StoredValue::Float(3.5)), 1.0, 1.0, "integer")]
+#[case(Some(StoredValue::Text("not a number".into())), 2.0, 2.0, "integer")]
+#[case(Some(StoredValue::Text("5".into())), 2.0, 7.0, "integer")]
+#[case(Some(StoredValue::Text("3.5".into())), 2.0, 2.0, "integer")]
+#[case(Some(StoredValue::Pickle(vec![0x80, 0x05, 0x88, 0x2e])), 1.0, 2.0, "integer")]
+#[case(Some(StoredValue::Pickle(vec![0x80, 0x05, 0x4b, 0x02, 0x2e])), 1.0, 3.0, "integer")]
+#[case(Some(StoredValue::Pickle(vec![0x80, 0x05, 0x95, 0x0a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7d, 0x94, 0x8c, 0x01, 0x61, 0x94, 0x4b, 0x01, 0x73, 0x2e])), 1.0, 1.0, "integer")]
+#[case(Some(StoredValue::Pickle(vec![0x80, 0x05, 0x4e, 0x2e])), 4.0, 4.0, "integer")]
+fn counters_follow_python_initialization(
+    sandbox: Sandbox,
+    #[case] initial: Option<StoredValue>,
+    #[case] amount: f64,
+    #[case] expected: f64,
+    #[case] sqlite_type: &str,
+) {
+    if let Some(initial) = initial {
+        sandbox.store().set("counter", initial, None, 0.0).unwrap();
+    }
+    let cache = sandbox.cache::<f64>();
     assert_eq!(
         cache
-            .increment_cache("counter", 1.5, ExactCacheContext::default())
+            .increment_cache("counter", amount, ExactCacheContext::default())
             .unwrap(),
-        3.5
+        expected
     );
     assert_eq!(
-        cache
-            .increment_cache("invalid", 2.0, ExactCacheContext::default())
-            .unwrap(),
-        2.0
-    );
-    assert_eq!(
-        cache
-            .increment_cache("pickle-counter", 1.0, ExactCacheContext::default())
-            .unwrap(),
-        3.0
-    );
-    let connection = Connection::open(directory.path().join("cache.db")).unwrap();
-    assert_eq!(
-        connection
+        sandbox
+            .db()
             .query_row(
                 "SELECT typeof(value) FROM Cache WHERE key = 'counter'",
                 [],
                 |row| row.get::<_, String>(0)
             )
             .unwrap(),
-        "real"
-    );
-    assert_eq!(
-        cache
-            .increment_cache("counter", 1.0, ExactCacheContext::default())
-            .unwrap(),
-        1.0
+        sqlite_type
     );
 }
 
-#[test]
-fn counters_are_atomic_across_concurrent_callers() {
-    let directory = tempfile::tempdir().unwrap();
-    let cache = Arc::new(DiskCache::open(directory.path(), JsonCodec::<f64>::new()).unwrap());
+#[rstest]
+fn counters_are_atomic_across_concurrent_callers(sandbox: Sandbox) {
+    let cache = Arc::new(sandbox.cache::<f64>());
     let workers = (0..8)
         .map(|_| {
             let cache = Arc::clone(&cache);
@@ -266,15 +270,88 @@ fn counters_are_atomic_across_concurrent_callers() {
     );
 }
 
-#[test]
-fn delete_flush_and_spilled_file_replacement_clean_up_storage() {
-    let (directory, store) = store();
+#[rstest]
+fn fractional_then_integer_increment_follows_python_behavior(sandbox: Sandbox) {
+    let cache = sandbox.cache::<f64>();
+    assert_eq!(
+        cache
+            .increment_cache("counter", 3.5, ExactCacheContext::default())
+            .unwrap(),
+        3.5
+    );
+    assert_eq!(
+        cache
+            .increment_cache("counter", 1.0, ExactCacheContext::default())
+            .unwrap(),
+        1.0
+    );
+}
+
+#[rstest]
+fn increment_ttl_replacement_clears_expiry_without_ttl(sandbox: Sandbox) {
+    let cache = sandbox.cache::<f64>();
+    cache
+        .increment_cache(
+            "counter",
+            1.0,
+            ExactCacheContext {
+                ttl: Some(Duration::from_secs(60)),
+            },
+        )
+        .unwrap();
+    assert!(
+        sandbox
+            .db()
+            .query_row(
+                "SELECT expire_time IS NOT NULL FROM Cache WHERE key = 'counter'",
+                [],
+                |row| row.get::<_, bool>(0)
+            )
+            .unwrap()
+    );
+    cache
+        .increment_cache("counter", 1.0, ExactCacheContext::default())
+        .unwrap();
+    assert!(
+        !sandbox
+            .db()
+            .query_row(
+                "SELECT expire_time IS NOT NULL FROM Cache WHERE key = 'counter'",
+                [],
+                |row| row.get::<_, bool>(0)
+            )
+            .unwrap()
+    );
+}
+
+#[rstest]
+fn custom_adapter_controls_storage_and_reads(sandbox: Sandbox) {
+    let cache = DiskCache::with_adapter(sandbox.store(), TextAdapter, JsonCodec::<Value>::new());
+    cache
+        .set_cache("key", json!({"answer": 42}), &ExactCacheContext::default())
+        .unwrap();
+    assert!(matches!(
+        sandbox.store().get("key", 0.0).unwrap(),
+        Some(StoredValue::Text(_))
+    ));
+    assert_eq!(
+        cache
+            .get_cache("key", &ExactCacheContext::default())
+            .unwrap(),
+        Some(json!({"answer": 42}))
+    );
+}
+
+#[rstest]
+fn delete_flush_and_spilled_file_replacement_clean_up_storage(sandbox: Sandbox) {
     let large = vec![b'x'; 32 * 1024];
-    store
+    sandbox
+        .store()
         .set("large", StoredValue::Bytes(large.clone()), None, 0.0)
         .unwrap();
-    assert_eq!(value_files(directory.path()).len(), 1);
-    store
+    assert_eq!(sandbox.value_files().len(), 1);
+    sandbox
+        .store()
         .set(
             "large",
             StoredValue::Bytes(vec![b'y'; 32 * 1024]),
@@ -282,23 +359,25 @@ fn delete_flush_and_spilled_file_replacement_clean_up_storage() {
             0.0,
         )
         .unwrap();
-    assert_eq!(value_files(directory.path()).len(), 1);
-    store.pop("large", 0.0).unwrap();
-    assert!(value_files(directory.path()).is_empty());
-    store
+    assert_eq!(sandbox.value_files().len(), 1);
+    sandbox.store().pop("large", 0.0).unwrap();
+    assert!(sandbox.value_files().is_empty());
+    sandbox
+        .store()
         .set("a", StoredValue::Bytes(large.clone()), None, 0.0)
         .unwrap();
-    store
+    sandbox
+        .store()
         .set("b", StoredValue::Bytes(large), None, 0.0)
         .unwrap();
-    store.clear().unwrap();
-    assert!(value_files(directory.path()).is_empty());
+    sandbox.store().clear().unwrap();
+    assert!(sandbox.value_files().is_empty());
 }
 
+#[rstest]
 #[tokio::test]
-async fn async_operations_connection_and_delete_match_sync_operations() {
-    let directory = tempfile::tempdir().unwrap();
-    let cache = cache(directory.path());
+async fn async_operations_connection_and_delete_match_sync_operations(sandbox: Sandbox) {
+    let cache = sandbox.cache::<Value>();
     let context = ExactCacheContext {
         ttl: Some(Duration::from_secs(60)),
     };
