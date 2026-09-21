@@ -9588,7 +9588,7 @@ def test_deployment_listing_price_keys_on_base_model_and_prefers_litellm_params(
 
     assert price == DeploymentListingPrice(
         cost_map_key="eu.anthropic.claude-opus-5", input_cost_per_token=4e-06, output_cost_per_token=None
-    )
+    ), f"base_model keys the catalog and litellm_params wins the price, got {price}"
 
 
 def test_get_model_listing_info_keeps_each_deployment_price_separate():
@@ -9620,7 +9620,7 @@ def test_get_model_listing_info_keeps_each_deployment_price_separate():
             cost_map_key="openai/gpt-4o-mini", input_cost_per_token=3e-07, output_cost_per_token=None
         ),
         DeploymentListingPrice(cost_map_key="openai/gpt-5.5", input_cost_per_token=None, output_cost_per_token=None),
-    )
+    ), f"each deployment needs its own record and key, got {info.deployment_prices}"
 
 
 def test_get_wildcard_listing_prices_reports_every_matched_deployment():
@@ -9654,7 +9654,7 @@ def test_get_wildcard_listing_prices_reports_every_matched_deployment():
     assert {(p.input_cost_per_token, p.output_cost_per_token) for p in prices} == {
         (9e-06, 9e-05),
         (4e-05, 8e-05),
-    }
+    }, f"every matched deployment must be returned, got {prices}"
 
 
 def test_get_wildcard_listing_prices_skips_pattern_matching_when_no_wildcard_is_priced():

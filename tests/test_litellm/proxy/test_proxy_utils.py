@@ -1158,7 +1158,7 @@ def test_create_model_info_response_includes_cost_map_pricing():
     assert response["pricing"] == {
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 1e-05,
-    }
+    }, f"expected the cost-map prices, got {response['pricing']}"
 
 
 def test_create_model_info_response_reports_unpriced_model_as_null_not_zero():
@@ -1184,7 +1184,7 @@ def test_create_model_info_response_reports_unpriced_model_as_null_not_zero():
     assert response["pricing"] == {
         "input_cost_per_token": None,
         "output_cost_per_token": None,
-    }
+    }, f"a sparse cost-map entry must read as unknown, got {response['pricing']}"
 
 
 def test_create_model_info_response_reports_declared_zero_price_as_zero():
@@ -1207,7 +1207,7 @@ def test_create_model_info_response_reports_declared_zero_price_as_zero():
     assert response["pricing"] == {
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
-    }
+    }, f"a catalog-declared zero is free, not unknown, got {response['pricing']}"
 
 
 def test_create_model_info_response_configured_pricing_overrides_cost_map():
@@ -1242,7 +1242,7 @@ def test_create_model_info_response_configured_pricing_overrides_cost_map():
     assert response["pricing"] == {
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
-    }
+    }, f"configured pricing must outrank the cost map, got {response['pricing']}"
 
 
 def test_create_model_info_response_reports_highest_price_in_a_mixed_group():
@@ -1331,7 +1331,7 @@ def test_create_model_info_response_does_not_let_a_custom_rate_hide_a_dearer_cat
     assert response["pricing"] == {
         "input_cost_per_token": 5e-06,
         "output_cost_per_token": 3e-05,
-    }
+    }, f"the uncustomised deployment is dearer and must set the price, got {response['pricing']}"
 
 
 def test_create_model_info_response_prefers_a_cheaper_override_over_its_own_catalog_price():
@@ -1363,7 +1363,7 @@ def test_create_model_info_response_prefers_a_cheaper_override_over_its_own_cata
     assert response["pricing"] == {
         "input_cost_per_token": 3e-08,
         "output_cost_per_token": 4e-08,
-    }
+    }, f"the override is what the request bills, even when cheaper, got {response['pricing']}"
 
 
 def test_create_model_info_response_uses_wildcard_pricing_for_an_expanded_row():
@@ -1394,7 +1394,7 @@ def test_create_model_info_response_uses_wildcard_pricing_for_an_expanded_row():
     assert response["pricing"] == {
         "input_cost_per_token": 9e-06,
         "output_cost_per_token": 9e-05,
-    }
+    }, f"expected the wildcard override, got {response['pricing']}"
 
 
 def test_create_model_info_response_reports_the_dearest_deployment_behind_one_pattern():
@@ -1428,7 +1428,7 @@ def test_create_model_info_response_reports_the_dearest_deployment_behind_one_pa
     assert response["pricing"] == {
         "input_cost_per_token": 4e-05,
         "output_cost_per_token": 9e-05,
-    }
+    }, f"expected the dearest matched deployment per field, got {response['pricing']}"
 
 
 def test_create_model_info_response_wildcard_sibling_without_an_override_still_bills_catalog():
@@ -1457,7 +1457,7 @@ def test_create_model_info_response_wildcard_sibling_without_an_override_still_b
     assert response["pricing"] == {
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 6e-07,
-    }
+    }, f"the sibling without an override bills catalog and is dearest, got {response['pricing']}"
 
 
 def test_create_model_info_response_falls_back_to_catalog_for_an_unpriced_wildcard_row():
@@ -1480,7 +1480,7 @@ def test_create_model_info_response_falls_back_to_catalog_for_an_unpriced_wildca
     assert response["pricing"] == {
         "input_cost_per_token": 1.5e-07,
         "output_cost_per_token": 6e-07,
-    }
+    }, f"an unpriced wildcard leaves the catalog answer, got {response['pricing']}"
 
 
 def test_create_model_info_response_reports_unknown_price_as_null():
@@ -1496,7 +1496,7 @@ def test_create_model_info_response_reports_unknown_price_as_null():
     assert response["pricing"] == {
         "input_cost_per_token": None,
         "output_cost_per_token": None,
-    }
+    }, f"an unmapped model must read as unknown, got {response['pricing']}"
 
 
 def test_create_model_info_response_ignores_malformed_price():
@@ -1519,7 +1519,7 @@ def test_create_model_info_response_ignores_malformed_price():
     assert response["pricing"] == {
         "input_cost_per_token": None,
         "output_cost_per_token": None,
-    }
+    }, f"malformed and negative values must be dropped, got {response['pricing']}"
 
 
 def test_create_model_info_response_accepts_string_price():
@@ -1538,7 +1538,7 @@ def test_create_model_info_response_accepts_string_price():
     assert response["pricing"] == {
         "input_cost_per_token": 2.5e-06,
         "output_cost_per_token": 1e-05,
-    }
+    }, f"a string price must reach the listing as a number, got {response['pricing']}"
 
 
 def test_create_model_info_response_pricing_does_not_call_router_group_info():
@@ -1557,7 +1557,7 @@ def test_create_model_info_response_pricing_does_not_call_router_group_info():
     )
 
     router.get_model_group_info.assert_not_called()
-    assert response["pricing"]["input_cost_per_token"] == 2.5e-06
+    assert response["pricing"]["input_cost_per_token"] == 2.5e-06, f"expected the cost-map price, got {response['pricing']}"
 
 
 def test_get_model_listing_info_carries_custom_deployment_pricing():
@@ -1595,7 +1595,7 @@ def test_get_model_listing_info_carries_custom_deployment_pricing():
     assert response["pricing"] == {
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
-    }
+    }, f"expected the deployment's configured pricing, got {response['pricing']}"
 
 
 def test_create_model_info_response_resolves_alias_once_per_listing():
