@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
@@ -9,7 +10,7 @@ def _build(
     patch_kwargs: dict[str, object],
     request_params: set[str],
     fingerprints: list[str] | None = None,
-) -> dict[str, object]:
+) -> Mapping[str, object]:
     return build_agentic_followup_kwargs(
         request_kwargs=request_kwargs,
         patch_kwargs=patch_kwargs,
