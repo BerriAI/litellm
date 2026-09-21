@@ -605,6 +605,38 @@ class TestNonStreaming:
             assert result["error"]["message"] == "Bad request"
 
 
+class TestStreaming:
+    """Streaming requests must ask AgentCore for a stream, not a single send."""
+
+    @pytest.mark.asyncio
+    async def test_streaming_request_uses_message_stream_method_and_yields_sse_events(self, httpx_transport):
+        from litellm.a2a_protocol.providers.bedrock_agentcore.config import (
+            BedrockAgentCoreA2AConfig,
+        )
+
+        sse_body = (
+            'data: {"jsonrpc": "2.0", "id": "req-001", "result": {"kind": "task", "id": "t1"}}\n\n'
+            'data: {"jsonrpc": "2.0", "id": "req-001", "result": {"kind": "status-update", "final": true}}\n\n'
+        )
+        with respx.mock(assert_all_called=True) as router:
+            route = router.post(url__regex=r".*/invocations.*").mock(
+                return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, text=sse_body)
+            )
+            events = [
+                event
+                async for event in BedrockAgentCoreA2AConfig().handle_streaming(
+                    request_id="req-001",
+                    params=SAMPLE_PARAMS,
+                    litellm_params=SAMPLE_LITELLM_PARAMS,
+                )
+            ]
+
+        sent_body = json.loads(route.calls.last.request.content)
+        assert sent_body["method"] == "message/stream", sent_body
+        assert sent_body["params"]["message"]["messageId"] == "msg-001"
+        assert [event["result"]["kind"] for event in events] == ["task", "status-update"]
+
+
 class TestConfigManager:
     """Test that config manager routes 'bedrock' correctly."""
 
