@@ -54468,7 +54468,10 @@
         "supports_native_structured_output": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "source": "https://aws.amazon.com/bedrock/pricing/"
+        "source": "https://aws.amazon.com/bedrock/pricing/",
+        "supports_audio_input": false,
+        "supports_response_schema": true,
+        "supports_vision": false
     },
     "zai.glm-4.7-flash": {
         "input_cost_per_token": 7e-08,
