@@ -64,7 +64,6 @@ vi.mock("./networking", () => ({
   teamCreateCall: vi.fn(),
   teamDeleteCall: vi.fn(),
   fetchMCPAccessGroups: vi.fn(),
-  v2TeamListCall: vi.fn(),
   getGuardrailsList: vi.fn().mockResolvedValue({ guardrails: [] }),
   getPoliciesList: vi.fn().mockResolvedValue({ policies: [] }),
   getDefaultTeamSettings: vi.fn().mockResolvedValue({ values: {} }),

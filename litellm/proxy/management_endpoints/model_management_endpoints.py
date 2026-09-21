@@ -22,7 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -88,6 +88,7 @@ from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_team,
     authorize_member_auto_router_write,
 )
+from litellm.proxy.management_helpers.model_allowlist_rename_sync import sync_model_allowlists_for_renamed_model
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
@@ -136,7 +137,7 @@ from litellm.types.router import (
     updateDeployment,
     updateLiteLLMParams,
 )
-from litellm.types.utils import without_server_derived_pricing
+from litellm.types.utils import echoed_cost_map_pricing_fields, without_server_derived_pricing
 from litellm.utils import get_utc_datetime
 
 if TYPE_CHECKING:
@@ -144,6 +145,8 @@ if TYPE_CHECKING:
     from prisma import types as prisma_types
 
 router: Final = APIRouter()
+CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points"})
+NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 
 
 async def update_team(*args, **kwargs):
@@ -286,7 +289,11 @@ def _strategy_router_write_violation(
     if incoming_params is None:
         return None
     config_violation: Final = validate_complexity_router_config_write(
-        complexity_router_config=incoming_params.complexity_router_config
+        complexity_router_config=(
+            _effective_complexity_router_config(incoming_params, existing_params)
+            if incoming_params.complexity_router_config is not None
+            else None
+        )
     )
     if config_violation is not None:
         return config_violation
@@ -347,11 +354,33 @@ WHERE model_id <> $1
 def _effective_complexity_router_config(
     incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
 ) -> object:
-    """The complexity config a write leaves on the row: the incoming one when the write carries it, else the stored one."""
     incoming: Final = None if incoming_params is None else incoming_params.complexity_router_config
-    if incoming is not None or existing_params is None:
+    existing: Final = None if existing_params is None else existing_params.complexity_router_config
+    if incoming is None:
+        return existing
+    if existing is None or incoming.get("classifier_type") != "jev" or existing.get("classifier_type") != "jev":
         return incoming
-    return existing_params.complexity_router_config
+    incoming_jev: Final[object] = incoming.get("jev_classifier_config")
+    existing_jev: Final[object] = existing.get("jev_classifier_config")
+    if not isinstance(incoming_jev, Mapping) or not isinstance(existing_jev, Mapping):
+        return incoming
+    supplied: Final = TypeAdapter(dict[str, object]).validate_python(incoming_jev)
+    stored: Final = TypeAdapter(dict[str, object]).validate_python(existing_jev)
+    same_base: Final = "api_base" not in supplied or supplied["api_base"] == stored.get("api_base")
+    transport: Final = MappingProxyType(
+        {
+            key: value
+            for key, value in stored.items()
+            if key in ("api_key", "api_base") and (key != "api_key" or same_base)
+        }
+    )
+    return {  # mutable-ok: persisted JSON requires concrete nested dicts
+        **incoming,
+        "jev_classifier_config": {  # mutable-ok: json.dumps cannot serialize MappingProxyType
+            **transport,
+            **supplied,
+        },
+    }
 
 
 def _effective_model(
@@ -873,13 +902,22 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
         _raise_if_ptu_cost_attribution_disabled(updated_patch.model_info.model_dump(exclude_none=True))
     merged_model_name: Final = updated_patch.model_name or db_model.model_name
     merged_litellm_params: Final = db_model.litellm_params.model_dump(exclude_none=True)
-    merged_model_info: Final[dict[str, object]] = db_model.model_info.model_dump(exclude_none=True)
+    stored_model_info: Final = db_model.model_info.model_dump(exclude_none=True)
+    echoed_pricing: Final = echoed_cost_map_pricing_fields(stored_model_info)
+    merged_model_info: Final[dict[str, object]] = {
+        k: v for k, v in stored_model_info.items() if k not in echoed_pricing
+    }
 
     # update litellm params
     if updated_patch.litellm_params:
         # Encrypt any sensitive values
         encrypted_params: Final = {
-            k: encrypt_value_helper(v) for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items()
+            k: (
+                _effective_complexity_router_config(updated_patch.litellm_params, db_model.litellm_params)
+                if k == "complexity_router_config"
+                else encrypt_value_helper(v)
+            )
+            for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items()
         }
 
         merged_litellm_params.update(encrypted_params)
@@ -898,7 +936,7 @@ def update_db_model(db_model: Deployment, updated_patch: updateDeployment) -> Pr
     # clear propagates to both blobs.
     if updated_patch.litellm_params:
         for field in updated_patch.litellm_params.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.litellm_params, field) is None:
+            if getattr(updated_patch.litellm_params, field) is None and field in NULL_CLEARABLE_LITELLM_PARAMS:
                 merged_litellm_params.pop(field, None)
                 merged_model_info.pop(field, None)
             elif (
@@ -984,6 +1022,7 @@ async def patch_model(
         premium_user,
         prisma_client,
         store_model_in_db,
+        user_api_key_cache,
     )
 
     try:
@@ -1131,6 +1170,14 @@ async def patch_model(
                 old_name=db_model.model_name,
                 new_name=stored_model_name,
                 llm_router=llm_router,
+            )
+            await sync_model_allowlists_for_renamed_model(
+                prisma_client=prisma_client,
+                model_id=model_id,
+                old_name=db_model.model_name,
+                new_name=stored_model_name,
+                llm_router=llm_router,
+                user_api_key_cache=user_api_key_cache,
             )
 
         # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)
@@ -2433,6 +2480,7 @@ async def update_model(
         premium_user,
         prisma_client,
         store_model_in_db,
+        user_api_key_cache,
     )
 
     try:
@@ -2511,14 +2559,21 @@ async def update_model(
             _new_litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
 
             ### ENCRYPT PARAMS ###
-            for k, v in _new_litellm_params_dict.items():
-                encrypted_value = encrypt_value_helper(value=v)
-                model_params.litellm_params[k] = encrypted_value
+            encrypted_params: Final = MappingProxyType(
+                {
+                    k: (
+                        _effective_complexity_router_config(model_params.litellm_params, deployment.litellm_params)
+                        if k == "complexity_router_config"
+                        else encrypt_value_helper(value=v)
+                    )
+                    for k, v in _new_litellm_params_dict.items()
+                }
+            )
 
             ### MERGE WITH EXISTING DATA ###
             _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
             merged_dictionary: Final = {
-                key: _existing_litellm_params_dict[key] if value is None else value
+                key: _existing_litellm_params_dict[key] if value is None else encrypted_params[key]
                 for key, value in _mp.items()
                 if value is not None or _existing_litellm_params_dict.get(key) is not None
             }
@@ -2565,6 +2620,14 @@ async def update_model(
                     old_name=deployment.model_name,
                     new_name=renamed_to,
                     llm_router=llm_router,
+                )
+                await sync_model_allowlists_for_renamed_model(
+                    prisma_client=prisma_client,
+                    model_id=_model_id,
+                    old_name=deployment.model_name,
+                    new_name=renamed_to,
+                    llm_router=llm_router,
+                    user_api_key_cache=user_api_key_cache,
                 )
 
             # Clear cache and reload models (uses config setting or defaults to preserving config models for DB updates)

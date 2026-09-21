@@ -64,6 +64,7 @@ from litellm.constants import (
     AZURE_OPENAI_AUDIO_PROVIDERS,
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
+    OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
 )
 from litellm.exceptions import LiteLLMUnknownProvider
 from litellm.integrations.custom_logger import CustomLogger
@@ -98,6 +99,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
+)
+from litellm.llms.azure_ai.common_utils import (
+    azure_ai_supports_native_responses,
+    foundry_chat_rejects_function_tools_while_reasoning,
 )
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -206,7 +211,7 @@ from .llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
-from .llms.deprecated_providers import aleph_alpha, palm
+from .llms.deprecated_providers import aleph_alpha
 from .llms.gdc.chat.transformation import GDCGeminiConfig
 from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
@@ -1105,10 +1110,18 @@ def responses_api_bridge_check(
     #   provider with a custom api_base and gpt-5.4+ model names serve tools without
     #   reasoning fine and have no /responses route, so they keep pre-existing
     #   behavior (bridge only on an explicit reasoning_effort).
+    # - Azure AI Foundry's OpenAI v1 hosts (azure_ai provider) enforce it later in the series:
+    #   an explicit effort with function tools is rejected from gpt-5.6 on, and the unset
+    #   effort only from gpt-6 on (gpt-5.6 serves tools with reasoning silently off), so the
+    #   azure_ai gate keys on those measured boundaries instead of gpt-5.4+.
     # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
     has_function_tool: Final = any(
-        (tool.get("type") == "function" if isinstance(tool, dict) else getattr(tool, "type", None) == "function")
+        (
+            tool.get("type") == "function" and (isinstance(tool.get("function"), dict) or "name" in tool)
+            if isinstance(tool, dict)
+            else getattr(tool, "type", None) == "function"
+        )
         for tool in (tools or ())
     )
     if isinstance(reasoning_effort, dict):
@@ -1117,28 +1130,35 @@ def responses_api_bridge_check(
         reasoning_active = reasoning_effort != "none"
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
-    # by Azure OpenAI. Resolve the effective base arg>global>env>default exactly as the chat handler
-    # does, so a custom base set via litellm.api_base or OPENAI_BASE_URL/OPENAI_API_BASE isn't misread
-    # as the default and bridged to a /responses route it lacks. A whitespace-only base collapses to
-    # the default too.
+    # by Azure OpenAI through the azure provider. Resolve the effective OpenAI base arg>global>env>default
+    # exactly as the chat handler does, so a custom base set via litellm.api_base or
+    # OPENAI_BASE_URL/OPENAI_API_BASE isn't misread as the default and bridged to a /responses route it
+    # lacks. A whitespace-only base collapses to the default too.
     resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
+    on_foundry_openai_endpoint: Final = custom_llm_provider == "azure_ai" and azure_ai_supports_native_responses(
+        model, api_base
+    )
     on_constraint_enforcing_endpoint: Final = (
         custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
     )
-    if (
-        custom_llm_provider in ("openai", "azure")
-        and model_info.get("mode") != "responses"
-        and OpenAIGPT5Config.is_model_gpt_5_model(model)
-        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
+    chat_rejects_function_tools: Final = (
+        has_function_tool
+        and reasoning_active
         and (
-            (reasoning_effort is not None and reasoning_summary is not None)
-            or (
+            foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
+            if on_foundry_openai_endpoint
+            else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
-                and has_function_tool
-                and reasoning_active
                 and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
             )
         )
+    )
+    if (
+        (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)
+        and model_info.get("mode") != "responses"
+        and OpenAIGPT5Config.is_model_gpt_5_model(model)
+        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
+        and ((reasoning_effort is not None and reasoning_summary is not None) or chat_rejects_function_tools)
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
@@ -1146,37 +1166,35 @@ def responses_api_bridge_check(
     return model_info, model
 
 
-def _should_allow_input_examples(custom_llm_provider: str | None, model: str) -> bool:
+_ANTHROPIC_ONLY_TOOL_KEYS: Final = frozenset({"input_examples", "eager_input_streaming"})
+
+
+def _is_claude_tool_target(custom_llm_provider: str | None, model: str) -> bool:
     if custom_llm_provider == "anthropic":
         return True
-    if custom_llm_provider == "azure_ai" or custom_llm_provider == "bedrock" or custom_llm_provider == "vertex_ai":
-        return "claude" in model.lower()
+    model_lower: Final = model.lower()
+    if custom_llm_provider == "bedrock":
+        return "claude" in model_lower or ("arn:" in model_lower and ":bedrock:" in model_lower)
+    if custom_llm_provider == "azure_ai" or custom_llm_provider == "vertex_ai":
+        return "claude" in model_lower
     return False
 
 
-def _drop_input_examples_from_tool(tool: dict) -> dict:
-    tool_copy: Final = tool.copy()
-    tool_copy.pop("input_examples", None)
-    function = tool_copy.get("function")
-    if isinstance(function, dict):
-        function = function.copy()
-        function.pop("input_examples", None)
-        tool_copy["function"] = function
-    return tool_copy
+def _without_anthropic_only_tool_keys(tool: dict) -> dict:
+    kept: Final = {key: value for key, value in tool.items() if key not in _ANTHROPIC_ONLY_TOOL_KEYS}
+    function: Final = tool.get("function")
+    if not isinstance(function, dict):
+        return kept
+    return {
+        **kept,
+        "function": {key: value for key, value in function.items() if key not in _ANTHROPIC_ONLY_TOOL_KEYS},
+    }
 
 
-def _drop_input_examples_from_tools(
-    tools: list[dict] | None,
-) -> list[dict] | None:
+def _drop_anthropic_only_tool_keys(tools: list[dict] | None) -> list[dict] | None:
     if tools is None:
         return None
-    cleaned_tools: Final[list[dict]] = []
-    for tool in tools:
-        if isinstance(tool, dict):
-            cleaned_tools.append(_drop_input_examples_from_tool(tool))
-        else:
-            cleaned_tools.append(tool)
-    return cleaned_tools
+    return [_without_anthropic_only_tool_keys(tool) if isinstance(tool, dict) else tool for tool in tools]
 
 
 class _ProxyAuthHeadersProvider(Protocol):
@@ -2193,7 +2211,7 @@ def _complete_a2a(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
         api_key,
         headers,
     ) = litellm.A2AConfig.resolve_agent_config_from_registry(
-        model=model,
+        agent_name=model,
         api_base=api_base,
         api_key=api_key,
         headers=headers,
@@ -5109,7 +5127,7 @@ def completion(
     messages = validate_and_fix_openai_messages(messages=messages)
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
-    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice, model=model)
     # validate optional params
     stop = validate_openai_optional_params(stop=stop)
     thinking = validate_and_fix_thinking_param(thinking=thinking)
@@ -5360,8 +5378,8 @@ def completion(
             api_base=api_base,
         )
 
-        if not _should_allow_input_examples(custom_llm_provider=custom_llm_provider, model=model):
-            tools = _drop_input_examples_from_tools(tools=tools)
+        if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
+            tools = _drop_anthropic_only_tool_keys(tools=tools)
 
         if provider_specific_header is not None:
             headers.update(
@@ -7832,6 +7850,10 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
+    uses_openai_transport: Final = custom_llm_provider in OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS and not (
+        provider_config is not None and provider_config.has_native_transcription_endpoint
+    )
+
     if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
@@ -7861,7 +7883,7 @@ def transcription(
             litellm_params=litellm_params_dict,
             custom_llm_provider=custom_llm_provider,
         )
-    elif custom_llm_provider == "openai" or (custom_llm_provider in litellm.openai_compatible_providers):
+    elif uses_openai_transport:
         api_base = (
             api_base
             or litellm.api_base
@@ -8756,6 +8778,39 @@ def _stamp_streaming_usage_cost(usage: Usage, response: ModelResponse, logging_o
         setattr(usage, "cost", computed_cost)
 
 
+_NON_TEXT_DELTA_FIELDS: Final = (
+    "tool_calls",
+    "function_call",
+    "reasoning_content",
+    "thinking_blocks",
+    "annotations",
+    "audio",
+    "images",
+    "provider_specific_fields",
+)
+
+
+def _stream_choice_delta(choice: object) -> Mapping[str, object]:
+    delta: Final = choice.get("delta", {}) if isinstance(choice, dict) else getattr(choice, "delta", {})
+    if isinstance(delta, Mapping):
+        return delta
+    if isinstance(delta, BaseModel):
+        return delta.model_dump()
+    return {}
+
+
+def _delta_carries_more_than_text(delta: Mapping[str, object]) -> bool:
+    return any(delta.get(field) is not None for field in _NON_TEXT_DELTA_FIELDS)
+
+
+def _simple_text_part(choices: Sequence[object]) -> str | None:
+    deltas: Final = tuple(_stream_choice_delta(choice) for choice in choices)
+    if any(_delta_carries_more_than_text(delta) for delta in deltas):
+        return None
+    content: Final = deltas[0].get("content")
+    return content if isinstance(content, str) else ""
+
+
 def stream_chunk_builder(
     chunks: list,
     messages: Sequence | None = None,
@@ -8800,31 +8855,11 @@ def stream_chunk_builder(
             if not chunk.get("choices"):
                 continue
 
-            choice = chunk["choices"][0]
-            delta_obj = choice.get("delta", {}) if isinstance(choice, dict) else getattr(choice, "delta", {})
-            if isinstance(delta_obj, dict):
-                delta = delta_obj
-            elif hasattr(delta_obj, "model_dump"):
-                delta = cast(dict[str, Any], delta_obj.model_dump())
-            else:
-                delta = {}
-
-            if (
-                delta.get("tool_calls") is not None
-                or delta.get("function_call") is not None
-                or delta.get("reasoning_content") is not None
-                or delta.get("thinking_blocks") is not None
-                or delta.get("annotations") is not None
-                or delta.get("audio") is not None
-                or delta.get("images") is not None
-                or delta.get("provider_specific_fields") is not None
-            ):
+            if (part := _simple_text_part(chunk["choices"])) is None:
                 is_simple_text_stream = False
                 break
-
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                simple_content_parts.append(content)
+            if part:
+                simple_content_parts.append(part)
 
         if is_simple_text_stream:
             if simple_content_parts:
@@ -8861,9 +8896,10 @@ def stream_chunk_builder(
         tool_call_chunks: Final = [
             chunk
             for chunk in chunks
-            if chunk.get("choices")
-            and "tool_calls" in chunk["choices"][0]["delta"]
-            and chunk["choices"][0]["delta"]["tool_calls"] is not None
+            if any(
+                "tool_calls" in choice["delta"] and choice["delta"]["tool_calls"] is not None
+                for choice in chunk.get("choices") or ()
+            )
         ]
 
         if len(tool_call_chunks) > 0:

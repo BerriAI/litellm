@@ -17,6 +17,8 @@ vi.mock("@/components/networking", () => ({
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
+  fetchMCPGatewaySessions: vi.fn(),
+  terminateMCPGatewaySessions: vi.fn(),
 }));
 
 const createQueryClient = () =>
@@ -58,6 +60,20 @@ describe("MCPServers", () => {
 
     // Verify the title is rendered
     expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+  });
+
+  it.each(["Admin", "Internal User"])("links a %s to their MCP connections page", async (userRole) => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} userRole={userRole} />
+      </QueryClientProvider>,
+    );
+
+    const myConnections = await screen.findByRole("link", { name: "My Connections" });
+    expect(myConnections).toBeVisible();
+    expect(myConnections).toHaveAttribute("href", "/ui/connect");
   });
 
   it("should render mocked MCP servers data in the table", async () => {
@@ -399,5 +415,51 @@ describe("MCPServers", () => {
 
     // The server list refresh must NOT trigger a second health check
     expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
+  });
+
+  const liveSessionsReport = {
+    worker_pid: 4242,
+    total_sessions: 1,
+    by_client: [{ label: "claude-code", count: 1 }],
+    by_user: [{ label: "alice", count: 1 }],
+    sessions: [
+      {
+        session_id_prefix: "aaaa1111",
+        client_name: "claude-code",
+        client_version: "1.0.0",
+        user_id: "alice",
+        user_email: "alice@example.com",
+        key_alias: "alice-key",
+        team_id: null,
+        team_alias: null,
+        client_ip: "10.0.0.1",
+        idle_seconds: 5,
+        in_flight_requests: 0,
+      },
+    ],
+  };
+
+  const openLiveConnections = async (props: { isViewOnly?: boolean }) => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    vi.mocked(networking.fetchMCPGatewaySessions).mockResolvedValue(liveSessionsReport);
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} {...props} />
+      </QueryClientProvider>,
+    );
+    await userEvent.click(await screen.findByRole("tab", { name: "Live Connections" }));
+    return within(await screen.findByRole("region", { name: "Live sessions" })).getByRole("row", { name: /aaaa1111/ });
+  };
+
+  it("lets a full admin disconnect a live session", async () => {
+    const row = await openLiveConnections({ isViewOnly: false });
+    expect(within(row).getByRole("button", { name: "Disconnect session aaaa1111" })).toBeInTheDocument();
+  });
+
+  it("shows live sessions to a view-only admin session without any disconnect control", async () => {
+    const row = await openLiveConnections({ isViewOnly: true });
+    expect(row).toHaveTextContent("alice@example.com");
+    expect(within(row).queryByRole("button", { name: /^Disconnect/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Disconnect all/ })).not.toBeInTheDocument();
   });
 });

@@ -11,10 +11,21 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
+from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
 from litellm.types.utils import LlmProviders
+
+
+def test_fuse_presets_route_serves_the_shared_catalog_without_authentication() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    client: Final = TestClient(app)
+    response: Final = client.get("/public/complexity_router/fuse_presets")
+    assert response.status_code == 200
+    assert response.json() == get_fuse_presets().model_dump(mode="json")
+    assert client.get("/public/complexity_router/fuse_presets").json() == response.json()
 
 
 def test_get_supported_providers_returns_enum_values():
@@ -384,6 +395,7 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "tencent",
         "tensormesh",
         "text-completion-inception",
+        "transcribe",
         "valkey",
         "xiaomi_mimo",
         "zai",

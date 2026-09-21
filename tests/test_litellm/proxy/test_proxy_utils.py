@@ -2151,96 +2151,6 @@ async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monk
     assert "test_proxy_utils" in captured["async_traceback"]
 
 
-def test_create_model_info_response_resolves_alias_to_deployment_model():
-    """A public model name that is not itself a cost-map key must not be resolved through
-    the fallback-generalization rules: `bedrock-claude-opus-5` matches the generic
-    claude-family baseline (200k/64k) by substring, while the deployment it fronts really
-    accepts 1M/128k. Regression for the /v1/models alias resolution introduced in v1.94.0."""
-    from litellm import Router
-
-    saved_model_cost = dict(litellm.model_cost)
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "bedrock-claude-opus-5",
-                    "litellm_params": {
-                        "custom_llm_provider": "bedrock",
-                        "model": "bedrock/eu.anthropic.claude-opus-5",
-                    },
-                    "model_info": {"base_model": "eu.anthropic.claude-opus-5"},
-                }
-            ]
-        )
-
-        response = create_model_info_response(
-            model_id="bedrock-claude-opus-5", provider="openai", llm_router=router
-        )
-    finally:
-        litellm.model_cost.clear()
-        litellm.model_cost.update(saved_model_cost)
-
-    assert response["max_input_tokens"] == 1000000
-    assert response["max_output_tokens"] == 128000
-
-
-def test_create_model_info_response_keeps_exact_alias_over_generalized_deployment_model():
-    """Mirror of the alias bug: when the deployment points at a custom backend name that
-    only matches a generalization rule, the listed name's exact cost-map entry is the
-    better answer and must win."""
-    from litellm import Router
-
-    saved_model_cost = dict(litellm.model_cost)
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "claude-opus-5",
-                    "litellm_params": {
-                        "custom_llm_provider": "bedrock",
-                        "model": "bedrock/my-claude-opus-5-provisioned",
-                    },
-                }
-            ]
-        )
-
-        response = create_model_info_response(
-            model_id="claude-opus-5", provider="openai", llm_router=router
-        )
-    finally:
-        litellm.model_cost.clear()
-        litellm.model_cost.update(saved_model_cost)
-
-    assert response["max_input_tokens"] == 1000000
-
-
-def test_create_model_info_response_falls_back_to_alias_for_opaque_deployment_name():
-    """An Azure deployment named after the resource rather than the model has no cost-map
-    entry; the listed name still does, and must keep answering."""
-    from litellm import Router
-
-    saved_model_cost = dict(litellm.model_cost)
-    try:
-        router = Router(
-            model_list=[
-                {
-                    "model_name": "gpt-4o",
-                    "litellm_params": {"model": "azure/my-gpt4o-deployment"},
-                }
-            ]
-        )
-
-        response = create_model_info_response(
-            model_id="gpt-4o", provider="openai", llm_router=router
-        )
-    finally:
-        litellm.model_cost.clear()
-        litellm.model_cost.update(saved_model_cost)
-
-    assert response["max_input_tokens"] == 128000
-    assert response["max_output_tokens"] == 16384
-
-
 def test_create_model_info_response_resolves_mode_through_deployment_model():
     """`mode` is derived from the same lookup, so an aliased embedding deployment
     currently reports no mode at all; it must report `embedding`."""
@@ -2265,6 +2175,41 @@ def test_create_model_info_response_resolves_mode_through_deployment_model():
         litellm.model_cost.update(saved_model_cost)
 
     assert response["mode"] == "embedding"
+
+
+@pytest.mark.parametrize(
+    "model_group_alias",
+    [
+        {"team-embeddings": "my-embeddings"},
+        {"team-embeddings": {"model": "my-embeddings", "hidden": False}},
+    ],
+)
+def test_create_model_info_response_resolves_model_group_alias_to_target(model_group_alias, local_model_cost_map):
+    """A `model_group_alias` row must report the metadata of the group it points at,
+    not the cost-map generalization or nothing that the alias name resolves to."""
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-embeddings",
+                "litellm_params": {"model": "openai/text-embedding-3-small"},
+            }
+        ],
+        model_group_alias=model_group_alias,
+    )
+
+    alias_response = create_model_info_response(
+        model_id="team-embeddings", provider="openai", llm_router=router
+    )
+    target_response = create_model_info_response(
+        model_id="my-embeddings", provider="openai", llm_router=router
+    )
+
+    assert alias_response["id"] == "team-embeddings"
+    for field in ("mode", "max_input_tokens", "max_output_tokens"):
+        assert alias_response.get(field) == target_response.get(field)
+    assert alias_response["mode"] == "embedding"
 
 
 @pytest.mark.parametrize(
