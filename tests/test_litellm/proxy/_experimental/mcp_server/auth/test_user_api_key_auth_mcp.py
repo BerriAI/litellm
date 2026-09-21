@@ -3522,6 +3522,31 @@ class TestMCPCustomHeaderName:
         assert result == expected
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("db_groups", [[], ["replacement"], ["original"]])
+async def test_promoted_server_access_groups_override_original_config(db_groups):
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    original = MCPServer(server_id="promoted", name="promoted", transport="http", access_groups=["original"])
+    untouched = MCPServer(server_id="config-only", name="config-only", transport="http", access_groups=["original"])
+    saved = original.model_copy(update={"access_groups": db_groups})
+    prisma = MagicMock()
+    table = prisma.db.litellm_mcpservertable
+    table.find_many = AsyncMock(return_value=[saved] if "original" in db_groups else [])
+
+    with (
+        patch.dict(global_mcp_server_manager.config_mcp_servers, {"promoted": original, "config-only": untouched}, clear=True),
+        patch.dict(global_mcp_server_manager.registry, {"promoted": saved}, clear=True),
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+    ):
+        resolved = await MCPRequestHandler._get_mcp_servers_from_access_groups(["original"])
+
+    assert set(resolved) == ({"config-only", "promoted"} if "original" in db_groups else {"config-only"})
+    table.find_many.assert_awaited_once_with(where={"mcp_access_groups": {"hasSome": ["original"]}})
+    assert original.access_groups == ["original"]
+
+
 class TestMCPAccessGroupsE2E:
     """Simple e2e tests for MCP access groups functionality"""
 

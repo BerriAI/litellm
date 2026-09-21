@@ -3233,7 +3233,14 @@ class MCPRequestHandler:
 
             # Use the new helper for config-loaded servers
             server_ids: Final = MCPRequestHandler._get_config_server_ids_for_access_groups(
-                global_mcp_server_manager.config_mcp_servers, access_groups
+                MappingProxyType(
+                    {
+                        server_id: server
+                        for server_id, server in global_mcp_server_manager.config_mcp_servers.items()
+                        if server_id not in global_mcp_server_manager.registry
+                    }
+                ),
+                access_groups,
             )
 
             # Use the new helper for DB servers
