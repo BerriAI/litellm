@@ -62,6 +62,8 @@ Under `incremental_diff` the reply is held until the end-of-stream evaluate retu
 
 `incremental_diff` covers OpenAI chat completions streaming; other surfaces fall back to `block_only`.
 
+Streamed tool calls are the exception in either mode: LiteLLM forwards the tool-call deltas as they arrive and only sends the assembled call to TrustGuard once the stream ends, so a blocked call can already have reached the client. `incremental_diff` narrows that window, holding back the answer text and the turn's `finish_reason` so the block lands as an error instead of trailing a stream that looks complete. Use non-streaming requests where a tool call must be vetted before the client ever sees it.
+
 ## References
 
 - [NeuralTrust TrustGuard on LiteLLM](https://docs.neuraltrust.ai/integrations/litellm)

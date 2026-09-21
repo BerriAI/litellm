@@ -1,3 +1,4 @@
+import json
 import os
 from collections.abc import AsyncIterator, Sequence
 from typing import Literal
@@ -23,8 +24,10 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.guardrails import LitellmParams
 from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
     Choices,
     Delta,
+    Function,
     GenericGuardrailAPIInputs,
     Message,
     ModelResponse,
@@ -104,6 +107,55 @@ async def _upstream_reply() -> AsyncIterator[ModelResponseStream]:
     yield _stream_chunk("", finish_reason="stop")
 
 
+FORBIDDEN_TOOL = "wire_transfer"
+
+
+async def _upstream_tool_call() -> AsyncIterator[ModelResponseStream]:
+    for chunk in REPLY_CHUNKS[:4]:
+        yield _stream_chunk(chunk)
+    yield ModelResponseStream(
+        model="gpt-4o-mini",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    content=None,
+                    role="assistant",
+                    tool_calls=[
+                        ChatCompletionDeltaToolCall(
+                            id="call_1",
+                            type="function",
+                            index=0,
+                            function=Function(name=FORBIDDEN_TOOL, arguments='{"amount": 100000}'),
+                        )
+                    ],
+                ),
+                finish_reason="tool_calls",
+            )
+        ],
+    )
+
+
+def _tool_call_blocking_trustguard() -> AsyncMock:
+    async def _post(*_args: object, **kwargs: object) -> Response:
+        seen = json.dumps(kwargs["json"]["payload"])
+        if FORBIDDEN_TOOL not in seen:
+            return _response({"status": "allow"})
+        return _response({"status": "block", "trace_id": "trace-1"})
+
+    return AsyncMock(side_effect=_post)
+
+
+def _finish_reasons(items: Sequence[object]) -> list[str]:
+    return [
+        choice.finish_reason
+        for item in items
+        if isinstance(item, ModelResponseStream)
+        for choice in (item.choices or [])
+        if choice.finish_reason
+    ]
+
+
 def _redacting_trustguard(*, on_card: str = "transform") -> AsyncMock:
     """A TrustGuard that only reacts once the whole card number is in the accumulated reply."""
 
@@ -126,10 +178,13 @@ def _redacting_trustguard(*, on_card: str = "transform") -> AsyncMock:
     return AsyncMock(side_effect=_post)
 
 
-def _guardrail_stream(guardrail: NeuralTrustGuardrail) -> AsyncIterator[object]:
+def _guardrail_stream(
+    guardrail: NeuralTrustGuardrail,
+    upstream: AsyncIterator[ModelResponseStream] | None = None,
+) -> AsyncIterator[object]:
     return UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="tgk_test", request_route="/v1/chat/completions"),
-        response=_upstream_reply(),
+        response=_upstream_reply() if upstream is None else upstream,
         request_data={
             "guardrail_to_apply": guardrail,
             "model": "gpt-4o-mini",
@@ -1100,6 +1155,23 @@ class TestNeuralTrustGuardrail:
         assert exc_info.value.status_code == 400
         assert exc_info.value.detail["verdict"] == "block"
         assert _deltas(received) == []
+
+    @pytest.mark.asyncio
+    async def test_tool_call_block_under_incremental_diff_leaves_the_turn_unfinished(self) -> None:
+        """A streamed tool call is only scanned once the stream ends, so the turn must not look complete.
+
+        Until then the answer text stays withheld and no finish_reason goes out, so a client cannot treat
+        the turn as done, and the block surfaces as a 400 rather than trailing a finished-looking stream.
+        """
+        guardrail = _guardrail(event_hook="post_call", default_on=True, streaming_transform_mode="incremental_diff")
+        received: list[object] = []  # mutable-ok: collects what the client saw before the block
+        with patch.object(guardrail.async_handler, "post", _tool_call_blocking_trustguard()):
+            with pytest.raises(HTTPException) as exc_info:
+                await _drain_into(_guardrail_stream(guardrail, _upstream_tool_call()), received)
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["verdict"] == "block"
+        assert _deltas(received) == []
+        assert _finish_reasons(received) == []
 
     @pytest.mark.asyncio
     async def test_default_streaming_mode_leaves_the_transform_off_the_wire(self) -> None:
