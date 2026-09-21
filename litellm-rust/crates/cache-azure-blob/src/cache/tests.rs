@@ -39,6 +39,7 @@ struct FakeState {
     blobs: BTreeMap<String, Vec<u8>>,
     requests: Vec<RecordedRequest>,
     failing: bool,
+    precondition_conflicts: bool,
 }
 
 #[derive(Clone, Default)]
@@ -77,6 +78,10 @@ impl FakeBlobService {
 
     fn set_failing(&self, failing: bool) {
         self.state.lock().unwrap().failing = failing;
+    }
+
+    fn set_precondition_conflicts(&self, enabled: bool) {
+        self.state.lock().unwrap().precondition_conflicts = enabled;
     }
 
     fn requests(&self) -> Vec<RecordedRequest> {
@@ -158,7 +163,15 @@ impl HttpClient for FakeBlobService {
             }
             (Method::Put, false, Some(name)) => {
                 if if_none_match.as_deref() == Some("*") && state.blobs.contains_key(&name) {
-                    Self::respond(StatusCode::Conflict, Some("BlobAlreadyExists"), Vec::new())
+                    if state.precondition_conflicts {
+                        Self::respond(
+                            StatusCode::PreconditionFailed,
+                            Some("ConditionNotMet"),
+                            Vec::new(),
+                        )
+                    } else {
+                        Self::respond(StatusCode::Conflict, Some("BlobAlreadyExists"), Vec::new())
+                    }
                 } else {
                     let bytes = match request.body() {
                         Body::Bytes(bytes) => bytes.to_vec(),
@@ -366,6 +379,25 @@ fn sync_set_does_not_overwrite_an_existing_blob() {
         uploads
             .iter()
             .all(|request| request.if_none_match.as_deref() == Some("*"))
+    );
+}
+
+#[test]
+fn sync_set_treats_a_precondition_conflict_as_an_existing_blob() {
+    let fixture = Fixture::new(FakeBlobService::default());
+    fixture.service.set_precondition_conflicts(true);
+    fixture
+        .cache
+        .set_cache("key", entry(json!({"v": "first"})), &no_ttl())
+        .unwrap();
+    fixture
+        .cache
+        .set_cache("key", entry(json!({"v": "second"})), &no_ttl())
+        .unwrap();
+
+    assert_eq!(
+        fixture.stored_json("key")["response"],
+        json!({"v": "first"})
     );
 }
 
