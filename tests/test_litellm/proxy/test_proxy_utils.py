@@ -987,6 +987,7 @@ class TestPostCallFailureHookEstimatesDispatchedInputTokens:
 from typing import cast
 
 import litellm
+from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME
 from litellm.proxy.utils import create_model_info_response
 from litellm.types.router import DeploymentListingPrice, DeploymentModelListingInfo
 from litellm.types.utils import ModelInfo
@@ -1130,7 +1131,11 @@ def test_create_model_info_response_reports_widest_window_in_a_mixed_group():
 
 
 def test_create_model_info_response_omits_pricing_unless_asked():
-    """The default listing shape is unchanged, so existing clients see no new field."""
+    """A caller who does not ask for pricing gets the same entry as before the flag.
+
+    Asserted whole rather than as "pricing is absent", so any other key the listing starts
+    emitting by default fails here too.
+    """
     response = create_model_info_response(
         model_id="gpt-4o",
         provider="openai",
@@ -1140,7 +1145,12 @@ def test_create_model_info_response_omits_pricing_unless_asked():
         ),
     )
 
-    assert "pricing" not in response
+    assert response == {
+        "id": "gpt-4o",
+        "object": "model",
+        "created": DEFAULT_MODEL_CREATED_AT_TIME,
+        "owned_by": "openai",
+    }, f"the default listing entry changed shape: {response}"
 
 
 def test_create_model_info_response_includes_cost_map_pricing():
