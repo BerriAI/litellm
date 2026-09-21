@@ -6,7 +6,7 @@ import logging
 from contextlib import ExitStack
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import List, Optional, cast
+from typing import Final, List, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1613,6 +1613,60 @@ class TestTeamScopedMCPServerAccess:
             # Admin should NOT need to be a team member
             result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth, team_id="any-team-id")
             assert len(result) == 1
+
+
+class TestFetchAllMCPServersOrdering:
+    def test_display_order_is_case_insensitive_name_then_id(self) -> None:
+        servers: Final = (
+            LiteLLM_MCPServerTable(server_id="s-2", server_name="GitHub", alias="aaa", transport=MCPTransport.http),
+            LiteLLM_MCPServerTable(server_id="s-1", alias="github", transport=MCPTransport.http),
+            LiteLLM_MCPServerTable(server_id="s-0", server_name="Slack", alias="zzz", transport=MCPTransport.http),
+            LiteLLM_MCPServerTable(server_id="confluence", server_name="", alias="", transport=MCPTransport.http),
+        )
+
+        ordered: Final = sorted(servers, key=mgmt_endpoints._mcp_server_display_order)
+        assert [s.server_id for s in ordered] == ["confluence", "s-1", "s-2", "s-0"]
+
+    @pytest.mark.parametrize("team_id", [None, "team-1"])
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.asyncio
+    async def test_list_is_sorted_by_display_name_regardless_of_resolution_order(
+        self, team_id: str | None, reverse: bool
+    ) -> None:
+        mock_user_auth: Final = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_id="admin_user",
+        )
+        servers: Final = (
+            generate_mock_mcp_server_db_record(server_id="s-zeta", alias="zeta"),
+            generate_mock_mcp_server_db_record(server_id="s-alpha", alias="Alpha"),
+            generate_mock_mcp_server_db_record(server_id="s-mid", alias="mid"),
+        )
+        resolved: Final = list(reversed(servers) if reverse else servers)
+        mock_manager: Final = MagicMock()
+        mock_manager.get_all_allowed_mcp_servers = AsyncMock(return_value=resolved)
+        with (
+            patch(  # test-quality-ok: the route reads a module-global manager with no injection seam
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(  # test-quality-ok: admin view is derived from module-global proxy settings
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=True,
+            ),
+            patch(  # test-quality-ok: auth contexts need a live prisma client
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[mock_user_auth]),
+            ),
+            patch(  # test-quality-ok: isolate the route's ordering from team database resolution
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_team_scoped_mcp_server_list",
+                AsyncMock(return_value=resolved),
+            ),
+        ):
+            result: Final = await mgmt_endpoints.fetch_all_mcp_servers(
+                user_api_key_dict=mock_user_auth, team_id=team_id
+            )
+            assert [s.server_id for s in result] == ["s-alpha", "s-mid", "s-zeta"]
 
     @pytest.mark.asyncio
     async def test_restricted_virtual_key_cannot_use_team_id_filter(self):
