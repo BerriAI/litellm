@@ -626,11 +626,10 @@ def _get_exact_count_function(
             tokenizer: Final[Tokenizer | NativeTokenizer] = tokenizer_json["tokenizer"]
 
             def count_tokens(text: str) -> int:
-                return (
-                    tokenizer.count(text)
-                    if isinstance(tokenizer, NativeTokenizer)
-                    else len(tokenizer.encode_batch_fast([text])[0])
-                )
+                count: Final = getattr(tokenizer, "count", None)
+                if callable(count):
+                    return count(text)
+                return len(tokenizer.encode_batch_fast([text])[0])
 
             return count_tokens
         elif tokenizer_json["type"] == "openai_tokenizer":

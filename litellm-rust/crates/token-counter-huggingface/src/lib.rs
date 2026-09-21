@@ -7,6 +7,14 @@ use std::collections::HashSet;
 pub use error::Error;
 pub use tokenizers::{EncodeInput, Encoding, InputSequence};
 
+pub fn encoding_from_json(json: &str) -> Result<Encoding, Error> {
+    serde_json::from_str(json).map_err(|error| Error::Load(error.into()))
+}
+
+pub fn encoding_to_json(encoding: &Encoding) -> Result<String, Error> {
+    serde_json::to_string(encoding).map_err(|error| Error::Load(error.into()))
+}
+
 pub struct HuggingFaceTokenizer {
     tokenizer: Box<tokenizers::Tokenizer>,
     special_token_ids: HashSet<u32>,

@@ -1,6 +1,7 @@
 use litellm_token_counter_huggingface::Error as BackendError;
 pub use litellm_token_counter_huggingface::{
-    EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence,
+    EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence, encoding_from_json,
+    encoding_to_json,
 };
 
 use crate::{Error, TextCodec, TokenCounter, Tokenizer};

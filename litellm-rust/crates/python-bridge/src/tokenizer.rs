@@ -24,7 +24,8 @@ use crate::token_counter::token_count_error_to_pyerr;
 
 #[cfg(feature = "huggingface")]
 use litellm_token_counter::huggingface::{
-    EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence,
+    EncodeInput, Encoding, HuggingFaceTokenizer, InputSequence, encoding_from_json,
+    encoding_to_json,
 };
 #[cfg(feature = "tiktoken")]
 use litellm_token_counter::tiktoken::TiktokenTokenizer;
@@ -315,7 +316,7 @@ impl HuggingFaceEncoding {
     #[pyo3(signature = (json = None))]
     fn new(json: Option<&str>) -> PyResult<Self> {
         let inner = match json {
-            Some(json) => serde_json::from_str(json)
+            Some(json) => encoding_from_json(json)
                 .map_err(|error| PyValueError::new_err(error.to_string()))?,
             None => Encoding::default(),
         };
@@ -326,7 +327,7 @@ impl HuggingFaceEncoding {
         &self,
         py: Python<'py>,
     ) -> PyResult<(Bound<'py, pyo3::types::PyType>, (String,))> {
-        let json = serde_json::to_string(&self.inner)
+        let json = encoding_to_json(&self.inner)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         Ok((py.get_type::<Self>(), (json,)))
     }
