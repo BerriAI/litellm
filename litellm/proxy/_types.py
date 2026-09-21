@@ -3238,6 +3238,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # above; a forged value could at most narrow, but the stripping keeps the field's provenance
     # single-owner so its meaning stays trustworthy.
     mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
+    mcp_toolset_id: str | None = Field(default=None, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -3279,6 +3280,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_admitted_user_subject", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_id", None)
+        values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         if values.get("api_key") is not None:
             values.update({"token": cls._safe_hash_litellm_api_key(values.get("api_key"))})
