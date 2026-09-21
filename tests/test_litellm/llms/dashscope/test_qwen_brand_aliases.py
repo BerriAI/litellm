@@ -1,10 +1,14 @@
+import json
 import math
+import re
+from pathlib import Path
 
 import pytest
 
 import litellm
 from litellm import completion, get_llm_provider
 from litellm.llms.dashscope.chat.transformation import DashScopeChatConfig
+from litellm.llms.dashscope.common_utils import missing_dashscope_family_key_message
 from litellm.llms.dashscope.cost_calculator import (
     cost_per_token as dashscope_cost_per_token,
 )
@@ -53,6 +57,7 @@ BRAND_CASES = [
     pytest.param(
         {
             "provider": "qwencloud",
+            "display_name": "QwenCloud",
             "enum": LlmProviders.QWENCLOUD,
             "key_env": "QWENCLOUD_API_KEY",
             "base_env": "QWENCLOUD_API_BASE",
@@ -69,6 +74,7 @@ BRAND_CASES = [
     pytest.param(
         {
             "provider": "qwen_ai_platform",
+            "display_name": "Qianwen AI Platform",
             "enum": LlmProviders.QWEN_AI_PLATFORM,
             "key_env": "QWEN_AI_PLATFORM_API_KEY",
             "base_env": "QWEN_AI_PLATFORM_API_BASE",
@@ -248,6 +254,48 @@ class TestQwenBrandDefaultUrls:
                 api_key=None,
                 api_base=None,
             )
+
+
+class TestQwenBrandUserFacingNames:
+    RETIRED_MAINLAND_NAME = "Qwen AI Platform"
+
+    @pytest.mark.parametrize("brand", BRAND_CASES)
+    def test_missing_key_message_names_brand(self, brand):
+        message = missing_dashscope_family_key_message(brand["provider"])
+        assert brand["display_name"] in message
+        assert brand["key_env"] in message
+        assert self.RETIRED_MAINLAND_NAME not in message
+
+    @pytest.mark.parametrize("brand", BRAND_CASES)
+    def test_embedding_without_key_names_brand(self, brand):
+        with pytest.raises(litellm.APIConnectionError, match=re.escape(brand["display_name"])) as exc_info:
+            litellm.embedding(model=f"{brand['provider']}/text-embedding-v4", input=["hello"])
+        assert self.RETIRED_MAINLAND_NAME not in str(exc_info.value)
+
+    @pytest.mark.parametrize("brand", BRAND_CASES)
+    def test_rerank_without_key_names_brand(self, brand):
+        with pytest.raises(litellm.APIConnectionError, match=re.escape(brand["display_name"])) as exc_info:
+            litellm.rerank(model=f"{brand['provider']}/gte-rerank-v2", query="q", documents=["a", "b"])
+        assert self.RETIRED_MAINLAND_NAME not in str(exc_info.value)
+
+    @pytest.mark.parametrize("brand", BRAND_CASES)
+    def test_image_generation_without_key_names_brand(self, brand):
+        with pytest.raises(litellm.APIConnectionError, match=re.escape(brand["display_name"])) as exc_info:
+            litellm.image_generation(model=f"{brand['provider']}/qwen-image", prompt="a cup of coffee")
+        assert self.RETIRED_MAINLAND_NAME not in str(exc_info.value)
+
+    @pytest.mark.parametrize("brand", BRAND_CASES)
+    @pytest.mark.parametrize(
+        "matrix_path",
+        [
+            Path(litellm.__file__).parent / "provider_endpoints_support_backup.json",
+            Path(litellm.__file__).parent.parent / "provider_endpoints_support.json",
+        ],
+        ids=["backup", "root"],
+    )
+    def test_supported_endpoints_matrix_display_name(self, brand, matrix_path):
+        matrix = json.loads(matrix_path.read_text())
+        assert matrix["providers"][brand["provider"]]["display_name"] == f"{brand['display_name']} (`{brand['provider']}`)"
 
 
 class TestQwenBrandCostParity:
