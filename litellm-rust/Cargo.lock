@@ -2465,6 +2465,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-cache-gcs"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-auth-gcp",
+ "litellm-auth-types",
+ "litellm-cache",
+ "percent-encoding",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+ "url",
+ "wiremock",
+]
+
+[[package]]
 name = "litellm-cache-memory"
 version = "0.1.0"
 dependencies = [
@@ -2666,6 +2682,7 @@ dependencies = [
  "litellm-auth",
  "litellm-auth-gcp",
  "litellm-cache",
+ "litellm-cache-gcs",
  "litellm-cache-memory",
  "litellm-cache-redis",
  "litellm-cache-response",

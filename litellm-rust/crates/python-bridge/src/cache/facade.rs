@@ -192,6 +192,7 @@ impl FacadeGuard {
         let (module, name, cache_kind) = match kind {
             "memory" => ("litellm.caching.in_memory_cache", "InMemoryCache", "local"),
             "redis" => ("litellm.caching.redis_cache", "RedisCache", "redis"),
+            "gcs" => ("litellm.caching.gcs_cache", "GCSCache", "gcs"),
             _ => unreachable!(),
         };
         let backend = facade.getattr("cache")?;
@@ -235,6 +236,9 @@ impl FacadeGuard {
                     "max_size_per_item",
                     "redis_kwargs",
                     "redis_flush_size",
+                    "bucket_name",
+                    "key_prefix",
+                    "path_service_account",
                 ],
             )?,
             redis_pool: (kind == "redis")
