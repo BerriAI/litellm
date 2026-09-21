@@ -39,6 +39,13 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_from_response,
+    assemble_anthropic_sse_stream,
+    is_anthropic_sse_stream,
+    is_sse_error_stream,
+    model_response_text,
+)
 from litellm.types.guardrails import (
     GuardrailEventHooks,
     LitellmParams,
@@ -133,6 +140,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.mock_redacted_text = mock_redacted_text
         self.output_parse_pii = output_parse_pii or False
         self.apply_to_output = apply_to_output
+        if apply_to_output:
+            self.mask_response_content = True
 
         # When output_parse_pii or apply_to_output is enabled, the guardrail must
         # also run on post_call to unmask/mask the response.  Expand the event_hook
@@ -1340,6 +1349,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.types.utils import ModelResponse
 
         all_chunks: list[ModelResponseStream] = []
+        raw_chunks: list[bytes] = []
+        buffered_chunks: list[ModelResponseStream | bytes] = []
         passthrough_due_to_unknown_stream_shape = False
         try:
             async for chunk in response:
@@ -1348,22 +1359,29 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         yield chunk
                     else:
                         all_chunks.append(chunk)
-                elif isinstance(chunk, bytes):
-                    yield chunk
+                        buffered_chunks.append(chunk)
+                elif isinstance(chunk, (bytes, str)):
+                    if passthrough_due_to_unknown_stream_shape:
+                        yield cast(bytes, chunk)
+                    else:
+                        raw_chunks.append(cast(bytes, chunk))
+                        buffered_chunks.append(cast(ModelResponseStream | bytes, chunk))
                     continue
                 else:
-                    if all_chunks:
+                    if buffered_chunks:
                         # Flush buffered chunks and switch to transparent passthrough for this stream shape.
                         # NOTE: these buffered chunks are emitted unmasked because this
                         # stream mixed chunk types and cannot be safely reconstructed.
                         verbose_proxy_logger.warning(
                             "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
                             "Flushing %d buffered chunks without PII masking and switching to transparent passthrough.",
-                            len(all_chunks),
+                            len(buffered_chunks),
                         )
-                        for buffered_chunk in all_chunks:
+                        for buffered_chunk in buffered_chunks:
                             yield buffered_chunk
                         all_chunks = []
+                        raw_chunks = []
+                        buffered_chunks = []
                     passthrough_due_to_unknown_stream_shape = True
                     yield chunk
             if passthrough_due_to_unknown_stream_shape:
@@ -1371,6 +1389,48 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     "Presidio apply_to_output: streaming response contained unknown event objects "
                     "(e.g. /v1/responses events). Output PII masking was skipped for this response."
                 )
+                return
+            if raw_chunks and not all_chunks:
+                if is_sse_error_stream(raw_chunks) or not is_anthropic_sse_stream(raw_chunks):
+                    verbose_proxy_logger.warning(
+                        "Presidio apply_to_output: raw streaming response was not an Anthropic SSE stream. "
+                        "Output PII masking was skipped for this response."
+                    )
+                    for chunk in raw_chunks:
+                        yield chunk
+                    return
+
+                assembled_anthropic_response = assemble_anthropic_sse_stream(raw_chunks, restore_identity=True)
+                if assembled_anthropic_response is None:
+                    verbose_proxy_logger.warning(
+                        "Presidio apply_to_output: Anthropic SSE stream could not be assembled. "
+                        "Output PII masking was skipped for this response."
+                    )
+                    for chunk in raw_chunks:
+                        yield chunk
+                    return
+
+                pre_text = model_response_text(assembled_anthropic_response)
+                await self._process_response_for_pii(
+                    response=assembled_anthropic_response,
+                    request_data=request_data,
+                    mode="mask",
+                )
+                if model_response_text(assembled_anthropic_response) != pre_text:
+                    for chunk in anthropic_sse_chunks_from_response(assembled_anthropic_response):
+                        yield chunk
+                else:
+                    for chunk in raw_chunks:
+                        yield chunk
+                return
+            if all_chunks and raw_chunks:
+                verbose_proxy_logger.warning(
+                    "Presidio apply_to_output: mixed stream detected (ModelResponseStream + unknown event). "
+                    "Flushing %d buffered chunks without PII masking and switching to transparent passthrough.",
+                    len(buffered_chunks),
+                )
+                for buffered_chunk in buffered_chunks:
+                    yield buffered_chunk
                 return
             if not all_chunks:
                 verbose_proxy_logger.warning(
@@ -1400,6 +1460,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         except Exception as e:
             verbose_proxy_logger.error("Error masking streaming PII output: %s", e)
             for chunk in all_chunks:
+                yield chunk
+            for chunk in raw_chunks:
                 yield chunk
 
     @staticmethod

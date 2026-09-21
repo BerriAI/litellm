@@ -5,6 +5,7 @@ Tests PII detection and masking for different message formats
 
 import asyncio
 from contextlib import asynccontextmanager
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,6 +21,17 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.utils import Choices, Message, ModelResponse
 from litellm.exceptions import BlockedPiiEntityError
+
+
+def _anthropic_sse_frames(text: str) -> tuple[bytes, ...]:
+    return (
+        b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_01","type":"message","role":"assistant","model":"claude-3-5-sonnet","content":[],"usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        f'event: content_block_delta\ndata: {{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{text}"}}}}\n\n'.encode(),
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":1,"output_tokens":5}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    )
 
 
 def _make_mock_session_iterator(json_response, status=200, content_type="application/json", text_response=""):
@@ -2372,6 +2384,64 @@ async def test_apply_to_output_streaming_bytes_only_logs_warning():
         mock_logger.warning.assert_called_once()
         warning_msg = mock_logger.warning.call_args[0][0]
         assert "Output PII masking was skipped" in warning_msg
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_masks_anthropic_sse_stream(mock_user_api_key):
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "My card is <CREDIT_CARD>"},
+    )
+    upstream_frames: Final = _anthropic_sse_frames("My card is 4111 1111 1111 1111")
+
+    async def mock_stream():
+        for frame in upstream_frames:
+            yield frame
+
+    collected: list[bytes] = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        assert isinstance(chunk, bytes)
+        collected.append(chunk)
+
+    output: Final = b"".join(collected).decode()
+    assert "<CREDIT_CARD>" in output
+    assert "4111 1111 1111 1111" not in output
+    assert "message_start" in output
+    assert "message_stop" in output
+    assert "msg_01" in output
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_anthropic_sse_stream_without_pii_is_passed_through_byte_for_byte(
+    mock_user_api_key,
+):
+    original_text: Final = "My card is safe"
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": original_text},
+    )
+    upstream_frames: Final = _anthropic_sse_frames(original_text)
+
+    async def mock_stream():
+        for frame in upstream_frames:
+            yield frame
+
+    collected: list[bytes] = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={},
+    ):
+        assert isinstance(chunk, bytes)
+        collected.append(chunk)
+
+    assert collected == list(upstream_frames)
 
 
 @pytest.mark.asyncio

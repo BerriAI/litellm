@@ -363,6 +363,26 @@ class GuardrailsClient:
             ),
         )
 
+    def messages_stream_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+        max_tokens: int = 64,
+    ) -> StreamingResponse:
+        return self.proxy.messages_stream(
+            key,
+            AnthropicMessagesBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=text)],
+                max_tokens=max_tokens,
+                stream=True,
+                guardrails=guardrails,
+            ),
+        )
+
     def responses(
         self,
         key: str,
