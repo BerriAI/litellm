@@ -765,7 +765,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                 if saw_text_content:
                     async for out in _round(last_chunk, is_final=False):
                         yield out
-                for tool_only in (
+                tool_chunks: Final = tuple(
                     self._tool_call_passthrough_chunk(
                         buffered_item,
                         finish_reason_per_choice=finish_reason_per_choice,
@@ -773,9 +773,31 @@ class UnifiedLLMGuardrails(CustomLogger):
                     )
                     for buffered_item in responses_so_far
                     if self._chunk_has_tool_calls(buffered_item)
-                ):
+                )
+
+                async def checked_tail() -> AsyncGenerator[object, None]:
+                    try:
+                        async for tail_chunk in self._emit_stream_tail(
+                            last_chunk=last_chunk,
+                            final_round=_round,
+                            responses_so_far=responses_so_far,
+                            responses_yielded=responses_yielded,
+                        ):
+                            yield tail_chunk
+                    except _StreamTerminated as exc:
+                        yield exc
+
+                tail_chunks: Final = tuple([chunk async for chunk in checked_tail()])
+                if tail_chunks and isinstance(tail_chunks[-1], _StreamTerminated):
+                    for error_chunk in tail_chunks[:-1]:
+                        yield error_chunk
+                    return
+                for tool_only in tool_chunks:
                     responses_yielded.append(tool_only)
                     yield tool_only
+                for tail_chunk in tail_chunks:
+                    yield tail_chunk
+                return
 
             async for out in self._emit_stream_tail(
                 last_chunk=last_chunk,

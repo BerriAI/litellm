@@ -1375,14 +1375,15 @@ class TestStreamingTransform:
         assert out[-2].choices[0].finish_reason == "stop"
 
     @pytest.mark.asyncio
-    async def test_tool_call_blocking_guardrail_is_enforced(self):
+    @pytest.mark.parametrize(("content", "allowed_scans"), [(None, 0), ("proposal", 0), ("proposal", 1)])
+    async def test_tool_call_blocking_guardrail_is_enforced(self, content: str | None, allowed_scans: int):
         """A guardrail that blocks on tool calls must terminate the incremental_diff
         stream: tool calls go through the block decision, not bypass it."""
         from litellm.exceptions import GuardrailRaisedException
 
         class _ToolCallBlocker(_StreamingTextGuardrail):
             async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
-                if input_type == "response" and inputs.get("tool_calls"):
+                if input_type == "response" and self.response_calls >= allowed_scans:
                     raise GuardrailRaisedException(
                         guardrail_name="tc-block",
                         message="blocked tool call",
@@ -1395,7 +1396,7 @@ class TestStreamingTransform:
                 StreamingChoices(
                     index=0,
                     delta=Delta(
-                        content=None,
+                        content=content,
                         tool_calls=[
                             {
                                 "index": 0,
@@ -1418,8 +1419,13 @@ class TestStreamingTransform:
             response=upstream(),
             request_data={"guardrail_to_apply": _ToolCallBlocker(), "model": "gpt-4"},
         )
+        async def consume_checked_stream() -> None:
+            async for chunk in stream:
+                assert isinstance(chunk, ModelResponseStream)
+                assert all(not choice.delta.tool_calls and choice.finish_reason is None for choice in chunk.choices)
+
         with pytest.raises(GuardrailRaisedException):
-            await anext(stream)
+            await consume_checked_stream()
 
     @pytest.mark.asyncio
     async def test_mixed_content_and_tool_call_chunk_does_not_leak_text(self):
