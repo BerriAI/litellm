@@ -62,7 +62,7 @@ impl UrlPolicy {
     }
 }
 
-fn normalize_host(host: &str) -> String {
+pub fn normalize_host(host: &str) -> String {
     host.to_ascii_lowercase().trim_end_matches('.').to_owned()
 }
 
