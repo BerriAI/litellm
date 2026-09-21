@@ -4,6 +4,7 @@ imported_openAIResponse = True
 try:
     import io
     import logging
+    from collections.abc import Mapping
     from typing import Any, Literal, Protocol, TypeVar
 
     from wandb.sdk.data_types import trace_tree
@@ -43,7 +44,7 @@ try:
 
         @staticmethod
         def results_to_trace_tree(
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             results: list[trace_tree.Result],
             time_elapsed: float,
@@ -73,7 +74,7 @@ try:
 
         def _resolve_edit(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
@@ -91,7 +92,7 @@ try:
 
         def _resolve_completion(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             time_elapsed: float,
         ) -> trace_tree.WBTraceTree:
@@ -134,7 +135,7 @@ try:
 
         def _request_response_result_to_trace(
             self,
-            request: dict[str, Any],
+            request: Mapping[str, object],
             response: OpenAIResponse,
             request_str: str,
             choices: list[str],

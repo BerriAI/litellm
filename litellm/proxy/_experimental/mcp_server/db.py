@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     MCPApprovalStatus,
     MCPEnvVar,
     MCPEnvVarScope,
+    MCPServerUserCredentialListItem,
     MCPSubmissionsSummary,
     NewMCPServerRequest,
     SpecialMCPServerName,
@@ -1502,6 +1503,37 @@ async def get_user_oauth_credential(
     if decoded is None:
         _warn_undecryptable_credential(user_id, server_id)
     return _parse_oauth_payload(decoded)
+
+
+def _server_user_credential_item(
+    row: "prisma_db_models.LiteLLM_MCPUserCredentials",
+) -> MCPServerUserCredentialListItem:
+    oauth_payload: Final = _decode_oauth_payload(row.credential_b64)
+    if oauth_payload is None:
+        return MCPServerUserCredentialListItem(
+            user_id=row.user_id,
+            credential_type="byok",
+            updated_at=row.updated_at.isoformat(),
+        )
+    return MCPServerUserCredentialListItem(
+        user_id=row.user_id,
+        credential_type="oauth2",
+        expires_at=oauth_payload.get("expires_at"),
+        connected_at=oauth_payload.get("connected_at"),
+        updated_at=row.updated_at.isoformat(),
+    )
+
+
+async def list_server_user_credentials(
+    prisma_client: PrismaClient,
+    server_id: str,
+) -> tuple[MCPServerUserCredentialListItem, ...]:
+    """Every user's stored credential for one server, typed but without the secret, for admins."""
+    rows: Final = await _db_find_user_credential_rows(
+        prisma_client,
+        {"server_id": server_id},  # mutable-ok: prisma where-inputs must be plain dicts
+    )
+    return tuple(_server_user_credential_item(row) for row in rows)
 
 
 async def list_user_oauth_credentials(

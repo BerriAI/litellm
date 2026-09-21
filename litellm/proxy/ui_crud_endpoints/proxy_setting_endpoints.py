@@ -3,9 +3,10 @@ import asyncio
 import json
 import os
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from types import MappingProxyType
 from typing import (
+    Annotated,
     Final,
     NamedTuple,
     Protocol,
@@ -24,13 +25,14 @@ from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._experimental.mcp_server.tool_search import MCP_TOOL_SEARCH_SETTINGS_KEY
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.config_resolvers.settings_store import ConfigOwnedKeyError
 from litellm.proxy.config_resolvers.sso import (
     SSO_FIELD_ENV_VARS,
     SSO_SECRET_FIELDS,
     resolve_sso_config,
 )
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
-    SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
+    SUPPORTED_TEAM_ADMIN_PERMISSIONS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import is_ptu_cost_attribution_enabled
@@ -216,7 +218,7 @@ class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
 
-_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS))
+_TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
 
 
 class UISettings(BaseModel):
@@ -315,7 +317,8 @@ class UISettings(BaseModel):
         default=(),
         description=(
             "Team settings fields a team admin may change on the teams they administer. "
-            "Empty means team admins cannot edit team settings at all. "
+            "Include 'projects' to let team admins create and update projects for those teams. "
+            "Empty means team admins cannot edit team settings or manage projects at all. "
             "Proxy admins and org admins are not affected."
         ),
         json_schema_extra={  # mutable-ok: pydantic only merges json_schema_extra when it is a plain dict
@@ -475,6 +478,82 @@ class MCPToolSearchSettingsResponse(SettingsResponse):
     """Response model for native MCP tool search settings"""
 
 
+class WebSearchInterceptionSettings(BaseModel):
+    """Configuration for server-side web search interception"""
+
+    enabled: bool = Field(
+        default=False,
+        description="Serve web search tool calls from a configured search tool instead of passing them upstream",
+    )
+
+    enabled_providers: list[str] = Field(
+        default_factory=list,
+        description="LLM providers to intercept for (e.g. 'bedrock', 'vertex_ai'). Empty intercepts Bedrock only.",
+    )
+
+    search_tool_name: str | None = Field(
+        default=None,
+        description="Name of the configured search tool to run searches through. Empty uses the first one available.",
+    )
+
+    max_agentic_loops: int | None = Field(
+        default=None,
+        ge=1,
+        description="How many follow-up model calls one intercepted request may chain. Empty applies the default of 3.",
+    )
+
+
+class WebSearchInterceptionSettingsResponse(SettingsResponse):
+    """Response model for web search interception settings"""
+
+    active_on_this_pod: bool = Field(
+        default=False,
+        description=(
+            "Whether the process answering this request has the interception callback "
+            "registered. Read-only: it reports what is running here, while values.enabled "
+            "is the cluster-wide setting, and the two disagree while a pod is still "
+            "applying a change or failed to apply it."
+        ),
+    )
+
+
+def _with_websearch_enabled_resolved(config: Mapping[str, object]) -> dict[str, object]:
+    """
+    Answer with the stored flag when there is one, and only otherwise with what
+    this process is running.
+
+    A stored flag is the cluster's own answer, so it is the same on every pod and
+    is safe for the page to send back on save. Deriving the answer from this
+    process instead would report off on a pod that has not polled yet, and the
+    next save would persist that as a cluster-wide off. Without a stored flag the
+    only available answer is local: litellm_settings.callbacks activates
+    interception without storing one, and a write through the generic config
+    endpoint can drop the flag from a block that is still live. Reporting the
+    field default there would claim the feature is off while it serves.
+    """
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    litellm_settings: Final[Mapping[str, object]] = _as_settings_section(config.get("litellm_settings"))
+    stored: Final[Mapping[str, object]] = _as_settings_section(litellm_settings.get("websearch_interception_params"))
+    if "enabled" in stored:
+        return dict(config)
+
+    resolved: Final = {
+        **stored,
+        "enabled": bool(litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)),
+    }
+    return {
+        **config,
+        "litellm_settings": {**litellm_settings, "websearch_interception_params": resolved},
+    }
+
+
+def _as_settings_section(value: object) -> Mapping[str, object]:
+    return cast("Mapping[str, object]", value) if isinstance(value, Mapping) else MappingProxyType({})
+
+
 @router.get(
     "/get/allowed_ips",
     tags=["Budget & Spend Tracking"],
@@ -486,6 +565,21 @@ async def get_allowed_ips():
 
     _allowed_ip: Final = general_settings.get("allowed_ips")
     return {"data": _allowed_ip}
+
+
+def _store_allowed_ips(general_settings: MutableMapping[str, object], allowed_ips: Sequence[str]) -> None:
+    try:
+        general_settings["allowed_ips"] = list(allowed_ips)  # mutable-ok: compared against the file's own list
+    except ConfigOwnedKeyError as owned:
+        raise HTTPException(
+            status_code=400,
+            detail={  # mutable-ok: HTTPException serializes its detail as json
+                "error": str(owned),
+                "keys": (owned.key,),
+                "section": owned.section,
+                "stored_database_value_ignored": owned.shadows_db_value,
+            },
+        ) from owned
 
 
 @router.post(
@@ -508,12 +602,10 @@ async def add_allowed_ip(
     if prisma_client is None:
         raise Exception("No DB Connected")
 
-    _allowed_ips: Final[list] = general_settings.get("allowed_ips", [])
-    if ip_address.ip not in _allowed_ips:
-        _allowed_ips.append(ip_address.ip)
-        general_settings["allowed_ips"] = _allowed_ips
-    else:
+    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or ()
+    if ip_address.ip in _allowed_ips:
         raise HTTPException(status_code=400, detail="IP address already exists")
+    _store_allowed_ips(general_settings, (*_allowed_ips, ip_address.ip))
 
     if store_model_in_db is not True:
         raise HTTPException(
@@ -567,12 +659,10 @@ async def delete_allowed_ip(
         proxy_config,
     )
 
-    _allowed_ips: Final[list] = general_settings.get("allowed_ips", [])
-    if ip_address.ip in _allowed_ips:
-        _allowed_ips.remove(ip_address.ip)
-        general_settings["allowed_ips"] = _allowed_ips
-    else:
+    _allowed_ips: Final[Sequence[str]] = general_settings.get("allowed_ips") or ()
+    if ip_address.ip not in _allowed_ips:
         raise HTTPException(status_code=404, detail="IP address not found")
+    _store_allowed_ips(general_settings, tuple(ip for ip in _allowed_ips if ip != ip_address.ip))
 
     # Load existing config
     config: Final = await proxy_config.get_config()
@@ -862,7 +952,13 @@ async def update_default_team_member_budget(teams: list[NewUserRequestTeam], use
 
 
 async def _update_litellm_setting(
-    settings: DefaultInternalUserParams | DefaultTeamSSOParams | MCPSemanticFilterSettings | MCPToolSearchSettings,
+    settings: (
+        DefaultInternalUserParams
+        | DefaultTeamSSOParams
+        | MCPSemanticFilterSettings
+        | MCPToolSearchSettings
+        | WebSearchInterceptionSettings
+    ),
     settings_key: str,
     success_message: str,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1387,6 +1483,88 @@ async def update_mcp_semantic_filter_settings(
 
 
 @router.get(
+    "/get/websearch_interception_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=WebSearchInterceptionSettingsResponse,
+)
+async def get_websearch_interception_settings(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Get web search interception configuration.
+
+    Returns the current settings plus their schema, for the Admin UI to render.
+    """
+    from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    config: Final = await proxy_config.get_config()
+
+    from litellm.integrations.websearch_interception.handler import (
+        WebSearchInterceptionLogger,
+    )
+
+    settings: Final = await _get_settings_with_schema(
+        settings_key="websearch_interception_params",
+        settings_class=WebSearchInterceptionSettings,
+        config=_with_websearch_enabled_resolved(config),
+    )
+    return WebSearchInterceptionSettingsResponse(
+        values=settings["values"],
+        field_schema=settings["field_schema"],
+        active_on_this_pod=bool(
+            litellm.logging_callback_manager.get_custom_loggers_for_type(WebSearchInterceptionLogger)
+        ),
+    )
+
+
+@router.patch(
+    "/update/websearch_interception_settings",
+    tags=["Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_websearch_interception_settings(
+    settings: WebSearchInterceptionSettings,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    """
+    Update web search interception settings in database.
+
+    Settings will be picked up by all pods within approximately 10 seconds via background polling.
+    """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can update web search interception settings.",
+        )
+
+    result: Final = await _update_litellm_setting(
+        settings=settings,
+        settings_key="websearch_interception_params",
+        success_message=(
+            "Web search interception settings updated successfully. "
+            "Changes will be applied across all pods within 10 seconds."
+        ),
+        user_api_key_dict=user_api_key_dict,
+    )
+    try:
+        from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+        if prisma_client is not None:
+            await proxy_config.init_websearch_interception_settings_in_db(prisma_client=prisma_client)
+    except Exception as e:
+        verbose_proxy_logger.warning("Failed to reinitialize web search interception settings immediately: %s", e)
+
+    return result
+
+
+@router.get(
     "/get/mcp_tool_search_settings",
     tags=["Settings"],  # mutable-ok: FastAPI's route decorator only accepts a list
     dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator only accepts a list
@@ -1483,10 +1661,13 @@ _UI_SETTINGS_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 
 def apply_runtime_general_settings_flags(ui_settings: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     """Copy the UI settings that gate runtime behavior into ``general_settings``. Returns what was applied."""
+    from litellm.proxy.config_resolvers import SettingsStore
     from litellm.proxy.proxy_server import general_settings
 
     flags: Final = {k: ui_settings[k] for k in _RUNTIME_GENERAL_SETTINGS_FLAGS if k in ui_settings}
-    if flags:
+    if isinstance(general_settings, SettingsStore):
+        general_settings.apply_db_row("ui_settings", flags)
+    elif flags:
         general_settings.update(flags)
     return MappingProxyType(flags)
 
@@ -1623,7 +1804,7 @@ async def update_ui_settings(
         raise HTTPException(status_code=422, detail=e.errors())
 
     unsupported_team_fields: Final = sorted(
-        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS
+        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_PERMISSIONS
     )
     if unsupported_team_fields:
         raise HTTPException(
@@ -1631,7 +1812,7 @@ async def update_ui_settings(
             detail={  # mutable-ok: HTTPException detail must be a plain dict for FastAPI JSON serialization
                 "error": (
                     f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING} does not support {unsupported_team_fields}. "
-                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS)}."
+                    f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS)}."
                 )
             },
         )

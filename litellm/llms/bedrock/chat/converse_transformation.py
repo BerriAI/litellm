@@ -48,6 +48,7 @@ from litellm.llms.bedrock.request_metadata import (
     merge_bedrock_invoke_headers,
     resolve_bedrock_request_metadata,
 )
+from litellm.types.llms.anthropic import ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
 from litellm.types.llms.bedrock import *
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -107,6 +108,7 @@ BEDROCK_COMPUTER_USE_TOOLS: Final = [
     "bash_",
     "text_editor_",
 ]
+BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS: Final = 16
 
 # Beta header patterns that are not supported by Bedrock Converse API
 # These will be filtered out to prevent errors
@@ -376,6 +378,10 @@ class AmazonConverseConfig(BaseConfig):
     @staticmethod
     def _is_openai_gpt_reasoning_model(model: str) -> bool:
         return re.search(r"openai\.gpt-\d", model) is not None
+
+    @staticmethod
+    def _requires_min_max_tokens(model: str) -> bool:
+        return re.search(r"openai\.gpt-\d|xai\.grok-", model) is not None
 
     def _is_nova_2_model(self, model: str) -> bool:
         """
@@ -999,7 +1005,11 @@ class AmazonConverseConfig(BaseConfig):
                     is_thinking_enabled=is_thinking_enabled,
                 )
             if param == "max_tokens" or param == "max_completion_tokens":
-                optional_params["maxTokens"] = value
+                optional_params["maxTokens"] = (
+                    max(value, BEDROCK_OPENAI_COMPAT_MIN_MAX_TOKENS)
+                    if isinstance(value, int) and self._requires_min_max_tokens(model)
+                    else value
+                )
             if param == "stream":
                 optional_params["stream"] = value
             if param == "stop":
@@ -1517,12 +1527,6 @@ class AmazonConverseConfig(BaseConfig):
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: list[ToolBlock] = []
 
-        # Collect anthropic_beta values from user headers
-        anthropic_beta_list: Final = []
-        if headers:
-            user_betas: Final = get_anthropic_beta_from_headers(headers)
-            anthropic_beta_list.extend(user_betas)
-
         # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
         # from OpenAI-format tools that need transformation via _bedrock_tools_pt
         filtered_tools: Final = []
@@ -1541,6 +1545,17 @@ class AmazonConverseConfig(BaseConfig):
                     # Tool search not supported in Converse API - skip it
                     continue
                 filtered_tools.append(tool)
+
+        base_model: Final = BedrockModelInfo.get_base_model(model)
+        client_beta_list: Final = get_anthropic_beta_from_headers(headers or {})
+        eager_beta: Final = (
+            (ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,)
+            if base_model.startswith("anthropic")
+            and AnthropicModelInfo().is_eager_input_streaming_used(filtered_tools)
+            and ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER not in client_beta_list
+            else ()
+        )
+        anthropic_beta_list: Final = [*client_beta_list, *eager_beta]
 
         # Only separate tools if computer use tools are actually present
         if filtered_tools and self.is_computer_use_tool_used(filtered_tools, model):
@@ -1619,7 +1634,6 @@ class AmazonConverseConfig(BaseConfig):
 
         # Opus 4.5 gates ``output_config.effort`` behind a beta header;
         # Claude 4.6/4.7 accept it without one.
-        base_model: Final = BedrockModelInfo.get_base_model(model)
         if base_model.startswith("anthropic"):
             output_config: Final = additional_request_params.get("output_config")
             if (
