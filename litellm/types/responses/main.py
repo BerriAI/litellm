@@ -1,4 +1,9 @@
 from collections.abc import Mapping, Sequence
+
+# `Union` is no longer referenced in this module, but
+# `litellm/llms/base_llm/image_edit/transformation.py` does
+# `from litellm.types.responses.main import *` and annotates with it, so
+# dropping it here breaks that import at class-definition time.
 from typing import Final, Literal, Optional, Union
 
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
@@ -27,6 +32,20 @@ class OutputText(BaseLiteLLMOpenAIResponseObject):
     type: str | None  # "output_text"
     text: str | None
     annotations: list[GenericResponseOutputItemContentAnnotation] | None
+
+
+class OutputReasoningText(BaseLiteLLMOpenAIResponseObject):
+    """Reasoning text content inside a ``reasoning`` output item.
+
+    Distinct from :class:`OutputText`: the Responses API types a reasoning
+    item's content parts as ``reasoning_text`` with a ``text`` field and no
+    annotations, while a message's content parts are ``output_text``. Emitting
+    the latter inside a reasoning item makes ``openai-python`` warn on every
+    reasoning-bearing response.
+    """
+
+    type: Literal["reasoning_text"]
+    text: str | None
 
 
 class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
@@ -142,7 +161,7 @@ class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):
     id: str
     status: str  # "completed", "in_progress", etc.
     role: str  # "assistant", "user", etc.
-    content: list[OutputText]
+    content: list[OutputText | OutputReasoningText]
     phase: Phase = None
 
 
