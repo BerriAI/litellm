@@ -311,9 +311,7 @@ def optionally_handle_anthropic_oauth(
         ):
             headers.pop(name)
         headers["authorization"] = (
-            api_key
-            if api_key.startswith("Bearer ")
-            else f"Bearer {api_key}"  # pyright: ignore[reportOptionalMemberAccess]  # guarded by is_anthropic_oauth_key
+            api_key if api_key.startswith("Bearer ") else f"Bearer {api_key}"  # pyright: ignore[reportOptionalMemberAccess]  # guarded by is_anthropic_oauth_key
         )
         headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
         headers["anthropic-dangerous-direct-browser-access"] = "true"
