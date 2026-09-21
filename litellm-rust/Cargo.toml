@@ -14,9 +14,14 @@ litellm-host = { path = "crates/host" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
 litellm-framing = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
+litellm-auth-types = { path = "crates/auth-types" }
 litellm-auth-aws = { path = "crates/auth-aws" }
 litellm-auth-azure = { path = "crates/auth-azure" }
 litellm-auth-gcp = { path = "crates/auth-gcp" }
+litellm-secrets = { path = "crates/secrets" }
+litellm-secrets-types = { path = "crates/secrets-types" }
+litellm-secrets-aws = { path = "crates/secrets-aws" }
+litellm-secrets-google = { path = "crates/secrets-google" }
 litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
 litellm-types = { path = "crates/types" }
@@ -31,6 +36,8 @@ litellm-host-python = { path = "crates/host-python" }
 
 bytes = "1"
 http = "1"
+google-cloud-auth = { version = "1.16.0", default-features = false }
+jsonwebtoken = { version = "11.1.0", default-features = false }
 hyper-util = { version = "0.1.20", default-features = false, features = ["client-proxy"] }
 proptest = "1.7.0"
 pyo3 = "0.29.2"
