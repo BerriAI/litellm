@@ -485,10 +485,8 @@ class LoggingWorker:
         callback hasn't finished yet — ``queue.empty()`` would return True in
         that window and cause us to skip the wait.
 
-        ``start()`` runs first so that, after an event loop change, the tasks
-        still on the previous loop's queue move onto this loop and a worker
-        here drains them; joining the old queue directly would wait on a
-        counter nothing on this loop ever decrements.
+        ``start()`` runs first so a queue left behind by a previous event loop
+        is carried onto this one and drained here instead of joined forever.
         """
         if self._queue is None:
             return
