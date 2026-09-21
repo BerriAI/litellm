@@ -83,9 +83,7 @@ class S3Stub:
                 if send_body:
                     self.wfile.write(entry.body)
 
-            def log_message(
-                self, format: str, *args: object
-            ) -> None:  # BaseHTTPRequestHandler.log_message names this parameter format
+            def log_message(self, format: str, *args: object) -> None:
                 pass
 
         self._server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
