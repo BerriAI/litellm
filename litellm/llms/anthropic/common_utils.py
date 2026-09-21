@@ -263,6 +263,7 @@ def optionally_handle_anthropic_oauth(
     api_key: str | None,
     api_base: str | None = None,
 ) -> tuple[dict, str | None]:
+    result_headers: Final = headers.copy()
     if not is_anthropic_api_base(api_base):
         from litellm._logging import verbose_proxy_logger
 
@@ -270,12 +271,12 @@ def optionally_handle_anthropic_oauth(
             "Stripping Anthropic OAuth token from request to non-Anthropic api_base: %s",
             api_base,
         )
-        for name in tuple(headers):
+        for name in tuple(result_headers):
             name_lower = name.lower()
-            if name_lower in ("authorization", "x-api-key") and is_anthropic_oauth_key(headers[name]):
-                headers.pop(name)
+            if name_lower in ("authorization", "x-api-key") and is_anthropic_oauth_key(result_headers[name]):
+                result_headers.pop(name)
             elif name_lower == "anthropic-beta":
-                existing_beta = headers.get(name)
+                existing_beta = result_headers.get(name)
                 if existing_beta:
                     filtered_betas = tuple(
                         b.strip()
@@ -283,41 +284,45 @@ def optionally_handle_anthropic_oauth(
                         if b.strip() and b.strip() != ANTHROPIC_OAUTH_BETA_HEADER
                     )
                     if filtered_betas:
-                        headers[name] = ",".join(filtered_betas)
+                        result_headers[name] = ",".join(filtered_betas)
                     else:
-                        headers.pop(name)
+                        result_headers.pop(name)
             elif name_lower == "anthropic-dangerous-direct-browser-access":
-                headers.pop(name)
+                result_headers.pop(name)
         sanitized_key: Final = None if is_anthropic_oauth_key(api_key) else api_key
-        return headers, sanitized_key
+        return result_headers, sanitized_key
 
     # Check Authorization header (passthrough / forwarded requests)
-    auth_header: Final = next((value for name, value in headers.items() if name.lower() == "authorization"), "")
+    auth_header: Final = next((value for name, value in result_headers.items() if name.lower() == "authorization"), "")
     if auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
-        api_key = auth_header.removeprefix("Bearer ")
+        extracted_api_key: Final = auth_header.removeprefix("Bearer ")
         for name in tuple(
-            header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
+            header_name for header_name in result_headers if header_name.lower() in ("x-api-key", "authorization")
         ):
-            headers.pop(name)
-        headers["authorization"] = auth_header
-        headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
-        headers["anthropic-dangerous-direct-browser-access"] = "true"
-        return headers, api_key
+            result_headers.pop(name)
+        result_headers["authorization"] = auth_header
+        result_headers["anthropic-beta"] = _merge_beta_headers(
+            result_headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+        )
+        result_headers["anthropic-dangerous-direct-browser-access"] = "true"
+        return result_headers, extracted_api_key
 
     # Check if api_key itself is an OAuth token
     if is_anthropic_oauth_key(api_key):
         for name in tuple(
-            header_name for header_name in headers if header_name.lower() in ("x-api-key", "authorization")
+            header_name for header_name in result_headers if header_name.lower() in ("x-api-key", "authorization")
         ):
-            headers.pop(name)
-        headers["authorization"] = (
+            result_headers.pop(name)
+        result_headers["authorization"] = (
             api_key if api_key.startswith("Bearer ") else f"Bearer {api_key}"  # pyright: ignore[reportOptionalMemberAccess]  # guarded by is_anthropic_oauth_key
         )
-        headers["anthropic-beta"] = _merge_beta_headers(headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER)
-        headers["anthropic-dangerous-direct-browser-access"] = "true"
-        return headers, api_key
+        result_headers["anthropic-beta"] = _merge_beta_headers(
+            result_headers.get("anthropic-beta"), ANTHROPIC_OAUTH_BETA_HEADER
+        )
+        result_headers["anthropic-dangerous-direct-browser-access"] = "true"
+        return result_headers, api_key
 
-    return headers, api_key
+    return result_headers, api_key
 
 
 class _EagerInputStreamingFunction(BaseModel):
