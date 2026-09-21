@@ -1628,7 +1628,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if not getattr(assembled_model_response, "usage", None) and chunks:
             last_chunk_usage: Final = getattr(chunks[-1], "usage", None)
             if last_chunk_usage:
-                assembled_model_response.usage = last_chunk_usage
+                setattr(assembled_model_response, "usage", last_chunk_usage)  # noqa: B010
 
     def get_presidio_settings_from_request_data(self, data: dict) -> PresidioPerRequestConfig | None:
         if "metadata" in data:
