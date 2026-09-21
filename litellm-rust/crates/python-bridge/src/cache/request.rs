@@ -17,6 +17,8 @@ struct RequestInput {
     messages: Option<Value>,
     input: Option<Value>,
     metadata: Option<Value>,
+    litellm_metadata: Option<Value>,
+    litellm_params: Option<Value>,
 }
 
 pub(super) struct NativeRequest {
@@ -27,6 +29,8 @@ pub(super) struct NativeRequest {
     pub(super) messages: Option<Value>,
     pub(super) input: Option<Value>,
     pub(super) metadata: Option<Value>,
+    pub(super) litellm_metadata: Option<Value>,
+    pub(super) litellm_params: Option<Value>,
 }
 
 pub(super) fn request(value: &Bound<'_, PyAny>) -> PyResult<NativeRequest> {
@@ -46,6 +50,8 @@ fn request_input(input: RequestInput) -> PyResult<NativeRequest> {
         messages: input.messages,
         input: input.input,
         metadata: input.metadata,
+        litellm_metadata: input.litellm_metadata,
+        litellm_params: input.litellm_params,
     })
 }
 

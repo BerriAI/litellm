@@ -53,8 +53,12 @@ def _request(prompt: str = "semantic cache prompt") -> dict[str, object]:
 def _field_request(
     prompt: str,
     metadata: Mapping[str, object],
+    *,
+    namespace: str | None = None,
+    litellm_metadata: Mapping[str, object] | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    request: Final = {
         "key": {
             "fields": [
                 {
@@ -69,23 +73,32 @@ def _field_request(
                     "api_parameter": True,
                     "internal_parameter": False,
                 },
-            ]
+            ],
+            "namespace": namespace,
         },
         "messages": [{"role": "user", "content": prompt}],
         "metadata": dict(metadata),
     }
+    if litellm_metadata is not None:
+        request["litellm_metadata"] = dict(litellm_metadata)
+    if litellm_params is not None:
+        request["litellm_params"] = dict(litellm_params)
+    return request
 
 
 def _facade(
     url: str,
     index_name: str,
     embeddings: Mapping[str, list[float]],
+    *,
+    namespace: str | None = None,
 ) -> Cache:
     facade: Final = Cache(
         type=LiteLLMCacheType.VALKEY_SEMANTIC,
         redis_url=url,
         similarity_threshold=0.8,
         valkey_semantic_cache_index_name=index_name,
+        namespace=namespace,
     )
     vectors: Final = embeddings
 
@@ -173,6 +186,45 @@ async def test_async_lookup_and_store(
     request: Final = {**_request(), "ttl_seconds": 2.0}
     await binding.async_store(request, {"answer": "async"})
     assert await binding.async_lookup(request) == {"answer": "async"}
+
+
+async def test_disabled_cache_controls_skip_async_embedding(
+    valkey_url: str,
+    index_name: str,
+) -> None:
+    backend: Final = _backend(valkey_url, index_name)
+    calls: Final = []
+
+    async def fail_embedding(prompt: str, metadata: dict[str, object] | None = None) -> list[float]:
+        calls.append(prompt)
+        raise AssertionError("embedding must not run")
+
+    backend._get_async_embedding = fail_embedding
+    handle: Final = _native._CacheTestHandle.valkey_semantic(
+        valkey_url,
+        0.8,
+        index_name,
+        backend,
+    )
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    controls: Final = {
+        "supported_call_type": True,
+        "configured": True,
+        "native_backend": True,
+        "default_on": True,
+        "caching": True,
+        "no_cache": False,
+        "no_store": False,
+        "use_cache": True,
+    }
+    no_read_request: Final = {**_request(), "controls": {**controls, "no_cache": True}}
+    assert await binding.async_lookup(no_read_request) is None
+    no_write_request: Final = {**_request(), "controls": {**controls, "no_store": True}}
+    await binding.async_store(no_write_request, {"answer": "blocked"})
+    assert calls == []
+    client: Final = redis.Redis.from_url(valkey_url)
+    assert list(client.scan_iter(f"{index_name}:*")) == []
+    client.close()
 
 
 async def test_async_embedding_runs_inline_in_caller_task(
@@ -323,6 +375,25 @@ def test_malformed_entry_is_a_miss_on_native_and_python(
     assert backend.get_cache("key", messages=_request()["messages"]) is None
 
 
+def test_mixed_content_parts_match_python_semantic_behavior(
+    valkey_url: str,
+    index_name: str,
+) -> None:
+    backend: Final = _backend(valkey_url, index_name)
+    messages: Final = [{"role": "user", "content": ["raw", {"text": "hello"}]}]
+    backend.set_cache("key", {"answer": "mixed"}, messages=messages)
+    assert backend.get_cache("key", messages=messages) is None
+
+    handle: Final = _native._CacheTestHandle.valkey_semantic(valkey_url, 0.8, index_name, backend)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    request: Final = {**_request(), "messages": messages}
+    binding.store(request, {"answer": "mixed"})
+    assert binding.lookup(request) is None
+    client: Final = redis.Redis.from_url(valkey_url)
+    assert list(client.scan_iter(f"{index_name}:*")) == []
+    client.close()
+
+
 async def test_async_store_batch_and_lookup(
     valkey_url: str,
     index_name: str,
@@ -406,6 +477,84 @@ def test_field_key_matches_python_semantic_scope(
     client.close()
 
 
+def test_field_key_reads_all_python_tenant_metadata_sources(
+    valkey_url: str,
+    index_name: str,
+) -> None:
+    facade: Final = _facade(valkey_url, index_name, {"semantic cache prompt": [1.0, 0.0]})
+    params_metadata: Final = {"user_api_key_team_id": "team-from-params"}
+    expected: Final = facade.get_cache_key(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": "semantic cache prompt"}],
+        metadata={},
+        litellm_params={"metadata": params_metadata},
+    )
+    handle: Final = _native._CacheTestHandle.valkey_semantic(
+        valkey_url,
+        0.8,
+        index_name,
+        facade.cache,
+    )
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    binding.store(
+        _field_request(
+            "semantic cache prompt",
+            {},
+            litellm_params={"metadata": params_metadata},
+        ),
+        {"answer": "params"},
+    )
+    client: Final = redis.Redis.from_url(valkey_url)
+    documents: Final = list(client.scan_iter(f"{index_name}:*"))
+    assert len(documents) == 1
+    document_parts: Final = documents[0].decode().split(":")
+    assert document_parts[1] == hashlib.sha256(expected.encode()).hexdigest()
+    client.close()
+
+    assert (
+        binding.lookup(
+            _field_request(
+                "semantic cache prompt",
+                {},
+                litellm_metadata={"user_api_key_team_id": "team-from-litellm"},
+            )
+        )
+        is None
+    )
+
+
+def test_namespace_isolates_semantic_entries(
+    valkey_url: str,
+    index_name: str,
+) -> None:
+    facade: Final = _facade(
+        valkey_url,
+        index_name,
+        {"semantic cache prompt": [1.0, 0.0]},
+        namespace="team-a",
+    )
+    handle: Final = _native._CacheTestHandle.valkey_semantic(
+        valkey_url,
+        0.8,
+        index_name,
+        facade.cache,
+    )
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=handle)).resolve()
+    team_a: Final = _field_request("semantic cache prompt", {}, namespace="team-a")
+    team_b: Final = _field_request("semantic cache prompt", {}, namespace="team-b")
+    binding.store(team_a, {"answer": "team-a"})
+    assert binding.lookup(team_b) is None
+    assert binding.lookup(team_a) == {"answer": "team-a"}
+    cached: Final = cast(
+        Mapping[str, object],
+        facade.get_cache(
+            model="gpt-4.1",
+            messages=[{"role": "user", "content": "semantic cache prompt"}],
+        ),
+    )
+    assert cached == {"answer": "team-a"}
+
+
 def test_field_key_isolates_tenant_scope(
     valkey_url: str,
     index_name: str,
@@ -422,13 +571,8 @@ def test_field_key_isolates_tenant_scope(
         _field_request("semantic cache prompt", {"user_api_key": "k1"}),
         {"answer": "tenant one"},
     )
-    assert (
-        binding.lookup(_field_request("semantic cache prompt", {"user_api_key": "k2"}))
-        is None
-    )
-    assert binding.lookup(_field_request("semantic cache prompt", {"user_api_key": "k1"})) == {
-        "answer": "tenant one"
-    }
+    assert binding.lookup(_field_request("semantic cache prompt", {"user_api_key": "k2"})) is None
+    assert binding.lookup(_field_request("semantic cache prompt", {"user_api_key": "k1"})) == {"answer": "tenant one"}
 
 
 def test_tls_valkey_facade_falls_back_to_python(

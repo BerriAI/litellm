@@ -273,13 +273,11 @@ pub fn prompt_from_context(context: &SemanticCacheContext) -> Option<String> {
     if let Some(Value::Array(messages)) = context.messages.as_ref()
         && !messages.is_empty()
     {
-        return Some(
-            messages
-                .iter()
-                .filter_map(Value::as_object)
-                .map(message_text)
-                .collect(),
-        );
+        return messages
+            .iter()
+            .filter_map(Value::as_object)
+            .map(message_text)
+            .collect();
     }
     let input = context.input.as_ref()?;
     let mut parts = Vec::new();
@@ -288,21 +286,25 @@ pub fn prompt_from_context(context: &SemanticCacheContext) -> Option<String> {
     (!prompt.is_empty()).then_some(prompt)
 }
 
-fn message_text(message: &serde_json::Map<String, Value>) -> String {
+fn message_text(message: &serde_json::Map<String, Value>) -> Option<String> {
     let content = match message.get("content") {
         Some(Value::String(value)) => value.clone(),
-        Some(Value::Array(parts)) => parts
-            .iter()
-            .filter_map(Value::as_object)
-            .filter_map(|part| part.get("text").and_then(Value::as_str))
-            .filter(|text| !text.is_empty())
-            .collect(),
+        Some(Value::Array(parts)) => {
+            let mut content = String::new();
+            for part in parts {
+                let part = part.as_object()?;
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    content.push_str(text);
+                }
+            }
+            content
+        }
         _ => String::new(),
     };
-    format!(
+    Some(format!(
         "{content}{}",
         search_results_text(message.get("search_results"))
-    )
+    ))
 }
 
 fn search_results_text(value: Option<&Value>) -> String {
@@ -732,6 +734,7 @@ mod tests {
     #[rstest]
     #[case(json!([{"content": "hello"}]), None, Some("hello"))]
     #[case(json!([{"content": [{"text": "hello"}, {"text": " world"}]}]), None, Some("hello world"))]
+    #[case(json!([{"content": ["raw", {"text": "hello"}]}]), None, None)]
     #[case(json!([{"search_results": [{"source": "s", "title": "t", "content": [{"text": "c"}], "citations": ["x"]}]}]), None, Some(r#"stc["x"]"#))]
     #[case(Value::Array(vec![]), Some(json!(" hello ")), Some("hello"))]
     #[case(Value::Array(vec![]), Some(json!([{"content": "first"}, {"text": "second"}])), Some("first\nsecond"))]

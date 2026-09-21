@@ -28,7 +28,7 @@ pub(super) struct SemanticEmbedExecution {
     embedder: PythonEmbedder,
     requests: Vec<ResponseCacheRequest<SemanticCacheContext>>,
     op: Op,
-    now: Duration,
+    now: Option<Duration>,
     prepared: Vec<Option<Vec<f32>>>,
     index: usize,
     state: State,
@@ -39,14 +39,13 @@ impl SemanticEmbedExecution {
         backend: Arc<ValkeySemanticCache<PythonEmbedder, ResponseCacheCodec>>,
         embedder: PythonEmbedder,
         request: ResponseCacheRequest<SemanticCacheContext>,
-        now: Duration,
     ) -> Self {
         Self {
             backend,
             embedder,
             requests: vec![request],
             op: Op::Lookup,
-            now,
+            now: None,
             prepared: vec![None],
             index: 0,
             state: State::Start,
@@ -58,14 +57,13 @@ impl SemanticEmbedExecution {
         embedder: PythonEmbedder,
         request: ResponseCacheRequest<SemanticCacheContext>,
         response: Value,
-        now: Duration,
     ) -> Self {
         Self {
             backend,
             embedder,
             requests: vec![request],
             op: Op::Store(response),
-            now,
+            now: None,
             prepared: vec![None],
             index: 0,
             state: State::Start,
@@ -77,7 +75,6 @@ impl SemanticEmbedExecution {
         embedder: PythonEmbedder,
         requests: Vec<ResponseCacheRequest<SemanticCacheContext>>,
         responses: Vec<Value>,
-        now: Duration,
     ) -> Self {
         Self {
             backend,
@@ -85,15 +82,26 @@ impl SemanticEmbedExecution {
             prepared: vec![None; requests.len()],
             requests,
             op: Op::StoreBatch(responses),
-            now,
+            now: None,
             index: 0,
             state: State::Start,
         }
     }
 
     fn start(&mut self, py: Python<'_>) -> PyResult<ExecutionStep> {
+        if self.now.is_none() {
+            self.now = Some(super::request::now());
+        }
         while self.index < self.requests.len() {
             let request = &self.requests[self.index];
+            let enabled = match &self.op {
+                Op::Lookup => request.controls.reads(),
+                Op::Store(_) | Op::StoreBatch(_) => request.controls.writes(),
+            };
+            if !enabled {
+                self.index += 1;
+                continue;
+            }
             let Some(prompt) = prompt_from_context(&request.context) else {
                 self.index += 1;
                 continue;
@@ -113,7 +121,9 @@ impl SemanticEmbedExecution {
         let requests = self.requests.clone();
         let prepared = self.prepared.clone();
         let backend = Arc::clone(&self.backend);
-        let now = self.now;
+        let now = self
+            .now
+            .ok_or_else(|| PyRuntimeError::new_err("semantic cache timestamp is unavailable"))?;
         let awaitable = match &self.op {
             Op::Lookup => {
                 let Some(request) = requests.into_iter().next() else {
