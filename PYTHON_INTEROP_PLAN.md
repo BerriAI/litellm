@@ -4,9 +4,9 @@ Proposed implementation PR title: `fix(rust): preserve Python settings semantics
 
 Base: `main` at `457b01e96d131f88df8cace8832f8e044ee5f167`. Planning branch: `litellm_python_interop_foundation`
 
-This plan follows `migration/tdd/sections/rust/python-interop/{pyo3-contract,boundary,coercion}.typ` in the sibling `litellm-typst` checkout. The first PR establishes conversion contracts and exercises them through existing HTTP, URL policy, and OCR provider-default consumers. Implementation, runtime validation, and PR creation remain future work
+This plan follows `migration/tdd/sections/rust/python-interop/{pyo3-contract,boundary,coercion}.typ` in the sibling `litellm-typst` checkout. The first PR establishes conversion contracts and exercises them through existing HTTP, URL policy, and OCR provider-default consumers. The foundation is implemented on this branch. No PR is being created for this task
 
-**What already exists**
+**Baseline before implementation**
 
 `host-python/src/marshal.rs` already uses `pythonize` directly, separates internal conversion from public argument errors, and contains serializer panics in `Pythonized<T>`. Keep those entrypoints. `Pythonized<T>` currently stringifies conversion errors, unlike `from_py` and `to_py`, so its error transfer needs correction
 
