@@ -51,7 +51,15 @@ from litellm.router_utils.client_initalization_utils import MaxParallelRequestsL
 from litellm.router_utils.cooldown_handlers import _async_get_cooldown_deployments
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.llms.openai import ChatCompletionRequest
-from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
+from litellm.types.router import (
+    Deployment,
+    DeploymentListingPrice,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    ModelInfo,
+    PreRoutingHookResponse,
+    RetryPolicy,
+)
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -9539,39 +9547,104 @@ def test_get_model_listing_info_returns_none_for_unknown_name():
     assert router.get_model_listing_info("not-a-real-model") is None
 
 
-def test_highest_configured_price_quotes_the_dearest_deployment_across_both_sources():
-    """Custom pricing is accepted in model_info and in litellm_params, so both are read.
+def test_configured_price_reads_model_info_when_litellm_params_has_none():
+    """Custom pricing is accepted in both blocks, so model_info alone still counts."""
+    price = litellm.Router._configured_price(
+        {"input_cost_per_token": 3e-07}, {"model": "openai/gpt-4o-mini"}, "input_cost_per_token"
+    )
 
-    A group whose deployments disagree quotes the dearest, matching what
-    get_model_group_info reports: a caller pricing against the cheapest member
-    under-funds the request that lands on the dearest one.
-    """
-    model_infos = ({"input_cost_per_token": 3e-07}, {"mode": "chat"})
-    params = ({"model": "openai/gpt-4o-mini"}, {"input_cost_per_token": 9e-07})
-
-    highest = litellm.Router._highest_configured_price(model_infos, params, "input_cost_per_token")
-
-    assert highest == 9e-07, f"expected the dearer deployment's price, got {highest}"
+    assert price == 3e-07, f"expected the model_info price, got {price}"
 
 
-def test_highest_configured_price_is_none_when_no_deployment_configures_one():
+def test_configured_price_is_none_when_the_deployment_configures_none():
     """Nothing configured means the cost map answers instead, so this must not report 0."""
-    model_infos = ({"mode": "chat"},)
-    params = ({"model": "openai/gpt-4o-mini"},)
+    price = litellm.Router._configured_price(
+        {"mode": "chat"}, {"model": "openai/gpt-4o-mini"}, "input_cost_per_token"
+    )
 
-    highest = litellm.Router._highest_configured_price(model_infos, params, "input_cost_per_token")
-
-    assert highest is None, f"expected no configured price, got {highest}"
+    assert price is None, f"expected no configured price, got {price}"
 
 
-def test_highest_configured_price_ignores_a_malformed_configured_value():
+def test_configured_price_ignores_a_malformed_configured_value():
     """model_info reaches the listing uncoerced, so a config typo must not become a price."""
-    model_infos = ({"input_cost_per_token": ""},)
-    params = ({"model": "openai/gpt-4o-mini", "input_cost_per_token": -1e-06},)
+    price = litellm.Router._configured_price(
+        {"input_cost_per_token": ""}, {"input_cost_per_token": -1e-06}, "input_cost_per_token"
+    )
 
-    highest = litellm.Router._highest_configured_price(model_infos, params, "input_cost_per_token")
+    assert price is None, f"expected malformed and negative values to be dropped, got {price}"
 
-    assert highest is None, f"expected malformed and negative values to be dropped, got {highest}"
+
+def test_get_model_listing_info_keeps_each_deployment_price_separate():
+    """A group's price is only correct once each deployment resolves its own price first.
+
+    Collapsing the group to the highest override here would hide a deployment that
+    configures nothing and is dearer in the catalog, so the listing gets one record per
+    deployment, carrying that deployment's own cost-map key.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "mixed",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 3e-07,
+                },
+            },
+            {"model_name": "mixed", "litellm_params": {"model": "openai/gpt-5.5", "api_key": "test-key"}},
+        ]
+    )
+
+    info = router.get_model_listing_info("mixed")
+
+    assert info is not None
+    assert info.deployment_prices == (
+        DeploymentListingPrice(
+            cost_map_key="openai/gpt-4o-mini", input_cost_per_token=3e-07, output_cost_per_token=None
+        ),
+        DeploymentListingPrice(cost_map_key="openai/gpt-5.5", input_cost_per_token=None, output_cost_per_token=None),
+    )
+
+
+def test_get_wildcard_listing_price_reports_a_priced_pattern_deployment():
+    """A wildcard-expanded name is absent from the index, so its override lives on the pattern.
+
+    Without this the listing quotes the catalog while the request is billed at the
+    override.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_key": "test-key",
+                    "input_cost_per_token": 9e-06,
+                    "output_cost_per_token": 9e-05,
+                },
+            }
+        ]
+    )
+
+    price = router.get_wildcard_listing_price("openai/gpt-4o-mini")
+
+    assert price is not None
+    assert (price.input_cost_per_token, price.output_cost_per_token) == (9e-06, 9e-05)
+
+
+def test_get_wildcard_listing_price_skips_pattern_matching_when_no_wildcard_is_priced():
+    """Pattern matching is the expensive path, so an unpriced wildcard must not trigger it.
+
+    With no override the catalog is already the right answer, so there is nothing to find.
+    """
+    router = litellm.Router(
+        model_list=[{"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}}]
+    )
+
+    with patch.object(router.pattern_router, "route", side_effect=AssertionError("pattern matching ran")) as routed:
+        assert router.get_wildcard_listing_price("openai/gpt-4o-mini") is None
+
+    routed.assert_not_called()
 
 
 def test_get_model_listing_info_carries_configured_limits():

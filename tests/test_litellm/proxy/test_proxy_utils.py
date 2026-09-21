@@ -988,7 +988,7 @@ from typing import cast
 
 import litellm
 from litellm.proxy.utils import create_model_info_response
-from litellm.types.router import DeploymentModelListingInfo
+from litellm.types.router import DeploymentListingPrice, DeploymentModelListingInfo
 from litellm.types.utils import ModelInfo
 
 
@@ -1221,8 +1221,11 @@ def test_create_model_info_response_configured_pricing_overrides_cost_map():
         cost_map_keys=("gpt-4o",),
         max_input_tokens=None,
         max_output_tokens=None,
-        input_cost_per_token=3e-07,
-        output_cost_per_token=1.2e-06,
+        deployment_prices=(
+            DeploymentListingPrice(
+                cost_map_key="gpt-4o", input_cost_per_token=3e-07, output_cost_per_token=1.2e-06
+            ),
+        ),
     )
 
     response = create_model_info_response(
@@ -1264,7 +1267,13 @@ def test_create_model_info_response_reports_highest_price_in_a_mixed_group():
     for keys in (("cheap-model", "dear-model"), ("dear-model", "cheap-model")):
         router = MagicMock()
         router.get_model_listing_info.return_value = DeploymentModelListingInfo(
-            cost_map_keys=keys, max_input_tokens=None, max_output_tokens=None
+            cost_map_keys=keys,
+            max_input_tokens=None,
+            max_output_tokens=None,
+            deployment_prices=tuple(
+                DeploymentListingPrice(cost_map_key=key, input_cost_per_token=None, output_cost_per_token=None)
+                for key in keys
+            ),
         )
 
         response = create_model_info_response(
@@ -1280,6 +1289,133 @@ def test_create_model_info_response_reports_highest_price_in_a_mixed_group():
             "input_cost_per_token": 5e-06,
             "output_cost_per_token": 3e-05,
         }, keys
+
+
+def test_create_model_info_response_does_not_let_a_custom_rate_hide_a_dearer_catalog_one():
+    """One deployment's override must not stand in for a group that has a dearer member.
+
+    Comparing overrides against each other and only then falling back to the catalog
+    quoted the cheap override here while a request routed to the uncustomised deployment
+    billed 17x that, and disagreed with /model_group/info.
+    """
+    prices = {
+        "cheap-model": _fake_model_info(key="cheap-model", input_cost_per_token=1e-07, output_cost_per_token=4e-07),
+        "dear-model": _fake_model_info(key="dear-model", input_cost_per_token=5e-06, output_cost_per_token=3e-05),
+    }
+    cost_map = {
+        "cheap-model": {"input_cost_per_token": 1e-07, "output_cost_per_token": 4e-07},
+        "dear-model": {"input_cost_per_token": 5e-06, "output_cost_per_token": 3e-05},
+    }
+    router = MagicMock()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("cheap-model", "dear-model"),
+        max_input_tokens=None,
+        max_output_tokens=None,
+        deployment_prices=(
+            DeploymentListingPrice(
+                cost_map_key="cheap-model", input_cost_per_token=3e-07, output_cost_per_token=1.2e-06
+            ),
+            DeploymentListingPrice(cost_map_key="dear-model", input_cost_per_token=None, output_cost_per_token=None),
+        ),
+    )
+
+    response = create_model_info_response(
+        model_id="house-model",
+        provider="openai",
+        llm_router=router,
+        include_pricing=True,
+        get_model_info=lambda model: prices[model],
+        cost_map=cost_map,
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 3e-05,
+    }
+
+
+def test_create_model_info_response_prefers_a_cheaper_override_over_its_own_catalog_price():
+    """The override is what the request is billed at, so it wins even when it is cheaper.
+
+    The guard against the case above must not turn into "always take the catalog".
+    """
+    router = MagicMock()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("gpt-4o",),
+        max_input_tokens=None,
+        max_output_tokens=None,
+        deployment_prices=(
+            DeploymentListingPrice(cost_map_key="gpt-4o", input_cost_per_token=3e-08, output_cost_per_token=4e-08),
+        ),
+    )
+
+    response = create_model_info_response(
+        model_id="house-model",
+        provider="openai",
+        llm_router=router,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o", input_cost_per_token=1.5e-07, output_cost_per_token=6e-07
+        ),
+        cost_map={"gpt-4o": {"input_cost_per_token": 1.5e-07, "output_cost_per_token": 6e-07}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 3e-08,
+        "output_cost_per_token": 4e-08,
+    }
+
+
+def test_create_model_info_response_uses_wildcard_pricing_for_an_expanded_row():
+    """A wildcard-expanded name has no index entry, so its override lives on the pattern.
+
+    Reading only the index quoted the catalog here while the request billed at the
+    wildcard's own rate.
+    """
+    router = MagicMock()
+    router.get_model_listing_info.return_value = None
+    router.get_wildcard_listing_price.return_value = DeploymentListingPrice(
+        cost_map_key="openai/gpt-4o-mini", input_cost_per_token=9e-06, output_cost_per_token=9e-05
+    )
+
+    response = create_model_info_response(
+        model_id="openai/gpt-4o-mini",
+        provider="openai",
+        llm_router=router,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o-mini", input_cost_per_token=1.5e-07, output_cost_per_token=6e-07
+        ),
+        cost_map={"gpt-4o-mini": {"input_cost_per_token": 1.5e-07, "output_cost_per_token": 6e-07}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 9e-06,
+        "output_cost_per_token": 9e-05,
+    }
+
+
+def test_create_model_info_response_falls_back_to_catalog_for_an_unpriced_wildcard_row():
+    """An unpriced wildcard changes nothing, so the catalog answer still stands."""
+    router = MagicMock()
+    router.get_model_listing_info.return_value = None
+    router.get_wildcard_listing_price.return_value = None
+
+    response = create_model_info_response(
+        model_id="openai/gpt-4o-mini",
+        provider="openai",
+        llm_router=router,
+        include_pricing=True,
+        get_model_info=lambda _model: _fake_model_info(
+            key="gpt-4o-mini", input_cost_per_token=1.5e-07, output_cost_per_token=6e-07
+        ),
+        cost_map={"gpt-4o-mini": {"input_cost_per_token": 1.5e-07, "output_cost_per_token": 6e-07}},
+    )
+
+    assert response["pricing"] == {
+        "input_cost_per_token": 1.5e-07,
+        "output_cost_per_token": 6e-07,
+    }
 
 
 def test_create_model_info_response_reports_unknown_price_as_null():
@@ -1344,6 +1480,7 @@ def test_create_model_info_response_pricing_does_not_call_router_group_info():
     """Pricing must not pull /v1/models onto the expensive group-info path (#33721)."""
     router = MagicMock()
     router.get_model_listing_info.return_value = None
+    router.get_wildcard_listing_price.return_value = None
 
     response = create_model_info_response(
         model_id="gpt-4o",
@@ -1377,8 +1514,11 @@ def test_get_model_listing_info_carries_custom_deployment_pricing():
     listing_info = router.get_model_listing_info("house-gpt")
 
     assert listing_info is not None
-    assert listing_info.input_cost_per_token == 3e-07
-    assert listing_info.output_cost_per_token == 1.2e-06
+    assert listing_info.deployment_prices == (
+        DeploymentListingPrice(
+            cost_map_key="openai/gpt-4o-mini", input_cost_per_token=3e-07, output_cost_per_token=1.2e-06
+        ),
+    )
 
     response = create_model_info_response(
         model_id="house-gpt",

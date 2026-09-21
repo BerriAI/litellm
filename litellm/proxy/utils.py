@@ -71,6 +71,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.model_listing import ModelInfoResponse, ModelPricing
+from litellm.types.router import DeploymentListingPrice
 from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo, Usage
 
 try:
@@ -8420,51 +8421,98 @@ def _first_price(candidates: tuple[ModelInfo, ...], field: str, cost_map: Mappin
     )
 
 
-def _group_price(
-    candidate_sets: tuple[tuple[ModelInfo, ...], ...], field: str, cost_map: Mapping[str, object]
-) -> float | None:
-    """The highest price any deployment behind the listed name declares for ``field``.
+def _listing_deployment_prices(
+    lookup_model: str,
+    listing_info: "DeploymentModelListingInfo | None",
+    llm_router: Optional["Router"],
+) -> tuple["DeploymentListingPrice", ...]:
+    """The per-deployment prices behind a listed name, one entry per deployment.
 
-    Mirrors ``_group_token_limit``: one model behind interchangeable deployments has a
-    single price and the choice of aggregate does not arise. When a group mixes models,
-    the highest is reported because it is what ``/model_group/info`` already shows, and
-    because a caller budgeting against the cheapest member under-funds the request that
-    lands on the dearest one.
+    A name the router indexes carries its deployments' own records. A wildcard-expanded
+    name has none, so its deployment's override lives on the pattern instead and is asked
+    for there; the record is keyed to None so an absent half still falls back to the
+    catalog entry the listing already resolved.
     """
-    prices: Final = tuple(
-        price
-        for price in (_first_price(candidates, field, cost_map) for candidates in candidate_sets)
-        if price is not None
+    if listing_info is not None:
+        return listing_info.deployment_prices
+
+    wildcard_price: Final = llm_router.get_wildcard_listing_price(lookup_model) if llm_router is not None else None
+    if wildcard_price is None:
+        return (DeploymentListingPrice(cost_map_key=None, input_cost_per_token=None, output_cost_per_token=None),)
+    return (
+        DeploymentListingPrice(
+            cost_map_key=None,
+            input_cost_per_token=wildcard_price.input_cost_per_token,
+            output_cost_per_token=wildcard_price.output_cost_per_token,
+        ),
     )
-    return max(prices) if prices else None
+
+
+def _deployment_effective_price(
+    configured: float | None,
+    cost_map_key: str | None,
+    field: str,
+    candidates_by_key: Mapping[str | None, tuple[ModelInfo, ...]],
+    cost_map: Mapping[str, object],
+) -> float | None:
+    """What one deployment charges for ``field``: its own override, else its catalog entry."""
+    if configured is not None:
+        return configured
+    return _first_price(candidates_by_key.get(cost_map_key, ()), field, cost_map)
+
+
+def _highest_price(prices: tuple[float | None, ...]) -> float | None:
+    known: Final = tuple(price for price in prices if price is not None)
+    return max(known) if known else None
 
 
 def _listing_pricing(
     candidate_sets: tuple[tuple[ModelInfo, ...], ...],
-    listing_info: "DeploymentModelListingInfo | None",
+    deployment_models: tuple[str | None, ...],
+    deployment_prices: tuple["DeploymentListingPrice", ...],
     cost_map: Mapping[str, object],
 ) -> ModelPricing:
     """Effective per-token prices for a listed model, in USD.
 
-    Custom pricing configured on a deployment outranks the cost map, exactly as configured
-    token limits do, and is the only source for it: the router strips custom pricing from
-    the shared backend cost-map key so one deployment's override cannot become another's.
+    Each deployment resolves its own price first, its override when it has one and its
+    catalog entry otherwise, and the group reports the highest of those. Comparing
+    overrides against each other and only then falling back to the catalog would hide a
+    dearer deployment that happens to configure no override, quoting a caller less than
+    the request that lands there actually costs.
+
+    The highest is the deliberate pick across a group, matching what ``/model_group/info``
+    reports, because the listing cannot know which deployment a later request will reach.
 
     A price the proxy does not know is reported as None rather than 0, so a caller doing
     cost accounting cannot read an unmapped model as free.
     """
-    configured_input: Final = listing_info.input_cost_per_token if listing_info is not None else None
-    configured_output: Final = listing_info.output_cost_per_token if listing_info is not None else None
+    candidates_by_key: Final[Mapping[str | None, tuple[ModelInfo, ...]]] = MappingProxyType(
+        {key: candidates for key, candidates in zip(deployment_models, candidate_sets)}
+    )
     pricing: Final[ModelPricing] = {
-        "input_cost_per_token": (
-            configured_input
-            if configured_input is not None
-            else _group_price(candidate_sets, "input_cost_per_token", cost_map)
+        "input_cost_per_token": _highest_price(
+            tuple(
+                _deployment_effective_price(
+                    deployment.input_cost_per_token,
+                    deployment.cost_map_key,
+                    "input_cost_per_token",
+                    candidates_by_key,
+                    cost_map,
+                )
+                for deployment in deployment_prices
+            )
         ),
-        "output_cost_per_token": (
-            configured_output
-            if configured_output is not None
-            else _group_price(candidate_sets, "output_cost_per_token", cost_map)
+        "output_cost_per_token": _highest_price(
+            tuple(
+                _deployment_effective_price(
+                    deployment.output_cost_per_token,
+                    deployment.cost_map_key,
+                    "output_cost_per_token",
+                    candidates_by_key,
+                    cost_map,
+                )
+                for deployment in deployment_prices
+            )
         ),
     }
     return pricing
@@ -8560,7 +8608,8 @@ def create_model_info_response(
     if include_pricing:
         base["pricing"] = _listing_pricing(
             candidate_sets,
-            listing_info,
+            deployment_models,
+            _listing_deployment_prices(lookup_model, listing_info, llm_router),
             cost_map if cost_map is not None else litellm.model_cost,
         )
 
