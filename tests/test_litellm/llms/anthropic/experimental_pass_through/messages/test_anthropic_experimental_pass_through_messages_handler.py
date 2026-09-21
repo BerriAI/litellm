@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 
 import httpx
 import pytest
@@ -1579,11 +1579,19 @@ def _upstream_answering_with(safeguard_results: list[dict[str, object]], capture
     return upstream
 
 
+_CLIENT_BETA_HEADERS: Final = (
+    pytest.param({"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"}, id="client_sends_beta"),
+    pytest.param({"anthropic-beta": "interleaved-thinking-2025-05-14"}, id="client_omits_beta"),
+    pytest.param({}, id="client_sends_no_beta_header"),
+)
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
 async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_bedrock_invoke(
-    local_beta_headers_config,
+    local_beta_headers_config, client_headers
 ):
-    """Bedrock Invoke takes betas in the body's `anthropic_beta` and 400s on `safeguards` without the beta."""
+    """Bedrock Invoke takes betas in the body's `anthropic_beta` and 400s on `safeguards` without the beta, so the beta rides along with the field."""
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
 
     safeguards, safeguard_results = _claude_code_auto_mode_request()
@@ -1599,7 +1607,7 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
         aws_region_name="us-east-1",
         client=_upstream_answering_with(safeguard_results, captured),
         safeguards=safeguards,
-        extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"},
+        extra_headers=client_headers,
     )
 
     assert captured["body"]["safeguards"] == safeguards
@@ -1608,10 +1616,11 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("client_headers", _CLIENT_BETA_HEADERS)
 async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_beta_to_vertex(
-    local_beta_headers_config,
+    local_beta_headers_config, client_headers
 ):
-    """Vertex rawPredict takes the beta as the `anthropic-beta` header and 400s on `safeguards` without it."""
+    """Vertex rawPredict takes the beta as the `anthropic-beta` header and 400s on `safeguards` without it, so the beta rides along with the field."""
     from litellm.llms.anthropic.experimental_pass_through.messages import handler
     from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
@@ -1629,13 +1638,10 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
             vertex_credentials="{}",
             client=_upstream_answering_with(safeguard_results, captured),
             safeguards=safeguards,
-            extra_headers={"anthropic-beta": "dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14"},
+            extra_headers=client_headers,
         )
 
     assert captured["body"]["safeguards"] == safeguards
     assert "anthropic_beta" not in captured["body"]
-    assert set(captured["anthropic-beta"].split(",")) == {
-        "dangerous-tool-use-2026-09-03",
-        "interleaved-thinking-2025-05-14",
-    }
+    assert captured["anthropic-beta"].split(",").count("dangerous-tool-use-2026-09-03") == 1
     assert response["safeguard_results"] == safeguard_results
