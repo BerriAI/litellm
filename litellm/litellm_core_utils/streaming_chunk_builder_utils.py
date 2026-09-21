@@ -3,7 +3,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
+from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, TypeVar, Union, cast
 
 from typing_extensions import ReadOnly, Required
 
@@ -212,6 +212,23 @@ def apply_grounding_request_counts(
         return prompt_tokens_details
     counted: Final = prompt_tokens_details if prompt_tokens_details is not None else PromptTokensDetailsWrapper()
     return counted.model_copy(update=updates)
+
+
+_TokenDetails = TypeVar("_TokenDetails", CompletionTokensDetails, PromptTokensDetailsWrapper)
+
+
+def _as_token_details(value: object, wrapper: type[_TokenDetails]) -> _TokenDetails | None:
+    """Coerce token details from a dict or any pydantic model, including the OpenAI SDK's."""
+    if value is None:
+        return None
+    if isinstance(value, wrapper):
+        return value
+    if isinstance(value, dict):
+        return wrapper(**value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return wrapper(**model_dump())
+    return None
 
 
 class ChunkProcessor:
@@ -766,26 +783,17 @@ class ChunkProcessor:
         prompt_tokens_details: PromptTokensDetailsWrapper | None = None
         cost: float | None = None
 
-        if "prompt_tokens" in usage_chunk:
-            prompt_tokens = usage_chunk.get("prompt_tokens", 0) or 0
-        if "completion_tokens" in usage_chunk:
-            completion_tokens = usage_chunk.get("completion_tokens", 0) or 0
-        if "cache_creation_input_tokens" in usage_chunk:
-            cache_creation_input_tokens = usage_chunk.get("cache_creation_input_tokens")
-        if "cache_read_input_tokens" in usage_chunk:
-            cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
-        if "cost" in usage_chunk:
-            cost = usage_chunk.get("cost")
-        if hasattr(usage_chunk, "completion_tokens_details"):
-            if isinstance(usage_chunk.completion_tokens_details, dict):
-                completion_tokens_details = CompletionTokensDetails(**usage_chunk.completion_tokens_details)
-            elif isinstance(usage_chunk.completion_tokens_details, CompletionTokensDetails):
-                completion_tokens_details = usage_chunk.completion_tokens_details
-        if hasattr(usage_chunk, "prompt_tokens_details"):
-            if isinstance(usage_chunk.prompt_tokens_details, dict):
-                prompt_tokens_details = PromptTokensDetailsWrapper(**usage_chunk.prompt_tokens_details)
-            elif isinstance(usage_chunk.prompt_tokens_details, PromptTokensDetailsWrapper):
-                prompt_tokens_details = usage_chunk.prompt_tokens_details
+        prompt_tokens = getattr(usage_chunk, "prompt_tokens", None) or 0
+        completion_tokens = getattr(usage_chunk, "completion_tokens", None) or 0
+        cache_creation_input_tokens = getattr(usage_chunk, "cache_creation_input_tokens", None)
+        cache_read_input_tokens = getattr(usage_chunk, "cache_read_input_tokens", None)
+        cost = getattr(usage_chunk, "cost", None)
+        completion_tokens_details = _as_token_details(
+            getattr(usage_chunk, "completion_tokens_details", None), CompletionTokensDetails
+        )
+        prompt_tokens_details = _as_token_details(
+            getattr(usage_chunk, "prompt_tokens_details", None), PromptTokensDetailsWrapper
+        )
 
         return {
             "prompt_tokens": prompt_tokens,

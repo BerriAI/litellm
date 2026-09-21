@@ -1648,3 +1648,103 @@ def test_calculate_usage_falls_back_to_prompt_counter_when_mock_stream_has_no_ad
     )
 
     assert usage.prompt_tokens == 77
+
+
+def test_calculate_usage_keeps_an_openai_sdk_usage_chunk() -> None:
+    """Regression for #36168: an OpenAI-compatible upstream streams usage as an
+    SDK ``CompletionUsage``, which answers neither ``in`` nor ``get``, so every
+    count read through the Mapping protocol was zero and the details were lost.
+    """
+    from openai.types.completion_usage import CompletionTokensDetails as SDKCompletionTokensDetails
+    from openai.types.completion_usage import CompletionUsage
+    from openai.types.completion_usage import PromptTokensDetails as SDKPromptTokensDetails
+
+    usage_chunk: Final = ModelResponseStream(model="gpt-5.4-mini", choices=[])
+    usage_chunk.usage = CompletionUsage(  # type: ignore[attr-defined]
+        prompt_tokens=5234,
+        completion_tokens=125,
+        total_tokens=5359,
+        prompt_tokens_details=SDKPromptTokensDetails(cached_tokens=4992),
+        completion_tokens_details=SDKCompletionTokensDetails(reasoning_tokens=103),
+    )
+    chunks: Final = (
+        _openai_chunk(choices=({"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None},)),
+        _openai_chunk(choices=({"index": 0, "delta": {}, "finish_reason": "stop"},)),
+        usage_chunk,
+    )
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="ok",
+        count_prompt_tokens=_fail_prompt_token_count,
+    )
+
+    assert usage.prompt_tokens == 5234
+    assert usage.completion_tokens == 125
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 4992
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens == 103
+
+
+def test_calculate_usage_keeps_a_litellm_usage_chunk() -> None:
+    usage_chunk: Final = ModelResponseStream(model="gpt-5.4-mini", choices=[])
+    usage_chunk.usage = Usage(  # type: ignore[attr-defined]
+        prompt_tokens=100,
+        completion_tokens=20,
+        total_tokens=120,
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=64),
+    )
+    chunks: Final = (
+        _openai_chunk(choices=({"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None},)),
+        _openai_chunk(choices=({"index": 0, "delta": {}, "finish_reason": "stop"},)),
+        usage_chunk,
+    )
+
+    usage: Final = ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="ok",
+        count_prompt_tokens=_fail_prompt_token_count,
+    )
+
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 20
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 64
+
+
+def _usage_from_details(details: object) -> Usage:
+    usage: Final = Usage(prompt_tokens=100, completion_tokens=20, total_tokens=120)
+    usage.prompt_tokens_details = details  # type: ignore[assignment]
+    return usage
+
+
+def _calculate_usage_for(usage_block: Usage) -> Usage:
+    usage_chunk: Final = ModelResponseStream(model="gpt-5.4-mini", choices=[])
+    usage_chunk.usage = usage_block  # type: ignore[attr-defined]
+    chunks: Final = (
+        _openai_chunk(choices=({"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None},)),
+        _openai_chunk(choices=({"index": 0, "delta": {}, "finish_reason": "stop"},)),
+        usage_chunk,
+    )
+    return ChunkProcessor(chunks=chunks).calculate_usage(
+        chunks=chunks,
+        model="gpt-5.4-mini",
+        completion_output="ok",
+        count_prompt_tokens=_fail_prompt_token_count,
+    )
+
+
+def test_calculate_usage_keeps_token_details_given_as_a_plain_dict() -> None:
+    usage: Final = _calculate_usage_for(_usage_from_details({"cached_tokens": 64}))
+
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.cached_tokens == 64
+
+
+def test_calculate_usage_drops_token_details_it_cannot_read() -> None:
+    usage: Final = _calculate_usage_for(_usage_from_details(object()))
+
+    assert usage.prompt_tokens_details is None
