@@ -205,7 +205,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         session_id: Final = self._get_session_id(optional_params)
 
         # Build the input
-        input_data: Final[dict[str, Any]] = {
+        input_data: Final[dict[str, str]] = {
             "message": prompt,
             "user_id": user_id,
         }

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use litellm_auth::{
+use litellm_auth_types::{
     CredentialResolverHandle, Error, InputSource, SecretValue, Sourced, TokenProviderHandle,
 };
 use serde_json::{Map, Value};
@@ -126,7 +126,7 @@ fn source_for(sources: &BTreeMap<String, InputSource>, name: &str) -> InputSourc
 mod tests {
     use std::collections::BTreeMap;
 
-    use litellm_auth::{InputSource, Sourced};
+    use litellm_auth_types::{InputSource, Sourced};
     use serde_json::json;
 
     use super::{AzureAuthInputs, AzureCredentialType, ConfigValue};

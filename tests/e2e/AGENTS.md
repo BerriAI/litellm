@@ -2,9 +2,35 @@
 
 Code-style rules for writing tests under `tests/e2e/`. The harness already encodes the plumbing; your job is the feature-specific behavior, not reinventing it. For what a complete test must do (the lifecycle contract, asserting both recorded state and enforced behavior) and how to run a suite, see `CONTRIBUTING.md` in this directory. Repo-wide conventions live in the root `AGENTS.md`
 
+## What good looks like
+
+Only what a real provider proves. If it holds against our scripted upstream: `tests/integration`
+
+```python
+def test_pre_call_masks_pii_on_chat_completions(self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str) -> None:
+    name = f"e2e-presidio-pre-chat-{unique_marker()}"
+    _register_presidio(client, resources, name=name)
+    email = _fake_email()
+    _assert_eventually_masked(
+        lambda: client.chat(scoped_key, MODEL, _pii_prompt(unique_marker(), email), guardrails=[name], max_tokens=128),
+        _first_content,
+        email=email,
+    )
+```
+
+Marker per run, so a leftover guardrail cannot pass it. `resources.defer(...)` at creation, so a failed
+assert still tears down. Assert what the caller receives
+
+## Where it goes
+
+By the surface a customer would name: `guardrails`, `llm_translation`, `management`. Mutation check
+deferred; it needs credentials
+
 ## Suite folders
 
 Each subdirectory under `tests/e2e/` is one suite, scoped to an endpoint family or behavior area. If you add a new folder, you must add a line here describing what kind of tests belong in it, so the layout stays self-describing. `gateway/` is the exception: it holds proxy configuration only and never tests
+
+- `migrations/` - isolated Docker startup, concurrent migration, crash recovery, and legacy database compatibility. The CircleCI migration workflow enables `LITELLM_MIGRATION_TESTS=1`; these tests own their proxy containers and databases, so they do not use the shared proxy preflight or shared database cleanup
 
 - `llm_translation/` - LLM endpoint and provider-translation behavior: passthrough, custom pricing, OCR, and the non-chat inference endpoints (`/v1/responses`, `/v1/messages`, `/embeddings`, `/v1/rerank`, `/v1/audio/speech`, `/v1/images/generations`), each against a deployment the test creates via `/model/new` and deletes on teardown
 - `access_control/` - the gateway's authorization and error-shape contract: per-key model allow-lists, route-group permissions (`allowed_routes`), and unknown-model validation
@@ -96,7 +122,7 @@ E2E_FIXTURE_MODE=replay E2E_FIXTURE_DIR=/tmp/e2e-fixtures E2E_RESET_SPEND_LOGS=1
 
 Point the proxy at bogus provider credentials for the replay run and it still has to pass: that is the whole proof that nothing left the process. Bundles are never committed. `tests/e2e/.fixtures` is gitignored because a bundle holds verbatim provider response bodies and hard-fails after seven days. CI records and replays this lane on a schedule in `.github/workflows/e2e_record_replay.yml`, publishing the bundle as a private `e2e-fixtures-bundle` artifact instead of committing it, selecting the tests with the `@pytest.mark.replayable` marker, and proving the bogus-credentials replay hermetic by counting provider egress with `.github/scripts/e2e_egress_sentinel.py`
 
-Current limits: Bedrock cannot be mounted (SigV4 signs the Host header, so a rewritten api_base fails signature verification), deployments baked into the proxy's config file cannot be edge-wired (only `/model/new` registrations can carry the edge api_base), and a file upload routed by `custom_llm_provider` through the proxy's `files_settings` block never passes a deployment at all, so the batches `model_param` and `provider_fallback` scenarios keep uploading live in every mode
+Current limits: Bedrock cannot be mounted in record or replay (SigV4 signs the Host header, so a rewritten api_base fails signature verification); a test that needs to observe the Converse body registers its own `LiveEdge` with `provider_edge_bedrock.bedrock_signer` re-signing the forwarded request, and carries the `provider_edge_host` opt-in marker because the gateway must reach the pytest host, which the Buildkite ephemeral stack cannot (the GitHub changed-e2e lane, whose gateways run on the runner, sets `E2E_PROVIDER_EDGE_HOST_REACHABLE`). Deployments baked into the proxy's config file cannot be edge-wired (only `/model/new` registrations can carry the edge api_base), and a file upload routed by `custom_llm_provider` through the proxy's `files_settings` block never passes a deployment at all, so the batches `model_param` and `provider_fallback` scenarios keep uploading live in every mode
 
 ## Typing
 

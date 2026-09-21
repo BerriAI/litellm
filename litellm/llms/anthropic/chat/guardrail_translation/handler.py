@@ -1457,7 +1457,9 @@ class AnthropicMessagesHandler(BaseTranslation):
         if not any(is_text_delta(event) for item in responses_so_far for event in cls._iter_sse_events(item)):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name, "the buffered stream carries no text_delta event to land the text rewrite on"
+            )
         replacements: Final = chain((rewritten_text,), repeat(""))
 
         def rewrite_text_delta(event: Mapping[str, object]) -> _SSEFieldRewrite | None:
@@ -1498,7 +1500,11 @@ class AnthropicMessagesHandler(BaseTranslation):
         if len(block_indices) != len(post_guardrail_tool_calls):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
+                f"{len(block_indices)} tool_use blocks",
+            )
         rewrites_by_block: Final = MappingProxyType(
             {
                 index: after
