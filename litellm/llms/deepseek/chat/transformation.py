@@ -61,11 +61,11 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
 
         if (
             model.removeprefix("deepseek/").startswith(("deepseek-v4-", "deepseek-flash"))
-            and optional_params.get("thinking") == {"type": "enabled"}
+            and not (isinstance(thinking_value, dict) and thinking_value.get("type") == "disabled")
             and isinstance(reasoning_effort, str)
             and reasoning_effort != "none"
         ):
-            return {**optional_params, "reasoning_effort": reasoning_effort}
+            return {**optional_params, "reasoning_effort": reasoning_effort}  # mutable-ok: adapters mutate this dict
 
         return optional_params
 
