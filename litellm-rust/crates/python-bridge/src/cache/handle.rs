@@ -75,6 +75,18 @@ impl CacheTestHandle {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (directory))]
+    fn disk(py: Python<'_>, directory: String) -> PyResult<Self> {
+        let service =
+            release_gil(py, move || NativeResponseCache::disk(&directory)).map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
     #[pyo3(signature = (url, *, collection_name, similarity_threshold, vector_size, embedding_model="text-embedding-3-small", api_key=None, embedding_api_key=None, embedding_api_base=None, embedding_timeout_seconds=None, quantization="binary"))]
     #[expect(
         clippy::too_many_arguments,

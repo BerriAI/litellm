@@ -34,6 +34,11 @@ struct RedisPoolGuard {
     attributes: RedisPoolAttributes,
 }
 
+struct DiskStoreGuard {
+    reference: Py<PyAny>,
+    directory: String,
+}
+
 struct AzureBlobClientGuard {
     sync_client: Py<PyAny>,
     async_client: Py<PyAny>,
@@ -68,6 +73,7 @@ const CLUSTER_POOL: RedisPoolAttributes = RedisPoolAttributes {
 pub(super) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
+    disk_store: Option<DiskStoreGuard>,
     connection: ConnectionGuard,
 }
 
@@ -247,6 +253,26 @@ impl RedisPoolGuard {
     }
 }
 
+impl DiskStoreGuard {
+    fn capture(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let store = backend.getattr("disk_cache")?;
+        Ok(Self {
+            reference: store.clone().unbind(),
+            directory: store.getattr("directory")?.extract()?,
+        })
+    }
+
+    fn matches(&self, py: Python<'_>, backend: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let store = backend.getattr("disk_cache")?;
+        Ok(self.reference.bind(py).is(&store)
+            && self.directory == store.getattr("directory")?.extract::<String>()?)
+    }
+
+    fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        visit.call(&self.reference)
+    }
+}
+
 impl AzureBlobClientGuard {
     fn capture(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
         let sync_client = backend.getattr("container_client")?;
@@ -329,6 +355,7 @@ impl FacadeGuard {
                 "QdrantSemanticCache",
                 "qdrant-semantic",
             ),
+            ("disk", _) => ("litellm.caching.disk_cache", "DiskCache", "disk"),
             ("azure-blob", _) => (
                 "litellm.caching.azure_blob_cache",
                 "AzureBlobCache",
@@ -354,7 +381,7 @@ impl FacadeGuard {
             return Err(PyTypeError::new_err(message));
         }
         let backend_config_names = match kind {
-            "memory" | "redis" | "azure-blob" => &[
+            "memory" | "redis" | "azure-blob" | "disk" => &[
                 "namespace",
                 "default_ttl",
                 "max_size_in_memory",
@@ -389,6 +416,9 @@ impl FacadeGuard {
                 ],
             )?,
             backend: ObjectGuard::capture(py, &backend, backend_config_names)?,
+            disk_store: (kind == "disk")
+                .then(|| DiskStoreGuard::capture(&backend))
+                .transpose()?,
             connection: ConnectionGuard::capture(kind, cluster, &backend)?,
         })
     }
@@ -401,12 +431,20 @@ impl FacadeGuard {
         if !self.backend.matches(py, &backend)? {
             return Ok(false);
         }
+        if let Some(guard) = &self.disk_store
+            && !guard.matches(py, &backend)?
+        {
+            return Ok(false);
+        }
         self.connection.matches(py, &backend)
     }
 
     pub(super) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.outer.traverse(&visit)?;
         self.backend.traverse(&visit)?;
+        if let Some(guard) = &self.disk_store {
+            guard.traverse(&visit)?;
+        }
         self.connection.traverse(&visit)
     }
 }
