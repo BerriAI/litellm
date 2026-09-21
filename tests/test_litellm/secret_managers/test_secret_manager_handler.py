@@ -89,7 +89,9 @@ def test_azure_key_vault_matches_rust_parity_fixture() -> None:
             value=secret,
         )
         if case.expected.missing or case.expected.error:
-            with pytest.raises(Exception):
+            with pytest.raises(
+                AzureResourceNotFoundError if case.expected.missing else AzureHttpResponseError
+            ):
                 get_secret_from_manager(
                     secret_name=case.secret_name,
                     key_manager=KeyManagementSystem.AZURE_KEY_VAULT.value,
