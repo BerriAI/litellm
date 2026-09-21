@@ -90,6 +90,16 @@ class TestXAIReasoningTokenFolding:
         assert response.usage.total_tokens == 999
 
 
+def test_max_completion_tokens_is_accepted_and_mapped_to_max_tokens() -> None:
+    optional_params = litellm.get_optional_params(
+        model="grok-4.20",
+        custom_llm_provider="xai",
+        max_completion_tokens=64,
+    )
+    assert optional_params["max_tokens"] == 64, optional_params
+    assert "max_completion_tokens" not in optional_params, optional_params
+
+
 class TestXAIParallelToolCalls:
     """Test suite for XAI parallel tool calls functionality."""
 
