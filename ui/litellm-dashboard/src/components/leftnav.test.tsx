@@ -21,6 +21,7 @@ const navState = vi.hoisted(() => ({ pathname: "/ui/api-keys" }));
 
 vi.mock("next/navigation", () => ({
   usePathname: () => navState.pathname,
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {

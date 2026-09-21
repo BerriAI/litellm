@@ -255,6 +255,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
     cache_read_input_audio_token_cost: ReadOnly[float | None]
+    cache_read_input_image_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -314,6 +315,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
+    output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
@@ -328,6 +330,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
     output_cost_per_second_480p: ReadOnly[float | None]
     output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
     output_cost_per_second_4k: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
     ocr_cost_per_page_batches: ReadOnly[float | None]
@@ -2550,6 +2554,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
+    @field_serializer("data")
+    def _serialize_image_data(self, data: Sequence[OpenAIImage] | None) -> Sequence[Mapping[str, object]] | None:
+        return None if data is None else [image.model_dump() for image in data]
+
     def __init__(
         self,
         created: int | None = None,
@@ -3609,6 +3617,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_second_1080p: float | None = None
     output_cost_per_second_480p: float | None = None
     output_cost_per_second_720p: float | None = None
+    output_cost_per_second_768p: float | None = None
+    output_cost_per_second_2k: float | None = None
     output_cost_per_second_4k: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
@@ -3635,6 +3645,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_read_input_audio_token_cost: float | None = None
+    cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
@@ -3828,6 +3839,10 @@ bedrock_batch_litellm_params: Final = (
     "s3_region_name",
     "s3_endpoint_url",
     "s3_output_bucket_name",
+    "s3_bucket_owner",
+    "s3_access_key_id",
+    "s3_secret_access_key",
+    "s3_encryption_key_id",
     "bedrock_tags",
 )
 
@@ -4149,6 +4164,7 @@ class LlmProviders(str, Enum):
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
+    EDENAI = "edenai"
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"

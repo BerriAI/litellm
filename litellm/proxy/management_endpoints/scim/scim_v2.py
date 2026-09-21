@@ -1871,6 +1871,10 @@ async def delete_user(
         # Delete user
         await _table(UserRepository(prisma_client)).delete(where={"user_id": user_id})
 
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
+
         return Response(status_code=204)
     except Exception as e:
         raise handle_exception_on_proxy(e)

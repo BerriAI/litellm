@@ -246,6 +246,8 @@ model LiteLLM_UserTable {
     organization_id String?
     object_permission_id String?
     password  String?
+    password_reset_required Boolean?
+    last_breach_check_at DateTime?
     teams    String[] @default([])
     user_role  String?
 		max_budget Float?
@@ -1419,6 +1421,7 @@ model LiteLLM_PolicyAttachmentTable {
   models           String[]  @default([])  // Model names or patterns
   tags             String[]  @default([])  // Tag patterns (e.g., ["healthcare", "prod-*"])
   priority         Int?                    // Explicit execution order
+  is_default       Boolean   @default(false)  // Applied only when no non-default attachment matches
   created_at       DateTime  @default(now())
   created_by       String?
   updated_at       DateTime  @default(now()) @updatedAt
