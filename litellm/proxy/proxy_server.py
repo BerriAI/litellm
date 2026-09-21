@@ -342,6 +342,15 @@ from litellm.proxy.auth.login_throttle import (
     warn_login_counters_are_per_worker,
     warn_source_login_limit_is_off,
 )
+from litellm.proxy.auth.master_key_boot_check import (
+    MASTER_KEY_ENV_VAR,
+    SALT_KEY_ENV_VAR,
+    WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR,
+    announce_on_stderr_at_exit,
+    enforce_master_key_boot_verdict,
+    master_key_boot_verdict,
+    with_stored_secrets_counted,
+)
 from litellm.proxy.auth.model_checks import (
     expand_wildcard_deployments_for_model_info,
     get_all_fallbacks,
@@ -464,6 +473,7 @@ from litellm.proxy.config_resolvers.settings_rules import (
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -477,6 +487,10 @@ from litellm.proxy.db.gateway_request_tracking import (
     GatewayRequestAccumulator,
     GatewayRequestRedisBuffer,
     flush_gateway_requests,
+)
+from litellm.proxy.db.master_key_migration import (
+    count_values_encrypted_with_or_none,
+    migrate_if_requested,
 )
 from litellm.proxy.db.proxy_worker_heartbeat import (
     PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
@@ -586,6 +600,9 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
+)
+from litellm.proxy.management_endpoints.prompt_caching_requests import (
+    router as prompt_caching_requests_router,
 )
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
@@ -1123,6 +1140,14 @@ async def _initialize_shared_aiohttp_session():
         return None
 
 
+async def _connect_to_count_stored_values() -> SupportsRawQueries:
+    client: Final = prisma_client or PrismaClient(
+        database_url=str(get_secret("DATABASE_URL")), proxy_logging_obj=proxy_logging_obj
+    )
+    await client.connect()
+    return client.writer_db
+
+
 @asynccontextmanager
 async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     global \
@@ -1208,12 +1233,28 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
                 general_settings,
             ) = await proxy_config.load_config(router=llm_router, config_file_path=worker_config)
         elif isinstance(worker_config, dict):
-            await initialize(**worker_config)
+            await initialize_from_worker_config(worker_config)
         else:
             # if not, assume it's a json string
             worker_config = json.loads(worker_config)
             if isinstance(worker_config, dict):
-                await initialize(**worker_config)
+                await initialize_from_worker_config(worker_config)
+
+    enforce_master_key_boot_verdict(
+        await with_stored_secrets_counted(
+            master_key_boot_verdict(
+                master_key=master_key,
+                environment_master_key=os.getenv(MASTER_KEY_ENV_VAR),
+                general_settings=general_settings,
+                config_file_path=user_config_file_path,
+                override_env_is_on=get_secret_bool(WEAK_OR_UNSET_MASTER_KEY_OVERRIDE_ENV_VAR) is True,
+                salt_key_is_set=os.getenv(SALT_KEY_ENV_VAR) is not None,
+                database_is_configured=prisma_client is not None or get_secret("DATABASE_URL", None) is not None,
+            ),
+            count_values_encrypted_with=partial(count_values_encrypted_with_or_none, _connect_to_count_stored_values),
+        ),
+        announce=announce_on_stderr_at_exit,
+    )
 
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
@@ -1223,6 +1264,14 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             proxy_logging_obj=proxy_logging_obj,
             user_api_key_cache=user_api_key_cache,
         )
+
+    await migrate_if_requested(
+        environ=os.environ,
+        master_key=master_key,
+        connected_database=lambda: None if prisma_client is None else prisma_client.writer_db,
+        log=verbose_proxy_logger.warning,
+        raise_unless_tolerated=PrismaDBExceptionHandler.handle_db_exception,
+    )
 
     if prisma_client is not None:
 
@@ -1463,6 +1512,12 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
             await prisma_client.stop_db_health_watchdog_task()
         except Exception as e:
             verbose_proxy_logger.error("Error stopping DB health watchdog task: %s", e)
+
+    if prisma_client is not None and hasattr(prisma_client, "stop_view_setup_task"):
+        try:
+            await prisma_client.stop_view_setup_task()
+        except Exception as e:
+            verbose_proxy_logger.error("Error stopping the spend view setup task: %s", e)
 
     await _drain_spend_event_producer_on_shutdown()
 
@@ -2374,7 +2429,6 @@ user_debug = False
 user_max_tokens = None
 user_request_timeout = None
 user_temperature = None
-user_telemetry = True
 user_config: Final = None
 user_headers = None
 user_config_file_path: str | None = None
@@ -8569,6 +8623,14 @@ def save_worker_config(**data):
     os.environ["WORKER_CONFIG"] = json.dumps(data)
 
 
+LEGACY_WORKER_CONFIG_KEYS: Final = frozenset({"telemetry"})
+
+
+async def initialize_from_worker_config(worker_config: Mapping[str, object]) -> None:
+    supported: Final = MappingProxyType({k: v for k, v in worker_config.items() if k not in LEGACY_WORKER_CONFIG_KEYS})
+    await initialize(**supported)
+
+
 async def initialize(
     model=None,
     alias=None,
@@ -8580,7 +8642,6 @@ async def initialize(
     max_tokens=None,
     request_timeout=600,
     max_budget=None,
-    telemetry=False,
     drop_params=True,
     add_function_to_prompt=True,
     headers=None,
@@ -8596,7 +8657,6 @@ async def initialize(
         user_user_max_tokens, \
         user_request_timeout, \
         user_temperature, \
-        user_telemetry, \
         user_headers, \
         experimental, \
         llm_model_list, \
@@ -8703,7 +8763,6 @@ async def initialize(
         dynamic_config["general"]["max_budget"] = litellm.max_budget
     if experimental:
         pass
-    user_telemetry = telemetry
 
 
 # for streaming
@@ -10762,14 +10821,7 @@ class ProxyStartupEvent:
             if hasattr(prisma_client, "db") and hasattr(prisma_client.db, "start_token_refresh_task"):
                 await prisma_client.db.start_token_refresh_task()
 
-            ## Add necessary views to proxy ##
-            asyncio.create_task(
-                prisma_client.check_view_exists()
-            )  # check if all necessary views exist. Don't block execution
-
-            asyncio.create_task(
-                prisma_client._set_spend_logs_row_count_in_proxy_state()
-            )  # set the spend logs row count in proxy state. Don't block execution
+            prisma_client.start_view_setup_task()
 
             if hasattr(prisma_client, "start_db_health_watchdog_task"):
                 await prisma_client.start_db_health_watchdog_task()
@@ -13425,6 +13477,48 @@ async def supported_openai_params(model: str):
         }
     except Exception:
         raise HTTPException(status_code=400, detail={"error": f"Could not map model={model}"})
+
+
+class _ModelInfoLookupResponse(TypedDict):
+    model: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str]
+    model_info: ReadOnly[Mapping[str, object]]
+
+
+@router.get(
+    "/utils/model_info",
+    tags=["llm utils"],  # mutable-ok: FastAPI tags kwarg is list-typed
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI dependencies kwarg is list-typed
+)
+async def model_info_lookup(model: str, custom_llm_provider: str | None = None):
+    """
+    Returns the model cost map entry (token limits, pricing, supports_* capabilities) for any model
+    in the cost map, whether or not it is registered on this proxy. `model_info` carries every
+    field of the raw cost map entry plus the typed fields `litellm.get_model_info` derives from it
+    (`key`, `supported_openai_params`).
+
+    Example curl:
+    ```
+    curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai' \
+        --header 'Authorization: Bearer sk-1234'
+    ```
+    """
+    detail: Final = {  # mutable-ok: FastAPI serializes detail as a plain dict
+        "error": f"model={model}, custom_llm_provider={custom_llm_provider} is not in the model cost map"
+    }
+    try:
+        typed_model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:
+        raise HTTPException(status_code=404, detail=detail)
+    cost_map_entry: Final = litellm.model_cost.get(typed_model_info["key"])
+    if cost_map_entry is None:
+        raise HTTPException(status_code=404, detail=detail)
+    response: Final[_ModelInfoLookupResponse] = {
+        "model": model,
+        "custom_llm_provider": typed_model_info["litellm_provider"],
+        "model_info": {**typed_model_info, **cost_map_entry},
+    }
+    return response
 
 
 @router.post(
@@ -19183,6 +19277,7 @@ app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
+app.include_router(prompt_caching_requests_router)
 app.include_router(router_settings_router)
 app.include_router(fallback_management_router)
 app.include_router(cache_settings_router)

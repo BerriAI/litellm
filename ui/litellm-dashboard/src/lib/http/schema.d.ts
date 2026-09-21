@@ -3534,6 +3534,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/cost_optimization/prompt_caching/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Prompt Caching Requests */
+        get: operations["get_prompt_caching_requests_cost_optimization_prompt_caching_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials": {
         parameters: {
             query?: never;
@@ -16215,6 +16232,7 @@ export interface paths {
          *         - langfuse_secret: The secret for the Langfuse callback
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
+         *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -16309,6 +16327,29 @@ export interface paths {
          *     ```
          */
         post: operations["disable_team_logging_team__team_id__disable_logging_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/{team_id}/member/{user_id}/reset_budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset Team Member Budget Fn
+         * @description Put a team member back on the team's shared default member budget (`team_member_budget`).
+         *
+         *     Drops the member's own budget row link so team-wide changes made through /team/update
+         *     reach them again. Leaves the member with no budget when the team has no default. Spend is untouched.
+         */
+        post: operations["reset_team_member_budget_fn_team__team_id__member__user_id__reset_budget_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -17418,6 +17459,34 @@ export interface paths {
          *     Returns the JSON structure with 'content' and 'metadata' fields.
          */
         post: operations["convert_prompt_file_to_json_utils_dotprompt_json_converter_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/utils/model_info": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Model Info Lookup
+         * @description Returns the model cost map entry (token limits, pricing, supports_* capabilities) for any model
+         *     in the cost map, whether or not it is registered on this proxy. `model_info` carries every
+         *     field of the raw cost map entry plus the typed fields `litellm.get_model_info` derives from it
+         *     (`key`, `supported_openai_params`).
+         *
+         *     Example curl:
+         *     ```
+         *     curl -X GET --location 'http://localhost:4000/utils/model_info?model=gpt-4o&custom_llm_provider=openai'         --header 'Authorization: Bearer sk-1234'
+         *     ```
+         */
+        get: operations["model_info_lookup_utils_model_info_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -24215,6 +24284,11 @@ export interface components {
              */
             router_name: string;
             /**
+             * Saved Model Id
+             * @description Test this saved deployment's server-side configuration instead of the supplied config and default model
+             */
+            saved_model_id?: string | null;
+            /**
              * System
              * @description The top-level system prompt an Anthropic /v1/messages body carries beside its messages
              */
@@ -26829,6 +26903,11 @@ export interface components {
              * @description override user_api_key_auth with your own auth script - https://docs.litellm.ai/docs/proxy/virtual_keys#custom-auth
              */
             custom_auth?: string | null;
+            /**
+             * Dangerously Permit Weak Or Unset Master Key
+             * @description local development only: start even when master_key is unset, empty, or a publicly known default
+             */
+            dangerously_permit_weak_or_unset_master_key?: boolean | null;
             /** @description custom args for instantiating dynamodb client - e.g. billing provision */
             database_args?: components["schemas"]["DynamoDBArgs"] | null;
             /**
@@ -30897,6 +30976,8 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost */
+            cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
@@ -35814,6 +35895,48 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /** PromptCachingRequest */
+        PromptCachingRequest: {
+            /** Cache Creation Tokens */
+            cache_creation_tokens: number;
+            /** Cache Read Tokens */
+            cache_read_tokens: number;
+            /** Gateway Injected */
+            gateway_injected: boolean;
+            /** Model */
+            model: string;
+            /** Net Savings */
+            net_savings: number | null;
+            /** Request Id */
+            request_id: string;
+            /** Spend */
+            spend: number;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+        };
+        /** PromptCachingRequestCursor */
+        PromptCachingRequestCursor: {
+            /** Request Id */
+            request_id: string;
+            /**
+             * Start Time
+             * Format: date-time
+             */
+            start_time: string;
+        };
+        /** PromptCachingRequestsResponse */
+        PromptCachingRequestsResponse: {
+            /** Has More */
+            has_more: boolean;
+            next_cursor: components["schemas"]["PromptCachingRequestCursor"] | null;
+            /** Page Size */
+            page_size: number;
+            /** Requests */
+            requests: components["schemas"]["PromptCachingRequest"][];
+        };
         /** PromptInfo */
         PromptInfo: {
             /**
@@ -36550,24 +36673,24 @@ export interface components {
             classification_prompt?: string | null;
             /**
              * Classifier Context Budget Chars
-             * @description Maximum characters of prior-turn text quoted to the LLM classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and, except for Claude Code requests, the extracted system-role text sit outside this budget and are sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Only applies when classifier_type is 'llm'.
+             * @description Maximum characters of prior-turn text quoted to the LLM or JEV classifier, across the whole context window, per classification call. Turns are taken newest first and quoted whole while they fit, so a conversation small enough to quote entirely is never cut; once the budget runs out the older turns are dropped whole and only the turn straddling the boundary is truncated, into whatever space is left. The current ask and, except for Claude Code requests, the extracted system-role text sit outside this budget and are sent in full, as does the numbering each quoted turn carries. A budget under 120 leaves no room to quote a turn and suppresses the block; set classifier_context_window_size to 0 to turn context off deliberately. Applies to LLM and JEV classification.
              * @default 8000
              */
             classifier_context_budget_chars: number;
             /**
              * Classifier Context Include Assistant Turns
-             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Only applies when classifier_type is 'llm'.
+             * @description Include assistant turns in the classifier context window, so difficulty stated by the model rather than by the user stays visible: a plan the assistant calls complex, which the user approves with 'yes', is classified on the work being approved instead of on the word 'yes'. When enabled, classifier_context_window_size counts the last N turns of the conversation across both roles rather than the last N user turns, and assistant text is sent to the classifier model, which may be a different deployment or provider than the routed completion model. Assistant replies spend classifier_context_budget_chars alongside user turns, so raise it if the oldest turns stop being quoted once replies join the window. Off by default because enabling it shifts tier decisions, and therefore spend, for an already-deployed router. Applies to LLM and JEV classification.
              * @default false
              */
             classifier_context_include_assistant_turns: boolean;
             /**
              * Classifier Context Per Turn Chars
-             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Only applies when classifier_type is 'llm'.
+             * @description Optional cap on each individual prior turn's text, applied before classifier_context_budget_chars bounds the block. Unset by default, so one long turn may spend the whole budget, which is usually what a follow-up needs; set it when no single turn should dominate the context the classifier sees. A capped turn keeps its opening and its ending with the middle elided. Applies to LLM and JEV classification.
              */
             classifier_context_per_turn_chars?: number | null;
             /**
              * Classifier Context Window Size
-             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM classifier prompt, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model, which may be a different deployment or provider than the routed completion model; that call carries the current user ask and, except for Claude Code requests, the extracted system-role text in full. Claude Code system text is omitted to avoid classifying harness instructions; the routed completion still receives it. Set to 0 to send neither prior turns nor any conversation context beyond the current ask. Only applies when classifier_type is 'llm'.
+             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM or JEV classifier input, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model (the configured TypeSafe endpoint for JEV), which may be a different deployment or provider than the routed completion model; that call carries the current user ask and, except for Claude Code requests, the extracted system-role text in full. Claude Code system text is omitted to avoid classifying harness instructions; the routed completion still receives it. Set to 0 to omit prior turns and the conversation-depth summary; the current ask and selected system text are still sent. Applies to LLM and JEV classification.
              * @default 3
              */
             classifier_context_window_size: number;
@@ -36676,6 +36799,11 @@ export interface components {
              * @default ultrafeedback
              */
             heuristic_v2_artifact: components["schemas"]["TrainedTierArtifact"] | "ultrafeedback";
+            /**
+             * Heuristic V2 Success Threshold
+             * @description Minimum predicted success probability for classifier_type 'heuristic_v2' to select a tier. The first tier meeting this threshold is selected, or REASONING if none meets it. When omitted or null, uses the artifact's routing_threshold (0.75 for the bundled artifact). Other classifier types ignore this setting
+             */
+            heuristic_v2_success_threshold?: number | null;
             /**
              * Housekeeping Patterns
              * @description Additional case-sensitive literal sentinels that mark a request as client housekeeping, on top of the built-in conversation-title ones. For clients whose wording the built-ins don't cover, or after a client release changes its strings.
@@ -36908,6 +37036,8 @@ export interface components {
             DefaultRetries?: number | null;
             /** Internalservererrorretries */
             InternalServerErrorRetries?: number | null;
+            /** Notfounderrorretries */
+            NotFoundErrorRetries?: number | null;
             /** Ratelimiterrorretries */
             RateLimitErrorRetries?: number | null;
             /** Serviceunavailableerrorretries */
@@ -38761,6 +38891,22 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id?: string | null;
+        };
+        /** TeamMemberResetBudgetResponse */
+        TeamMemberResetBudgetResponse: {
+            /** Budget Id */
+            budget_id: string | null;
+            /**
+             * Budget Source
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "none";
+            /** Previous Budget Id */
+            previous_budget_id: string | null;
+            /** Team Id */
+            team_id: string;
+            /** User Id */
+            user_id: string;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -41612,6 +41758,8 @@ export interface components {
             cache_creation_input_token_cost_ultrafast?: number | null;
             /** Cache Read Input Audio Token Cost */
             cache_read_input_audio_token_cost?: number | null;
+            /** Cache Read Input Image Token Cost */
+            cache_read_input_image_token_cost?: number | null;
             /** Cache Read Input Token Cost */
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
@@ -47231,6 +47379,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CachePredictionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_prompt_caching_requests_cost_optimization_prompt_caching_requests_get: {
+        parameters: {
+            query: {
+                start_date: string;
+                end_date: string;
+                page_size?: number;
+                filter?: "all" | "injected" | "hits";
+                cursor_start_time?: string | null;
+                cursor_request_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PromptCachingRequestsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -62036,6 +62220,38 @@ export interface operations {
             };
         };
     };
+    reset_team_member_budget_fn_team__team_id__member__user_id__reset_budget_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                team_id: string;
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamMemberResetBudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reset_team_member_spend_fn_team__team_id__member__user_id__reset_spend_post: {
         parameters: {
             query?: never;
@@ -63546,6 +63762,38 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_info_lookup_utils_model_info_get: {
+        parameters: {
+            query: {
+                model: string;
+                custom_llm_provider?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

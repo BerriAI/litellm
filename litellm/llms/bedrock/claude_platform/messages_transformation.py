@@ -12,6 +12,9 @@ from .common_utils import BedrockClaudePlatformMixin, strip_claude_platform_rout
 
 
 class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicMessagesConfig):
+    def should_filter_anthropic_beta_headers(self) -> bool:
+        return False
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
