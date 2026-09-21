@@ -530,12 +530,12 @@ async def test_get_available_models_for_user_resolves_key_access_group_models(
     assert result == ["model-b"]
 
 
-def _team_member_world(monkeypatch, *, allowed_models, access_groups=None):
+def _team_member_world(monkeypatch, *, allowed_models, access_groups=None, team_models=("all-proxy-models",)):
     from litellm.models.budget import LiteLLM_BudgetTable
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.models.team_membership import LiteLLM_TeamMembership
 
-    team = LiteLLM_TeamTableCachedObj(team_id="team-1", models=["all-proxy-models"])
+    team = LiteLLM_TeamTableCachedObj(team_id="team-1", models=list(team_models))
     membership = LiteLLM_TeamMembership(
         user_id="member-1",
         team_id="team-1",
@@ -687,3 +687,22 @@ async def test_get_available_models_for_user_member_scope_applies_to_team_access
     )
 
     assert result == ["model-c"]
+
+
+@pytest.mark.asyncio
+async def test_get_available_models_for_user_member_scope_applies_when_team_has_no_model_list(monkeypatch):
+    router = _team_member_world(monkeypatch, allowed_models=["model-b"], team_models=())
+
+    result = await get_available_models_for_user(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="sk-member", user_id="member-1", team_id="team-1", models=[], team_models=[]
+        ),
+        llm_router=router,
+        general_settings={},
+        user_model=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    assert result == ["model-b"]

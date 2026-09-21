@@ -8285,18 +8285,11 @@ async def get_available_models_for_user(
 
     effective_team_id: Final = team_id or user_api_key_dict.team_id
 
-    team_object: Final = (
-        (
-            requested_team_object
-            or await _get_team_object_for_access_groups(
-                team_id=effective_team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                proxy_logging_obj=proxy_logging_obj,
-            )
-        )
-        if key_models or team_models
-        else None
+    team_object: Final = requested_team_object or await _get_team_object_for_access_groups(
+        team_id=effective_team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
     )
 
     access_group_models: Final = (
