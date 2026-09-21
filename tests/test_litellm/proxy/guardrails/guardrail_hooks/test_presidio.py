@@ -2494,6 +2494,31 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_are_replayed_when_p
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_propagates_upstream_error_when_nothing_was_buffered():
+    """
+    An upstream guardrail that rejects the stream before the first chunk must
+    surface as an error to the caller, not as an empty 200 stream.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+
+    async def failing_stream():
+        raise RuntimeError("upstream guardrail rejected the stream")
+        yield b""
+
+    with pytest.raises(RuntimeError, match="upstream guardrail rejected the stream"):
+        async for _ in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=failing_stream(),
+            request_data={},
+        ):
+            pass
+
+
+@pytest.mark.asyncio
 async def test_output_parse_pii_streaming_responses_events_passthrough(
     mock_user_api_key,
 ):
