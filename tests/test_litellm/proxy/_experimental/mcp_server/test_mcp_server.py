@@ -1992,6 +1992,7 @@ async def test_streamable_http_session_manager_is_stateless():
     (
         ("POST", b'{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}', True),
         ("POST", b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}', False),
+        ("POST", b"", False),
         ("GET", b"", False),
         ("DELETE", b"", False),
     ),
@@ -2466,106 +2467,65 @@ async def test_mcp_routing_caps_body_peek_for_oversized_chunked_body():
 
 
 @pytest.mark.asyncio
-async def test_mcp_routing_peek_survives_multibyte_char_split_at_cap():
-    """
-    A tool-call POST whose UTF-8 body is larger than the routing peek cap, with a
-    multibyte character straddling the cap boundary, must still be forwarded
-    intact instead of blowing up with a UnicodeDecodeError 500.
+@pytest.mark.parametrize("method", ("initialize", "tools/call"))
+@pytest.mark.parametrize("chunked", (False, True))
+@pytest.mark.parametrize(
+    ("character", "bytes_before_cap"),
+    (("é", 0), ("é", 1), ("中", 1), ("中", 2), ("😀", 1), ("😀", 2), ("😀", 3)),
+)
+async def test_mcp_routing_peek_survives_multibyte_char_split_at_cap(
+    method: str, chunked: bool, character: str, bytes_before_cap: int
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
 
-    Regression test for https://github.com/BerriAI/litellm/issues/34917
-    """
-    try:
-        from litellm.proxy._experimental.mcp_server import server as mcp_server
-        from litellm.proxy._experimental.mcp_server.server import (
-            handle_streamable_http_mcp,
-            session_manager_stateful,
-            session_manager_stateless,
-        )
-    except ImportError:
-        pytest.skip("MCP server not available")
+    params: Final = (
+        {
+            "protocolVersion": LATEST_HANDSHAKE_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "<<text>>", "version": "1"},
+        }
+        if method == "initialize"
+        else {"name": "update_full_document", "arguments": {"markdown": "<<text>>"}}
+    )
+    template: Final = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    prefix, suffix = template.split(b"<<text>>")
+    cap: Final = mcp_module._MCP_ROUTING_PEEK_MAX_BYTES
+    body: Final = prefix + b"x" * (cap - bytes_before_cap - len(prefix)) + character.encode() + b"tail" + suffix
+    chunks: Final = (body[: cap - 1], body[cap - 1 : cap], body[cap:]) if chunked else (body,)
+    messages: Final[tuple[Message, ...]] = tuple(
+        {"type": "http.request", "body": chunk, "more_body": index < len(chunks) - 1}
+        for index, chunk in enumerate(chunks)
+    )
+    receive: Final = AsyncMock(side_effect=messages)
+    send: Final = AsyncMock()
+    received: Final[asyncio.Future[bytes]] = asyncio.get_running_loop().create_future()
 
-    peek_cap = mcp_server._MCP_ROUTING_PEEK_MAX_BYTES
+    async def handle_request(_: Scope, downstream_receive: Receive, outgoing: Send) -> None:
+        assert receive.await_count == (2 if chunked else 1)
+        received.set_result(await _drain_body(downstream_receive))
+        await outgoing({"type": "http.response.start", "status": 200, "headers": []})
+        await outgoing({"type": "http.response.body", "body": b"{}"})
 
-    def _splits_multibyte_at_cap(candidate: bytes) -> bool:
-        try:
-            candidate[:peek_cap].decode("utf-8")
-        except UnicodeDecodeError:
-            return True
-        return False
-
-    def _build_body() -> bytes:
-        for pad in range(4):
-            candidate = json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "tools/call",
-                    "params": {
-                        "name": "update_full_document" + "x" * pad,
-                        "arguments": {"markdown": "щ" * 3000},
-                    },
-                },
-                ensure_ascii=False,
-            ).encode("utf-8")
-            if len(candidate) > peek_cap and _splits_multibyte_at_cap(candidate):
-                return candidate
-        raise AssertionError("could not build a body splitting a multibyte char at the peek cap")
-
-    body = _build_body()
-
-    messages = [{"type": "http.request", "body": body, "more_body": False}]
-    receive_calls = {"count": 0}
-
-    async def receive():
-        idx = receive_calls["count"]
-        receive_calls["count"] += 1
-        return messages[idx]
-
-    scope = {
-        "type": "http",
-        "method": "POST",
-        "path": "/mcp/progress_test",
-        "headers": [
-            (b"content-type", b"application/json"),
-            (b"authorization", b"Bearer test-key"),
-        ],
-    }
-    send = AsyncMock()
-
-    streamed_chunks = []
-
-    async def stateless_handle(s, r, se):
-        while True:
-            msg = await r()
-            if msg.get("type") != "http.request":
-                break
-            streamed_chunks.append(msg.get("body", b"") or b"")
-            if not msg.get("more_body", False):
-                break
-
-    async def stateful_handle(s, r, se):
-        raise AssertionError("non-initialize POST should not reach stateful manager")
-
+    stateless_handle: Final = AsyncMock(side_effect=handle_request)
+    stateful_handle: Final = AsyncMock()
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
     with (
+        _client_allowlist_patches({}, None),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
-            new_callable=AsyncMock,
-            return_value=(MagicMock(), None, ["progress_test"], None, None, None),
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            SimpleNamespace(handle_request=stateless_handle),
         ),
-        patch("litellm.proxy._experimental.mcp_server.server.set_auth_context"),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
-            True,
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            SimpleNamespace(handle_request=stateful_handle),
         ),
-        patch.object(session_manager_stateless, "handle_request", side_effect=stateless_handle),
-        patch.object(session_manager_stateful, "handle_request", side_effect=stateful_handle),
-        patch.object(session_manager_stateless, "_server_instances", {}),
-        patch.object(session_manager_stateful, "_server_instances", {}),
     ):
-        await handle_streamable_http_mcp(scope, receive, send)
+        await mcp_module.handle_streamable_http_mcp(scope, receive, send)
 
-    assert send.await_count == 0, f"unexpected response emitted by the proxy: {send.await_args_list}"
-    assert b"".join(streamed_chunks) == body
+    assert send.call_args_list[0].args[0]["status"] == 200
+    assert received.result() == body
+    stateless_handle.assert_awaited_once()
+    stateful_handle.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -4119,7 +4079,12 @@ def test_jsonrpc_text_has_top_level_method_ignores_nested_method():
 
 
 @pytest.mark.asyncio
-async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
+@pytest.mark.parametrize("response_field", ("result", "error"))
+@pytest.mark.parametrize(("character", "bytes_before_cap"), (("", 0), ("x", 0), ("é", 1), ("中", 2), ("😀", 3)))
+@pytest.mark.parametrize("cancel_request", (False, True))
+async def test_truncated_jsonrpc_response_with_nested_method_skips_lock(
+    response_field: str, character: str, bytes_before_cap: int, cancel_request: bool
+) -> None:
     """Regression: a large JSON-RPC *response* POST whose ``result`` payload
     nests a ``method`` key must skip the per-session lock so it does not
     deadlock behind the in-flight request POST that is holding the lock while
@@ -4147,7 +4112,7 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
     async def handle(s, r, se):
         msg = await r()
         body = msg.get("body", b"") or b""
-        if b'"result"' in body:
+        if body == response_body:
             response_handled.set()
         else:
             request_in_handle.set()
@@ -4174,9 +4139,16 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
     # A JSON-RPC response larger than the routing peek cap so it can't be fully
     # parsed, with a nested "method" key in the first bytes to trip a flat
     # substring heuristic.
-    response_body = (
-        '{"jsonrpc":"2.0","id":99,"result":{"toolResult":{"method":"GET","payload":"' + ("x" * 5000) + '"}}}'
+    response_prefix: Final = (
+        '{"jsonrpc":"2.0","id":99,"' + response_field
+        + '":{"code":-32000,"message":"test","data":{"method":"GET","payload":"'
     ).encode()
+    response_body: Final = (
+        response_prefix
+        + b"x" * (mcp_server._MCP_ROUTING_PEEK_MAX_BYTES - bytes_before_cap - len(response_prefix) if character else 0)
+        + character.encode()
+        + b'tail"}}}'
+    )
 
     try:
         with (
@@ -4204,8 +4176,17 @@ async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
             # lock held by req_task and this wait would time out (deadlock).
             await asyncio.wait_for(response_handled.wait(), timeout=1.0)
 
-            gate.set()
-            await asyncio.gather(req_task, resp_task)
+            await resp_task
+            assert not req_task.done()
+            if cancel_request:
+                req_task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await req_task
+            else:
+                gate.set()
+                await req_task
+            assert not mcp_server._stateful_session_locks[session_id].locked()
+            assert session_id not in mcp_server._stateful_session_active_request_counts
     finally:
         gate.set()
         mcp_server._stateful_session_auth_contexts.pop(session_id, None)
