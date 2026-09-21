@@ -793,6 +793,10 @@ def test_image_response_serialization_honors_dump_options():
     assert response.model_dump(exclude_none=True)["data"] == expected
     assert json.loads(response.model_dump_json(exclude_none=True))["data"] == expected
     assert response.model_dump()["data"][0]["provider_specific_fields"] == expected[0]["provider_specific_fields"]
+    assert "url" not in response.model_dump(exclude={"data": {0: {"url"}}})["data"][0]
+    assert response.model_dump(include={"data": {"__all__": {"url"}}})["data"] == [
+        {"url": "https://example.com/image.png"}
+    ]
 
 
 @pytest.mark.parametrize(

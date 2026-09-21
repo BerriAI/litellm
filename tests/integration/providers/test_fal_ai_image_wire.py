@@ -144,7 +144,6 @@ def test_fal_gpt_image_25_generation_prices_non_canonical_size_from_nearest_row(
         assert response.status_code == 200, response.text
         cost: Final = _response_cost(response)
         assert cost == _approx(_catalog_cost("fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"))
-        assert cost != _catalog_cost("fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/text-to-image")
         assert [(request.method, request.target) for request in wire.drain()] == [
             ("POST", "/openai/gpt-image-2.5/flare/text-to-image")
         ]

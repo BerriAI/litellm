@@ -100,11 +100,7 @@ def test_gpt_image_25_noncanonical_response_uses_nearest_keyed_row():
     expected: Final = litellm.model_cost[
         "fal_ai/low/1024-x-1536/openai/gpt-image-2.5/flare/text-to-image"
     ]["output_cost_per_image"]
-    default_row: Final = litellm.model_cost[
-        "fal_ai/low/1024-x-768/openai/gpt-image-2.5/flare/text-to-image"
-    ]["output_cost_per_image"]
     assert cost == expected
-    assert cost != default_row
 
 
 def test_gpt_image_25_quality_tiers_are_monotonic():

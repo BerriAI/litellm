@@ -2561,20 +2561,25 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         data: Sequence[OpenAIImage] | None,
         info: FieldSerializationInfo,
     ) -> Sequence[Mapping[str, object]] | None:
-        return (
-            None
-            if data is None
-            else [
-                image.model_dump(
-                    mode=info.mode,
-                    exclude_none=info.exclude_none,
-                    exclude_unset=info.exclude_unset,
-                    exclude_defaults=info.exclude_defaults,
-                    by_alias=info.by_alias,
-                )
-                for image in data
-            ]
-        )
+        if data is None:
+            return None
+        include: Final = info.include
+        exclude: Final = info.exclude
+        return [
+            image.model_dump(
+                mode=info.mode,
+                include=include.get(index, include.get("__all__")) if isinstance(include, Mapping) else include,
+                exclude=exclude.get(index, exclude.get("__all__")) if isinstance(exclude, Mapping) else exclude,
+                context=info.context,
+                exclude_none=info.exclude_none,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                round_trip=info.round_trip,
+                by_alias=info.by_alias,
+            )
+            for index, image in enumerate(data)
+            if not isinstance(include, Mapping) or "__all__" in include or index in include
+        ]
 
     def __init__(
         self,
