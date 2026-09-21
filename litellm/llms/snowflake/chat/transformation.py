@@ -315,7 +315,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         for msg in messages:
             if isinstance(msg, dict):
                 role = msg.get("role", "")
-                content: Any = msg.get("content", "")
+                content: object = msg.get("content", "")
                 msg_cache_control: object = msg.get("cache_control")
             else:
                 role = getattr(msg, "role", "")
@@ -463,7 +463,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return body
 
-    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> dict[str, Any]:
+    def _transform_tool_choice_to_anthropic(self, tool_choice: object) -> Mapping[str, object]:
         """
         Convert tool_choice from OpenAI format to Anthropic format.
 

@@ -7,7 +7,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, TypeGuard
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, TypeGuard
 
 import httpx
 from fastapi import HTTPException
@@ -50,6 +50,7 @@ from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
     from litellm.types.guardrails import LitellmParams
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
@@ -878,9 +879,9 @@ class HeadroomGuardrail(CustomGuardrail):
 
     async def async_pre_call_deployment_hook(
         self,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         call_type: CallTypes | None,
-    ) -> dict[str, Any] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
+    ) -> dict[str, object] | None:  # mutable-ok: overrides CustomLogger hook whose contract is a plain dict
         base_result: Final = await super().async_pre_call_deployment_hook(kwargs, call_type)
         effective: Final = base_result if base_result is not None else kwargs
         if call_type not in _STREAM_CONVERTIBLE_CALL_TYPES:
@@ -897,7 +898,7 @@ class HeadroomGuardrail(CustomGuardrail):
 
     async def async_should_run_agentic_loop(
         self,
-        response: Any,
+        response: object,
         model: str,
         messages: list[dict],
         tools: list[dict] | None,
@@ -919,8 +920,8 @@ class HeadroomGuardrail(CustomGuardrail):
         tools: dict,
         model: str,
         messages: list[dict],
-        response: Any,
-        anthropic_messages_provider_config: Any,
+        response: object,
+        anthropic_messages_provider_config: BaseAnthropicMessagesConfig | None,
         anthropic_messages_optional_request_params: dict,
         logging_obj: LiteLLMLoggingObj | None,
         stream: bool,

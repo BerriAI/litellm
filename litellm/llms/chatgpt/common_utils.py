@@ -268,7 +268,7 @@ def _normalize_litellm_params(litellm_params: Any | None) -> dict:
     return {}
 
 
-def get_chatgpt_session_id(litellm_params: Any | None) -> str | None:
+def get_chatgpt_session_id(litellm_params: object) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
@@ -286,5 +286,5 @@ def get_chatgpt_session_id(litellm_params: Any | None) -> str | None:
     return None
 
 
-def ensure_chatgpt_session_id(litellm_params: Any | None) -> str:
+def ensure_chatgpt_session_id(litellm_params: object) -> str:
     return get_chatgpt_session_id(litellm_params) or str(uuid4())
