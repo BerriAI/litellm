@@ -120,7 +120,7 @@ def test_flux_dev_cost_uses_response_megapixels_per_image():
         optional_params={},
     )
     output_cost_per_pixel = litellm.model_cost[model]["output_cost_per_pixel"]
-    assert cost == pytest.approx(output_cost_per_pixel * 1_000_000 * (1 + 3 + 1))
+    assert cost == pytest.approx(output_cost_per_pixel * 1_048_576 * (1 + 2 + 1))
 
 
 def test_image_edit_call_type_routes_to_fal_keyed_pricing():

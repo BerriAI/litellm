@@ -10,6 +10,7 @@ from litellm.types.utils import ImageObject, ImageResponse
 
 FAL_KEYED_PRICING_DEFAULT_QUALITY: Final[str] = "high"
 FAL_TEXT_TO_IMAGE_DEFAULT_SIZE: Final[str] = "1024-x-768"
+FAL_PIXELS_PER_MEGAPIXEL: Final[int] = 1_048_576
 FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "square_hd": "1024-x-1024",
@@ -21,10 +22,8 @@ FAL_NAMED_IMAGE_SIZES: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
-_MODEL_COST_MAP: Final[TypeAdapter[Mapping[str, Mapping[str, object]]]] = TypeAdapter(
-    Mapping[str, Mapping[str, object]]
-)
 _OBJECT_MAP: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_EMPTY_ENTRY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _keyed_size(optional_params: Mapping[str, object]) -> str | None:
@@ -43,46 +42,6 @@ def _keyed_size(optional_params: Mapping[str, object]) -> str | None:
     return None
 
 
-def _response_size(image: object) -> str | None:
-    if not isinstance(image, ImageObject):
-        return None
-    raw_provider_specific_fields: Final = image.provider_specific_fields
-    if not isinstance(raw_provider_specific_fields, Mapping):
-        return None
-    provider_specific_fields: Final = _OBJECT_MAP.validate_python(raw_provider_specific_fields)
-    width: Final = provider_specific_fields.get("width")
-    height: Final = provider_specific_fields.get("height")
-    if not isinstance(width, int) or not isinstance(height, int):
-        return None
-    return f"{width}-x-{height}"
-
-
-def _keyed_quality(optional_params: Mapping[str, object]) -> str:
-    raw_quality: Final = optional_params.get("quality")
-    return raw_quality if isinstance(raw_quality, str) and raw_quality != "auto" else FAL_KEYED_PRICING_DEFAULT_QUALITY
-
-
-def _keyed_cost_per_image(
-    model: str,
-    image: object,
-    optional_params: Mapping[str, object],
-    model_cost_map: Mapping[str, Mapping[str, object]],
-) -> float | None:
-    quality: Final = _keyed_quality(optional_params)
-    request_size: Final = _keyed_size(optional_params) or FAL_TEXT_TO_IMAGE_DEFAULT_SIZE
-    sizes: Final = (_response_size(image), request_size, FAL_TEXT_TO_IMAGE_DEFAULT_SIZE)
-    for size in sizes:
-        if size is None:
-            continue
-        keyed_entry = model_cost_map.get(f"fal_ai/{quality}/{size}/{model}")
-        if keyed_entry is None:
-            continue
-        keyed_cost = keyed_entry.get("output_cost_per_image")
-        if isinstance(keyed_cost, (int, float)):
-            return float(keyed_cost)
-    return None
-
-
 def _image_dimensions(image: object) -> tuple[int, int] | None:
     if not isinstance(image, ImageObject):
         return None
@@ -97,6 +56,39 @@ def _image_dimensions(image: object) -> tuple[int, int] | None:
     return width, height
 
 
+def _response_size(image: object) -> str | None:
+    dimensions: Final = _image_dimensions(image)
+    if dimensions is None:
+        return None
+    width, height = dimensions
+    return f"{width}-x-{height}"
+
+
+def _keyed_quality(optional_params: Mapping[str, object]) -> str:
+    raw_quality: Final = optional_params.get("quality")
+    return raw_quality if isinstance(raw_quality, str) and raw_quality != "auto" else FAL_KEYED_PRICING_DEFAULT_QUALITY
+
+
+def _keyed_cost_per_image(
+    model: str,
+    image: object,
+    optional_params: Mapping[str, object],
+) -> float | None:
+    quality: Final = _keyed_quality(optional_params)
+    request_size: Final = _keyed_size(optional_params) or FAL_TEXT_TO_IMAGE_DEFAULT_SIZE
+    sizes: Final = (_response_size(image), request_size, FAL_TEXT_TO_IMAGE_DEFAULT_SIZE)
+    for size in sizes:
+        if size is None:
+            continue
+        keyed_entry = _entry(f"fal_ai/{quality}/{size}/{model}")
+        if keyed_entry is None:
+            continue
+        keyed_cost = keyed_entry.get("output_cost_per_image")
+        if isinstance(keyed_cost, (int, float)):
+            return float(keyed_cost)
+    return None
+
+
 def _flat_cost_per_image(
     image: object,
     output_cost_per_image: float,
@@ -106,8 +98,15 @@ def _flat_cost_per_image(
     if dimensions is None or output_cost_per_pixel is None:
         return output_cost_per_image
     width, height = dimensions
-    megapixels: Final = 1 if (width, height) == (1024, 1024) else ceil(width * height / 1_000_000)
-    return output_cost_per_pixel * 1_000_000 * megapixels
+    megapixels: Final = ceil(width * height / FAL_PIXELS_PER_MEGAPIXEL)
+    return output_cost_per_pixel * FAL_PIXELS_PER_MEGAPIXEL * megapixels
+
+
+def _entry(key: str) -> Mapping[str, object] | None:
+    raw_entry: Final[object] = litellm.model_cost.get(key)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # global catalog is untyped
+    if not isinstance(raw_entry, Mapping):
+        return None
+    return _OBJECT_MAP.validate_python(raw_entry)
 
 
 def cost_calculator(
@@ -123,28 +122,24 @@ def cost_calculator(
     normalized_model: Final = model.removeprefix(f"{litellm.LlmProviders.FAL_AI.value}/")
     params: Final[Mapping[str, object]] = optional_params or MappingProxyType({})
     images: Final = tuple(image_response.data or ())
-    raw_model_cost: Final[object] = litellm.model_cost  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # global catalog is untyped
-    model_cost_map: Final = _MODEL_COST_MAP.validate_python(raw_model_cost)
     keyed_costs: Final = tuple(
         _keyed_cost_per_image(
             model=normalized_model,
             image=image,
             optional_params=params,
-            model_cost_map=model_cost_map,
         )
         for image in images
     )
     if all(cost is not None for cost in keyed_costs):
         return sum(cost for cost in keyed_costs if cost is not None)
-    model_info_entry: Final = next(
+    model_info: Final = next(
         (
             entry
             for key in (f"{litellm.LlmProviders.FAL_AI.value}/{normalized_model}", normalized_model)
-            if (entry := model_cost_map.get(key)) is not None
+            if (entry := _entry(key)) is not None
         ),
-        None,
+        _EMPTY_ENTRY,
     )
-    model_info: Final = _OBJECT_MAP.validate_python(model_info_entry or MappingProxyType({}))
     raw_output_cost_per_image: Final = model_info.get("output_cost_per_image")
     output_cost_per_image: Final = (
         float(raw_output_cost_per_image) if isinstance(raw_output_cost_per_image, (int, float)) else 0.0

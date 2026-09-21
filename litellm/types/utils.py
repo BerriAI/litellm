@@ -2543,7 +2543,6 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
 
-    data: list[ImageObject]
     usage: ImageUsage | None = None
     """
     Users might use litellm with older python versions, we don't want this to break for them.
@@ -2551,6 +2550,10 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     """
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    @field_serializer("data")
+    def _serialize_image_data(self, data: list[OpenAIImage]) -> list[dict[str, object]]:
+        return [image.model_dump() for image in data]
 
     def __init__(
         self,
