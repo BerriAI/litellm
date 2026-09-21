@@ -2584,12 +2584,16 @@ async def test_outer_deadline_delivers_session_termination(termination: str) -> 
 @pytest.mark.parametrize("original_error", (False, True))
 async def test_task_cancellation_during_cleanup_preserves_failure(original_error: bool) -> None:
     deleting: Final = asyncio.Event()
+    drained: Final = asyncio.Event()
     original: Final = RuntimeError("operation failed before teardown")
 
     async def respond(request: httpx2.Request) -> httpx2.Response:
         if request.method == "DELETE":
             deleting.set()
-            await anyio.sleep_forever()
+            try:
+                await anyio.sleep_forever()
+            finally:
+                drained.set()
         if request.method == "GET":
             return httpx2.Response(405)
         payload: Final = _JSONRPC_MESSAGE_ADAPTER.validate_json(request.content)
@@ -2617,9 +2621,12 @@ async def test_task_cancellation_during_cleanup_preserves_failure(original_error
     client: Final = _MockTransportClient(respond, server_url="https://example.com/mcp", timeout=30)
     task: Final = asyncio.create_task(client.run_with_session(operation))
     await asyncio.wait_for(deleting.wait(), 2)
-    task.cancel()
+    for _ in range(3):
+        task.cancel()
+        await asyncio.sleep(0)
     with pytest.raises(RuntimeError if original_error else asyncio.CancelledError) as caught:
         await task
+    assert drained.is_set(), "Caller must wait for termination cleanup to finish"
     if original_error:
         assert caught.value is original
     else:
@@ -2631,12 +2638,16 @@ async def test_task_cancellation_during_cleanup_preserves_failure(original_error
 @pytest.mark.parametrize("cancel_mode", ("task", "scope"))
 async def test_http_close_cancellation_cannot_turn_into_success(original_error: bool, cancel_mode: str) -> None:
     closing: Final = asyncio.Event()
+    drained: Final = asyncio.Event()
     original: Final = RuntimeError("failed before HTTP close")
 
     class ClosingHTTPClient(httpx2.AsyncClient):
         async def aclose(self) -> None:
             closing.set()
-            await anyio.sleep_forever()
+            try:
+                await anyio.sleep_forever()
+            finally:
+                drained.set()
 
     class ClosingMCPClient(MCPClient):
         def _create_transport_context(self):
@@ -2661,7 +2672,127 @@ async def test_http_close_cancellation_cannot_turn_into_success(original_error: 
     cancellation_type: Final = asyncio.CancelledError if cancel_mode == "task" else TimeoutError
     with pytest.raises(RuntimeError if original_error else cancellation_type) as caught:
         await task
+    assert drained.is_set(), "Caller must wait for HTTP closure to finish"
     if original_error:
         assert caught.value is original
     elif cancel_mode == "task":
         assert task.cancelled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_mode", ("scope", "task", "wait_for", "read_timeout"))
+@pytest.mark.parametrize("concurrency", (1, 5))
+async def test_cancellation_delivers_termination_over_tcp(cancel_mode: str, concurrency: int) -> None:
+    started: Final = asyncio.Event()
+    terminations: Final[list[bytes]] = []
+    starts: Final[list[bytes]] = []
+    stop: Final = asyncio.Event()
+    connections: Final[list[asyncio.Task[None]]] = []
+
+    async def handle_connection(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        connection: Final = asyncio.current_task()
+        assert connection is not None
+        connections.append(connection)
+        try:
+            request_line: Final = await reader.readline()
+            if not request_line:
+                return
+            method: Final = request_line.split()[0]
+            headers: Final = await reader.readuntil(b"\r\n\r\n")
+            length: Final = next(
+                (
+                    int(line.split(b":", 1)[1])
+                    for line in headers.splitlines()
+                    if line.lower().startswith(b"content-length:")
+                ),
+                0,
+            )
+            body: Final = await reader.readexactly(length)
+            if method == b"DELETE":
+                terminations.append(body)
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            elif method == b"GET":
+                writer.write(b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            else:
+                payload: Final = json.loads(body)
+                if payload["method"] == "tools/call":
+                    starts.append(body)
+                    if len(starts) == concurrency:
+                        started.set()
+                    await stop.wait()
+                    return
+                if payload["method"] == "initialize":
+                    response: Final = json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": payload["id"],
+                            "result": {
+                                "protocolVersion": payload["params"]["protocolVersion"],
+                                "capabilities": {"tools": {}},
+                                "serverInfo": {"name": "tcp-peer", "version": "1"},
+                            },
+                        }
+                    ).encode()
+                    writer.write(
+                        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nMcp-Session-Id: tcp-session\r\n"
+                        + f"Content-Length: {len(response)}\r\nConnection: close\r\n\r\n".encode()
+                        + response
+                    )
+                else:
+                    writer.write(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    listener: Final = await asyncio.start_server(handle_connection, "127.0.0.1", 0)
+    port: Final = listener.sockets[0].getsockname()[1]
+    client: Final = MCPClient(
+        server_url=f"http://127.0.0.1:{port}/mcp", timeout=0.2 if cancel_mode == "read_timeout" else 30
+    )
+
+    async def calls():
+        results: Final = await asyncio.gather(
+            *(
+                client.call_tool(CallToolRequestParams(name="slow", arguments={}), raise_on_error=True)
+                for _ in range(concurrency)
+            ),
+            return_exceptions=cancel_mode == "read_timeout",
+        )
+        if cancel_mode == "read_timeout":
+            assert all(isinstance(result, TimeoutError) for result in results)
+        return results
+
+    async def invoke():
+        if cancel_mode == "scope":
+            with anyio.fail_after(0.2):
+                return await calls()
+        return await calls()
+
+    try:
+        task: Final = asyncio.create_task(invoke())
+        await asyncio.wait_for(started.wait(), 3)
+        if cancel_mode == "task":
+            task.cancel()
+        expected_error: Final = (
+            TimeoutError
+            if cancel_mode == "read_timeout"
+            else asyncio.CancelledError
+            if cancel_mode == "task"
+            else TimeoutError
+        )
+        if cancel_mode == "read_timeout":
+            await task
+        elif cancel_mode == "wait_for":
+            with pytest.raises(expected_error):
+                await asyncio.wait_for(task, 0.2)
+        else:
+            with pytest.raises(expected_error):
+                await task
+        assert len(starts) == concurrency
+        assert len(terminations) == concurrency, "Each cancelled call must send DELETE over a fresh TCP connection"
+    finally:
+        stop.set()
+        listener.close()
+        await listener.wait_closed()
+        await asyncio.wait_for(asyncio.gather(*connections), 2)

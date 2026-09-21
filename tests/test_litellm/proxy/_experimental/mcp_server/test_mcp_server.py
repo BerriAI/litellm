@@ -1147,109 +1147,39 @@ async def test_mcp_read_resource_success():
     assert result is read_result
 
 
-def test_normalize_resource_contents_passes_metadata():
-    """Test that _normalize_resource_contents preserves meta from ResourceContents (MCP 1.26.0+)."""
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _normalize_resource_contents,
-        )
-    except ImportError:
-        pytest.skip("MCP server not available")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind,metadata",
+    (("text", {"version": "1.0", "source": "test"}), ("blob", {"encoding": "base64"}), ("text", {}), ("text", None)),
+)
+async def test_read_resource_preserves_content_metadata(_mcp_request_ctx, kind, metadata):
+    from mcp.types import ReadResourceRequestParams
+    from litellm.proxy._experimental.mcp_server import operations, server
 
-    meta = {"version": "1.0", "source": "test"}
-    contents = [
-        TextResourceContents(
-            uri="https://example.com/resource",
-            text="hello world",
-            mimeType="text/plain",
-            meta=meta,
-        )
-    ]
+    uri: Final = "https://example.com/resource"
+    caller: Final = UserAPIKeyAuth(user_id="resource-caller")
+    upstream_server: Final = MCPServer(server_id="catalog", name="catalog", transport=MCPTransport.http)
+    content: Final = (
+        TextResourceContents(uri=uri, text="hello world", mimeType="text/plain", meta=metadata)
+        if kind == "text"
+        else BlobResourceContents(uri=uri, blob="aGVsbG8=", mimeType="image/png", meta=metadata)
+    )
+    with (
+        patch.object(server, "get_or_extract_auth_context", AsyncMock(return_value=(caller, None, ["catalog"], None, None, None, None))),
+        patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream_server])),
+        patch.object(operations.global_mcp_server_manager, "read_resource_from_server", AsyncMock(return_value=ReadResourceResult(contents=[content]))),
+    ):
+        result: Final = await server.read_resource(_mcp_request_ctx(), ReadResourceRequestParams(uri=uri))
 
-    result = _normalize_resource_contents(contents)
-
-    assert len(result) == 1
-    assert result[0].content == "hello world"
-    assert result[0].mime_type == "text/plain"
-    assert result[0].meta == meta
-
-
-def test_normalize_resource_contents_blob_with_metadata():
-    """Test that _normalize_resource_contents preserves meta for BlobResourceContents."""
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _normalize_resource_contents,
-        )
-    except ImportError:
-        pytest.skip("MCP server not available")
-
-    meta = {"encoding": "base64"}
-    contents = [
-        BlobResourceContents(
-            uri="https://example.com/image.png",
-            blob="aGVsbG8=",
-            mimeType="image/png",
-            meta=meta,
-        )
-    ]
-
-    result = _normalize_resource_contents(contents)
-
-    assert len(result) == 1
-    assert result[0].content == "aGVsbG8="
-    assert result[0].mime_type == "image/png"
-    assert result[0].meta == meta
-
-
-def test_normalize_resource_contents_preserves_empty_metadata():
-    """Test that empty dict meta is preserved (truthiness bug fix)."""
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _normalize_resource_contents,
-        )
-    except ImportError:
-        pytest.skip("MCP server not available")
-
-    empty_meta: dict = {}
-    contents = [
-        TextResourceContents(
-            uri="https://example.com/resource",
-            text="hi",
-            mimeType="text/plain",
-            meta=empty_meta,
-        )
-    ]
-
-    result = _normalize_resource_contents(contents)
-
-    assert len(result) == 1
-    assert result[0].meta == empty_meta
-    assert result[0].meta is not None
-    assert result[0].meta == {}
-
-
-def test_normalize_resource_contents_without_metadata():
-    """Test that _normalize_resource_contents works when meta is absent (backward compat)."""
-    try:
-        from litellm.proxy._experimental.mcp_server.server import (
-            _normalize_resource_contents,
-        )
-    except ImportError:
-        pytest.skip("MCP server not available")
-
-    contents = [
-        TextResourceContents(
-            uri="https://example.com/resource",
-            text="hello",
-            mimeType="text/plain",
-        )
-    ]
-
-    result = _normalize_resource_contents(contents)
-
-    assert len(result) == 1
-    assert result[0].content == "hello"
-    assert result[0].meta is None
+    assert result.model_dump(mode="json", by_alias=True, exclude_none=True) == {
+        "cacheScope": "private", "resultType": "complete", "ttlMs": 0,
+        "contents": [{
+            "uri": uri,
+            "mimeType": "text/plain" if kind == "text" else "image/png",
+            "text" if kind == "text" else "blob": "hello world" if kind == "text" else "aGVsbG8=",
+            **({"_meta": metadata} if metadata is not None else {}),
+        }],
+    }
 
 
 @pytest.mark.asyncio

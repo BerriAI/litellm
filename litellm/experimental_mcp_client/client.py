@@ -159,6 +159,30 @@ _ListPage = TypeVar("_ListPage", bound=PaginatedResult)
 _ListItem = TypeVar("_ListItem")
 
 
+async def _run_bounded_cleanup(operation: Callable[[], Awaitable[TSessionResult]], deadline: float) -> TSessionResult:
+    async def run() -> TSessionResult:
+        with anyio.fail_after(max(0, deadline - anyio.current_time()), shield=True):
+            return await operation()
+
+    # A cancelled asyncio.gather repeatedly forwards Task.cancel, bypassing AnyIO shields.
+    # Isolate only cleanup, and drain it before propagating the caller's cancellation.
+    task: Final = asyncio.create_task(run())
+    interrupted: asyncio.CancelledError | None = None
+    with anyio.CancelScope(shield=True):
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as exc:
+                interrupted = exc
+            except Exception:
+                break
+        if interrupted is not None:
+            if not task.cancelled():
+                task.exception()
+            raise interrupted
+        return task.result()
+
+
 class _MCPHTTPClient(httpx2.AsyncClient):
     cleanup_scope: anyio.CancelScope | None = None
 
@@ -171,12 +195,15 @@ class _MCPHTTPClient(httpx2.AsyncClient):
         follow_redirects: bool | UseClientDefault = httpx2.USE_CLIENT_DEFAULT,
     ) -> httpx2.Response:
         if request.method == "DELETE" and self.cleanup_scope is not None:
-            with anyio.fail_after(max(0, self.cleanup_scope.deadline - anyio.current_time()), shield=True):
-                termination: Final = await super().send(
+
+            async def terminate() -> httpx2.Response:
+                termination: Final = await super(_MCPHTTPClient, self).send(
                     request, stream=stream, auth=auth, follow_redirects=follow_redirects
                 )
                 await termination.aread()
                 return termination
+
+            return await _run_bounded_cleanup(terminate, self.cleanup_scope.deadline)
         response: Final = await super().send(request, stream=stream, auth=auth, follow_redirects=follow_redirects)
         if request.method == "POST" and response.is_error and response.status_code != 404:
             await response.aclose()
@@ -592,8 +619,7 @@ class MCPClient:
         finally:
             if http_client is not None:
                 try:
-                    with anyio.move_on_after(1, shield=True):
-                        await http_client.aclose()
+                    await _run_bounded_cleanup(http_client.aclose, anyio.current_time() + 1)
                 except BaseException as e:
                     verbose_logger.debug("Error during http_client cleanup: %s", e)
                     if isinstance(e, asyncio.CancelledError):
