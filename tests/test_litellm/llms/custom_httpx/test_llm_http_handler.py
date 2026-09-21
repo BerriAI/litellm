@@ -4007,3 +4007,47 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     assert events[6]["usage"] == {"type": "duration", "seconds": 2.0}
     assert speech_client.requests[0].streaming_config.config.model == "chirp_3"
     assert [bytes(request.audio) for request in speech_client.requests[1:]] == [b"\x00\x01" * 800, b"\x00\x01" * 800]
+
+
+@pytest.mark.asyncio
+async def test_responses_agentic_followup_does_not_repeat_request_params_from_plan_kwargs(monkeypatch):
+    """A plan whose kwargs repeat a request param must not crash the Responses follow-up with a duplicate keyword"""
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+    followup_calls: list[dict[str, object]] = []
+
+    async def fake_aresponses(**kwargs: object) -> str:
+        followup_calls.append(kwargs)
+        return "followup-response"
+
+    monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+    request_kwargs: Final = {"prompt_cache_key": "thread-1", "metadata": {"user": "u1"}}
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(
+            model="gpt-5",
+            messages=[{"role": "user", "content": "x"}],
+            optional_params={"prompt_cache_key": "thread-1"},
+            kwargs=dict(request_kwargs),
+        ),
+    )
+
+    response: Final = await BaseLLMHTTPHandler()._execute_responses_agentic_plan(
+        plan=plan,
+        model="gpt-5",
+        response_api_optional_request_params={"prompt_cache_key": "thread-1"},
+        logging_obj=Mock(litellm_call_id="call-1"),
+        kwargs=dict(request_kwargs),
+        depth=0,
+        max_loops=3,
+        fingerprints=[],
+        fingerprint="fp",
+        callback=CustomLogger(),
+    )
+
+    assert response == "followup-response"
+    assert len(followup_calls) == 1
+    assert followup_calls[0]["prompt_cache_key"] == "thread-1"
+    assert followup_calls[0]["metadata"] == {"user": "u1"}
+    assert followup_calls[0]["_agentic_loop_depth"] == 1

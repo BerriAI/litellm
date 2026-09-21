@@ -5,18 +5,24 @@ import json
 import os
 import threading
 import time
+import uuid
 import weakref
 from collections.abc import Generator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final, Protocol, cast
 from urllib.parse import urlparse
 
+import diskcache
 import fakeredis
 import pytest
 import redis
+from azure.storage.blob import ContainerClient
 
 import litellm
+from litellm.caching.azure_blob_cache import AzureBlobCache
 from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
+from litellm.caching.disk_cache import DiskCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.rust_bridge import _native
@@ -45,6 +51,36 @@ def redis_url() -> Generator[str]:
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+
+
+@pytest.fixture
+def azure_blob_facade() -> Generator[Cache]:
+    account_url: Final = os.environ.get("AZURE_BLOB_CACHE_ACCOUNT_URL")
+    if account_url is None:
+        pytest.skip(
+            "live Azure Blob parity needs AZURE_BLOB_CACHE_ACCOUNT_URL plus DefaultAzureCredential inputs in the environment"
+        )
+    facade: Final = Cache(
+        type=LiteLLMCacheType.AZURE_BLOB,
+        azure_account_url=account_url,
+        azure_blob_container=f"litellm-parity-{uuid.uuid4().hex[:12]}",
+    )
+    backend: Final = facade.cache
+    assert isinstance(backend, AzureBlobCache)
+    try:
+        yield facade
+    finally:
+        backend.container_client.delete_container()
+        asyncio.run(backend.disconnect())
+
+
+def azure_blob_handle(facade: Cache) -> _native._CacheTestHandle:
+    backend: Final = facade.cache
+    assert isinstance(backend, AzureBlobCache)
+    return _native._CacheTestHandle.azure_blob(
+        backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}"),
+        backend.container_client.container_name,
+    )
 
 
 @pytest.fixture
@@ -371,6 +407,89 @@ def test_facade_registration_rejects_mismatched_capacity() -> None:
         _native._CacheTestHandle.memory(capacity=7)._bind_facade(facade)
 
 
+def test_azure_blob_facade_serves_natively_and_python_reads_the_same_blobs(azure_blob_facade: Cache) -> None:
+    backend: Final = azure_blob_facade.cache
+    assert isinstance(backend, AzureBlobCache)
+    handle: Final = azure_blob_handle(azure_blob_facade)
+    assert handle.backend == "azure-blob"
+    account_url: Final = backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}")
+    with pytest.raises(TypeError, match="containers must match"):
+        _native._CacheTestHandle.azure_blob(account_url, f"{backend.container_client.container_name}-other")._bind_facade(
+            azure_blob_facade
+        )
+    handle._bind_facade(azure_blob_facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=azure_blob_facade))
+    native: Final = resolver.resolve()
+    assert native.kind == "native"
+
+    response: Final = {"choices": [{"text": "caf\u00e9 \u2603"}], "usage": {"total_tokens": 3}, "flag": True, "empty": None}
+    native.store({**request("sync"), "ttl_seconds": 0.001}, response)
+    native.store(request("sync"), {"choices": [{"text": "second"}]})
+    time.sleep(0.01)
+    stored: Final = json.loads(backend.container_client.download_blob("sync").readall())
+    assert stored["response"] == response
+    assert isinstance(stored["timestamp"], float)
+    assert native.lookup(request("sync")) == response
+    assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="sync") == response
+
+    backend.set_cache("python", {"timestamp": time.time(), "response": response})
+    backend.set_cache("legacy", "bare legacy value")
+    backend.container_client.upload_blob("invalid", b"{not json", overwrite=True)
+    assert native.lookup(request("python")) == response
+    assert native.lookup(request("legacy")) == cast(CacheLookup, azure_blob_facade).get_cache(cache_key="legacy")
+    assert native.lookup_batch([request("python"), request("missing"), request("invalid"), request("sync")]) == {
+        "values": [response, None, None, response],
+        "missing_indices": [1, 2],
+    }
+
+    with rebound(azure_blob_facade, "ttl", 12):
+        assert resolver.resolve().kind == "python_callback"
+    with rebound(backend, "container_client", ContainerClient.from_container_url(backend.container_client.url)):
+        assert resolver.resolve().kind == "python_callback"
+
+    def custom_get(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    with rebound(backend, "get_cache", custom_get):
+        assert resolver.resolve().kind == "python_callback"
+    assert resolver.resolve().kind == "python_callback"
+    assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="sync") == response
+
+    class CustomBlobCache(AzureBlobCache):
+        pass
+
+    with rebound(azure_blob_facade, "cache", CustomBlobCache(account_url, backend.container_client.container_name)):
+        assert resolver.resolve().kind == "python_callback"
+        with pytest.raises(TypeError):
+            azure_blob_handle(azure_blob_facade)._bind_facade(azure_blob_facade)
+
+
+async def test_azure_blob_native_async_writes_overwrite_batch_and_flush_like_python(azure_blob_facade: Cache) -> None:
+    backend: Final = azure_blob_facade.cache
+    assert isinstance(backend, AzureBlobCache)
+    azure_blob_handle(azure_blob_facade)._bind_facade(azure_blob_facade)
+    binding: Final = _native._CacheTestResolver(SimpleNamespace(cache=azure_blob_facade)).resolve()
+    assert binding.kind == "native"
+    ping: Final = cast(dict[str, object], await binding.ping())
+    assert ping["status"] == "success", ping
+
+    await binding.async_store(request("async"), {"value": 1})
+    await binding.async_store({**request("async"), "ttl_seconds": 0.001}, {"value": 2})
+    time.sleep(0.01)
+    assert await binding.async_lookup(request("async")) == {"value": 2}
+    assert await backend.async_get_cache("async") == json.loads(backend.container_client.download_blob("async").readall())
+    assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="async") == {"value": 2}
+
+    await binding.async_store_batch([request("first"), request("second")], [{"value": 3}, {"value": 4}])
+    assert await binding.async_lookup_batch([request("second"), request("missing"), request("first")]) == {
+        "values": [{"value": 4}, None, {"value": 3}],
+        "missing_indices": [1],
+    }
+    await binding.async_flush()
+    assert [blob.name for blob in backend.container_client.list_blobs()] == []
+    assert await binding.async_lookup(request("async")) is None
+
+
 async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
     parsed: Final = urlparse(redis_url)
     with rebound(litellm, "default_redis_ttl", 60):
@@ -403,6 +522,112 @@ async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
     assert client.get("second") is not None
     await facade.cache.disconnect()
     client.close()
+async def test_disk_reads_python_entries_and_python_reads_native_entries(tmp_path: Path) -> None:
+    disk_cache: Final = DiskCache(disk_cache_dir=str(tmp_path))
+    response: Final = {"choices": [{"text": "cached"}], "usage": {"total_tokens": 3}}
+    disk_cache.disk_cache.set(
+        "sync",
+        {"timestamp": time.time(), "response": json.dumps(response)},
+    )
+    disk_cache.disk_cache.set("async", json.dumps({"timestamp": time.time(), "response": response}))
+    disk_cache.disk_cache.set("raw", json.dumps(response))
+    disk_cache.disk_cache.set("invalid", "not a cache entry")
+    disk_cache.disk_cache.set(
+        "large",
+        {"timestamp": time.time(), "response": {"text": "x" * 70_000}},
+    )
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=_native._CacheTestHandle.disk(str(tmp_path)))
+    ).resolve()
+
+    assert binding.lookup(request("sync")) == response
+    assert await binding.async_lookup(request("async")) == response
+    assert binding.lookup(request("raw")) == response
+    assert await binding.async_lookup(request("invalid")) is None
+    assert binding.lookup(request("large")) == {"text": "x" * 70_000}
+
+    await binding.async_store({**request("native"), "ttl_seconds": 12.0}, response)
+    stored_response: Final = disk_cache.get_cache("native")
+    assert isinstance(stored_response, dict)
+    assert stored_response["response"] == response
+    stored, expire_time = disk_cache.disk_cache.get("native", expire_time=True)
+    assert stored is not None
+    assert time.time() < expire_time <= time.time() + 12.0
+    await binding.async_store(request("no-ttl"), response)
+    _, no_expiry = disk_cache.disk_cache.get("no-ttl", expire_time=True)
+    assert no_expiry is None
+
+
+async def test_disk_entries_survive_a_fresh_handle_and_expire_on_time(tmp_path: Path) -> None:
+    first: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=_native._CacheTestHandle.disk(str(tmp_path)))
+    ).resolve()
+    await first.async_store(request("persistent"), {"value": "persistent"})
+    await first.async_store({**request("expiring"), "ttl_seconds": 0.3}, {"value": "expiring"})
+    fresh: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=_native._CacheTestHandle.disk(str(tmp_path)))
+    ).resolve()
+    assert fresh.lookup(request("persistent")) == {"value": "persistent"}
+    assert fresh.lookup(request("expiring")) == {"value": "expiring"}
+    await asyncio.sleep(0.4)
+    assert fresh.lookup(request("expiring")) is None
+    assert fresh.lookup(request("persistent")) == {"value": "persistent"}
+
+
+def test_disk_facade_registers_and_store_changes_fall_back(tmp_path: Path) -> None:
+    facade: Final = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path))
+    with pytest.raises(TypeError, match="directories must match"):
+        _native._CacheTestHandle.disk(str(tmp_path / "other"))._bind_facade(facade)
+    handle: Final = _native._CacheTestHandle.disk(str(tmp_path))
+    handle._bind_facade(facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    binding: Final = resolver.resolve()
+    assert binding.kind == "native"
+    binding.store(request("native"), {"value": "native"})
+    assert facade.get_cache(cache_key="native") == {"value": "native"}
+
+    with rebound(facade.cache, "disk_cache", diskcache.Cache(str(tmp_path))):
+        assert resolver.resolve().kind == "python_callback"
+    assert resolver.resolve().kind == "native"
+
+    class CustomDiskCache(DiskCache):
+        pass
+
+    with rebound(facade, "cache", CustomDiskCache(disk_cache_dir=str(tmp_path))):
+        assert resolver.resolve().kind == "python_callback"
+
+    class CustomStore(diskcache.Cache):
+        pass
+
+    custom_facade: Final = Cache(type=LiteLLMCacheType.DISK, disk_cache_dir=str(tmp_path))
+    custom_facade.cache.disk_cache = CustomStore(str(tmp_path))
+    with pytest.raises(TypeError, match="built-in diskcache store"):
+        _native._CacheTestHandle.disk(str(tmp_path))._bind_facade(custom_facade)
+
+
+async def test_disk_native_batch_lookup_and_store_report_partial_hits(tmp_path: Path) -> None:
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(cache=_native._CacheTestHandle.disk(str(tmp_path)))
+    ).resolve()
+    requests: Final = [request("hit"), request("miss"), request("disabled")]
+    requests[2]["controls"] = {
+        "supported_call_type": True,
+        "configured": True,
+        "native_backend": True,
+        "default_on": True,
+        "caching": False,
+        "no_cache": False,
+        "no_store": False,
+        "use_cache": False,
+    }
+    await binding.async_store_batch(requests, [{"value": 1}, {"value": 2}, {"value": 3}])
+
+    partial: Final = await binding.async_lookup_batch(requests)
+
+    assert partial == {
+        "values": [{"value": 1}, {"value": 2}, None],
+        "missing_indices": [2],
+    }
 
 
 async def test_redis_cluster_facade_serves_multi_slot_batches_and_scoped_flush_natively(

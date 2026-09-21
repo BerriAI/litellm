@@ -244,6 +244,30 @@
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-input_text]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.6-batch-halved_rates_when_map_has_no_batch_keys]": [
+      "quota_management.spend_tracking.batch_costs.fallback_rates"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.6-batch-cached_input_halved]": [
+      "quota_management.spend_tracking.batch_costs.cached_input"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.4-batch-explicit_batch_rates_bill_cached_at_batch_input_rate]": [
+      "quota_management.spend_tracking.batch_costs.explicit_rates"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_batch_costs[gpt-5.6-batch-all_requests_failed_zero_spend]": [
+      "quota_management.spend_tracking.batch_costs.failed_requests"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-single_turn_text_audio_cached]": [
+      "quota_management.spend_tracking.realtime_costs.single_turn"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-two_turns_summed_into_one_row]": [
+      "quota_management.spend_tracking.realtime_costs.multiple_turns"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-priced_from_session_created_model]": [
+      "quota_management.spend_tracking.realtime_costs.session_model"
+    ],
+    "tests/integration/cost_calculation/test_batch_realtime_cost.py::test_realtime_costs[gpt-realtime-mini-2025-12-15-realtime-session_without_turns_zero_spend]": [
+      "quota_management.spend_tracking.realtime_costs.session_without_turns"
+    ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-cache_read]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
