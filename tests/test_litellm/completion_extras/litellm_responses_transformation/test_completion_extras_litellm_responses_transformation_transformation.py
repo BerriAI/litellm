@@ -4185,24 +4185,38 @@ def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
 
 
-def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion() -> None:
+@pytest.mark.parametrize(
+    ("content_block", "expected_content"),
+    [
+        (
+            {"type": "text", "text": "Stable prefix"},
+            {"type": "input_text", "text": "Stable prefix"},
+        ),
+        (
+            {"type": "image_url", "image_url": "https://example.com/image.png"},
+            {"type": "input_image", "image_url": "https://example.com/image.png", "detail": "auto"},
+        ),
+        (
+            {"type": "file", "file": {"file_id": "file-123"}},
+            {"type": "input_file", "file_id": "file-123"},
+        ),
+    ],
+    ids=("text", "image_url", "file"),
+)
+def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion(
+    content_block: dict[str, object], expected_content: dict[str, object]
+) -> None:
     handler: Final = LiteLLMResponsesTransformationHandler()
     cache_breakpoint: Final = {"mode": "explicit"}
+    marked_content: Final = {**content_block, "prompt_cache_breakpoint": cache_breakpoint}
 
     request: Final = handler.transform_request(
         model="gpt-5.6-sol",
         messages=[
             {
-                "role": "system",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": "Stable prefix",
-                        "prompt_cache_breakpoint": cache_breakpoint,
-                    }
-                ],
-            },
-            {"role": "user", "content": "Use a tool"},
+                "role": "user",
+                "content": [marked_content],
+            }
         ],
         optional_params={"prompt_cache_options": cache_breakpoint},
         litellm_params={},
@@ -4212,14 +4226,8 @@ def test_prompt_cache_breakpoint_survives_chat_to_responses_conversion() -> None
 
     assert request["input"][0] == {
         "type": "message",
-        "role": "system",
-        "content": [
-            {
-                "type": "input_text",
-                "text": "Stable prefix",
-                "prompt_cache_breakpoint": cache_breakpoint,
-            }
-        ],
+        "role": "user",
+        "content": [{**expected_content, "prompt_cache_breakpoint": cache_breakpoint}],
     }
     assert request["prompt_cache_options"] == cache_breakpoint
 
