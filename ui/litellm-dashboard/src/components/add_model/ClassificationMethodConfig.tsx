@@ -1,4 +1,5 @@
 import { transitionClassifierType } from "./classifier_type_transition";
+import JevClassifierConfig from "./JevClassifierConfig";
 import { Info } from "lucide-react";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { MultiSelect } from "@/components/shared/MultiSelect";
@@ -39,6 +40,7 @@ import {
   effectiveTierLabel,
   heuristicScoringRole,
   usesLlmClassifier,
+  usesClassifierContext,
   DEFAULT_HYBRID_BOUNDARY_MARGIN,
   HEURISTIC_FIRST_MAX_TIER_KEYS,
   effectiveClassifierType,
@@ -243,6 +245,13 @@ const ClassifierTypeRadios: React.FC<{
           <span>
             <strong className="font-semibold">LLM Classifier</strong>{" "}
             <span className="text-muted-foreground">calls a model to decide the tier (e.g. a small/fast model)</span>
+          </span>
+        </Label>
+        <Label className="items-start font-normal leading-normal">
+          <RadioGroupItem value="jev" className="mt-0.5" />
+          <span>
+            <strong className="font-semibold">JEV Classifier</strong>{" "}
+            <span className="text-muted-foreground">uses TypeSafe System One Choice to decide the tier</span>
           </span>
         </Label>
         <SimpleTooltip content={scorerLockedReason}>
@@ -580,6 +589,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </p>
       </div>
 
+      {classifierType === "jev" && <JevClassifierConfig value={value} onChange={onChange} />}
       {usesLlmClassifier(classifierType) && (
         <div className="mt-4 space-y-3">
           <div>
@@ -672,6 +682,10 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               />
             )}
           </div>
+        </div>
+      )}
+      {usesClassifierContext(classifierType) && (
+        <div className="mt-4 space-y-3">
           <RestrictedSection heading="If the classifier fails" by={restrictedBy(value, "classifierFallback")}>
             <RadioGroup
               value={value.classifier_fallback ?? DEFAULT_CLASSIFIER_FALLBACK}
@@ -733,9 +747,9 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
               className="w-full"
             />
             <span className="text-xs text-muted-foreground">
-              Number of prior user turns (tool output and harness reminders excluded) sent to the classifier as context,
-              so a referring follow-up like &quot;now do the same for the streaming path&quot; is classified against
-              what it refers to. Set to 0 to send only the current message.
+              Number of prior user turns sent to the classifier provider, excluding tool output and harness reminders.
+              LLM and JEV default to 3 turns; JEV sends them to the configured TypeSafe endpoint. Set to 0 to omit
+              conversation history. The current message and selected system text are still sent.
             </span>
           </div>
           <div>
