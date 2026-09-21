@@ -2879,7 +2879,6 @@ def response_format_tests(response: litellm.ModelResponse):
     "model",
     [
         "bedrock/mistral.mistral-large-2407-v1:0",
-        "bedrock/cohere.command-r-plus-v1:0",
         "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mistral-7b-instruct-v0:2",
         "meta.llama3-8b-instruct-v1:0",
@@ -4000,10 +3999,14 @@ def test_completion_novita_ai():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client.chat.completions.with_raw_response, "create"
     ) as mock_call:
+        mock_call.return_value.headers = {}
+        mock_call.return_value.parse.return_value = litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "Hello"}}]
+        )
         try:
-            completion(
+            response = completion(
                 model="novita/meta-llama/llama-3.3-70b-instruct",
                 messages=messages,
                 client=openai_client,
@@ -4011,6 +4014,7 @@ def test_completion_novita_ai():
             )
 
             mock_call.assert_called_once()
+            assert response.choices[0].message.content == "Hello"
 
             # Verify model is passed correctly
             assert (

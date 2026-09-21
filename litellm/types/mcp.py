@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import TypedDict
 
 from litellm.types.llms.base import HiddenParams
@@ -89,6 +89,33 @@ class MCPPublicServer(BaseModel):
     spec_path: str | None = None
     auth_type: MCPAuthType | None = None
     mcp_info: dict[str, Any] | None = None
+
+
+class MCPToolSearchSettings(BaseModel):
+    """`litellm_settings.mcp_tool_search`: how the native `mcp_tool_search` virtual tool ranks the caller's tools."""
+
+    model_config = ConfigDict(frozen=True)
+
+    embedding_model: str | None = Field(
+        default=None,
+        description="Embedding model from model_list used to rank tools by meaning. Unset keeps keyword matching.",
+    )
+    top_k: int = Field(
+        default=5,
+        ge=1,
+        le=100,
+        description="Most ranked tools a search returns. A smaller top_k in the tool call wins. Core tools do not count.",
+    )
+    similarity_threshold: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Lowest cosine similarity a tool needs to appear in semantic results (0.0 = no cutoff).",
+    )
+    core_tools: tuple[str, ...] = Field(
+        default=(),
+        description="Tool names always returned first when the caller can access them, e.g. `my_server-get_rates`.",
+    )
 
 
 # OAuth 2.0 token-endpoint client authentication method (RFC 6749 section 2.3.1).

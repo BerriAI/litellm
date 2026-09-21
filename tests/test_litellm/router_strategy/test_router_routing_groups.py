@@ -12,6 +12,7 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.router import RoutingGroup, RoutingStrategy
 
 
@@ -435,6 +436,81 @@ def test_update_settings_unregisters_group_selectors_when_groups_removed(monkeyp
     assert router._group_selectors == {}
 
 
+def test_two_least_busy_groups_count_a_request_once(monkeypatch):
+    """
+    Least-busy counts a request up from the pre-call hooks on `litellm.input_callback` and
+    back down from the success hooks on `litellm.callbacks`. The success list drops a second
+    selector of the same class, so a pre-call list that kept both counted every request twice
+    and released it once, and the deployment's in-flight count climbed until it looked pinned.
+    """
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+
+    router = _build_router(
+        routing_strategy="least-busy",
+        routing_groups=[
+            {
+                "group_name": "fast",
+                "models": ["filtered-model"],
+                "routing_strategy": "least-busy",
+            }
+        ],
+    )
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"model_group": "filtered-model"},
+            "model_info": {"id": "deploy-1"},
+        }
+    }
+
+    for callback in litellm.input_callback:
+        if isinstance(callback, CustomLogger):
+            callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            callback.log_success_event(kwargs, None, None, None)
+
+    assert router.cache.get_cache("filtered-model_request_count:deploy-1") == 0
+
+
+def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
+    """
+    Least-busy hangs its counting off litellm's global callback lists, and those lists keep one
+    logger per class unless the instances differ in a plain attribute. Two routers in one process
+    (a second Router, or a per-request `user_config` one) therefore have to register separately:
+    a second router whose selector is dropped counts nothing, reads zero for every deployment,
+    and sends every request to whichever one is listed first.
+    """
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+
+    first = _build_router(routing_strategy="least-busy")
+    second = _build_router(routing_strategy="least-busy")
+    kwargs = {
+        "litellm_params": {
+            "metadata": {"model_group": "filtered-model"},
+            "model_info": {"id": "deploy-1"},
+        }
+    }
+
+    for callback in litellm.input_callback:
+        if isinstance(callback, CustomLogger):
+            callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
+
+    assert second.cache.get_cache("filtered-model_request_count:deploy-1") == 1
+    assert (
+        second.get_available_deployment(model="filtered-model", messages=[])["model_info"]["id"]
+        == "deploy-2"
+    )
+
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger):
+            callback.log_success_event(kwargs, None, None, None)
+
+    assert first.cache.get_cache("filtered-model_request_count:deploy-1") == 0
+    assert second.cache.get_cache("filtered-model_request_count:deploy-1") == 0
+
+
 # ---------------------------------------------------------------------------
 # Direct helper coverage
 # ---------------------------------------------------------------------------
@@ -716,13 +792,166 @@ def test_strategy_reinit_unregisters_override_selectors():
     router = _build_router(routing_strategy="least-busy")
     override_selector = router._get_override_strategy_selector("latency-based-routing")
     assert override_selector is not None
-    assert any(id(cb) == id(override_selector) for cb in litellm.callbacks)
+    assert not any(cb is override_selector for cb in litellm.callbacks)
 
     router.update_settings(routing_strategy="latency-based-routing")
 
     assert router._override_selectors == {}
-    assert not any(id(cb) == id(override_selector) for cb in litellm.callbacks)
+    assert not any(cb is override_selector for cb in litellm.callbacks)
     assert router._get_override_strategy_selector("latency-based-routing") is router.lowestlatency_logger
+
+
+def test_override_selectors_are_not_registered_process_wide(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _build_router(routing_strategy="simple-shuffle")
+    v2_selector = router._get_override_strategy_selector("usage-based-routing-v2")
+    least_busy_selector = router._get_override_strategy_selector("least-busy")
+    assert v2_selector is not None and least_busy_selector is not None
+
+    assert litellm.callbacks == []
+    assert litellm.input_callback == []
+
+
+def _rpm_limited_model_list():
+    return [
+        {
+            "model_name": "other-model",
+            "litellm_params": {
+                "model": "openai/gpt-4o",
+                "api_key": "sk-test-3",
+                "api_base": "https://example.invalid",
+                "rpm": 1,
+            },
+            "model_info": {"id": "deploy-3"},
+        },
+    ]
+
+
+async def _mock_completion(router, **override):
+    return await router.acompletion(
+        model="other-model", messages=[{"role": "user", "content": "hi"}], mock_response="ok", **override
+    )
+
+
+@pytest.mark.asyncio
+async def test_usage_based_v2_override_stays_scoped_to_the_request_that_asked_for_it():
+    router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
+
+    await _mock_completion(router, routing_strategy="usage-based-routing-v2")
+    override_selector = router._override_selectors["usage-based-routing-v2"]
+    assert not any(cb is override_selector for cb in litellm.callbacks)
+
+    with patch.object(
+        override_selector, "async_pre_call_check", wraps=override_selector.async_pre_call_check
+    ) as pre_call_spy:
+        for _ in range(2):
+            plain = await _mock_completion(router)
+            assert plain.choices[0].message.content == "ok"
+        assert not pre_call_spy.called
+
+        with pytest.raises(litellm.RateLimitError):
+            await _mock_completion(router, routing_strategy="usage-based-routing-v2")
+
+
+def test_sync_usage_based_v2_override_stays_scoped_to_the_request_that_asked_for_it():
+    router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
+    messages = [{"role": "user", "content": "hi"}]
+
+    router.completion(
+        model="other-model", messages=messages, mock_response="ok", routing_strategy="usage-based-routing-v2"
+    )
+    override_selector = router._override_selectors["usage-based-routing-v2"]
+    assert not any(cb is override_selector for cb in litellm.callbacks)
+
+    for _ in range(2):
+        plain = router.completion(model="other-model", messages=messages, mock_response="ok")
+        assert plain.choices[0].message.content == "ok"
+
+    with pytest.raises(ValueError, match="No deployments available"):
+        router.completion(
+            model="other-model", messages=messages, mock_response="ok", routing_strategy="usage-based-routing-v2"
+        )
+
+
+@pytest.mark.asyncio
+async def test_override_selector_pre_call_check_only_runs_for_override_selectors(monkeypatch):
+    monkeypatch.setattr(litellm, "callbacks", [])
+    deployment = _rpm_limited_model_list()[0]
+
+    override_router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle")
+    override_selector = override_router._get_override_strategy_selector("usage-based-routing-v2")
+    await override_router._async_override_selector_pre_call_check(
+        "usage-based-routing-v2", override_selector, deployment, None
+    )
+    with pytest.raises(litellm.RateLimitError):
+        override_router._override_selector_pre_call_check("usage-based-routing-v2", override_selector, deployment)
+
+    default_router = Router(model_list=_rpm_limited_model_list(), routing_strategy="usage-based-routing-v2")
+    for _ in range(2):
+        await default_router._async_override_selector_pre_call_check(
+            "usage-based-routing-v2", default_router.lowesttpm_logger_v2, deployment, None
+        )
+        default_router._override_selector_pre_call_check(
+            "usage-based-routing-v2", default_router.lowesttpm_logger_v2, deployment
+        )
+    await default_router._async_override_selector_pre_call_check(None, None, deployment, None)
+    default_router._override_selector_pre_call_check(None, None, deployment)
+
+
+@pytest.mark.asyncio
+async def test_usage_based_v2_override_enforces_rpm_when_a_specific_deployment_is_requested():
+    router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
+    kwargs = {"model": "deploy-3", "messages": [{"role": "user", "content": "hi"}], "mock_response": "ok"}
+
+    first = await router.acompletion(**kwargs, routing_strategy="usage-based-routing-v2")
+    assert first.choices[0].message.content == "ok"
+    with pytest.raises(litellm.RateLimitError):
+        await router.acompletion(**kwargs, routing_strategy="usage-based-routing-v2")
+    assert (await router.acompletion(**kwargs)).choices[0].message.content == "ok"
+
+
+def test_sync_usage_based_v2_override_enforces_rpm_when_a_specific_deployment_is_requested():
+    router = Router(model_list=_rpm_limited_model_list(), routing_strategy="simple-shuffle", num_retries=0)
+    kwargs = {"model": "deploy-3", "messages": [{"role": "user", "content": "hi"}], "mock_response": "ok"}
+
+    first = router.completion(**kwargs, routing_strategy="usage-based-routing-v2")
+    assert first.choices[0].message.content == "ok"
+    with pytest.raises(litellm.RateLimitError):
+        router.completion(**kwargs, routing_strategy="usage-based-routing-v2")
+    assert router.completion(**kwargs).choices[0].message.content == "ok"
+
+
+def _pass_through_rpm_limited_model_list():
+    deployment = _rpm_limited_model_list()[0]
+    return [{**deployment, "litellm_params": {**deployment["litellm_params"], "use_in_pass_through": True}}]
+
+
+@pytest.mark.asyncio
+async def test_async_early_return_paths_run_the_override_pre_call_check():
+    router = Router(model_list=_pass_through_rpm_limited_model_list(), routing_strategy="simple-shuffle")
+    override = {"routing_strategy": "usage-based-routing-v2"}
+
+    pinned = await router.async_get_available_deployment(
+        model="other-model", request_kwargs={**override, "_encrypted_content_affinity_pinned": True}
+    )
+    assert pinned["model_info"]["id"] == "deploy-3"
+    with pytest.raises(litellm.RateLimitError):
+        await router.async_get_available_deployment_for_pass_through(model="deploy-3", request_kwargs=override)
+    plain = await router.async_get_available_deployment_for_pass_through(model="deploy-3", request_kwargs={})
+    assert plain["model_info"]["id"] == "deploy-3"
+
+
+def test_sync_pass_through_specific_deployment_runs_the_override_pre_call_check():
+    router = Router(model_list=_pass_through_rpm_limited_model_list(), routing_strategy="simple-shuffle")
+    override = {"routing_strategy": "usage-based-routing-v2"}
+
+    first = router.get_available_deployment_for_pass_through(model="deploy-3", request_kwargs=override)
+    assert first["model_info"]["id"] == "deploy-3"
+    with pytest.raises(litellm.RateLimitError):
+        router.get_available_deployment_for_pass_through(model="deploy-3", request_kwargs=override)
+    plain = router.get_available_deployment_for_pass_through(model="deploy-3", request_kwargs={})
+    assert plain["model_info"]["id"] == "deploy-3"
 
 
 def _quality_group(strategy="latency-based-routing"):

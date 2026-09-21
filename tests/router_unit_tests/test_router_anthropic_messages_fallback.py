@@ -338,6 +338,112 @@ def test_record_pre_routing_selection_writes_only_the_internal_bucket():
     assert kwargs["metadata"] == {"user_id": "u1"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+async def test_generic_only_row_recovers_safeguard_refusal(stream):
+    """With no content-policy list configured, a generic fallback row covers safeguard refusals,
+    so the dashboard's generic fallbacks work without config-only content_policy rows."""
+    fake = FakeAnthropicUpstream()
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"fable-tier": ["opus-target"]}])
+
+    with fake.install():
+        response = await router.aanthropic_messages(
+            model="fable-tier", max_tokens=16, stream=stream, messages=[{"role": "user", "content": "hi"}]
+        )
+        body = await _collect(response) if stream else response
+
+    if stream:
+        assert b'"refusal"' not in body
+        assert b"text_delta" in body
+    else:
+        assert body["stop_reason"] == "end_turn"
+    assert len(fake.calls) == 2
+    assert "claude-opus-5" in fake.calls[1]
+
+
+@pytest.mark.asyncio
+async def test_configured_content_policy_list_stays_authoritative_over_generic_rows():
+    fake = FakeAnthropicUpstream()
+    router = Router(
+        model_list=[FABLE_TIER, OPUS_TARGET],
+        fallbacks=[{"fable-tier": ["opus-target"]}],
+        content_policy_fallbacks=[{"unrelated-group": ["opus-target"]}],
+    )
+
+    with fake.install():
+        response = await router.aanthropic_messages(
+            model="fable-tier", max_tokens=16, messages=[{"role": "user", "content": "hi"}]
+        )
+
+    assert response["stop_reason"] == "refusal"
+    assert len(fake.calls) == 1
+
+
+def test_refusal_fallback_available_arms_on_generic_rows_only_without_content_policy():
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"tier-group": ["opus-target"]}])
+    stamped = {"litellm_metadata": {PRE_ROUTING_SELECTED_MODEL_KEY: "tier-group"}}
+
+    assert router._refusal_fallback_available("router-group", stamped) is True
+    assert router._refusal_fallback_available("router-group", {}) is False
+    assert router._refusal_fallback_available("router-group", {"content_policy_fallbacks": [{"other": ["x"]}]}) is False
+
+
+def test_chat_content_filter_gate_unchanged_by_generic_rows():
+    """The generic-row arming is scoped to /v1/messages safeguard refusals; the chat surface's
+    content_filter gate keeps its long-standing content-policy-only semantics."""
+    from litellm.types.utils import Choices, ModelResponse
+
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"fable-tier": ["opus-target"]}])
+    response = ModelResponse(choices=[Choices(finish_reason="content_filter")])
+
+    assert router._should_raise_content_policy_error(model="fable-tier", response=response, kwargs={}) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non-streaming", "streaming"])
+async def test_disable_fallbacks_returns_the_refusal_instead_of_raising(stream):
+    """A request that opted out of fallbacks must receive the provider's refusal response,
+    never a ContentPolicyViolationError the dispatcher refuses to recover."""
+    fake = FakeAnthropicUpstream()
+    router = Router(model_list=[FABLE_TIER, OPUS_TARGET], fallbacks=[{"fable-tier": ["opus-target"]}])
+
+    with fake.install():
+        response = await router.aanthropic_messages(
+            model="fable-tier",
+            max_tokens=16,
+            stream=stream,
+            disable_fallbacks=True,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+        body = await _collect(response) if stream else response
+
+    if stream:
+        assert b'"stop_reason": "refusal"' in body
+    else:
+        assert body["stop_reason"] == "refusal"
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_disable_fallbacks_beats_a_content_policy_row_too():
+    fake = FakeAnthropicUpstream()
+    router = Router(
+        model_list=[FABLE_TIER, OPUS_TARGET],
+        content_policy_fallbacks=[{"fable-tier": ["opus-target"]}],
+    )
+
+    with fake.install():
+        response = await router.aanthropic_messages(
+            model="fable-tier",
+            max_tokens=16,
+            disable_fallbacks=True,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+    assert response["stop_reason"] == "refusal"
+    assert len(fake.calls) == 1
+
+
 def test_refusal_gate_keys_on_pre_routing_tier_stamp():
     router = _router(content_policy_fallbacks=[{"tier-group": ["opus-target"]}])
 

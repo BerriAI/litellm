@@ -1,6 +1,7 @@
 import asyncio
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
@@ -24,7 +25,30 @@ else:
     UserAPIKeyAuth = Any
 
 
-def _get_otel_v2_class() -> type | None:
+class _ServiceSpanLogger(Protocol):
+    """The OTel logger surface this module drives: the two service-span hooks it calls."""
+
+    async def async_service_success_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
+        event_metadata: dict | None = None,
+    ) -> None: ...
+
+    async def async_service_failure_hook(
+        self,
+        payload: ServiceLoggerPayload,
+        error: str | None = "",
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
+        event_metadata: dict | None = None,
+    ) -> None: ...
+
+
+def _get_otel_v2_class() -> type[_ServiceSpanLogger] | None:
     """Return the ``OpenTelemetryV2`` class, or ``None`` if the OTel SDK is absent.
 
     Imported lazily: ``litellm.integrations.otel.logger`` imports the OpenTelemetry
@@ -54,7 +78,7 @@ class ServiceLogging(CustomLogger):
         if "prometheus_system" in litellm.service_callback:
             self.prometheusServicesLogger = PrometheusServicesLogger()
 
-    def _resolve_otel_service_logger(self, callback: Any) -> Any | None:
+    def _resolve_otel_service_logger(self, callback: object) -> _ServiceSpanLogger | None:
         """Resolve the OTel logger (legacy or V2) to emit a service span on.
 
         Returns the logger instance whose ``async_service_*_hook`` should fire for
@@ -69,19 +93,63 @@ class ServiceLogging(CustomLogger):
         """
         otel_v2_cls: Final = _get_otel_v2_class()
 
-        def _is_otel_logger(obj: Any) -> bool:
+        def _as_otel_logger(obj: object) -> _ServiceSpanLogger | None:
             if isinstance(obj, OpenTelemetry):
-                return True
-            return otel_v2_cls is not None and isinstance(obj, otel_v2_cls)
+                return obj
+            if otel_v2_cls is not None and isinstance(obj, otel_v2_cls):
+                return obj
+            return None
 
-        if _is_otel_logger(callback):
-            return callback
+        resolved_callback: Final = _as_otel_logger(callback)
+        if resolved_callback is not None:
+            return resolved_callback
         if callback == "otel":
             from litellm.proxy.proxy_server import open_telemetry_logger
 
-            if open_telemetry_logger is not None and _is_otel_logger(open_telemetry_logger):
-                return open_telemetry_logger
+            if open_telemetry_logger is not None:
+                return _as_otel_logger(open_telemetry_logger)
         return None
+
+    @staticmethod
+    def _sync_dispatch_loop() -> asyncio.AbstractEventLoop | None:
+        """The event loop a blocking caller can dispatch on, or ``None`` if it has none."""
+        try:
+            loop: Final = asyncio.get_event_loop()
+        except RuntimeError:
+            return None
+        return None if loop.is_closed() else loop
+
+    @staticmethod
+    async def _emit_guarded(hook: Callable[[], Coroutine[object, object, None]]) -> None:
+        """Emit one service event, absorbing anything the callbacks raise.
+
+        Monitoring must not break the call it monitors. Sync callers are the ones that
+        swallow their own service failures (a Redis batch read returns an empty dict),
+        so an exception from a misconfigured callback would replace a Redis outage with
+        a callback error and skip the caller's fallback handling.
+        """
+        try:
+            await hook()
+        except Exception as e:
+            verbose_logger.exception("Error emitting service event - %s", e)
+
+    @staticmethod
+    def _dispatch_from_sync(hook: Callable[[], Coroutine[object, object, None]]) -> None:
+        """Run an async service hook from a blocking caller, whatever event loop it holds.
+
+        Takes a factory rather than a coroutine so the hook is built on the path that
+        runs it, and only ever once.
+        """
+        loop: Final = ServiceLogging._sync_dispatch_loop()
+        try:
+            if loop is None:
+                asyncio.run(ServiceLogging._emit_guarded(hook))
+            elif loop.is_running():
+                loop.create_task(ServiceLogging._emit_guarded(hook))
+            else:
+                loop.run_until_complete(ServiceLogging._emit_guarded(hook))
+        except Exception as e:
+            verbose_logger.exception("Error dispatching service event - %s", e)
 
     def service_success_hook(
         self,
@@ -99,53 +167,44 @@ class ServiceLogging(CustomLogger):
         if self.mock_testing:
             self.mock_testing_sync_success_hook += 1
 
-        try:
-            # Try to get the current event loop
-            loop: Final = asyncio.get_event_loop()
-            # Check if the loop is running
-            if loop.is_running():
-                # If we're in a running loop, create a task
-                loop.create_task(
-                    self.async_service_success_hook(
-                        service=service,
-                        duration=duration,
-                        call_type=call_type,
-                        parent_otel_span=parent_otel_span,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                )
-            else:
-                # Loop exists but not running, we can use run_until_complete
-                loop.run_until_complete(
-                    self.async_service_success_hook(
-                        service=service,
-                        duration=duration,
-                        call_type=call_type,
-                        parent_otel_span=parent_otel_span,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
-                )
-        except RuntimeError:
-            # No event loop exists, create a new one and run
-            asyncio.run(
-                self.async_service_success_hook(
-                    service=service,
-                    duration=duration,
-                    call_type=call_type,
-                    parent_otel_span=parent_otel_span,
-                    start_time=start_time,
-                    end_time=end_time,
-                )
+        self._dispatch_from_sync(
+            lambda: self.async_service_success_hook(
+                service=service,
+                duration=duration,
+                call_type=call_type,
+                parent_otel_span=parent_otel_span,
+                start_time=start_time,
+                end_time=end_time,
             )
+        )
 
-    def service_failure_hook(self, service: ServiceTypes, duration: float, error: Exception, call_type: str):
+    def service_failure_hook(
+        self,
+        service: ServiceTypes,
+        duration: float,
+        error: Exception,
+        call_type: str,
+        parent_otel_span: Span | None = None,
+        start_time: datetime | float | None = None,
+        end_time: float | datetime | None = None,
+    ):
         """
-        [TODO] Not implemented for sync calls yet. V0 is focused on async monitoring (used by proxy).
+        Handles both sync and async monitoring by checking for existing event loop.
         """
         if self.mock_testing:
             self.mock_testing_sync_failure_hook += 1
+
+        self._dispatch_from_sync(
+            lambda: self.async_service_failure_hook(
+                service=service,
+                duration=duration,
+                error=error,
+                call_type=call_type,
+                parent_otel_span=parent_otel_span,
+                start_time=start_time,
+                end_time=end_time,
+            )
+        )
 
     async def async_service_success_hook(
         self,

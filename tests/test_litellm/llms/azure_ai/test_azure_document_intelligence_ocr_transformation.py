@@ -1,4 +1,5 @@
 from unittest.mock import MagicMock
+from typing import Final
 
 import httpx
 import pytest
@@ -371,3 +372,35 @@ def test_validate_environment_falls_back_to_entra_token(monkeypatch):
 
     assert headers["Authorization"] == "Bearer entra-token"
     assert "Ocp-Apim-Subscription-Key" not in headers
+
+
+@pytest.mark.parametrize(
+    ("request_headers", "expected_poll_headers"),
+    (
+        (
+            {"Ocp-Apim-Subscription-Key": "subscription-key"},
+            {"Ocp-Apim-Subscription-Key": "subscription-key"},
+        ),
+        (
+            {"Authorization": "Bearer entra-token"},
+            {"Authorization": "Bearer entra-token"},
+        ),
+    ),
+)
+def test_get_polling_target_preserves_request_authentication(
+    request_headers: dict[str, str], expected_poll_headers: dict[str, str]
+) -> None:
+    response: Final = httpx.Response(
+        status_code=202,
+        headers={"Operation-Location": "https://example.cognitiveservices.azure.com/operations/123"},
+        request=httpx.Request(
+            "POST",
+            "https://example.cognitiveservices.azure.com/documentintelligence/documentModels/prebuilt-layout:analyze",
+            headers=request_headers,
+        ),
+    )
+
+    operation_url, poll_headers = AzureDocumentIntelligenceOCRConfig()._get_polling_target(response)
+
+    assert operation_url == "https://example.cognitiveservices.azure.com/operations/123"
+    assert poll_headers == expected_poll_headers

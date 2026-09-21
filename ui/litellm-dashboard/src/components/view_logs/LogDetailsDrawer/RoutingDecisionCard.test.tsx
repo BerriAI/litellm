@@ -186,6 +186,12 @@ describe("RoutingDecisionCard", () => {
     expect(screen.queryByText("housekeeping")).not.toBeInTheDocument();
   });
 
+  it("labels a modality pin override instead of showing the raw cause token", () => {
+    render(<RoutingDecisionCard decision={{ ...heuristic, cause: "modality_pin_override" }} />);
+    expect(screen.getByText("Overrode session pin for image input")).toBeInTheDocument();
+    expect(screen.queryByText("modality_pin_override")).not.toBeInTheDocument();
+  });
+
   it("labels a modality escalation instead of showing the raw cause token", () => {
     render(<RoutingDecisionCard decision={{ ...heuristic, cause: "modality_escalation" }} />);
     expect(screen.getByText("Escalated for image input")).toBeInTheDocument();

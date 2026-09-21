@@ -52,6 +52,24 @@ describe("fetchAvailableModels", () => {
     ]);
   });
 
+  it("preserves absent, unknown, empty, and explicit effort capability states", async () => {
+    modelHubCallMock.mockResolvedValue({
+      data: [
+        { model_group: "absent", supports_reasoning: true },
+        { model_group: "unknown", supports_reasoning: true, supported_reasoning_efforts: null },
+        { model_group: "empty", supports_reasoning: true, supported_reasoning_efforts: [] },
+        { model_group: "known", supports_reasoning: true, supported_reasoning_efforts: ["low"] },
+      ],
+    });
+
+    expect(await fetchAvailableModels("token")).toEqual([
+      { model_group: "absent", supports_reasoning: true },
+      { model_group: "empty", supports_reasoning: true, supported_reasoning_efforts: [] },
+      { model_group: "known", supports_reasoning: true, supported_reasoning_efforts: ["low"] },
+      { model_group: "unknown", supports_reasoning: true, supported_reasoning_efforts: null },
+    ]);
+  });
+
   it.each([
     ["an error payload in place of the list", { data: { error: "no access" } }],
     ["a missing data key", {}],

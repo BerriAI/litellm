@@ -1,10 +1,19 @@
 import asyncio
+import re
+import sys
+import textwrap
+import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
+import httpx
 import pytest
 
 from litellm.integrations.s3_v2 import S3Logger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -21,9 +30,7 @@ class TestS3V2UnitTests:
         source_code = inspect.getsource(s3_v2)
 
         # Verify that json.dumps is not used directly in the code
-        assert (
-            "json.dumps(" not in source_code
-        ), "S3 v2 should not use json.dumps directly"
+        assert "json.dumps(" not in source_code, "S3 v2 should not use json.dumps directly"
 
     @patch("asyncio.create_task")
     @patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
@@ -86,12 +93,8 @@ class TestS3V2UnitTests:
         call_args_minio = s3_logger_minio.async_httpx_client.put.call_args
         assert call_args_minio is not None
         url_minio = call_args_minio[0][0]
-        expected_minio_url = (
-            "https://minio.example.com:9000/litellm-logs/2025-09-14/test-key.json"
-        )
-        assert (
-            url_minio == expected_minio_url
-        ), f"Expected MinIO URL {expected_minio_url}, got {url_minio}"
+        expected_minio_url = "https://minio.example.com:9000/litellm-logs/2025-09-14/test-key.json"
+        assert url_minio == expected_minio_url, f"Expected MinIO URL {expected_minio_url}, got {url_minio}"
 
         # Test 3: Custom endpoint without bucket name (should fall back to default)
         s3_logger_no_bucket = S3Logger(
@@ -136,12 +139,8 @@ class TestS3V2UnitTests:
             call_args_sync = mock_sync_client.put.call_args
             assert call_args_sync is not None
             url_sync = call_args_sync[0][0]
-            expected_sync_url = (
-                "https://custom.s3.endpoint.com/sync-bucket/2025-09-14/test-key.json"
-            )
-            assert (
-                url_sync == expected_sync_url
-            ), f"Expected sync URL {expected_sync_url}, got {url_sync}"
+            expected_sync_url = "https://custom.s3.endpoint.com/sync-bucket/2025-09-14/test-key.json"
+            assert url_sync == expected_sync_url, f"Expected sync URL {expected_sync_url}, got {url_sync}"
 
         # Test 5: Download method with custom endpoint
         s3_logger_download = S3Logger(
@@ -158,19 +157,15 @@ class TestS3V2UnitTests:
         s3_logger_download.async_httpx_client = AsyncMock()
         s3_logger_download.async_httpx_client.get.return_value = mock_download_response
 
-        result = asyncio.run(
-            s3_logger_download._download_object_from_s3(
-                "2025-09-14/download-test-key.json"
-            )
-        )
+        result = asyncio.run(s3_logger_download._download_object_from_s3("2025-09-14/download-test-key.json"))
 
         call_args_download = s3_logger_download.async_httpx_client.get.call_args
         assert call_args_download is not None
         url_download = call_args_download[0][0]
         expected_download_url = "https://download.s3.endpoint.com/download-bucket/2025-09-14/download-test-key.json"
-        assert (
-            url_download == expected_download_url
-        ), f"Expected download URL {expected_download_url}, got {url_download}"
+        assert url_download == expected_download_url, (
+            f"Expected download URL {expected_download_url}, got {url_download}"
+        )
 
         assert result == {"downloaded": "data"}
 
@@ -216,12 +211,8 @@ class TestS3V2UnitTests:
         call_args = s3_logger_virtual.async_httpx_client.put.call_args
         assert call_args is not None
         url = call_args[0][0]
-        expected_url = (
-            "https://test-bucket.s3.custom-endpoint.com/2025-09-14/test-key.json"
-        )
-        assert (
-            url == expected_url
-        ), f"Expected virtual-hosted-style URL {expected_url}, got {url}"
+        expected_url = "https://test-bucket.s3.custom-endpoint.com/2025-09-14/test-key.json"
+        assert url == expected_url, f"Expected virtual-hosted-style URL {expected_url}, got {url}"
 
         # Test 2: Path-style (default behavior with s3_use_virtual_hosted_style=False)
         s3_logger_path = S3Logger(
@@ -241,12 +232,8 @@ class TestS3V2UnitTests:
         call_args_path = s3_logger_path.async_httpx_client.put.call_args
         assert call_args_path is not None
         url_path = call_args_path[0][0]
-        expected_path_url = (
-            "https://s3.custom-endpoint.com/test-bucket/2025-09-14/test-key.json"
-        )
-        assert (
-            url_path == expected_path_url
-        ), f"Expected path-style URL {expected_path_url}, got {url_path}"
+        expected_path_url = "https://s3.custom-endpoint.com/test-bucket/2025-09-14/test-key.json"
+        assert url_path == expected_path_url, f"Expected path-style URL {expected_path_url}, got {url_path}"
 
         # Test 3: Virtual-hosted-style with http protocol
         s3_logger_http = S3Logger(
@@ -266,12 +253,10 @@ class TestS3V2UnitTests:
         call_args_http = s3_logger_http.async_httpx_client.put.call_args
         assert call_args_http is not None
         url_http = call_args_http[0][0]
-        expected_http_url = (
-            "http://http-bucket.minio.local:9000/2025-09-14/test-key.json"
+        expected_http_url = "http://http-bucket.minio.local:9000/2025-09-14/test-key.json"
+        assert url_http == expected_http_url, (
+            f"Expected virtual-hosted-style URL with http {expected_http_url}, got {url_http}"
         )
-        assert (
-            url_http == expected_http_url
-        ), f"Expected virtual-hosted-style URL with http {expected_http_url}, got {url_http}"
 
         # Test 4: Sync upload method with virtual-hosted-style
         s3_logger_sync_virtual = S3Logger(
@@ -295,12 +280,10 @@ class TestS3V2UnitTests:
             call_args_sync = mock_sync_client.put.call_args
             assert call_args_sync is not None
             url_sync = call_args_sync[0][0]
-            expected_sync_url = (
-                "https://sync-bucket.storage.example.com/2025-09-14/test-key.json"
+            expected_sync_url = "https://sync-bucket.storage.example.com/2025-09-14/test-key.json"
+            assert url_sync == expected_sync_url, (
+                f"Expected virtual-hosted-style sync URL {expected_sync_url}, got {url_sync}"
             )
-            assert (
-                url_sync == expected_sync_url
-            ), f"Expected virtual-hosted-style sync URL {expected_sync_url}, got {url_sync}"
 
         # Test 5: Download method with virtual-hosted-style
         s3_logger_download_virtual = S3Logger(
@@ -316,33 +299,26 @@ class TestS3V2UnitTests:
         mock_download_response.status_code = 200
         mock_download_response.json = MagicMock(return_value={"downloaded": "data"})
         s3_logger_download_virtual.async_httpx_client = AsyncMock()
-        s3_logger_download_virtual.async_httpx_client.get.return_value = (
-            mock_download_response
-        )
+        s3_logger_download_virtual.async_httpx_client.get.return_value = mock_download_response
 
-        result = asyncio.run(
-            s3_logger_download_virtual._download_object_from_s3(
-                "2025-09-14/download-test-key.json"
-            )
-        )
+        result = asyncio.run(s3_logger_download_virtual._download_object_from_s3("2025-09-14/download-test-key.json"))
 
         call_args_download = s3_logger_download_virtual.async_httpx_client.get.call_args
         assert call_args_download is not None
         url_download = call_args_download[0][0]
         expected_download_url = "https://download-bucket.download.endpoint.com/2025-09-14/download-test-key.json"
-        assert (
-            url_download == expected_download_url
-        ), f"Expected virtual-hosted-style download URL {expected_download_url}, got {url_download}"
+        assert url_download == expected_download_url, (
+            f"Expected virtual-hosted-style download URL {expected_download_url}, got {url_download}"
+        )
 
         assert result == {"downloaded": "data"}
 
     @patch("asyncio.create_task")
     @patch("litellm.integrations.s3_v2.CustomBatchLogger.periodic_flush")
-    def test_s3_v2_put_url_encodes_spaces_in_object_key(
-        self, mock_periodic_flush, mock_create_task
-    ):
-        import requests
+    def test_s3_v2_put_url_encodes_spaces_in_object_key(self, mock_periodic_flush, mock_create_task):
         from unittest.mock import AsyncMock
+
+        import requests
 
         from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 
@@ -487,9 +463,7 @@ async def test_async_upload_exhausts_retries_on_persistent_503():
     # All 3 attempts return 503
     response_503 = MagicMock()
     response_503.status_code = 503
-    response_503.raise_for_status = MagicMock(
-        side_effect=Exception("503 Service Unavailable")
-    )
+    response_503.raise_for_status = MagicMock(side_effect=Exception("503 Service Unavailable"))
 
     logger.async_httpx_client = AsyncMock()
     logger.async_httpx_client.put = AsyncMock(return_value=response_503)
@@ -528,12 +502,12 @@ async def test_async_upload_no_retry_on_4xx():
         s3_object_download_filename="test-no-retry.json",
     )
 
-    response_403 = MagicMock()
-    response_403.status_code = 403
-    response_403.raise_for_status = MagicMock(side_effect=Exception("403 Forbidden"))
+    response_400 = MagicMock()
+    response_400.status_code = 400
+    response_400.raise_for_status = MagicMock(side_effect=Exception("400 Bad Request"))
 
     logger.async_httpx_client = AsyncMock()
-    logger.async_httpx_client.put = AsyncMock(return_value=response_403)
+    logger.async_httpx_client.put = AsyncMock(return_value=response_400)
 
     with patch.object(logger, "handle_callback_failure") as mock_failure:
         await logger.async_upload_data_to_s3(test_element)
@@ -541,6 +515,190 @@ async def test_async_upload_no_retry_on_4xx():
     # Only 1 attempt — no retry for 4xx
     assert logger.async_httpx_client.put.call_count == 1
     mock_failure.assert_called_once_with(callback_name="S3Logger")
+
+
+_SIGV4_ACCESS_KEY = re.compile(r"Credential=(AKIA\d+)/")
+
+
+@pytest.fixture
+def rotating_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """
+    A real botocore profile whose credential_process hands out a new key generation on every call and
+    expires inside the advisory refresh window, so RefreshableCredentials re-runs it on every property read.
+    """
+    counter = tmp_path / "generation"
+    script = tmp_path / "rotate_credentials.py"
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            import json, sys
+            from datetime import datetime, timedelta, timezone
+            from pathlib import Path
+
+            counter = Path({str(counter)!r})
+            generation = int(counter.read_text()) if counter.exists() else 0
+            counter.write_text(str(generation + 1))
+            expiry = (datetime.now(timezone.utc) + timedelta(minutes=12)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            json.dump(
+                {{
+                    "Version": 1,
+                    "AccessKeyId": f"AKIA{{generation}}",
+                    "SecretAccessKey": f"secret-{{generation}}",
+                    "SessionToken": f"token-{{generation}}",
+                    "Expiration": expiry,
+                }},
+                sys.stdout,
+            )
+            """
+        )
+    )
+    profile = f"rotating-{uuid.uuid4().hex}"
+    (tmp_path / "config").write_text(f"[profile {profile}]\ncredential_process = {sys.executable} {script}\n")
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "config"))
+    return profile
+
+
+def _generation(request: httpx.Request) -> tuple[str, str]:
+    """(access key generation, session token generation) SigV4 baked into one request."""
+    access_key = _SIGV4_ACCESS_KEY.search(request.headers["Authorization"])
+    assert access_key is not None
+    return access_key.group(1).removeprefix("AKIA"), request.headers["X-Amz-Security-Token"].removeprefix("token-")
+
+
+@asynccontextmanager
+async def _s3_logger_on_production_handler(profile: str, statuses: list[int]):
+    """
+    S3Logger wired to the real AsyncHTTPHandler over an httpx MockTransport that answers with the given
+    statuses in order, so the handler's own raise_for_status behaviour is exercised end to end.
+    """
+    requests: list[httpx.Request] = []
+    replies = iter(statuses)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(next(replies), request=request, text="<Error><Code>SignatureDoesNotMatch</Code></Error>")
+
+    handler = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_region_name="us-east-1",
+        s3_aws_profile_name=profile,
+        s3_flush_interval=3600,
+    )
+    logger.async_httpx_client = handler
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        yield logger, requests, mock_sleep
+    await handler.client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_upload_signs_with_one_frozen_credential_snapshot(rotating_profile: str, caplog):
+    """
+    RefreshableCredentials refreshes on every property read once inside the advisory window, so signing
+    off the live object would mix the access key of one generation with the token of the next.
+    """
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-frozen.json",
+        payload={"test": "frozen"},
+        s3_object_download_filename="test-frozen.json",
+    )
+    async with _s3_logger_on_production_handler(rotating_profile, [200]) as (logger, requests, _):
+        await logger.async_upload_data_to_s3(test_element)
+
+    assert len(requests) == 1
+    access_key_generation, token_generation = _generation(requests[0])
+    assert access_key_generation == token_generation
+    assert "Error uploading to s3" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_upload_retries_403_with_fresh_credentials_and_signature(rotating_profile: str, caplog):
+    """
+    A 403 (SignatureDoesNotMatch after an IMDS rotation) must be retried, and the retry must fetch
+    credentials again and carry a signature computed from that newer generation.
+    """
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-403.json",
+        payload={"test": "403"},
+        s3_object_download_filename="test-403.json",
+    )
+    async with _s3_logger_on_production_handler(rotating_profile, [403, 200]) as (logger, requests, mock_sleep):
+        await logger.async_upload_data_to_s3(test_element)
+
+    assert len(requests) == 2
+    first_key, first_token = _generation(requests[0])
+    second_key, second_token = _generation(requests[1])
+    assert first_key == first_token
+    assert second_key == second_token
+    assert int(second_key) > int(first_key)
+    assert requests[1].headers["Authorization"] != requests[0].headers["Authorization"]
+    mock_sleep.assert_awaited_once_with(1)
+    assert "Error uploading to s3" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_upload_exhausts_403_retries_through_production_http_handler(rotating_profile: str, caplog):
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-403-exhausted.json",
+        payload={"test": "403-exhausted"},
+        s3_object_download_filename="test-403-exhausted.json",
+    )
+    async with _s3_logger_on_production_handler(rotating_profile, [403, 403, 403]) as (logger, requests, mock_sleep):
+        await logger.async_upload_data_to_s3(test_element)
+
+    assert len(requests) == 3
+    assert mock_sleep.await_args_list == [call(1), call(2)]
+    assert "Error uploading to s3" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_upload_does_not_retry_404_through_production_http_handler(rotating_profile: str, caplog):
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-404.json",
+        payload={"test": "404"},
+        s3_object_download_filename="test-404.json",
+    )
+    async with _s3_logger_on_production_handler(rotating_profile, [404]) as (logger, requests, mock_sleep):
+        await logger.async_upload_data_to_s3(test_element)
+
+    assert len(requests) == 1
+    mock_sleep.assert_not_awaited()
+    assert "Error uploading to s3" in caplog.text
+
+
+def test_sync_upload_retries_403_with_fresh_signature(rotating_profile: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("AWS_PROFILE", rotating_profile)
+    logger = S3Logger(s3_bucket_name="test-bucket", s3_region_name="us-east-1", s3_flush_interval=3600)
+    test_element = s3BatchLoggingElement(
+        s3_object_key="2025-09-14/test-sync-403.json",
+        payload={"test": "sync-403"},
+        s3_object_download_filename="test-sync-403.json",
+    )
+    requests: list[httpx.Request] = []
+    replies = iter([403, 200])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(next(replies), request=request)
+
+    handler = HTTPHandler()
+    handler.client = httpx.Client(transport=httpx.MockTransport(respond))
+    with (
+        patch(  # test-quality-ok: sync upload builds its HTTPHandler per call, there is no injection seam for it
+            "litellm.integrations.s3_v2._get_httpx_client", return_value=handler
+        ),
+        patch("time.sleep") as mock_sleep,
+    ):
+        logger.upload_data_to_s3(test_element)
+
+    assert len(requests) == 2
+    first_key, first_token = _generation(requests[0])
+    second_key, second_token = _generation(requests[1])
+    assert first_key == first_token
+    assert second_key == second_token
+    assert int(second_key) > int(first_key)
+    mock_sleep.assert_called_once_with(1)
 
 
 def test_sync_upload_retries_on_s3_503():
@@ -626,9 +784,7 @@ async def test_async_log_event_skips_when_standard_logging_object_missing():
 
     # Nothing should have been queued (catches the case where code falls
     # through without returning and appends None to the queue)
-    assert (
-        len(logger.log_queue) == 0
-    ), "log_queue should be empty when standard_logging_object is missing"
+    assert len(logger.log_queue) == 0, "log_queue should be empty when standard_logging_object is missing"
 
 
 @pytest.mark.asyncio
@@ -767,20 +923,18 @@ async def test_s3_verify_false_handling(monkeypatch: pytest.MonkeyPatch):
         litellm,
         "s3_callback_params",
         {
-                "s3_bucket_name": "test-bucket",
-                "s3_endpoint_url": "https://localhost:443",
-                "s3_aws_access_key_id": "minioadmin",
-                "s3_aws_secret_access_key": "minioadmin",
-                "s3_region_name": "us-east-1",
-                "s3_verify": False,  # This should NOT be ignored
-                "s3_use_ssl": False,  # This should also NOT be ignored
-            },
+            "s3_bucket_name": "test-bucket",
+            "s3_endpoint_url": "https://localhost:443",
+            "s3_aws_access_key_id": "minioadmin",
+            "s3_aws_secret_access_key": "minioadmin",
+            "s3_region_name": "us-east-1",
+            "s3_verify": False,  # This should NOT be ignored
+            "s3_use_ssl": False,  # This should also NOT be ignored
+        },
     )
 
     with patch("asyncio.create_task"):
-        with patch(
-            "litellm.integrations.s3_v2.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.integrations.s3_v2.get_async_httpx_client") as mock_get_client:
             mock_client = AsyncMock()
             mock_get_client.return_value = mock_client
 
@@ -788,22 +942,16 @@ async def test_s3_verify_false_handling(monkeypatch: pytest.MonkeyPatch):
             logger = S3Logger()
 
             # Verify s3_verify is False, not None
-            assert (
-                logger.s3_verify is False
-            ), f"Expected s3_verify=False, got {logger.s3_verify}"
-            assert (
-                logger.s3_use_ssl is False
-            ), f"Expected s3_use_ssl=False, got {logger.s3_use_ssl}"
+            assert logger.s3_verify is False, f"Expected s3_verify=False, got {logger.s3_verify}"
+            assert logger.s3_use_ssl is False, f"Expected s3_use_ssl=False, got {logger.s3_use_ssl}"
 
             # Verify that get_async_httpx_client was called with ssl_verify=False
             mock_get_client.assert_called_once()
             call_kwargs = mock_get_client.call_args.kwargs
-            assert (
-                "params" in call_kwargs
-            ), "params should be passed to get_async_httpx_client"
-            assert call_kwargs["params"] == {
-                "ssl_verify": False
-            }, f"Expected ssl_verify=False in params, got {call_kwargs.get('params')}"
+            assert "params" in call_kwargs, "params should be passed to get_async_httpx_client"
+            assert call_kwargs["params"] == {"ssl_verify": False}, (
+                f"Expected ssl_verify=False in params, got {call_kwargs.get('params')}"
+            )
 
 
 @pytest.mark.asyncio
@@ -820,17 +968,15 @@ async def test_s3_verify_none_handling(monkeypatch: pytest.MonkeyPatch):
         litellm,
         "s3_callback_params",
         {
-                "s3_bucket_name": "test-bucket",
-                "s3_aws_access_key_id": "test-key",
-                "s3_aws_secret_access_key": "test-secret",
-                "s3_region_name": "us-east-1",
-            },
+            "s3_bucket_name": "test-bucket",
+            "s3_aws_access_key_id": "test-key",
+            "s3_aws_secret_access_key": "test-secret",
+            "s3_region_name": "us-east-1",
+        },
     )
 
     with patch("asyncio.create_task"):
-        with patch(
-            "litellm.integrations.s3_v2.get_async_httpx_client"
-        ) as mock_get_client:
+        with patch("litellm.integrations.s3_v2.get_async_httpx_client") as mock_get_client:
             mock_client = AsyncMock()
             mock_get_client.return_value = mock_client
 
@@ -838,9 +984,7 @@ async def test_s3_verify_none_handling(monkeypatch: pytest.MonkeyPatch):
             logger = S3Logger()
 
             # Verify s3_verify is None (default)
-            assert (
-                logger.s3_verify is None
-            ), f"Expected s3_verify=None, got {logger.s3_verify}"
+            assert logger.s3_verify is None, f"Expected s3_verify=None, got {logger.s3_verify}"
 
             # Verify that get_async_httpx_client was called
             mock_get_client.assert_called_once()
@@ -868,13 +1012,13 @@ async def test_s3_verify_false_creates_httpx_client_with_verify_false(monkeypatc
         litellm,
         "s3_callback_params",
         {
-                "s3_bucket_name": "test-bucket",
-                "s3_endpoint_url": "https://localhost:443",
-                "s3_aws_access_key_id": "minioadmin",
-                "s3_aws_secret_access_key": "minioadmin",
-                "s3_region_name": "us-east-1",
-                "s3_verify": False,
-            },
+            "s3_bucket_name": "test-bucket",
+            "s3_endpoint_url": "https://localhost:443",
+            "s3_aws_access_key_id": "minioadmin",
+            "s3_aws_secret_access_key": "minioadmin",
+            "s3_region_name": "us-east-1",
+            "s3_verify": False,
+        },
     )
 
     with patch("asyncio.create_task"):
@@ -890,9 +1034,7 @@ async def test_s3_verify_false_creates_httpx_client_with_verify_false(monkeypatc
             httpx_client = logger.async_httpx_client.client
             # Check the _verify attribute (httpx internal)
             if hasattr(httpx_client, "_verify"):
-                assert (
-                    httpx_client._verify is False
-                ), f"Expected httpx client _verify=False, got {httpx_client._verify}"
+                assert httpx_client._verify is False, f"Expected httpx client _verify=False, got {httpx_client._verify}"
 
 
 @pytest.mark.asyncio
@@ -910,13 +1052,13 @@ async def test_s3_verify_false_async_client(monkeypatch: pytest.MonkeyPatch):
         litellm,
         "s3_callback_params",
         {
-                "s3_bucket_name": "test-bucket",
-                "s3_endpoint_url": "https://localhost:443",
-                "s3_aws_access_key_id": "minioadmin",
-                "s3_aws_secret_access_key": "minioadmin",
-                "s3_region_name": "us-east-1",
-                "s3_verify": False,
-            },
+            "s3_bucket_name": "test-bucket",
+            "s3_endpoint_url": "https://localhost:443",
+            "s3_aws_access_key_id": "minioadmin",
+            "s3_aws_secret_access_key": "minioadmin",
+            "s3_region_name": "us-east-1",
+            "s3_verify": False,
+        },
     )
 
     with patch("asyncio.create_task"):
@@ -948,9 +1090,9 @@ async def test_s3_verify_false_async_client(monkeypatch: pytest.MonkeyPatch):
         if hasattr(logger.async_httpx_client, "client"):
             httpx_client = logger.async_httpx_client.client
             if hasattr(httpx_client, "_verify"):
-                assert (
-                    httpx_client._verify is False
-                ), f"Expected async httpx client _verify=False, got {httpx_client._verify}"
+                assert httpx_client._verify is False, (
+                    f"Expected async httpx client _verify=False, got {httpx_client._verify}"
+                )
 
 
 @pytest.mark.asyncio
@@ -1017,9 +1159,7 @@ def patch_asyncio_create_task():
         (True, True, None, None, ""),
     ],
 )
-def test_s3_object_key_prefix_combinations(
-    use_team_prefix, use_key_prefix, team_alias, key_alias, expected_prefix
-):
+def test_s3_object_key_prefix_combinations(use_team_prefix, use_key_prefix, team_alias, key_alias, expected_prefix):
     """
     Validate correct S3 prefix composition for team alias + key alias combinations.
     """
@@ -1490,9 +1630,7 @@ def test_s3_callback_params_override_does_not_mutate_inputs(monkeypatch):
     logger = S3Logger(s3_callback_params_override=override)
     assert logger.s3_bucket_name == "resolved-bucket"
     assert override["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
-    assert (
-        litellm.s3_callback_params["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
-    )
+    assert litellm.s3_callback_params["s3_bucket_name"] == "os.environ/MY_AUDIT_BUCKET"
 
 
 def test_s3_callback_params_override_none_falls_back_to_global(monkeypatch):
@@ -1520,9 +1658,7 @@ def _expected_content_md5(payload: dict) -> str:
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
     json_string = safe_dumps(payload)
-    return base64.b64encode(
-        hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()
-    ).decode()
+    return base64.b64encode(hashlib.md5(json_string.encode("utf-8"), usedforsecurity=False).digest()).decode()
 
 
 def _require_non_security_md5(monkeypatch):
@@ -1658,9 +1794,9 @@ def test_s3_server_side_encryption_read_from_callback_params(monkeypatch):
         litellm,
         "s3_callback_params",
         {
-                "s3_bucket_name": "from-global",
-                "s3_server_side_encryption": "aws:kms",
-            },
+            "s3_bucket_name": "from-global",
+            "s3_server_side_encryption": "aws:kms",
+        },
     )
     logger = S3Logger()
     assert logger.s3_server_side_encryption == "aws:kms"
@@ -1789,10 +1925,10 @@ def test_s3_sse_kms_key_id_read_from_callback_params(monkeypatch):
         litellm,
         "s3_callback_params",
         {
-                "s3_bucket_name": "from-global",
-                "s3_server_side_encryption": "aws:kms",
-                "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
-            },
+            "s3_bucket_name": "from-global",
+            "s3_server_side_encryption": "aws:kms",
+            "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+        },
     )
     logger = S3Logger()
     assert logger.s3_sse_kms_key_id == ("arn:aws:kms:us-east-1:111122223333:key/test-key-id")
@@ -1863,10 +1999,10 @@ def test_kms_key_id_dropped_when_algorithm_is_not_kms(monkeypatch):
         litellm,
         "s3_callback_params",
         {
-                "s3_bucket_name": "from-global",
-                "s3_server_side_encryption": "AES256",
-                "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
-            },
+            "s3_bucket_name": "from-global",
+            "s3_server_side_encryption": "AES256",
+            "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+        },
     )
     logger = S3Logger()
     assert logger.s3_server_side_encryption == "AES256"
@@ -1884,10 +2020,10 @@ def test_non_string_algorithm_is_dropped_and_valid_key_id_is_rescued(monkeypatch
         litellm,
         "s3_callback_params",
         {
-                "s3_bucket_name": "from-global",
-                "s3_server_side_encryption": True,
-                "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
-            },
+            "s3_bucket_name": "from-global",
+            "s3_server_side_encryption": True,
+            "s3_sse_kms_key_id": "arn:aws:kms:us-east-1:111122223333:key/test-key-id",
+        },
     )
     logger = S3Logger()
     assert logger.s3_server_side_encryption == "aws:kms"
@@ -1902,10 +2038,10 @@ def test_non_string_key_id_is_dropped_and_valid_algorithm_is_kept(monkeypatch):
         litellm,
         "s3_callback_params",
         {
-                "s3_bucket_name": "from-global",
-                "s3_server_side_encryption": "aws:kms",
-                "s3_sse_kms_key_id": 12345,
-            },
+            "s3_bucket_name": "from-global",
+            "s3_server_side_encryption": "aws:kms",
+            "s3_sse_kms_key_id": 12345,
+        },
     )
     logger = S3Logger()
     assert logger.s3_server_side_encryption == "aws:kms"
@@ -2044,6 +2180,7 @@ async def test_download_signs_object_key_with_space_the_way_s3_does():
         body=None,
         headers=call.kwargs["headers"],
     )
+
 
 _RESERVED_CHAR_KEYS = (
     "2026-08-21/time-05-29-36_resp_bGl0ZWxsbTpjdXN0b20=.json",

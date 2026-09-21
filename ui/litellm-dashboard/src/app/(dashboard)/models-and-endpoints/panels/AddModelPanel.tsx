@@ -26,7 +26,7 @@ export default function AddModelPanel() {
   const { data: modelCostMapData } = useModelCostMap();
   const { data: credentialsResponse } = useCredentials();
   const { data: teams } = useTeams();
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.Anthropic);
+  const [selectedProvider, setSelectedProvider] = useState<string | null>(Providers.Anthropic);
   const [providerModels, setProviderModels] = useState<string[]>([]);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
@@ -57,7 +57,9 @@ export default function AddModelPanel() {
       selectedProvider={selectedProvider}
       setSelectedProvider={setSelectedProvider}
       providerModels={providerModels}
-      setProviderModelsFn={(provider) => setProviderModels(getProviderModels(provider, modelCostMapData))}
+      setProviderModelsFn={(provider) =>
+        setProviderModels(provider === null ? [] : getProviderModels(provider, modelCostMapData))
+      }
       getPlaceholder={getPlaceholder}
       showAdvancedSettings={showAdvancedSettings}
       setShowAdvancedSettings={setShowAdvancedSettings}

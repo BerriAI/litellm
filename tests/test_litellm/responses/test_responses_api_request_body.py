@@ -7,6 +7,7 @@ in expected_responses_api_request/.
 import copy
 import json
 from pathlib import Path
+from importlib import import_module
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -245,8 +246,10 @@ async def test_aresponses_keeps_include_obfuscation_in_stream_options():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, "true"])
 async def test_aresponses_request_level_drop_params_drops_bedrock_mantle_service_tier(
     monkeypatch,
+    drop_params,
 ):
     """
     Request-level drop_params=True (as the proxy injects for agentic CLIs) must
@@ -270,7 +273,7 @@ async def test_aresponses_request_level_drop_params_drops_bedrock_mantle_service
             aws_region_name="us-east-1",
             input="hi",
             service_tier="priority",
-            drop_params=True,
+            drop_params=drop_params,
         )
 
         mock_post.assert_called_once()
@@ -405,8 +408,8 @@ async def test_aresponses_websocket_strips_responses_routing_prefix_from_openai_
 
     from litellm.responses.main import _aresponses_websocket
 
-    with patch(
-        "litellm.responses.main.base_llm_http_handler.async_responses_websocket",
+    with patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler, "async_responses_websocket",
         new_callable=AsyncMock,
     ) as mock_ws:
         await _aresponses_websocket(
