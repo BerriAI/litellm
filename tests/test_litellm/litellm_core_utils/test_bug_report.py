@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import cast
 from urllib.parse import parse_qs, urlparse
 
+import httpx
 import pytest
 
 from litellm._version import version
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import APIConnectionError, BadRequestError, InternalServerError
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
     ISSUE_URL_BASE,
@@ -15,6 +16,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_issue_url,
     bug_report_notice,
     build_bug_report,
+    should_report_bug,
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
@@ -81,6 +83,29 @@ def test_bug_report_can_be_disabled(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(DISABLE_ENV_VAR, "true")
 
     assert bug_report_enabled() is False
+    assert should_report_bug(RuntimeError("boom")) is False
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        InternalServerError(message="upstream 500", llm_provider="openai", model="gpt-4"),
+        APIConnectionError(
+            message="connection reset",
+            llm_provider="openai",
+            model="gpt-4",
+            request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),
+        ),
+        BadRequestError(message="bad input", llm_provider="openai", model="gpt-4"),
+        "not an exception",
+    ],
+)
+def test_should_report_bug_skips_provider_and_network_errors(exc: object):
+    assert should_report_bug(exc) is False
+
+
+def test_should_report_bug_accepts_plain_python_errors():
+    assert should_report_bug(KeyError("missing")) is True
 
 
 def test_proxy_provider_uses_translation_domain():

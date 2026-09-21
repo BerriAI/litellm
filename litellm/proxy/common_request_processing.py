@@ -47,9 +47,9 @@ from litellm.constants import (
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.bug_report import (
-    bug_report_enabled,
     bug_report_notice,
     build_bug_report,
+    should_report_bug,
     strip_bug_report_notice,
 )
 from litellm.litellm_core_utils.core_helpers import (
@@ -3665,7 +3665,7 @@ class ProxyBaseLLMRequestProcessing:
             _code = _exc_status_code
         else:
             _code = status.HTTP_500_INTERNAL_SERVER_ERROR
-            if bug_report_enabled():
+            if should_report_bug(e):
                 proxy_server_request: Final = self.data.get("proxy_server_request")
                 request_url: Final = (
                     proxy_server_request.get("url") if isinstance(proxy_server_request, Mapping) else None

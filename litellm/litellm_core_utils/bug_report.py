@@ -43,6 +43,10 @@ def bug_report_enabled() -> bool:
     return os.getenv(DISABLE_ENV_VAR, "").lower() != "true"
 
 
+def should_report_bug(exc: object) -> bool:
+    return bug_report_enabled() and isinstance(exc, BaseException) and getattr(exc, "status_code", None) is None
+
+
 def _format_frame(frame: traceback.FrameSummary, package_dir: Path, package_parent: Path) -> str | None:
     frame_path: Final = Path(frame.filename).resolve()
     try:

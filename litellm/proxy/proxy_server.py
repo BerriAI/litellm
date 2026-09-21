@@ -75,9 +75,9 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.bug_report import (
-    bug_report_enabled,
     bug_report_notice,
     build_bug_report,
+    should_report_bug,
 )
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
@@ -1875,7 +1875,7 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
     verbose_proxy_logger.exception("Unhandled exception in request: %s", type(exc).__name__)
-    if bug_report_enabled():
+    if should_report_bug(exc):
         verbose_proxy_logger.error(
             bug_report_notice(build_bug_report(exc, surface="proxy", call_type=request.url.path))
         )
