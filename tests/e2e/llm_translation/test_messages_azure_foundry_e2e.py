@@ -17,7 +17,7 @@ from e2e_config import unique_marker
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from sdk_clients import SdkClients
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -55,9 +55,7 @@ class TestAzureFoundryMessages:
         return model
 
     @pytest.mark.covers("llm.messages.azure_foundry.basic.nonstream.works")
-    def test_basic_nonstream(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_basic_nonstream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
 
@@ -65,15 +63,14 @@ class TestAzureFoundryMessages:
             model=model,
             max_tokens=64,
             messages=[{"role": "user", "content": "Reply with one word."}],
+            extra_body=NO_PROXY_CACHE,
         )
         assert message.content, f"no content blocks in response: {message!r}"
         text = "".join(block.text for block in message.content if block.type == "text")
         assert text.strip(), f"/v1/messages returned no text: {message.content!r}"
 
     @pytest.mark.covers("llm.messages.azure_foundry.basic.stream.works")
-    def test_basic_stream(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_basic_stream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
 
@@ -82,13 +79,12 @@ class TestAzureFoundryMessages:
             max_tokens=64,
             stream=True,
             messages=[{"role": "user", "content": "Count from one to three."}],
+            extra_body=NO_PROXY_CACHE,
         )
         _assert_streamed_ok([event.type for event in stream])
 
     @pytest.mark.covers("llm.messages.azure_foundry.tool_use.nonstream.works")
-    def test_tool_use_nonstream(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_tool_use_nonstream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
 
@@ -97,6 +93,7 @@ class TestAzureFoundryMessages:
             max_tokens=256,
             tools=[WEATHER_TOOL],
             messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+            extra_body=NO_PROXY_CACHE,
         )
         assert message.content, f"no content blocks in response: {message!r}"
         assert any(block.type == "tool_use" for block in message.content), (
@@ -104,9 +101,7 @@ class TestAzureFoundryMessages:
         )
 
     @pytest.mark.covers("llm.messages.azure_foundry.tool_use.stream.works")
-    def test_tool_use_stream(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_tool_use_stream(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = self._register(proxy, resources)
         client = sdk.anthropic(resources.key(models=[model]))
 
@@ -116,12 +111,12 @@ class TestAzureFoundryMessages:
             stream=True,
             tools=[WEATHER_TOOL],
             messages=[{"role": "user", "content": "What is the weather in Paris? Use the tool."}],
+            extra_body=NO_PROXY_CACHE,
         )
         events: list[RawMessageStreamEvent] = list(stream)
         event_types = [event.type for event in events]
         assert event_types, "stream produced no SSE events"
         assert any(
-            event.type == "content_block_start" and event.content_block.type == "tool_use"
-            for event in events
+            event.type == "content_block_start" and event.content_block.type == "tool_use" for event in events
         ), "stream carried no tool_use block"
         assert "message_stop" in event_types, "stream never reached message_stop"

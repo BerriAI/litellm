@@ -36,7 +36,7 @@ from lifecycle import ResourceManager
 from models import ChatMessage, LiteLLMParamsBody, SpendLogRow
 from proxy_client import ProxyClient
 from pydantic import BaseModel, ConfigDict
-from sdk_clients import SdkClients, response_header
+from sdk_clients import NO_PROXY_CACHE, SdkClients, response_header
 
 pytestmark = [pytest.mark.e2e, pytest.mark.replayable]
 
@@ -96,13 +96,13 @@ def _user_turn(text: str) -> MessageParam:
 
 class TestAnthropicMessages:
     @pytest.mark.covers("llm.messages.anthropic.basic.nonstream.works")
-    def test_messages_returns_completion(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_messages_returns_completion(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model, key = _register(proxy, resources)
         client = sdk.anthropic(key)
 
-        message = client.messages.create(model=model, max_tokens=64, messages=[_user_turn("reply with one word")])
+        message = client.messages.create(
+            model=model, max_tokens=64, messages=[_user_turn("reply with one word")], extra_body=NO_PROXY_CACHE
+        )
         assert message.role == "assistant", f"unexpected role: {message.role!r}"
         assert _text(message).strip(), f"/v1/messages returned no text: {message.content!r}"
 
@@ -117,6 +117,7 @@ class TestAnthropicMessages:
             model=model,
             max_tokens=64,
             messages=[_user_turn(f"reply with one word {unique_marker()}")],
+            extra_body=NO_PROXY_CACHE,
         )
         message = raw.parse()
         assert message.role == "assistant" and _text(message).strip(), (
@@ -154,9 +155,7 @@ class TestAnthropicMessages:
 
     @pytest.mark.covers("llm.messages.anthropic.basic.stream.works")
     @pytest.mark.provider_live
-    def test_messages_streams_completion(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_messages_streams_completion(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         """Edge-wired like its non-streaming siblings, so record and replay both
         carry the streamed response.
 
@@ -175,6 +174,7 @@ class TestAnthropicMessages:
             max_tokens=800,
             stream=True,
             messages=[_user_turn("Count from 1 to 200, one number per line.")],
+            extra_body=NO_PROXY_CACHE,
         )
         arrivals: Final = tuple((event, time.monotonic() - started) for event in stream)
         assert arrivals, "stream produced no SSE events"
@@ -221,13 +221,16 @@ class TestAnthropicMessages:
             max_tokens=256,
             tools=[WEATHER_TOOL],
             messages=[_user_turn("What is the weather in Paris? Use the tool.")],
+            extra_body=NO_PROXY_CACHE,
         )
         assert message.content, f"no content blocks in response: {message!r}"
         assert any(isinstance(block, ToolUseBlock) for block in message.content), (
             f"model did not call the tool: {message.content!r}"
         )
 
-    @pytest.mark.skip(reason="stage red: product gap, /v1/messages 500s (anthropic_messages TypeError) on missing messages instead of 400")
+    @pytest.mark.skip(
+        reason="stage red: product gap, /v1/messages 500s (anthropic_messages TypeError) on missing messages instead of 400"
+    )
     @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
     def test_missing_messages_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
@@ -238,7 +241,9 @@ class TestAnthropicMessages:
         )
         assert_client_error(result, "messages missing messages")
 
-    @pytest.mark.skip(reason="stage red: product gap, /v1/messages 500s (anthropic_messages TypeError) on missing max_tokens instead of 400")
+    @pytest.mark.skip(
+        reason="stage red: product gap, /v1/messages 500s (anthropic_messages TypeError) on missing max_tokens instead of 400"
+    )
     @pytest.mark.covers("llm.messages.anthropic.input_validation.nonstream.works")
     def test_missing_max_tokens_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model, key = _register(proxy, resources)
@@ -292,9 +297,7 @@ def _tool_from_stream(events: tuple[RawMessageStreamEvent, ...]) -> ToolUseBlock
     terminal_positions: Final = tuple(
         index for index, event in enumerate(events) if isinstance(event, RawMessageDeltaEvent)
     )
-    stop_reasons: Final = tuple(
-        event.delta.stop_reason for event in events if isinstance(event, RawMessageDeltaEvent)
-    )
+    stop_reasons: Final = tuple(event.delta.stop_reason for event in events if isinstance(event, RawMessageDeltaEvent))
     assert stop_reasons == ("tool_use",)
     assert len(terminal_positions) == 1 and stops[0] < terminal_positions[0] < len(events) - 1
     assert tuple(index for index, event in enumerate(events) if event.type == "message_stop") == (len(events) - 1,), (
@@ -309,12 +312,23 @@ def _request_tool(client: Anthropic, model: str, question: MessageParam, tool: T
     if stream:
         events: Final = tuple(
             client.messages.create(
-                model=model, max_tokens=2048, messages=[question], tools=[tool], tool_choice=tool_choice, stream=True
+                model=model,
+                max_tokens=2048,
+                messages=[question],
+                tools=[tool],
+                tool_choice=tool_choice,
+                stream=True,
+                extra_body=NO_PROXY_CACHE,
             )
         )
         return _tool_from_stream(events)
     message: Final = client.messages.create(
-        model=model, max_tokens=2048, messages=[question], tools=[tool], tool_choice=tool_choice
+        model=model,
+        max_tokens=2048,
+        messages=[question],
+        tools=[tool],
+        tool_choice=tool_choice,
+        extra_body=NO_PROXY_CACHE,
     )
     blocks: Final = tuple(block for block in message.content if isinstance(block, ToolUseBlock))
     assert len(blocks) == 1
@@ -367,6 +381,7 @@ class TestOpenAIMessagesToolContinuation:
                 },
                 {"role": "user", "content": [{"type": "tool_result", "tool_use_id": emitted.id, "content": receipt}]},
             ],
+            extra_body=NO_PROXY_CACHE,
         )
         assert _text(continuation).strip() == receipt, "continuation did not consume the correlated tool result"
         assert all(not isinstance(block, ToolUseBlock) for block in continuation.content)

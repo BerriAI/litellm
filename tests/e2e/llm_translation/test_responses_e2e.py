@@ -9,6 +9,7 @@ litellm-regression-tests/tests/test_inference_endpoints.py.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 from collections.abc import Mapping
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, cast
 
+import openai
 import pytest
 from e2e_config import PROVIDER_EDGE_ADVERTISE_HOST, PROVIDER_EDGE_BIND_HOST, unique_marker
 from e2e_http import assert_client_error
@@ -31,7 +33,7 @@ from provider_edge import LiveEdge, start_provider_edge
 from provider_edge_bedrock import bedrock_signer
 from proxy_client import ProxyClient
 from pydantic import BaseModel
-from sdk_clients import SdkClients
+from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
@@ -136,7 +138,9 @@ class TestResponses:
         model = _register(proxy, resources, _openai_params())
         client = sdk.openai(resources.key())
 
-        response = client.responses.create(model=model, input="reply with one word", instructions=INSTRUCTIONS)
+        response = client.responses.create(
+            model=model, input="reply with one word", instructions=INSTRUCTIONS, extra_body=NO_PROXY_CACHE
+        )
         assert response.output_text.strip(), f"/responses returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.openai.basic.stream.works")
@@ -147,7 +151,11 @@ class TestResponses:
         client = sdk.openai(resources.key())
 
         stream = client.responses.create(
-            model=model, input="reply with one word", instructions=INSTRUCTIONS, stream=True
+            model=model,
+            input="reply with one word",
+            instructions=INSTRUCTIONS,
+            stream=True,
+            extra_body=NO_PROXY_CACHE,
         )
         events = tuple(stream)
         assert events, "responses stream returned no events"
@@ -158,14 +166,15 @@ class TestResponses:
         )
 
     @pytest.mark.covers("llm.responses.openai.basic.nonstream.cost_logged")
-    def test_responses_logs_cost(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
+    def test_responses_logs_cost(self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients) -> None:
         model = _register(proxy, resources, _openai_params())
         client = sdk.openai(resources.key())
 
         raw = client.responses.with_raw_response.create(
-            model=model, input=f"reply with one word {unique_marker()}", instructions=INSTRUCTIONS
+            model=model,
+            input=f"reply with one word {unique_marker()}",
+            instructions=INSTRUCTIONS,
+            extra_body=NO_PROXY_CACHE,
         )
         response = raw.parse()
         assert response.output_text.strip(), f"/responses returned no output text: {response.output!r}"
@@ -193,6 +202,7 @@ class TestResponses:
             input="What is the weather in San Francisco? Use the get_weather tool.",
             instructions=INSTRUCTIONS,
             tools=[WEATHER_TOOL],
+            extra_body=NO_PROXY_CACHE,
         )
         _assert_weather_call(response)
 
@@ -216,7 +226,9 @@ class TestResponses:
                 ],
             }
         ]
-        response = client.responses.create(model=model, input=vision_input, instructions=INSTRUCTIONS)
+        response = client.responses.create(
+            model=model, input=vision_input, instructions=INSTRUCTIONS, extra_body=NO_PROXY_CACHE
+        )
         text = response.output_text.strip().lower()
         assert text, f"/responses vision returned no output text: {response.output!r}"
         assert any(keyword in text for keyword in ("cat", "feline")), (
@@ -230,7 +242,9 @@ class TestResponses:
         model = _register(proxy, resources, _anthropic_params())
         client = sdk.openai(resources.key())
 
-        response = client.responses.create(model=model, input="reply with one word", instructions=INSTRUCTIONS)
+        response = client.responses.create(
+            model=model, input="reply with one word", instructions=INSTRUCTIONS, extra_body=NO_PROXY_CACHE
+        )
         assert response.output_text.strip(), f"/responses returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.anthropic.tool_use.nonstream.works")
@@ -245,6 +259,7 @@ class TestResponses:
             input="What is the weather in San Francisco? Use the get_weather tool.",
             instructions=INSTRUCTIONS,
             tools=[WEATHER_TOOL],
+            extra_body=NO_PROXY_CACHE,
         )
         _assert_weather_call(response)
 
@@ -255,7 +270,9 @@ class TestResponses:
         model = _register(proxy, resources, _bedrock_params())
         client = sdk.openai(resources.key())
 
-        response = client.responses.create(model=model, input="reply with one word", instructions=INSTRUCTIONS)
+        response = client.responses.create(
+            model=model, input="reply with one word", instructions=INSTRUCTIONS, extra_body=NO_PROXY_CACHE
+        )
         assert response.output_text.strip(), f"/responses over bedrock returned no output text: {response.output!r}"
 
     @pytest.mark.covers("llm.responses.bedrock_converse.tool_use.nonstream.works")
@@ -270,6 +287,7 @@ class TestResponses:
             input="What is the weather in San Francisco? Use the get_weather tool.",
             instructions=INSTRUCTIONS,
             tools=[WEATHER_TOOL],
+            extra_body=NO_PROXY_CACHE,
         )
         _assert_weather_call(response)
 
@@ -278,10 +296,15 @@ class TestResponses:
     def test_bedrock_forwards_allowed_safety_identifier_as_additional_model_request_field(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, endpoint: str
     ) -> None:
+        """Judges the Converse bodies the edge captured, not the reply: Claude on
+        Bedrock rejects the forwarded field with a 400, which the chat leg's
+        ``Result`` carries as a value and the OpenAI SDK raises."""
         capture: Final = ConverseRequestCapture()
         edge: Final = start_provider_edge(
             LiveEdge(observe_request=capture.observe, sign=bedrock_signer(BEDROCK_EDGE_REGION)),
-            mounts=MappingProxyType({BEDROCK_EDGE_MOUNT: f"https://bedrock-runtime.{BEDROCK_EDGE_REGION}.amazonaws.com"}),
+            mounts=MappingProxyType(
+                {BEDROCK_EDGE_MOUNT: f"https://bedrock-runtime.{BEDROCK_EDGE_REGION}.amazonaws.com"}
+            ),
             bind_host=PROVIDER_EDGE_BIND_HOST,
             advertise_host=PROVIDER_EDGE_ADVERTISE_HOST,
         )
@@ -303,12 +326,14 @@ class TestResponses:
         safety_identifier: Final = f"end-user-{unique_marker()}"
 
         if endpoint == "/v1/responses":
-            sdk.openai(key).responses.create(
-                model=model,
-                input="reply with one word",
-                instructions=INSTRUCTIONS,
-                safety_identifier=safety_identifier,
-            )
+            with contextlib.suppress(openai.BadRequestError):
+                sdk.openai(key).responses.create(
+                    model=model,
+                    input="reply with one word",
+                    instructions=INSTRUCTIONS,
+                    safety_identifier=safety_identifier,
+                    extra_body=NO_PROXY_CACHE,
+                )
         else:
             proxy.chat(
                 key,
@@ -325,7 +350,9 @@ class TestResponses:
             f"{endpoint} did not forward safety_identifier to Bedrock Converse on every attempt: {capture.bodies}"
         )
 
-    @pytest.mark.skip(reason="stage red: product gap, /v1/responses 500s (aresponses TypeError) on missing input instead of 400")
+    @pytest.mark.skip(
+        reason="stage red: product gap, /v1/responses 500s (aresponses TypeError) on missing input instead of 400"
+    )
     @pytest.mark.covers("llm.responses.openai.input_validation.nonstream.works")
     def test_missing_input_returns_error(self, proxy: ProxyClient, resources: ResourceManager) -> None:
         model = _register(proxy, resources, _openai_params(), prefix="e2e-responses-val")
