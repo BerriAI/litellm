@@ -88,7 +88,7 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         model the cost map does not know (see #40890). Pop them before the
         base transform so no drop warning fires, restore afterwards.
         """
-        stashed: dict = {}
+        stashed: dict = {}  # mutable-ok: transient pop/restore stash, never escapes the call
         for _key in ("thinking", "output_config", "temperature"):
             if _key in anthropic_messages_optional_request_params:
                 stashed[_key] = anthropic_messages_optional_request_params.pop(_key)
