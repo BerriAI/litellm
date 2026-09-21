@@ -1,5 +1,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use litellm_cache::ExactCacheContext;
 use litellm_cache_response::{CacheControls, CacheKeyInput, ResponseCacheRequest};
 use litellm_host_python::from_py;
 use pyo3::{exceptions::PyValueError, prelude::*};
@@ -14,13 +15,15 @@ struct RequestInput {
     max_age_seconds: Option<f64>,
 }
 
-pub(super) fn request(value: &Bound<'_, PyAny>) -> PyResult<ResponseCacheRequest> {
+pub(super) fn request(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<ResponseCacheRequest<ExactCacheContext>> {
     let input: RequestInput = from_py(value)?;
     request_input(input)
 }
 
-fn request_input(input: RequestInput) -> PyResult<ResponseCacheRequest> {
-    let mut request = ResponseCacheRequest::new(input.key);
+fn request_input(input: RequestInput) -> PyResult<ResponseCacheRequest<ExactCacheContext>> {
+    let mut request: ResponseCacheRequest<ExactCacheContext> = ResponseCacheRequest::new(input.key);
     if let Some(controls) = input.controls {
         request.controls = controls;
     }
@@ -29,7 +32,9 @@ fn request_input(input: RequestInput) -> PyResult<ResponseCacheRequest> {
     Ok(request)
 }
 
-pub(super) fn requests(value: &Bound<'_, PyAny>) -> PyResult<Vec<ResponseCacheRequest>> {
+pub(super) fn requests(
+    value: &Bound<'_, PyAny>,
+) -> PyResult<Vec<ResponseCacheRequest<ExactCacheContext>>> {
     from_py::<Vec<RequestInput>>(value)?
         .into_iter()
         .map(request_input)
