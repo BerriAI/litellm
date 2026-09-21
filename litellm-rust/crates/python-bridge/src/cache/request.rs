@@ -24,7 +24,7 @@ fn request_input(input: RequestInput) -> PyResult<ResponseCacheRequest> {
     if let Some(controls) = input.controls {
         request.controls = controls;
     }
-    request.kwargs.ttl = input.ttl_seconds.map(duration).transpose()?;
+    request.context.ttl = input.ttl_seconds.map(duration).transpose()?;
     request.max_age = input.max_age_seconds.map(duration).transpose()?;
     Ok(request)
 }

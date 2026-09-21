@@ -43,7 +43,7 @@ async fn sync_and_async_consumers_share_keys_ttls_and_freshness() {
     ));
     let cache = ResponseCache::new(backend.clone());
     let mut request = request();
-    request.kwargs.ttl = Some(Duration::from_secs(10));
+    request.context.ttl = Some(Duration::from_secs(10));
     request.max_age = Some(Duration::from_secs(5));
     cache
         .store(
@@ -336,7 +336,7 @@ fn response_codec_preserves_values_without_timestamps() {
     assert_eq!(entry.response, raw);
 
     let backend = Arc::new(InMemoryCache::default());
-    BaseCache::set_cache(backend.as_ref(), "tenant:key", entry, Default::default()).unwrap();
+    BaseCache::set_cache(backend.as_ref(), "tenant:key", entry, &Default::default()).unwrap();
     let cache = ResponseCache::new(backend);
     assert_eq!(
         cache.lookup(&request(), Duration::from_secs(100)).unwrap(),

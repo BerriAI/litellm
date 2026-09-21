@@ -1,23 +1,23 @@
 use std::sync::Arc;
 
 pub use crate::BaseCache as Cache;
-use crate::{BaseCache, CacheKwargs, Error};
+use crate::{BaseCache, Error};
 
 pub fn get_cache<B: BaseCache>(
     cache: &B,
     key: &str,
-    kwargs: &CacheKwargs,
+    context: &B::Context,
 ) -> Result<Option<B::Value>, Error> {
-    cache.get_cache(key, kwargs)
+    cache.get_cache(key, context)
 }
 
 pub fn set_cache<B: BaseCache>(
     cache: &B,
     key: &str,
     value: B::Value,
-    kwargs: CacheKwargs,
+    context: &B::Context,
 ) -> Result<(), Error> {
-    cache.set_cache(key, value, kwargs)
+    cache.set_cache(key, value, context)
 }
 
 pub type CacheBackend<B> = Arc<B>;

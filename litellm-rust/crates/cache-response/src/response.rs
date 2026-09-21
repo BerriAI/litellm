@@ -1,6 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_cache::{BaseCache, BatchEntry, CacheConnectionResult, CacheKwargs, Error};
+use litellm_cache::{
+    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, Error, ExactCacheContext, FlushCache,
+};
 use serde_json::Value;
 
 use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
@@ -9,7 +11,7 @@ use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
 pub struct ResponseCacheRequest {
     pub key: CacheKeyInput,
     pub controls: CacheControls,
-    pub kwargs: CacheKwargs,
+    pub context: ExactCacheContext,
     pub max_age: Option<Duration>,
 }
 
@@ -24,17 +26,17 @@ impl ResponseCacheRequest {
                 default_on: true,
                 ..Default::default()
             },
-            kwargs: CacheKwargs::default(),
+            context: ExactCacheContext::default(),
             max_age: None,
         }
     }
 }
 
-pub struct ResponseCache<B: BaseCache<Value = CacheEntry>> {
+pub struct ResponseCache<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> {
     backend: Arc<B>,
 }
 
-impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
+impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCache<B> {
     pub fn new(backend: Arc<B>) -> Self {
         Self { backend }
     }
@@ -43,11 +45,14 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         &self.backend
     }
 
-    pub fn default_ttl(&self) -> Duration {
-        self.backend.default_ttl()
+    pub fn default_ttl(&self) -> Option<Duration> {
+        self.backend.get_ttl(&ExactCacheContext::default())
     }
 
-    pub async fn async_flush(&self) -> Result<(), Error> {
+    pub async fn async_flush(&self) -> Result<(), Error>
+    where
+        B: FlushCache,
+    {
         self.backend.async_flush_cache().await
     }
 
@@ -65,7 +70,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         }
         let entry = match self
             .backend
-            .get_cache(&cache_key(&request.key), &request.kwargs)
+            .get_cache(&cache_key(&request.key), &request.context)
         {
             Ok(entry) => entry,
             Err(Error::InvalidEntry) => None,
@@ -84,7 +89,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         }
         let entry = match self
             .backend
-            .async_get_cache(&cache_key(&request.key), &request.kwargs)
+            .async_get_cache(&cache_key(&request.key), &request.context)
             .await
         {
             Ok(entry) => entry,
@@ -98,7 +103,10 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         &self,
         requests: &[ResponseCacheRequest],
         now: Duration,
-    ) -> Result<PartialHits, Error> {
+    ) -> Result<PartialHits, Error>
+    where
+        B: BatchCache,
+    {
         let readable = requests
             .iter()
             .enumerate()
@@ -109,7 +117,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
             .map(|(_, request)| cache_key(&request.key))
             .collect::<Vec<_>>();
         let entries = if let Some((_, request)) = readable.first() {
-            self.backend.get_cache_batch(&keys, &request.kwargs)?
+            self.backend.batch_get_cache(&keys, &request.context)?
         } else {
             Vec::new()
         };
@@ -120,7 +128,10 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         &self,
         requests: &[ResponseCacheRequest],
         now: Duration,
-    ) -> Result<PartialHits, Error> {
+    ) -> Result<PartialHits, Error>
+    where
+        B: BatchCache,
+    {
         let readable = requests
             .iter()
             .enumerate()
@@ -132,7 +143,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
             .collect::<Vec<_>>();
         let entries = if let Some((_, request)) = readable.first() {
             self.backend
-                .async_get_cache_batch(keys, request.kwargs.clone())
+                .async_batch_get_cache(keys, request.context.clone())
                 .await?
         } else {
             Vec::new()
@@ -155,7 +166,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
                 timestamp: Some(now.as_secs_f64()),
                 response,
             },
-            request.kwargs.clone(),
+            &request.context,
         )
     }
 
@@ -175,7 +186,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
                     timestamp: Some(now.as_secs_f64()),
                     response,
                 },
-                request.kwargs.clone(),
+                request.context.clone(),
             )
             .await
     }
@@ -210,26 +221,29 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
                         timestamp: Some(now.as_secs_f64()),
                         response,
                     },
-                    request.kwargs,
+                    request.context,
                 )
             })
             .collect::<Vec<_>>();
         let Some((_, _, first_kwargs)) = writable.first() else {
             return Ok(());
         };
-        if writable.iter().all(|(_, _, kwargs)| kwargs == first_kwargs) {
-            let kwargs = first_kwargs.clone();
+        if writable
+            .iter()
+            .all(|(_, _, context)| context == first_kwargs)
+        {
+            let context = first_kwargs.clone();
             let cache_list = writable
                 .into_iter()
                 .map(|(key, entry, _)| (key, entry))
                 .collect();
             return self
                 .backend
-                .async_set_cache_pipeline(cache_list, kwargs)
+                .async_set_cache_pipeline(cache_list, context)
                 .await;
         }
-        for (key, entry, kwargs) in writable {
-            self.backend.async_set_cache(&key, entry, kwargs).await?;
+        for (key, entry, context) in writable {
+            self.backend.async_set_cache(&key, entry, context).await?;
         }
         Ok(())
     }

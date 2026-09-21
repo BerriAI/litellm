@@ -4,14 +4,16 @@ use std::{
 };
 
 use litellm_cache::{
-    BaseCache, BatchEntry, CacheCodec, CacheConnectionResult, CacheConnectionStatus, CacheKwargs,
-    ClaimCache, CounterCache, Error,
+    BaseCache, BatchCache, BatchEntry, CacheCodec, CacheConnectionResult, CacheConnectionStatus,
+    ClaimCache, CounterCache, DeleteCache, Error, ExactCacheContext, FlushCache,
 };
 use redis::Commands;
 
 mod operations;
 
-pub use operations::{RedisArg, RedisLpopOperation, RedisLpopResult, RedisRpushOperation};
+pub use operations::{
+    RedisArg, RedisLpopOperation, RedisLpopResult, RedisRpushOperation, RedisScript,
+};
 
 const DEFAULT_TTL: Duration = Duration::from_secs(600);
 const REDIS_TIMEOUT: Duration = Duration::from_secs(5);
@@ -179,12 +181,7 @@ where
     }
 
     fn namespaced_key(&self, key: &str) -> String {
-        match &self.namespace {
-            Some(namespace) if !key.starts_with(&format!("{namespace}:")) => {
-                format!("{namespace}:{key}")
-            }
-            _ => key.into(),
-        }
+        namespaced_key(self.namespace.as_deref(), key)
     }
 
     fn namespaced_pattern(&self) -> Result<String, Error> {
@@ -260,20 +257,35 @@ where
     }
 }
 
+fn namespaced_key(namespace: Option<&str>, key: &str) -> String {
+    match namespace {
+        Some(namespace) if !key.starts_with(&format!("{namespace}:")) => {
+            format!("{namespace}:{key}")
+        }
+        _ => key.into(),
+    }
+}
+
 impl<S, C> BaseCache for RedisCache<S, C>
 where
     S: CacheCodec,
     C: redis::ConnectionLike + Send + 'static,
 {
     type Value = S::Value;
+    type Context = ExactCacheContext;
 
-    fn default_ttl(&self) -> Duration {
-        self.default_ttl
+    fn get_ttl(&self, context: &Self::Context) -> Option<Duration> {
+        context.ttl.or(Some(self.default_ttl))
     }
 
-    fn set_cache(&self, key: &str, value: Self::Value, kwargs: CacheKwargs) -> Result<(), Error> {
+    fn set_cache(
+        &self,
+        key: &str,
+        value: Self::Value,
+        context: &ExactCacheContext,
+    ) -> Result<(), Error> {
         let payload = self.codec.encode(&value)?;
-        let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
+        let ttl = Self::ttl_seconds(self.get_ttl(context).unwrap_or(self.default_ttl));
         let key = self.namespaced_key(key);
         self.connections.execute(|connection| {
             connection
@@ -282,7 +294,7 @@ where
         })
     }
 
-    fn get_cache(&self, key: &str, _: &CacheKwargs) -> Result<Option<Self::Value>, Error> {
+    fn get_cache(&self, key: &str, _: &ExactCacheContext) -> Result<Option<Self::Value>, Error> {
         let key = self.namespaced_key(key);
         let value = self.connections.execute(|connection| {
             connection
@@ -292,48 +304,15 @@ where
         self.decode_response(value)
     }
 
-    fn get_cache_batch(
-        &self,
-        keys: &[String],
-        _: &CacheKwargs,
-    ) -> Result<Vec<BatchEntry<Self::Value>>, Error> {
-        let keys = keys
-            .iter()
-            .map(|key| self.namespaced_key(key))
-            .collect::<Vec<_>>();
-        let values = self.connections.execute(|connection| {
-            redis::cmd("MGET")
-                .arg(keys)
-                .query::<Vec<redis::Value>>(connection)
-                .map_err(|_| Error::Unavailable)
-        })?;
-        values
-            .into_iter()
-            .map(|value| self.decode_batch_response(value))
-            .collect()
-    }
-
-    fn delete_cache(&self, key: &str) -> Result<(), Error> {
-        let key = self.namespaced_key(key);
-        self.connections
-            .execute(|connection| connection.del::<_, ()>(key).map_err(|_| Error::Unavailable))
-    }
-
-    fn flush_cache(&self) -> Result<(), Error> {
-        let pattern = self.namespaced_pattern()?;
-        self.connections
-            .execute(|connection| Self::flush_matching(connection, &pattern))
-    }
-
     async fn async_set_cache(
         &self,
         key: &str,
         value: Self::Value,
-        kwargs: CacheKwargs,
+        context: ExactCacheContext,
     ) -> Result<(), Error> {
         let payload = self.codec.encode(&value)?;
         let key = self.namespaced_key(key);
-        let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
+        let ttl = Self::ttl_seconds(self.get_ttl(&context).unwrap_or(self.default_ttl));
         Self::run_blocking(Arc::clone(&self.connections), move |connection| {
             connection
                 .set_ex::<_, _, ()>(key, payload, ttl)
@@ -345,7 +324,7 @@ where
     async fn async_get_cache(
         &self,
         key: &str,
-        _: &CacheKwargs,
+        _: &ExactCacheContext,
     ) -> Result<Option<Self::Value>, Error> {
         let key = self.namespaced_key(key);
         let value = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
@@ -357,32 +336,10 @@ where
         self.decode_response(value)
     }
 
-    async fn async_get_cache_batch(
-        &self,
-        keys: Vec<String>,
-        _: CacheKwargs,
-    ) -> Result<Vec<BatchEntry<Self::Value>>, Error> {
-        let keys = keys
-            .iter()
-            .map(|key| self.namespaced_key(key))
-            .collect::<Vec<_>>();
-        let values = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
-            redis::cmd("MGET")
-                .arg(keys)
-                .query::<Vec<redis::Value>>(connection)
-                .map_err(|_| Error::Unavailable)
-        })
-        .await?;
-        values
-            .into_iter()
-            .map(|value| self.decode_batch_response(value))
-            .collect()
-    }
-
     async fn async_set_cache_pipeline(
         &self,
         cache_list: Vec<(String, Self::Value)>,
-        kwargs: CacheKwargs,
+        context: ExactCacheContext,
     ) -> Result<(), Error> {
         let entries = cache_list
             .into_iter()
@@ -392,7 +349,7 @@ where
                     .map(|payload| (self.namespaced_key(&key), payload))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
+        let ttl = Self::ttl_seconds(self.get_ttl(&context).unwrap_or(self.default_ttl));
         Self::run_blocking(Arc::clone(&self.connections), move |connection| {
             let mut pipeline = redis::pipe();
             for (key, payload) in entries {
@@ -406,22 +363,6 @@ where
             pipeline
                 .query::<()>(connection)
                 .map_err(|_| Error::Unavailable)
-        })
-        .await
-    }
-
-    async fn async_delete_cache(&self, key: &str) -> Result<(), Error> {
-        let key = self.namespaced_key(key);
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
-            connection.del::<_, ()>(key).map_err(|_| Error::Unavailable)
-        })
-        .await
-    }
-
-    async fn async_flush_cache(&self) -> Result<(), Error> {
-        let pattern = self.namespaced_pattern()?;
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
-            Self::flush_matching(connection, &pattern)
         })
         .await
     }
@@ -457,26 +398,120 @@ where
     }
 }
 
+impl<S, C> BatchCache for RedisCache<S, C>
+where
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    fn batch_get_cache(
+        &self,
+        keys: &[String],
+        _: &ExactCacheContext,
+    ) -> Result<Vec<BatchEntry<Self::Value>>, Error> {
+        let keys = keys
+            .iter()
+            .map(|key| self.namespaced_key(key))
+            .collect::<Vec<_>>();
+        let values = self.connections.execute(|connection| {
+            redis::cmd("MGET")
+                .arg(keys)
+                .query::<Vec<redis::Value>>(connection)
+                .map_err(|_| Error::Unavailable)
+        })?;
+        values
+            .into_iter()
+            .map(|value| self.decode_batch_response(value))
+            .collect()
+    }
+
+    async fn async_batch_get_cache(
+        &self,
+        keys: Vec<String>,
+        _: ExactCacheContext,
+    ) -> Result<Vec<BatchEntry<Self::Value>>, Error> {
+        let keys = keys
+            .iter()
+            .map(|key| self.namespaced_key(key))
+            .collect::<Vec<_>>();
+        let values = Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+            redis::cmd("MGET")
+                .arg(keys)
+                .query::<Vec<redis::Value>>(connection)
+                .map_err(|_| Error::Unavailable)
+        })
+        .await?;
+        values
+            .into_iter()
+            .map(|value| self.decode_batch_response(value))
+            .collect()
+    }
+}
+
+impl<S, C> DeleteCache for RedisCache<S, C>
+where
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    fn delete_cache(&self, key: &str) -> Result<(), Error> {
+        let key = self.namespaced_key(key);
+        self.connections
+            .execute(|connection| connection.del::<_, ()>(key).map_err(|_| Error::Unavailable))
+    }
+
+    async fn async_delete_cache(&self, key: &str) -> Result<(), Error> {
+        let key = self.namespaced_key(key);
+        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+            connection.del::<_, ()>(key).map_err(|_| Error::Unavailable)
+        })
+        .await
+    }
+}
+
+impl<S, C> FlushCache for RedisCache<S, C>
+where
+    S: CacheCodec,
+    C: redis::ConnectionLike + Send + 'static,
+{
+    fn flush_cache(&self) -> Result<(), Error> {
+        let pattern = self.namespaced_pattern()?;
+        self.connections
+            .execute(|connection| Self::flush_matching(connection, &pattern))
+    }
+
+    async fn async_flush_cache(&self) -> Result<(), Error> {
+        let pattern = self.namespaced_pattern()?;
+        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+            Self::flush_matching(connection, &pattern)
+        })
+        .await
+    }
+}
+
 impl<S, C> CounterCache for RedisCache<S, C>
 where
     S: CacheCodec<Value = f64>,
     C: redis::ConnectionLike + Send + 'static,
 {
-    fn increment_cache(&self, key: &str, amount: f64, kwargs: CacheKwargs) -> Result<f64, Error> {
+    fn increment_cache(
+        &self,
+        key: &str,
+        amount: f64,
+        context: ExactCacheContext,
+    ) -> Result<f64, Error> {
         let key = self.namespaced_key(key);
-        let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
+        let ttl = Self::ttl_seconds(self.get_ttl(&context).unwrap_or(self.default_ttl));
         self.connections
             .execute(|connection| increment(connection, key, amount, ttl))
     }
 
-    async fn async_increment_cache(
+    async fn async_increment(
         &self,
         key: &str,
         amount: f64,
-        kwargs: CacheKwargs,
+        context: ExactCacheContext,
     ) -> Result<f64, Error> {
         let key = self.namespaced_key(key);
-        let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
+        let ttl = Self::ttl_seconds(self.get_ttl(&context).unwrap_or(self.default_ttl));
         Self::run_blocking(Arc::clone(&self.connections), move |connection| {
             increment(connection, key, amount, ttl)
         })
@@ -570,10 +605,10 @@ where
         key: &str,
         candidate: S::Value,
         eligible: &[S::Value],
-        kwargs: CacheKwargs,
+        context: ExactCacheContext,
     ) -> Result<S::Value, Error> {
         let key = self.namespaced_key(key);
-        let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
+        let ttl = Self::ttl_seconds(self.get_ttl(&context).unwrap_or(self.default_ttl));
         self.connections
             .execute(|connection| claim(connection, &self.codec, &key, candidate, eligible, ttl))
     }
@@ -583,10 +618,10 @@ where
         key: &str,
         candidate: S::Value,
         eligible: Vec<S::Value>,
-        kwargs: CacheKwargs,
+        context: ExactCacheContext,
     ) -> Result<S::Value, Error> {
         let key = self.namespaced_key(key);
-        let ttl = Self::ttl_seconds(self.get_ttl(&kwargs));
+        let ttl = Self::ttl_seconds(self.get_ttl(&context).unwrap_or(self.default_ttl));
         let codec = self.codec.clone();
         Self::run_blocking(Arc::clone(&self.connections), move |connection| {
             claim(connection, &codec, &key, candidate, &eligible, ttl)
@@ -599,7 +634,9 @@ where
 mod tests {
     use std::time::Duration;
 
-    use litellm_cache::{BaseCache, CacheCodec, CacheKwargs, JsonCodec};
+    use litellm_cache::{
+        BaseCache, CacheCodec, DeleteCache, ExactCacheContext, FlushCache, JsonCodec,
+    };
     use redis_test::{MockCmd, MockRedisConnection};
     use serde_json::json;
 
@@ -648,10 +685,12 @@ mod tests {
                 .with_namespace(Some("litellm-cache".into()));
 
         cache
-            .set_cache("key", value.clone(), CacheKwargs::default())
+            .set_cache("key", value.clone(), &ExactCacheContext::default())
             .unwrap();
         assert_eq!(
-            cache.get_cache("key", &CacheKwargs::default()).unwrap(),
+            cache
+                .get_cache("key", &ExactCacheContext::default())
+                .unwrap(),
             Some(value)
         );
         cache.delete_cache("key").unwrap();

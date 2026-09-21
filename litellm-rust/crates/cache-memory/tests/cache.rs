@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -7,8 +8,8 @@ use std::{
 };
 
 use litellm_cache::{
-    BaseCache, CacheBackend, CacheConnectionStatus, CacheKwargs, ClaimCache, CounterCache, Error,
-    IncrementOperation, get_cache, set_cache,
+    BaseCache, CacheBackend, CacheConnectionStatus, ClaimCache, CounterCache, DeleteCache, Error,
+    ExactCacheContext, IncrementOperation, SetCache, get_cache, set_cache,
 };
 use litellm_cache_memory::{CacheWrite, InMemoryCache};
 use rstest::{fixture, rstest};
@@ -152,39 +153,38 @@ async fn generic_consumers_share_typed_values_and_honor_expiration() {
     let clock = clock();
     let cache: CacheBackend<InMemoryCache<String>> = Arc::new(cache(clock.clone(), 4));
     let reader = Arc::clone(&cache);
-    let kwargs = CacheKwargs {
+    let context = ExactCacheContext {
         ttl: Some(Duration::from_secs(5)),
-        ..Default::default()
     };
-    set_cache(cache.as_ref(), "sync", "first".into(), kwargs.clone()).unwrap();
+    set_cache(cache.as_ref(), "sync", "first".into(), &context).unwrap();
     assert_eq!(
-        get_cache(reader.as_ref(), "sync", &kwargs).unwrap(),
+        get_cache(reader.as_ref(), "sync", &context).unwrap(),
         Some("first".into())
     );
     cache
-        .batch_cache_write("async", "second".into(), kwargs.clone())
+        .batch_cache_write("async", "second".into(), context.clone())
         .await
         .unwrap();
     cache
-        .async_set_cache_pipeline(vec![("batch".into(), "third".into())], kwargs.clone())
+        .async_set_cache_pipeline(vec![("batch".into(), "third".into())], context.clone())
         .await
         .unwrap();
     drop(cache);
     for (key, value) in [("sync", "first"), ("async", "second"), ("batch", "third")] {
         assert_eq!(
-            reader.async_get_cache(key, &kwargs).await.unwrap(),
+            reader.async_get_cache(key, &context).await.unwrap(),
             Some(value.into())
         );
     }
     reader.async_delete_cache("async").await.unwrap();
     assert_eq!(
-        reader.async_get_cache("async", &kwargs).await.unwrap(),
+        reader.async_get_cache("async", &context).await.unwrap(),
         None
     );
     clock.store(106, Ordering::SeqCst);
-    assert_eq!(get_cache(reader.as_ref(), "sync", &kwargs).unwrap(), None);
+    assert_eq!(get_cache(reader.as_ref(), "sync", &context).unwrap(), None);
     assert_eq!(
-        reader.async_get_cache("batch", &kwargs).await.unwrap(),
+        reader.async_get_cache("batch", &context).await.unwrap(),
         None
     );
 }
@@ -196,20 +196,19 @@ fn claims_are_atomic_and_refresh_eligible_winners() {
         let clock = clock.clone();
         move || Duration::from_secs(clock.load(Ordering::SeqCst))
     });
-    let kwargs = CacheKwargs {
+    let context = ExactCacheContext {
         ttl: Some(Duration::from_secs(10)),
-        ..Default::default()
     };
     assert_eq!(
         cache
-            .claim_cache("affinity", "first".to_string(), &[], kwargs.clone())
+            .claim_cache("affinity", "first".to_string(), &[], context.clone())
             .unwrap(),
         "first"
     );
     clock.store(103, Ordering::SeqCst);
     assert_eq!(
         cache
-            .claim_cache("affinity", "second".to_string(), &[], kwargs.clone())
+            .claim_cache("affinity", "second".to_string(), &[], context.clone())
             .unwrap(),
         "first"
     );
@@ -224,7 +223,7 @@ fn claims_are_atomic_and_refresh_eligible_winners() {
                 "affinity",
                 "second".to_string(),
                 &["first".to_string(), "second".to_string()],
-                kwargs,
+                context,
             )
             .unwrap(),
         "first"
@@ -239,11 +238,13 @@ fn claims_are_atomic_and_refresh_eligible_winners() {
 fn counters_increment_under_one_lock() {
     let cache = InMemoryCache::<f64>::default();
     assert_eq!(
-        CounterCache::increment_cache(&cache, "counter", 1.5, CacheKwargs::default()).unwrap(),
+        CounterCache::increment_cache(&cache, "counter", 1.5, ExactCacheContext::default())
+            .unwrap(),
         1.5
     );
     assert_eq!(
-        CounterCache::increment_cache(&cache, "counter", 2.0, CacheKwargs::default()).unwrap(),
+        CounterCache::increment_cache(&cache, "counter", 2.0, ExactCacheContext::default())
+            .unwrap(),
         3.5
     );
 }
@@ -263,7 +264,7 @@ fn rewriting_an_existing_key_at_capacity_keeps_other_entries(clock: Arc<AtomicU6
     assert_eq!(cache.get_cache("cold").unwrap(), Some("3".into()));
 
     cache
-        .claim_cache("cold", "4".into(), &[], CacheKwargs::default())
+        .claim_cache("cold", "4".into(), &[], ExactCacheContext::default())
         .unwrap();
     assert_eq!(cache.get_cache("hot").unwrap(), Some("1".into()));
 
@@ -278,7 +279,7 @@ fn incrementing_an_existing_counter_at_capacity_keeps_every_counter() {
     let cache = InMemoryCache::<f64>::new(Some(2), None);
     for key in ["a", "b", "a", "b"] {
         cache
-            .increment_cache(key, 1.0, CacheKwargs::default())
+            .increment_cache(key, 1.0, ExactCacheContext::default())
             .unwrap();
     }
     assert_eq!(cache.get_cache("a").unwrap(), Some(2.0));
@@ -290,7 +291,7 @@ fn disabled_cache_does_not_retain_claims_or_counters() {
     let claims = InMemoryCache::<String>::new(Some(0), None);
     assert_eq!(
         claims
-            .claim_cache("key", "first".into(), &[], CacheKwargs::default())
+            .claim_cache("key", "first".into(), &[], ExactCacheContext::default())
             .unwrap(),
         "first"
     );
@@ -299,7 +300,7 @@ fn disabled_cache_does_not_retain_claims_or_counters() {
     let counters = InMemoryCache::<f64>::new(Some(0), None);
     assert_eq!(
         counters
-            .increment_cache("key", 2.0, CacheKwargs::default())
+            .increment_cache("key", 2.0, ExactCacheContext::default())
             .unwrap(),
         2.0
     );
@@ -347,4 +348,21 @@ async fn increment_pipeline_preserves_operation_order() {
         [1.0, 3.0]
     );
     assert_eq!(cache.get_cache("a").unwrap(), Some(3.0));
+}
+
+#[tokio::test]
+async fn set_capability_preserves_python_result_and_deduplicates_storage() {
+    let cache = InMemoryCache::<HashSet<String>>::new(None, None);
+    let inserted = vec!["a".into(), "a".into(), "b".into()];
+    assert_eq!(
+        cache
+            .async_set_cache_sadd("members", inserted.clone(), None)
+            .await
+            .unwrap(),
+        inserted
+    );
+    assert_eq!(
+        cache.get_cache("members").unwrap(),
+        Some(HashSet::from(["a".into(), "b".into()]))
+    );
 }

@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use litellm_cache::CacheType;
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
@@ -127,21 +128,30 @@ impl NativeCacheConfig {
                 .extract::<String>()?,
         };
         let backend = facade.getattr("cache")?;
-        match backend_name.as_str() {
-            "local" => project_memory(&backend).map(|backend| {
+        match CacheType::from_python_name(&backend_name) {
+            Some(CacheType::Local) => project_memory(&backend).map(|backend| {
                 CacheConfigProjection::Native(Box::new(Self {
                     policy,
                     backend: CacheBackendConfig::Memory(backend),
                 }))
             }),
-            "redis" => match project_redis(&backend)? {
+            Some(CacheType::Redis) => match project_redis(&backend)? {
                 Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
                     policy,
                     backend: CacheBackendConfig::Redis(Box::new(backend)),
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
-            _ => Ok(CacheConfigProjection::Unsupported(
+            Some(
+                CacheType::RedisSemantic
+                | CacheType::ValkeySemantic
+                | CacheType::S3
+                | CacheType::Disk
+                | CacheType::QdrantSemantic
+                | CacheType::AzureBlob
+                | CacheType::Gcs,
+            )
+            | None => Ok(CacheConfigProjection::Unsupported(
                 UnsupportedCacheConfig::Backend,
             )),
         }
@@ -149,10 +159,10 @@ impl NativeCacheConfig {
 
     pub(super) fn service_mismatch(&self, service: &NativeResponseCache) -> Option<&'static str> {
         if service.default_ttl()
-            != match &self.backend {
+            != Some(match &self.backend {
                 CacheBackendConfig::Memory(config) => config.default_ttl,
                 CacheBackendConfig::Redis(config) => config.default_ttl,
-            }
+            })
         {
             return Some("facade and native backend default TTLs must match");
         }
