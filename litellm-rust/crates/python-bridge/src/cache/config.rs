@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use litellm_cache::CacheType;
 use litellm_cache_redis::{RedisNode, RedisTopology};
@@ -24,6 +24,10 @@ pub(super) struct MemoryCacheConfig {
     pub(super) default_ttl: Duration,
     pub(super) capacity: usize,
     pub(super) max_entry_bytes: usize,
+}
+
+pub(super) struct DiskCacheConfig {
+    pub(super) directory: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
@@ -103,6 +107,7 @@ pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
     ValkeySemantic(Box<ValkeySemanticCacheConfig>),
+    Disk(DiskCacheConfig),
     AzureBlob(AzureBlobCacheConfig),
 }
 
@@ -118,6 +123,7 @@ pub(super) enum UnsupportedCacheConfig {
     RedisCredentials,
     RedisConnection,
     RedisOption,
+    DiskStore,
 }
 
 impl UnsupportedCacheConfig {
@@ -128,6 +134,7 @@ impl UnsupportedCacheConfig {
             Self::RedisCredentials => "native Redis credentials require Python",
             Self::RedisConnection => "native Redis connection type is not implemented",
             Self::RedisOption => "native Redis configuration requires Python",
+            Self::DiskStore => "native disk cache requires the built-in diskcache store",
         }
     }
 }
@@ -177,6 +184,13 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::Disk) => match project_disk(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::Disk(backend),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
             Some(CacheType::AzureBlob) => project_azure_blob(&backend).map(|backend| {
                 CacheConfigProjection::Native(Box::new(Self {
                     policy,
@@ -186,7 +200,6 @@ impl NativeCacheConfig {
             Some(
                 CacheType::RedisSemantic
                 | CacheType::S3
-                | CacheType::Disk
                 | CacheType::QdrantSemantic
                 | CacheType::Gcs,
             )
@@ -201,6 +214,7 @@ impl NativeCacheConfig {
             CacheBackendConfig::Memory(config) => Some(config.default_ttl),
             CacheBackendConfig::Redis(config) => Some(config.default_ttl),
             CacheBackendConfig::ValkeySemantic(_) => Some(Duration::ZERO),
+            CacheBackendConfig::Disk(_) => None,
             CacheBackendConfig::AzureBlob(_) => None,
         };
         if !matches!(self.backend, CacheBackendConfig::ValkeySemantic(_))
@@ -240,6 +254,17 @@ impl NativeCacheConfig {
                 (threshold != config.similarity_threshold || index_name != config.index_name)
                     .then_some("facade and native semantic settings must match")
             }
+            CacheBackendConfig::Disk(_) if service.kind() != "disk" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::Disk(config) => {
+                let Some(directory) = service.directory() else {
+                    return Some("facade and native backend types must match");
+                };
+                let native = std::fs::canonicalize(directory).ok();
+                let facade = std::fs::canonicalize(&config.directory).ok();
+                (native != facade).then_some("facade and native backend directories must match")
+            }
             CacheBackendConfig::AzureBlob(config) => match service.azure_blob_identity() {
                 None => Some("facade and native backend types must match"),
                 Some((account_url, container))
@@ -278,6 +303,21 @@ fn project_memory(backend: &Bound<'_, PyAny>) -> PyResult<MemoryCacheConfig> {
             .checked_mul(1024)
             .ok_or_else(|| PyValueError::new_err("memory cache item limit is too large"))?,
     })
+}
+
+#[inline(never)]
+fn project_disk(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<DiskCacheConfig, UnsupportedCacheConfig>> {
+    let store = backend.getattr("disk_cache")?;
+    if !instance_class_is(&store, "diskcache.core", "Cache")?
+        || !instance_class_is(&store.getattr("_disk")?, "diskcache.core", "Disk")?
+    {
+        return Ok(Err(UnsupportedCacheConfig::DiskStore));
+    }
+    Ok(Ok(DiskCacheConfig {
+        directory: PathBuf::from(store.getattr("directory")?.extract::<String>()?),
+    }))
 }
 
 #[inline(never)]

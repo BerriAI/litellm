@@ -1,9 +1,10 @@
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use litellm_cache::{
     CacheCodec, CacheConnectionResult, Error, ExactCacheContext, SemanticCacheContext,
 };
 use litellm_cache_azure_blob::AzureBlobCache;
+use litellm_cache_disk::DiskCache;
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_redis::{RedisCache, RedisTopology};
 use litellm_cache_response::{
@@ -81,6 +82,7 @@ pub(super) enum NativeResponseCache {
         embedder: PythonEmbedder,
         scope: String,
     },
+    Disk(Arc<ResponseCache<DiskCache<ResponseCacheCodec>>>),
     AzureBlob(Arc<ResponseCache<AzureBlobCache<ResponseCacheCodec>>>),
 }
 
@@ -135,6 +137,11 @@ impl NativeResponseCache {
         })
     }
 
+    pub fn disk(directory: &str) -> Result<Self, Error> {
+        let cache = DiskCache::open(directory, ResponseCacheCodec)?;
+        Ok(Self::Disk(Arc::new(ResponseCache::new(Arc::new(cache)))))
+    }
+
     pub async fn azure_blob(account_url: &str, container: &str) -> Result<Self, Error> {
         let backend = AzureBlobCache::connect(
             account_url,
@@ -154,7 +161,9 @@ impl NativeResponseCache {
                 cache.backend().account_url(),
                 cache.backend().container_name(),
             )),
-            Self::Memory(_) | Self::Redis { .. } | Self::ValkeySemantic { .. } => None,
+            Self::Memory(_) | Self::Redis { .. } | Self::ValkeySemantic { .. } | Self::Disk(_) => {
+                None
+            }
         }
     }
 
@@ -213,6 +222,7 @@ impl NativeResponseCache {
             Self::Memory(_) => "memory",
             Self::Redis { .. } => "redis",
             Self::ValkeySemantic { .. } => "valkey-semantic",
+            Self::Disk(_) => "disk",
             Self::AzureBlob(_) => "azure-blob",
         }
     }
@@ -222,20 +232,25 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.default_ttl(),
             Self::Redis { cache, .. } => cache.default_ttl(),
             Self::ValkeySemantic { cache, .. } => cache.default_ttl(),
+            Self::Disk(cache) => cache.default_ttl(),
             Self::AzureBlob(cache) => cache.default_ttl(),
         }
     }
 
     pub fn namespace(&self) -> Option<&str> {
         match self {
-            Self::Memory(_) | Self::ValkeySemantic { .. } | Self::AzureBlob(_) => None,
+            Self::Memory(_) | Self::ValkeySemantic { .. } | Self::Disk(_) | Self::AzureBlob(_) => {
+                None
+            }
             Self::Redis { cache, .. } => cache.backend().namespace(),
         }
     }
 
     pub fn topology(&self) -> Option<&RedisTopology> {
         match self {
-            Self::Memory(_) | Self::ValkeySemantic { .. } | Self::AzureBlob(_) => None,
+            Self::Memory(_) | Self::ValkeySemantic { .. } | Self::Disk(_) | Self::AzureBlob(_) => {
+                None
+            }
             Self::Redis { cache, .. } => Some(cache.backend().topology()),
         }
     }
@@ -243,14 +258,30 @@ impl NativeResponseCache {
     pub fn capacity(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => Some(cache.backend().max_size_in_memory()),
-            Self::Redis { .. } | Self::ValkeySemantic { .. } | Self::AzureBlob(_) => None,
+            Self::Redis { .. }
+            | Self::ValkeySemantic { .. }
+            | Self::Disk(_)
+            | Self::AzureBlob(_) => None,
         }
     }
 
     pub fn max_entry_bytes(&self) -> Option<usize> {
         match self {
             Self::Memory(cache) => cache.backend().max_entry_bytes(),
-            Self::Redis { .. } | Self::ValkeySemantic { .. } | Self::AzureBlob(_) => None,
+            Self::Redis { .. }
+            | Self::ValkeySemantic { .. }
+            | Self::Disk(_)
+            | Self::AzureBlob(_) => None,
+        }
+    }
+
+    pub fn directory(&self) -> Option<&Path> {
+        match self {
+            Self::Disk(cache) => Some(cache.backend().directory()),
+            Self::Memory(_)
+            | Self::Redis { .. }
+            | Self::ValkeySemantic { .. }
+            | Self::AzureBlob(_) => None,
         }
     }
 
@@ -271,6 +302,7 @@ impl NativeResponseCache {
             Self::ValkeySemantic { cache, scope, .. } => {
                 cache.lookup(&Self::semantic(request, scope), now)
             }
+            Self::Disk(cache) => cache.lookup(&Self::exact(request), now),
             Self::AzureBlob(cache) => cache.lookup(&Self::exact(request), now),
         }
     }
@@ -287,6 +319,7 @@ impl NativeResponseCache {
             Self::ValkeySemantic { cache, scope, .. } => {
                 cache.store(&Self::semantic(request, scope), response, now)
             }
+            Self::Disk(cache) => cache.store(&Self::exact(request), response, now),
             Self::AzureBlob(cache) => cache.store(&Self::exact(request), response, now),
         }
     }
@@ -306,6 +339,9 @@ impl NativeResponseCache {
                 cache.lookup_batch(&requests, now)
             }
             Self::ValkeySemantic { .. } => Err(Error::UnsupportedOperation),
+            Self::Disk(cache) => {
+                cache.lookup_batch(&requests.iter().map(Self::exact).collect::<Vec<_>>(), now)
+            }
             Self::AzureBlob(cache) => {
                 cache.lookup_batch(&requests.iter().map(Self::exact).collect::<Vec<_>>(), now)
             }
@@ -325,6 +361,7 @@ impl NativeResponseCache {
                     .async_lookup(&Self::semantic(request, scope), now)
                     .await
             }
+            Self::Disk(cache) => cache.async_lookup(&Self::exact(request), now).await,
             Self::AzureBlob(cache) => cache.async_lookup(&Self::exact(request), now).await,
         }
     }
@@ -335,7 +372,7 @@ impl NativeResponseCache {
         request: NativeRequest,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
-            Self::Memory(_) | Self::Redis { .. } | Self::AzureBlob(_) => {
+            Self::Memory(_) | Self::Redis { .. } | Self::Disk(_) | Self::AzureBlob(_) => {
                 let service = self.clone();
                 litellm_host_python::run_async(
                     py,
@@ -391,6 +428,11 @@ impl NativeResponseCache {
                     .async_store(&Self::semantic(request, scope), response, now)
                     .await
             }
+            Self::Disk(cache) => {
+                cache
+                    .async_store(&Self::exact(request), response, now)
+                    .await
+            }
             Self::AzureBlob(cache) => {
                 cache
                     .async_store(&Self::exact(request), response, now)
@@ -406,7 +448,7 @@ impl NativeResponseCache {
         response: Value,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
-            Self::Memory(_) | Self::Redis { .. } | Self::AzureBlob(_) => {
+            Self::Memory(_) | Self::Redis { .. } | Self::Disk(_) | Self::AzureBlob(_) => {
                 let service = self.clone();
                 litellm_host_python::run_async(
                     py,
@@ -449,6 +491,11 @@ impl NativeResponseCache {
                 cache.async_lookup_batch(&requests, now).await
             }
             Self::ValkeySemantic { .. } => Err(Error::UnsupportedOperation),
+            Self::Disk(cache) => {
+                cache
+                    .async_lookup_batch(&requests.iter().map(Self::exact).collect::<Vec<_>>(), now)
+                    .await
+            }
             Self::AzureBlob(cache) => {
                 cache
                     .async_lookup_batch(&requests.iter().map(Self::exact).collect::<Vec<_>>(), now)
@@ -484,6 +531,13 @@ impl NativeResponseCache {
                     .collect();
                 cache.async_store_batch(entries, now).await
             }
+            Self::Disk(cache) => {
+                let entries = entries
+                    .into_iter()
+                    .map(|(request, value)| (Self::exact(&request), value))
+                    .collect();
+                cache.async_store_batch(entries, now).await
+            }
             Self::AzureBlob(cache) => {
                 let entries = entries
                     .into_iter()
@@ -500,7 +554,7 @@ impl NativeResponseCache {
         entries: Vec<(NativeRequest, Value)>,
     ) -> PyResult<Bound<'py, PyAny>> {
         match self {
-            Self::Memory(_) | Self::Redis { .. } | Self::AzureBlob(_) => {
+            Self::Memory(_) | Self::Redis { .. } | Self::Disk(_) | Self::AzureBlob(_) => {
                 let service = self.clone();
                 litellm_host_python::run_async(
                     py,
@@ -544,6 +598,7 @@ impl NativeResponseCache {
                 cache.async_flush().await
             }
             Self::ValkeySemantic { .. } => Err(Error::UnsupportedOperation),
+            Self::Disk(cache) => cache.async_flush().await,
             Self::AzureBlob(cache) => cache.async_flush().await,
         }
     }
@@ -553,6 +608,7 @@ impl NativeResponseCache {
             Self::Memory(cache) => cache.test_connection().await,
             Self::Redis { cache, .. } => cache.test_connection().await,
             Self::ValkeySemantic { cache, .. } => cache.test_connection().await,
+            Self::Disk(cache) => cache.test_connection().await,
             Self::AzureBlob(cache) => cache.test_connection().await,
         }
     }

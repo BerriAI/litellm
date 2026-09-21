@@ -74,7 +74,7 @@ class CachingHandlerResponse(BaseModel):
     For embeddings there can be a cache hit for some of the inputs in the list and a cache miss for others
     """
 
-    cached_result: Any | None = None
+    cached_result: object | None = None
     final_embedding_cached_response: EmbeddingResponse | None = None
     embedding_all_elements_cache_hit: bool = False  # this is set to True when all elements in the list have a cache hit in the embedding cache, if true return the final_embedding_cached_response no need to make an API call
 
@@ -722,7 +722,7 @@ class LLMCachingHandler:
 
     async def _retrieve_from_cache(
         self, call_type: str, kwargs: dict[str, object], args: tuple[object, ...]
-    ) -> Any | None:
+    ) -> object | None:
         """
         Internal method to
         - get cache key
@@ -968,7 +968,7 @@ class LLMCachingHandler:
 
     def _convert_cached_stream_response(
         self,
-        cached_result: Any,
+        cached_result: dict[str, object],
         call_type: str,
         logging_obj: LiteLLMLoggingObj,
         model: str,
@@ -997,7 +997,7 @@ class LLMCachingHandler:
 
     async def async_set_cache(
         self,
-        result: Any,
+        result: object,
         original_function: Callable,
         kwargs: dict[str, Any],
         args: tuple[object, ...] | None = None,
@@ -1065,7 +1065,7 @@ class LLMCachingHandler:
 
     def sync_set_cache(
         self,
-        result: Any,
+        result: object,
         kwargs: dict[str, object],
         args: tuple[object, ...] | None = None,
     ):

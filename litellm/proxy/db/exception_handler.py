@@ -1,6 +1,6 @@
 import re
 from collections.abc import Awaitable, Callable, Iterator
-from typing import Any, Final, TypeVar
+from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -446,8 +446,20 @@ def _coerce_timeout(value: object, fallback: float) -> float:
 _ReadResultT: Final = TypeVar("_ReadResultT")
 
 
+class _DBReconnectClient(Protocol):
+    """The one method `call_with_db_reconnect_retry` needs from a Prisma client."""
+
+    async def attempt_db_reconnect(
+        self,
+        *,
+        reason: str,
+        timeout_seconds: float | None = None,
+        lock_timeout_seconds: float | None = None,
+    ) -> bool: ...
+
+
 async def call_with_db_reconnect_retry(
-    prisma_client: Any,
+    prisma_client: _DBReconnectClient,
     coro_factory: Callable[[], Awaitable[_ReadResultT]],
     *,
     reason: str,

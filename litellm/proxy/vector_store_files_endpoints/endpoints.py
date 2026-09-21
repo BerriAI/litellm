@@ -526,7 +526,7 @@ async def vector_store_file_create(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -729,7 +729,7 @@ async def vector_store_file_retrieve(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -836,7 +836,7 @@ async def vector_store_file_content(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -946,7 +946,7 @@ async def vector_store_file_update(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -1053,7 +1053,7 @@ async def vector_store_file_delete(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        response = await processor.base_process_llm_request(
+        response: object = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,

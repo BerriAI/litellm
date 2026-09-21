@@ -68,6 +68,18 @@ impl CacheTestHandle {
     }
 
     #[staticmethod]
+    #[pyo3(signature = (directory))]
+    fn disk(py: Python<'_>, directory: String) -> PyResult<Self> {
+        let service =
+            release_gil(py, move || NativeResponseCache::disk(&directory)).map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
     #[pyo3(signature = (url, similarity_threshold, index_name, embedder))]
     fn valkey_semantic(
         url: String,
