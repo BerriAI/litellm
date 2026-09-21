@@ -109,6 +109,7 @@ class RetryPolicy(BaseModel):
     ContentPolicyViolationErrorRetries: int | None = None
     InternalServerErrorRetries: int | None = None
     ServiceUnavailableErrorRetries: int | None = None
+    NotFoundErrorRetries: int | None = None
     DefaultRetries: int | None = None
 
 
@@ -1055,6 +1056,13 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
     tags: tuple[str, ...]
     strategy: _PreRoutingStrategyT_co
+
+
+@dataclass(frozen=True, slots=True)
+class BaselineRouteStamp:
+    router_name: str
+    baseline_model: str
+    baseline_deployment_id: str
 
 
 @dataclass(frozen=True, slots=True)

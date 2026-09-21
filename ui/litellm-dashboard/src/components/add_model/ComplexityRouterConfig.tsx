@@ -37,7 +37,7 @@ import {
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import AdaptiveRoutingConfig from "./AdaptiveRoutingConfig";
-import ClassificationMethodConfig from "./ClassificationMethodConfig";
+import ClassificationMethodConfig, { InactiveHeuristicV2Threshold } from "./ClassificationMethodConfig";
 import ContextWindowEscalationConfig from "./ContextWindowEscalationConfig";
 import ResponseFormatControls from "./ResponseFormatControls";
 import StallEscalationConfig from "./StallEscalationConfig";
@@ -374,6 +374,7 @@ export interface ComplexityRouterConfigValue {
   /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
   default_model?: string;
   classifier_type: ClassifierType;
+  heuristic_v2_success_threshold?: number;
   capability_classifier_config?: CapabilitySettings;
   llm_v2_config?: FuseSettings;
   classifier_llm_config?: ClassifierLLMConfig;
@@ -617,6 +618,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
           </SimpleTooltip>
         )}
       </div>
+
+      <InactiveHeuristicV2Threshold value={value} onChange={onChange} />
 
       {forecast ? (
         <>

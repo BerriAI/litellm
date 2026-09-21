@@ -445,14 +445,8 @@ where
             Ok(failure) => return failure.into(),
             Err(classifier_error) => classifier_error,
         };
-        let attached = classifier_error.value(py).setattr(
-            "__context__",
-            PyRuntimeError::new_err(native).into_value(py),
-        );
-        match attached {
-            Ok(()) => classifier_error,
-            Err(error) => error,
-        }
+        classifier_error.set_context(py, Some(PyRuntimeError::new_err(native)));
+        classifier_error
     }
 
     fn succeeded(&mut self, py: Python<'_>, response: Py<PyAny>) -> PyResult<ExecutionStep> {
@@ -1071,9 +1065,9 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             let error = result.unwrap_err();
             assert!(error.is_instance_of::<pyo3::exceptions::PyTypeError>(py));
             assert_eq!(error.value(py).to_string(), "classifier failed");
-            let context = error.value(py).getattr("__context__").unwrap();
-            assert!(context.is_instance_of::<PyRuntimeError>());
-            assert_eq!(context.str().unwrap().to_string(), "provider exploded");
+            let context = error.context(py).unwrap();
+            assert!(context.is_instance_of::<PyRuntimeError>(py));
+            assert_eq!(context.value(py).to_string(), "provider exploded");
             assert_eq!(
                 log,
                 [
@@ -1186,20 +1180,12 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 type Failure = Classified;
                 fn invoke(
                     &mut self,
-                    py: Python<'_>,
+                    _: Python<'_>,
                     _: &Bound<'_, PyDict>,
                     _: &'static str,
                 ) -> Result<String, InvokeError<Error>> {
                     self.0.push("route");
-                    Err(PyErr::from_value(
-                        py.import("asyncio")
-                            .unwrap()
-                            .getattr("CancelledError")
-                            .unwrap()
-                            .call0()
-                            .unwrap(),
-                    )
-                    .into())
+                    Err(pyo3::exceptions::asyncio::CancelledError::new_err(()).into())
                 }
                 fn chunk(
                     &mut self,

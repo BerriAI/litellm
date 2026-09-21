@@ -7952,7 +7952,7 @@
       }
     },
     {
-      "name": "fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-fallback_cache_read_at_input_rate",
+      "name": "fireworks_ai-accounts-fireworks-models-deepseek-v4p1-flash-fallback_cache_read_at_half_input_rate",
       "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
       "model": "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash",
       "request": {
@@ -8008,8 +8008,8 @@
         }
       },
       "expected": {
-        "spend": 0.0021672,
-        "input_cost": 0.0019392,
+        "spend": 0.0012456,
+        "input_cost": 0.0010176,
         "output_cost": 0.000228,
         "prompt_tokens": 12928,
         "completion_tokens": 380

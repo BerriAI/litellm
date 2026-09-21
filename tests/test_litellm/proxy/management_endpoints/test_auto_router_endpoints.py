@@ -3,23 +3,34 @@ Unit tests for auto router management endpoints
 """
 
 from collections.abc import Mapping, Sequence
+from functools import partial
 from pathlib import Path
 from typing import Final
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
+import litellm
+from litellm.proxy import proxy_server
 from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.management_endpoints import auto_router_endpoints
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     preview_auto_router_routing,
 )
 from litellm.router import Router
+from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_strategy.complexity_router.jev_classifier import (
+    JevChoiceAnswer,
+    JevClassifierClient,
+    JevSystemOneResponse,
+)
 from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarksResponse,
     AutoRouterRoutingTestRequest,
@@ -422,8 +433,115 @@ async def test_a_key_over_its_budget_cannot_run_a_classifier_config(monkeypatch:
     assert calls == []
 
 
+@pytest.mark.parametrize(
+    "max_budget, spend, denied",
+    (
+        pytest.param(0.0, 0.0, True, id="zero-budget"),
+        pytest.param(1.0, 1.0, True, id="budget-reached"),
+        pytest.param(1.0, 2.0, True, id="budget-exceeded"),
+        pytest.param(1.0, 0.5, False, id="budget-remaining"),
+        pytest.param(None, 2.0, False, id="unlimited"),
+    ),
+)
 @pytest.mark.asyncio
-async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.MonkeyPatch):
+async def test_jev_test_routing_enforces_key_budget_before_provider_invocation(
+    monkeypatch: pytest.MonkeyPatch, max_budget: float | None, spend: float, denied: bool
+) -> None:
+    client: Final = AsyncMock(spec=JevClassifierClient)
+    client.evaluate.return_value = JevSystemOneResponse(
+        model="jev-test",
+        answers={
+            "tier": JevChoiceAnswer(type="choice", choice="SIMPLE", probabilities={"SIMPLE": 1.0}, confidence=1.0)
+        },
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    monkeypatch.setattr(auto_router_endpoints, "ComplexityRouter", partial(ComplexityRouter, jev_client=client))
+    actor: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-jev-budget-test",
+        user_id="admin",
+        models=["cheap-model", "typesafe/jev-test"],
+        max_budget=max_budget,
+        spend=spend,
+    )
+    request: Final = _request(
+        "what is 2+2",
+        classifier_type="jev",
+        jev_classifier_config={"model": "jev-test"},
+    )
+
+    if denied:
+        with pytest.raises(ProxyException) as exc_info:
+            await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor)
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "400"
+        assert exc_info.value.param is None
+        assert "Budget has been exceeded!" in exc_info.value.message
+        client.evaluate.assert_not_called()
+        return
+
+    response: Final = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor
+    )
+    assert response.routed_model == "cheap-model"
+    assert response.routing_decision["cause"] == "jev_classifier"
+    assert response.routing_decision["classifier_model"] == "typesafe/jev-test"
+    client.evaluate.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    "max_budget, spend, denied",
+    ((0.0, 0.0, True), (1.0, 2.0, True), (1.0, 0.5, False), (None, 2.0, False)),
+)
+@pytest.mark.asyncio
+async def test_jev_test_routing_hard_blocks_exhausted_throttle_enabled_keys(
+    monkeypatch: pytest.MonkeyPatch, max_budget: float | None, spend: float, denied: bool
+) -> None:
+    client: Final = AsyncMock(spec=JevClassifierClient)
+    client.evaluate.return_value = JevSystemOneResponse(
+        model="jev-test",
+        answers={
+            "tier": JevChoiceAnswer(type="choice", choice="SIMPLE", probabilities={"SIMPLE": 1.0}, confidence=1.0)
+        },
+    )
+    monkeypatch.setattr(litellm, "budget_exceeded_throttle_percentage", 0.1)
+    monkeypatch.setattr(proxy_server, "llm_router", _router())
+    monkeypatch.setattr(auto_router_endpoints, "ComplexityRouter", partial(ComplexityRouter, jev_client=client))
+    actor: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-jev-throttle-test",
+        user_id="admin",
+        models=["cheap-model", "typesafe/jev-test"],
+        max_budget=max_budget,
+        spend=spend,
+        rpm_limit=100,
+        metadata={"throttle_on_budget_exceeded": True},
+    )
+    request: Final = _request(
+        "what is 2+2",
+        classifier_type="jev",
+        jev_classifier_config={"model": "jev-test"},
+    )
+    if denied:
+        with pytest.raises(ProxyException) as exc_info:
+            await preview_auto_router_routing(http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor)
+        assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        assert exc_info.value.code == "400"
+        client.evaluate.assert_not_called()
+        return
+
+    response: Final = await preview_auto_router_routing(
+        http_request=ROUTING_HTTP_REQUEST, data=request, user_api_key_dict=actor
+    )
+    assert response.routing_decision["cause"] == "jev_classifier"
+    client.evaluate.assert_awaited_once()
+
+
+@pytest.mark.parametrize("max_budget, spend", ((0.0, 0.0), (1.0, 2.0)))
+@pytest.mark.asyncio
+async def test_a_heuristic_config_does_not_need_a_budget(
+    monkeypatch: pytest.MonkeyPatch, max_budget: float, spend: float
+):
     import litellm.proxy.proxy_server as proxy_server
 
     monkeypatch.setattr(proxy_server, "llm_router", _router())
@@ -435,8 +553,8 @@ async def test_a_heuristic_config_does_not_need_a_budget(monkeypatch: pytest.Mon
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-broke",
             user_id="admin",
-            max_budget=1.0,
-            spend=2.0,
+            max_budget=max_budget,
+            spend=spend,
             models=["cheap-model"],
         ),
     )
@@ -546,6 +664,9 @@ class TestAutoRouterBenchmarks:
         total_tokens=4000,
         spend=10.0,
         saved_spend=30.0,
+        savings_estimated_turns=40,
+        savings_estimated_actual_spend=10.0,
+        savings_estimated_saved_spend=30.0,
         classifier_cost=0.4,
         classifier_cost_recorded_turns=40,
         session_seconds=400.0,
@@ -582,11 +703,28 @@ class TestAutoRouterBenchmarks:
     def test_a_losing_router_reports_negative_savings(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
 
-        losing = self.ROW.model_copy(update={"saved_spend": -5.0})
+        losing = self.ROW.model_copy(update={"saved_spend": -5.0, "savings_estimated_saved_spend": -5.0})
         totals = _benchmark_totals(losing)
         assert totals.baseline_spend == 5.0
         assert totals.saved_pct == -100.0
         assert totals.classifier_cost == 0.4
+
+    @pytest.mark.parametrize("estimated_turns", [0, 4])
+    def test_savings_compare_only_the_current_estimated_cohort(self, estimated_turns: int) -> None:
+        from litellm.proxy.management_endpoints.auto_router_endpoints import _benchmark_totals
+
+        row: Final = self.ROW.model_copy(update={
+            "savings_estimated_turns": estimated_turns,
+            "savings_estimated_actual_spend": 2.0 if estimated_turns else 0.0,
+            "savings_estimated_saved_spend": -0.5 if estimated_turns else 0.0,
+        })
+        totals: Final = _benchmark_totals(row)
+        assert totals.spend == 10.0
+        assert totals.savings_estimated_turns == estimated_turns
+        assert totals.saved_spend == (-0.5 if estimated_turns else None)
+        assert totals.baseline_spend == (1.5 if estimated_turns else None)
+        assert totals.saved_pct == (pytest.approx(-33.3) if estimated_turns else None)
+        assert totals.saved_per_session is None
 
     def test_an_empty_window_folds_to_zeros(self):
         from litellm.proxy.management_endpoints.auto_router_endpoints import (
@@ -607,7 +745,10 @@ class TestAutoRouterBenchmarks:
             _summed_agg_row,
         )
 
-        other = self.ROW.model_copy(update={"router_name": "auto-2", "sessions": 1, "turns": 10, "spend": 0.0})
+        other = self.ROW.model_copy(update={
+            "router_name": "auto-2", "sessions": 1, "turns": 10, "spend": 0.0,
+            "savings_estimated_turns": 10, "savings_estimated_actual_spend": 0.0,
+        })
         summed = _summed_agg_row([self.ROW, other])
         totals = _benchmark_totals(summed)
         assert summed.sessions == 5
@@ -696,6 +837,9 @@ class TestAutoRouterBenchmarks:
                 "turns": 10,
                 "spend": 2.0,
                 "saved_spend": -0.5,
+                "savings_estimated_turns": 10,
+                "savings_estimated_actual_spend": 2.0,
+                "savings_estimated_saved_spend": -0.5,
                 "classifier_cost": recorded_turns * 0.02,
                 "classifier_cost_recorded_turns": recorded_turns,
             }
@@ -851,7 +995,6 @@ class TestAutoRouterBenchmarks:
 # ---------------------------------------------------------------------------
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
 
 from litellm.proxy.management_endpoints.auto_router_endpoints import (
     get_shadow_eval_job,
@@ -876,6 +1019,10 @@ class TestAutoRouterSession:
         "last_model": "anthropic/claude-sonnet-5",
         "spend": 0.14,
         "saved_spend": 0.24,
+        "savings_estimated_turns": 3,
+        "savings_estimated_actual_spend": 0.14,
+        "savings_estimated_saved_spend": 0.24,
+        "savings_estimated_baseline_models": {"anthropic/claude-opus-5": 3},
         "classifier_cost": 0.0,
         "tier_turns": {"simple": 1, "complex": 2},
         "baseline_models": {"anthropic/claude-opus-5": 3},
@@ -899,25 +1046,33 @@ class TestAutoRouterSession:
         return lookups
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("turns, estimated", [(3, True), (10, True), (10, False)], ids=["full", "partial", "legacy"])
     async def test_a_key_reads_its_own_session_with_the_baseline_its_turns_were_priced_against(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, turns: int, estimated: bool,
+    ) -> None:
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
 
         caller = UserAPIKeyAuth(api_key="sk-caller")
-        self._rig(monkeypatch, [{**self.ROW, "api_key": caller.api_key, "session_id": "sess-1"}])
+        row: Final = {key: value for key, value in self.ROW.items() if estimated or not key.startswith("savings_estimated_")}
+        spend: Final = 0.14 if turns == 3 else 10.0
+        if estimated and turns != 3:
+            row["savings_estimated_saved_spend"] = -0.04
+        self._rig(monkeypatch, [{**row, "api_key": caller.api_key, "session_id": "sess-1", "turns": turns, "spend": spend}])
         response = await get_auto_router_session(user_api_key_dict=caller, session_id="sess-1")
         assert response.model_dump() == {
             "session_id": "sess-1",
             "router_name": "claude-auto",
             "router_type": "complexity",
-            "turns": 3,
+            "turns": turns,
             "last_model": "anthropic/claude-sonnet-5",
-            "spend": 0.14,
-            "saved_spend": 0.24,
-            "baseline_spend": pytest.approx(0.38),
-            "baseline_model": "anthropic/claude-opus-5",
-            "baseline_models": {"anthropic/claude-opus-5": 3},
+            "spend": spend,
+            "saved_spend": (0.24 if turns == 3 else -0.04) if estimated else None,
+            "savings_estimated_turns": 3 if estimated else 0,
+            "savings_estimated_actual_spend": 0.14 if estimated else 0.0,
+            "baseline_spend": pytest.approx(0.38) if turns == 3 else None,
+            "savings_estimated_baseline_spend": pytest.approx(0.38 if turns == 3 else 0.1) if estimated else None,
+            "baseline_model": "anthropic/claude-opus-5" if estimated else None,
+            "baseline_models": {"anthropic/claude-opus-5": 3} if estimated else {},
         }
 
     @pytest.mark.asyncio
@@ -959,21 +1114,13 @@ class TestAutoRouterSession:
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
 
         priced = {"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}
-        self._rig(monkeypatch, [{**self.ROW, "api_key": ADMIN.api_key, "session_id": "s", "baseline_models": priced}])
+        self._rig(monkeypatch, [{
+            **self.ROW, "api_key": ADMIN.api_key, "session_id": "s",
+            "baseline_models": {"old-baseline": 100}, "savings_estimated_baseline_models": priced,
+        }])
         response = await get_auto_router_session(user_api_key_dict=ADMIN, session_id="s")
         assert response.baseline_model == "anthropic/claude-opus-5"
         assert response.baseline_models == priced
-
-    @pytest.mark.asyncio
-    async def test_a_session_whose_turns_recorded_no_baseline_reports_the_money_without_a_name(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
-
-        self._rig(monkeypatch, [{**self.ROW, "api_key": ADMIN.api_key, "session_id": "s", "baseline_models": {}}])
-        response = await get_auto_router_session(user_api_key_dict=ADMIN, session_id="s")
-        assert response.baseline_model is None
-        assert response.baseline_spend == pytest.approx(0.38)
 
     @pytest.mark.asyncio
     async def test_an_oversized_client_session_id_is_bounded_like_the_writer_bounded_it(

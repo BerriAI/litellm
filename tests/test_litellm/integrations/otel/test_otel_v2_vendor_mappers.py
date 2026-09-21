@@ -11,15 +11,14 @@ import pytest
 
 from litellm.integrations.otel import GenAIOperation
 from litellm.integrations.otel.mappers import (
-    GenAIMapper,
     LangfuseMapper,
     LangtraceMapper,
     OpenInferenceMapper,
     WeaveMapper,
     resolve_mappers,
 )
-from litellm.integrations.otel.model.trace_controls import TraceControls
 from litellm.integrations.otel.model.payloads import (
+    EmbeddingOutput,
     LLMCallSpanData,
     LLMRequestParams,
     LLMUsage,
@@ -27,6 +26,7 @@ from litellm.integrations.otel.model.payloads import (
     ServerInfo,
     ToolDefinition,
 )
+from litellm.integrations.otel.model.trace_controls import TraceControls
 
 
 def _llm_call(**overrides):
@@ -172,6 +172,59 @@ def test_langfuse_mapper_skips_when_no_messages():
     attrs = LangfuseMapper().map(data)
     assert "langfuse.observation.input" not in attrs
     assert "langfuse.observation.output" not in attrs
+
+
+def test_langfuse_mapper_renders_an_embedding_call_with_a_vector_summary_as_output():
+    data = _llm_call(
+        operation=GenAIOperation.EMBEDDINGS,
+        request_model="text-embedding-3-small",
+        messages_in=({"role": "user", "content": "hello"},),
+        choices_out=(),
+        finish_reasons=(),
+        embedding_output=EmbeddingOutput(count=2, dimensions=1536),
+    )
+    attrs = LangfuseMapper().map(data)
+
+    assert attrs["langfuse.observation.type"] == "generation"
+    assert json.loads(attrs["langfuse.observation.output"]) == {"count": 2, "dimensions": 1536}
+    assert json.loads(attrs["langfuse.observation.input"]) == [{"role": "user", "content": "hello"}]
+
+
+def test_langfuse_mapper_keeps_chat_output_when_no_embedding_summary():
+    attrs = LangfuseMapper().map(_llm_call(embedding_output=None))
+
+    assert json.loads(attrs["langfuse.observation.output"]) == [{"role": "assistant", "content": "Sunny."}]
+
+
+def test_langfuse_mapper_renders_a_responses_api_call_from_the_standard_logging_payload():
+    payload = {
+        "call_type": "aresponses",
+        "custom_llm_provider": "openai",
+        "model": "gpt-5.4-nano",
+        "messages": [{"role": "user", "content": "weather in sf?"}],
+        "response": {
+            "id": "resp_1",
+            "status": "completed",
+            "output": [
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Checking."}]},
+                {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": '{"city": "sf"}'},
+            ],
+        },
+    }
+    data = LLMCallSpanData.from_standard_logging_payload(payload, capture_content=True)
+    attrs = LangfuseMapper().map(data)
+
+    assert json.loads(attrs["langfuse.observation.output"]) == [
+        {
+            "role": "assistant",
+            "content": "Checking.",
+            "refusal": None,
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "sf"}'}}
+            ],
+        }
+    ]
+    assert attrs["langfuse.observation.type"] == "generation"
 
 
 # --------------------------------------------------------------------------- #

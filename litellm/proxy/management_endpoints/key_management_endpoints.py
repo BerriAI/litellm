@@ -1257,11 +1257,9 @@ async def _common_key_generation_helper(
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
-    is_ui_session_team_key = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID and _requested_team_id is not None
-    # Session tokens (lite login) carry max_budget=None to avoid a per-session
-    # LLM spend cap, but that None must not be read as "unlimited delegation
-    # authority". A personal key (no team) has no team-budget enforcement at
-    # request time, so a session token cannot delegate any budget for one.
+    # UI session personal keys are capped by user_max_budget when it is available.
+    is_ui_session_token: Final = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
+    is_ui_session_team_key = is_ui_session_token and _requested_team_id is not None
     if (
         user_api_key_dict.is_session_token
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -1279,7 +1277,9 @@ async def _common_key_generation_helper(
             },
         )
     delegation_ceiling: Final = (
-        user_api_key_dict.max_budget
+        user_api_key_dict.user_max_budget
+        if is_ui_session_token and user_api_key_dict.user_max_budget is not None
+        else user_api_key_dict.max_budget
         if user_api_key_dict.max_budget is not None
         else (team_table.max_budget if user_api_key_dict.is_session_token and team_table is not None else None)
     )
@@ -1968,7 +1968,7 @@ async def generate_key_fn(
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
-    - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
+    - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - budget_fallbacks: Optional[Dict[str, List[str]]] - Per-model fallback chain tried in order when that model's own `model_max_budget` is exceeded, e.g. {"gpt-4o": ["gpt-4o-mini"]}.
@@ -3323,7 +3323,7 @@ async def update_key_fn(
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
-    - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Anthropic and Bedrock Claude models only.
+    - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
     - aliases: Optional[dict] - Model aliases for the key - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)

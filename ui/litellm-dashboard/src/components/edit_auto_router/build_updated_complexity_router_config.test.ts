@@ -46,6 +46,34 @@ const hydratedState: KeywordMatchingState = {
 };
 
 describe("buildUpdatedComplexityRouterConfig keyword matching", () => {
+  it.each([0, 0.92, 1])("hydrates and saves a success threshold of %s without changing the artifact", (threshold) => {
+    const stored = {
+      ...STORED,
+      classifier_type: "heuristic_v2" as const,
+      heuristic_v2_success_threshold: threshold,
+      heuristic_v2_artifact: { routing_threshold: 0.82, custom_metadata: "retained" },
+    };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(hydrated.heuristic_v2_success_threshold).toBe(threshold);
+    const saved = buildUpdatedComplexityRouterConfig(stored, hydrated);
+    expect(saved.heuristic_v2_success_threshold).toBe(threshold);
+    expect(saved.heuristic_v2_artifact).toEqual(stored.heuristic_v2_artifact);
+
+    const cleared = buildUpdatedComplexityRouterConfig(stored, {
+      ...hydrated,
+      heuristic_v2_success_threshold: undefined,
+    });
+    expect(cleared).not.toHaveProperty("heuristic_v2_success_threshold");
+    expect(cleared.heuristic_v2_artifact).toEqual(stored.heuristic_v2_artifact);
+  });
+
+  it.each([undefined, null])("keeps an inherited success threshold %s omitted after saving", (threshold) => {
+    const stored = { ...STORED, heuristic_v2_success_threshold: threshold };
+    const hydrated = hydrateComplexityRouterConfig(stored, undefined);
+    expect(hydrated.heuristic_v2_success_threshold).toBeUndefined();
+    expect(buildUpdatedComplexityRouterConfig(stored, hydrated)).not.toHaveProperty("heuristic_v2_success_threshold");
+  });
+
   it.each(["capability", "llm_v2", "heuristic"] as const)(
     "handles enabled stored overrides when editing %s with or without keyword form state",
     (classifier_type) => {
@@ -678,6 +706,7 @@ describe("managed keys survive an untouched open-and-save", () => {
     plan_mode_min_tier: "COMPLEX",
     tier_labels: { SIMPLE: "Cheap" },
     classifier_type: "heuristic_first",
+    heuristic_v2_success_threshold: 0.89,
     heuristic_first_max_tier: "SIMPLE",
     classifier_llm_config: { model: "gpt-4o-mini", timeout_ms: 3000, reasoning_effort: "low" },
     classifier_context_window_size: 5,

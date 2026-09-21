@@ -69,6 +69,7 @@ class KeyMetadataDict(TypedDict, total=False):
     team_id: ReadOnly[str | None]
     user_id: ReadOnly[str | None]
     user_email: ReadOnly[str | None]
+    key_exists: ReadOnly[bool]
 
 
 class _TokenDigestRow(BaseModel):

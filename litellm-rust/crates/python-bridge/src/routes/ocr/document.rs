@@ -7,7 +7,8 @@ use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     pybacked::PyBackedBytes,
-    types::{PyBytes, PyString},
+    sync::PyOnceLock,
+    types::{PyBytes, PyString, PyType},
 };
 
 #[derive(Debug)]
@@ -84,7 +85,8 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
                 "OCR file input does not accept bare str values. Pass bytes, a pathlib.Path, or a file-like object.",
             ));
         }
-        if file.is_instance(&py.import("os")?.getattr("PathLike")?)? {
+        static PATH_LIKE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+        if file.is_instance(PATH_LIKE.import(py, "os", "PathLike")?)? {
             return Ok(Self {
                 input: OcrDocumentInput::Path {
                     path: file.extract::<PathBuf>()?,
