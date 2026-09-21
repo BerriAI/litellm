@@ -193,6 +193,7 @@ export interface BuildComplexityRouterConfigParams {
   classificationPrompt: string | undefined;
   classificationExamples: string | undefined;
   heuristicFirstMaxTier: string | undefined;
+  heuristicFirstMaxContextTokens?: number;
   hybridBoundaryMargin?: number;
   classificationMode: ClassificationMode | undefined;
   sessionAffinity: boolean;
@@ -537,8 +538,9 @@ const classifierWireFields = (
     ...(effectiveType === "heuristic_first" &&
       heuristicFirstMaxTier?.trim() && { heuristic_first_max_tier: heuristicFirstMaxTier }),
     ...(effectiveType === "heuristic_first" &&
-      heuristicFirstMaxContextTokens !== undefined &&
-      { heuristic_first_max_context_tokens: heuristicFirstMaxContextTokens }),
+      heuristicFirstMaxContextTokens !== undefined && {
+        heuristic_first_max_context_tokens: heuristicFirstMaxContextTokens,
+      }),
     ...(effectiveType === "hybrid" &&
       hybridBoundaryMargin !== undefined && { hybrid_boundary_margin: hybridBoundaryMargin }),
     ...(usesLlmClassifier(effectiveType) &&
