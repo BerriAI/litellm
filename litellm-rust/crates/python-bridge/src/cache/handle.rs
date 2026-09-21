@@ -1,6 +1,6 @@
 use litellm_cache_redis::{RedisNode, RedisTopology};
 use litellm_cache_redis_semantic::RedisSemanticConfig;
-use litellm_host_python::release_gil;
+use litellm_host_python::{release_gil, run_sync_value};
 use pyo3::{
     PyTraverseError, PyVisit,
     exceptions::{PyRuntimeError, PyTypeError},
@@ -65,6 +65,21 @@ impl CacheTestHandle {
             NativeResponseCache::redis(&url, &topology, ttl, namespace)
         })
         .map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (account_url, container))]
+    fn azure_blob(py: Python<'_>, account_url: String, container: String) -> PyResult<Self> {
+        let service = run_sync_value(py, async move {
+            NativeResponseCache::azure_blob(&account_url, &container)
+                .await
+                .map_err(cache_error)
+        })?;
         Ok(Self {
             service,
             guard: None,
