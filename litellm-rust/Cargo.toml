@@ -29,6 +29,7 @@ litellm-llms = { path = "crates/llms" }
 litellm-types = { path = "crates/types" }
 litellm-core-utils = { path = "crates/core-utils" }
 litellm-cache = { path = "crates/cache" }
+litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
 litellm-cache-memory = { path = "crates/cache-memory" }
 litellm-cache-redis = { path = "crates/cache-redis" }
 litellm-cache-response = { path = "crates/cache-response" }
