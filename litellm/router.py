@@ -191,6 +191,7 @@ from litellm.router_utils.fallback_event_handlers import (
     fallbacks_disabled_for_request,
     get_fallback_model_group_for_lookup_groups,
     get_pre_routing_selection,
+    has_unattempted_fallback_target,
     record_disable_fallbacks,
     record_pre_routing_selection,
     run_async_fallback,
@@ -8338,12 +8339,12 @@ class Router:
         """
         content_policy_fallbacks: Final = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
         if content_policy_fallbacks is not None:
-            return (
+            return has_unattempted_fallback_target(
                 self._get_fallback_model_group_for_lookup_groups(
                     fallbacks=content_policy_fallbacks,
                     lookup_groups=fallback_lookup_groups(kwargs, model_group),
-                )
-                is not None
+                ),
+                kwargs,
             )
         if self._has_default_fallbacks():
             return True
@@ -8375,7 +8376,7 @@ class Router:
             fallbacks=fallbacks,
             lookup_groups=fallback_lookup_groups(kwargs, model_group),
         )
-        return resolved is not None
+        return has_unattempted_fallback_target(resolved, kwargs)
 
     def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
         """
