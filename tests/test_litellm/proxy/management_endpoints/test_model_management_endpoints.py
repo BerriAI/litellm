@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from litellm._uuid import uuid
+from litellm.models.credentials import CredentialItem
 
 from litellm.proxy._types import (
     LiteLLM_ModelTable,
@@ -4249,10 +4250,11 @@ class TestPatchModelCredentialName:
         db_model: Deployment,
         user_api_key_dict: UserAPIKeyAuth,
         credential_name: str | None,
+        db_credential: CredentialItem | None = None,
+        credentials_repository: MagicMock | None = None,
     ) -> list[dict[str, object]]:
         import litellm
         from litellm.proxy.management_endpoints.model_management_endpoints import patch_model, update_db_model
-        from litellm.types.utils import CredentialItem
 
         monkeypatch.setattr(
             litellm,
@@ -4270,6 +4272,8 @@ class TestPatchModelCredentialName:
                 ),
             ],
         )
+        credentials_repository = credentials_repository or MagicMock()
+        credentials_repository.find_by_name = AsyncMock(return_value=db_credential)
         persisted: Final[list[dict[str, object]]] = []
 
         async def persist_model(**kwargs):
@@ -4284,6 +4288,10 @@ class TestPatchModelCredentialName:
             patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
             patch("litellm.proxy.proxy_server.store_model_in_db", True),
             patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.CredentialsRepository",
+                return_value=credentials_repository,
+            ),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.get_db_model",
                 new=AsyncMock(return_value=db_model),
@@ -4364,6 +4372,7 @@ class TestPatchModelCredentialName:
     async def test_patch_model_rejects_unknown_credential_name(self, monkeypatch):
         from litellm.proxy._types import ProxyException
 
+        credentials_repository = MagicMock()
         db_model: Final = Deployment(
             model_name="gpt-4",
             litellm_params=LiteLLM_Params(
@@ -4380,10 +4389,38 @@ class TestPatchModelCredentialName:
                 db_model,
                 self._admin_user(),
                 "ghost-credential",
+                credentials_repository=credentials_repository,
             )
 
         assert exc_info.value.code == "400"
         assert "not found" in exc_info.value.message.lower()
+        credentials_repository.find_by_name.assert_awaited_once_with("ghost-credential")
+
+    @pytest.mark.asyncio
+    async def test_patch_model_accepts_credential_known_only_in_db(self, monkeypatch):
+        db_model: Final = Deployment(
+            model_name="gpt-4",
+            litellm_params=LiteLLM_Params(
+                model="openai/gpt-4o",
+                api_base="https://api.openai.com/v1",
+                litellm_credential_name="shared-credential",
+            ),
+            model_info=ModelInfo(id="dep-cred-1"),
+        )
+
+        persisted: Final = await self._patch_model(
+            monkeypatch,
+            db_model,
+            self._admin_user(),
+            "db-only-credential",
+            db_credential=CredentialItem(
+                credential_name="db-only-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-db"},
+            ),
+        )
+        params: Final = json.loads(persisted[0]["litellm_params"])
+        assert params["litellm_credential_name"] == "db-only-credential"
 
     @pytest.mark.asyncio
     async def test_patch_model_replaces_credential_name_and_preserves_other_params(self, monkeypatch):

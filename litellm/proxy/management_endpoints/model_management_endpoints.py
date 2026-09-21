@@ -95,6 +95,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ModelTableRepository
@@ -333,7 +334,9 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
-def _raise_on_invalid_credential_name(litellm_params: updateLiteLLMParams | None) -> None:
+async def _raise_on_invalid_credential_name(
+    litellm_params: updateLiteLLMParams | None, prisma_client: PrismaClient
+) -> None:
     if litellm_params is None or "litellm_credential_name" not in litellm_params.model_fields_set:
         return
     credential_name: Final = litellm_params.litellm_credential_name
@@ -346,13 +349,19 @@ def _raise_on_invalid_credential_name(litellm_params: updateLiteLLMParams | None
             code=status.HTTP_400_BAD_REQUEST,
             param="litellm_credential_name",
         )
-    if CredentialAccessor.find_credential(credential_name) is None:
-        raise ProxyException(
-            message=f"Credential '{credential_name}' not found. Create it via /credentials before attaching it to a model.",
-            type=ProxyErrorTypes.validation_error.value,
-            code=status.HTTP_400_BAD_REQUEST,
-            param="litellm_credential_name",
-        )
+    if CredentialAccessor.find_credential(credential_name) is not None:
+        return
+    stored_credential: Final = await CredentialsRepository(WriterPinnedClient(prisma_client.db)).find_by_name(
+        credential_name
+    )
+    if stored_credential is not None:
+        return
+    raise ProxyException(
+        message=f"Credential '{credential_name}' not found. Create it via /credentials before attaching it to a model.",
+        type=ProxyErrorTypes.validation_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="litellm_credential_name",
+    )
 
 
 AUTO_ROUTER_CAPABILITY_SLOT_LOCK_KEY: Final = 5_872_301
@@ -1135,7 +1144,7 @@ async def patch_model(
             existing_litellm_params=db_model.litellm_params,
             null_detaches=True,
         )
-        _raise_on_invalid_credential_name(patch_data.litellm_params)
+        await _raise_on_invalid_credential_name(patch_data.litellm_params, prisma_client)
 
         ModelManagementAuthChecks.can_user_set_aws_session_tags(
             litellm_params=patch_data.litellm_params,
