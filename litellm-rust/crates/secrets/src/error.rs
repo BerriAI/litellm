@@ -1,5 +1,3 @@
-use crate::KeyManagementSystem;
-
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("encrypted environment value is missing")]
@@ -8,10 +6,6 @@ pub enum Error {
     InvalidCiphertext,
     #[error("decrypted value is not UTF-8")]
     Utf8,
-    #[error("secret manager backend is not compiled: {0:?}")]
-    UnsupportedBackend(KeyManagementSystem),
-    #[error("configured secret manager does not match its backend")]
-    BackendMismatch,
     #[error("unsupported OIDC provider or missing build feature")]
     UnsupportedOidc,
     #[error("OIDC reference requires a provider and audience")]
@@ -28,8 +22,8 @@ pub enum Error {
     UnsafeOidcPath,
     #[error("OIDC file could not be read")]
     OidcFile,
-    #[error("secret manager returned no secret")]
-    MissingSecret,
+    #[error("secret cannot be converted to {expected}")]
+    TypeMismatch { expected: &'static str },
     #[cfg(feature = "aws")]
     #[error(transparent)]
     Aws(#[from] litellm_secrets_aws::Error),

@@ -88,8 +88,13 @@ pub struct OidcResolver {
 
 impl Default for OidcResolver {
     fn default() -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(600))
+            .connect_timeout(Duration::from_secs(5))
+            .build()
+            .expect("HTTP client configuration");
         Self::new(
-            reqwest::Client::builder().timeout(Duration::from_secs(600)).connect_timeout(Duration::from_secs(5)).build().expect("HTTP client configuration"),
+            client,
             reqwest::Url::parse("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity").expect("static URL"),
         )
     }

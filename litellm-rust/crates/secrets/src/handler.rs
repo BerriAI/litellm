@@ -76,9 +76,8 @@ pub async fn get_secret_from_manager(
         #[cfg(feature = "google")]
         SecretManager::GoogleSecretManager(client) => client
             .get_secret_from_google_secret_manager(secret_name)
-            .await?
-            .map(Some)
-            .ok_or(Error::MissingSecret),
+            .await
+            .map_err(Error::from),
     }
 }
 

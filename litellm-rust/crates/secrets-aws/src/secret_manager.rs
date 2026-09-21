@@ -106,23 +106,24 @@ impl AwsSecretsManagerV2 {
                 } else {
                     self.async_read_secret(primary).await?
                 };
-                let object: Value = serde_json::from_str(
-                    value
-                        .as_ref()
-                        .map(SecretValue::expose)
-                        .filter(|v| !v.is_empty())
-                        .unwrap_or("{}"),
-                )
-                .map_err(|_| Error::PrimarySecret)?;
+                let Some(value) = value else {
+                    return Ok(None);
+                };
+                let object: Value =
+                    serde_json::from_str(value.expose()).map_err(|_| Error::PrimarySecret)?;
                 let object = object.as_object().ok_or(Error::PrimarySecret)?;
-                Ok(object.get(name).cloned().and_then(Secret::from_json))
+                Ok(object.get(name).cloned().map(Secret::from_json))
             }
         }
     }
 
     pub async fn async_read_secret(&self, name: &str) -> Result<Option<SecretValue>, Error> {
         match self.client.get_secret_value().secret_id(name).send().await {
-            Ok(response) => Ok(response.secret_string.map(SecretValue::new)),
+            Ok(response) => response
+                .secret_string
+                .map(SecretValue::new)
+                .map(Some)
+                .ok_or(Error::MissingString),
             Err(error)
                 if matches!(
                     &error,
@@ -131,11 +132,14 @@ impl AwsSecretsManagerV2 {
             {
                 Err(Error::Timeout)
             }
-            Err(error) if request_preparation_failed(&error) => Err(Error::Read(Box::new(error))),
-            Err(_) => {
-                tracing::error!("AWS secret read failed");
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|error| error.is_resource_not_found_exception()) =>
+            {
                 Ok(None)
             }
+            Err(error) => Err(Error::Read(Box::new(error))),
         }
     }
 
@@ -280,18 +284,4 @@ fn bootstrap_key(name: &str) -> bool {
             | AWS_REGION
             | AWS_BEDROCK_RUNTIME_ENDPOINT
     )
-}
-
-fn request_preparation_failed(
-    error: &aws_sdk_secretsmanager::error::SdkError<
-        aws_sdk_secretsmanager::operation::get_secret_value::GetSecretValueError,
-    >,
-) -> bool {
-    matches!(
-        error,
-        aws_sdk_secretsmanager::error::SdkError::ConstructionFailure(_)
-    ) || std::iter::successors(Some(error as &(dyn std::error::Error + 'static)), |error| {
-        error.source()
-    })
-    .any(|source| source.is::<aws_credential_types::provider::error::CredentialsError>())
 }

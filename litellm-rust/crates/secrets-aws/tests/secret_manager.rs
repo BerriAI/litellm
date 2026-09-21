@@ -290,3 +290,23 @@ async fn read_timeout_is_an_error_and_cannot_be_mistaken_for_missing() {
         Err(Error::Timeout)
     ));
 }
+
+#[rstest::rstest]
+#[case::denied(400, "AccessDeniedException")]
+#[case::throttled(400, "ThrottlingException")]
+#[case::unavailable(503, "ServiceUnavailableException")]
+#[tokio::test]
+async fn service_failures_remain_errors(#[case] status: u16, #[case] code: &str) {
+    let server = MockServer::start().await;
+    Mock::given(header("x-amz-target", "secretsmanager.GetSecretValue"))
+        .respond_with(ResponseTemplate::new(status).set_body_json(json!({"__type":code})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    assert!(matches!(
+        manager(&server, KeyManagementSettings::default())
+            .async_read_secret("key")
+            .await,
+        Err(Error::Read(_))
+    ));
+}

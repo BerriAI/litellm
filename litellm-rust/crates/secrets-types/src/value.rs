@@ -14,12 +14,11 @@ impl From<SecretValue> for Secret {
 }
 
 impl Secret {
-    pub fn from_json(value: serde_json::Value) -> Option<Self> {
+    pub fn from_json(value: serde_json::Value) -> Self {
         match value {
-            serde_json::Value::Null => None,
-            serde_json::Value::String(value) => Some(Self::String(SecretValue::new(value))),
-            serde_json::Value::Bool(value) => Some(Self::Bool(value)),
-            value => Some(Self::Json(value)),
+            serde_json::Value::String(value) => Self::String(SecretValue::new(value)),
+            serde_json::Value::Bool(value) => Self::Bool(value),
+            value => Self::Json(value),
         }
     }
 
