@@ -3850,6 +3850,9 @@ bedrock_batch_litellm_params: Final = (
     "s3_endpoint_url",
     "s3_output_bucket_name",
     "s3_bucket_owner",
+    "s3_access_key_id",
+    "s3_secret_access_key",
+    "s3_encryption_key_id",
     "bedrock_tags",
 )
 
@@ -4171,6 +4174,7 @@ class LlmProviders(str, Enum):
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
+    EDENAI = "edenai"
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"

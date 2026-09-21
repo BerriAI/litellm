@@ -21,8 +21,11 @@ tiktoken = ["litellm-token-counter/tiktoken"]
 [dependencies]
 bytes.workspace = true
 litellm-cache.workspace = true
+litellm-cache-azure-blob.workspace = true
 litellm-cache-memory.workspace = true
 litellm-cache-redis.workspace = true
+litellm-cache-gcs.workspace = true
+litellm-cache-disk.workspace = true
 litellm-cache-response.workspace = true
 serde.workspace = true
 litellm-auth.workspace = true
@@ -41,6 +44,8 @@ serde_json.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+serde.workspace = true
+serde_with.workspace = true
 criterion.workspace = true
 futures-util.workspace = true
 rstest.workspace = true

@@ -1,10 +1,11 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use litellm_cache::CacheType;
+use litellm_cache_redis::{RedisNode, RedisTopology};
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyDict, PyString},
+    types::{PyAny, PyDict, PyList, PyString},
 };
 
 use super::{native::NativeResponseCache, request::duration};
@@ -23,6 +24,10 @@ pub(super) struct MemoryCacheConfig {
     pub(super) default_ttl: Duration,
     pub(super) capacity: usize,
     pub(super) max_entry_bytes: usize,
+}
+
+pub(super) struct DiskCacheConfig {
+    pub(super) directory: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
@@ -70,12 +75,39 @@ pub(super) struct RedisCacheConfig {
     pub(super) default_ttl: Duration,
     pub(super) namespace: Option<String>,
     pub(super) flush_size: usize,
+    pub(super) topology: RedisTopology,
     pub(super) connection: RedisConnectionConfig,
 }
+
+#[derive(Debug, PartialEq)]
+pub(super) struct GcsCacheConfig {
+    pub(super) bucket_name: String,
+    pub(super) key_prefix: String,
+    pub(super) path_service_account: Option<String>,
+}
+
+pub(super) struct AzureBlobCacheConfig {
+    pub(super) account_url: String,
+    pub(super) container: String,
+}
+
+struct RedisClientProjection<'py> {
+    topology: RedisTopology,
+    host: String,
+    port: u16,
+    pool_size: usize,
+    resolved: Bound<'py, PyDict>,
+    tls: Option<RedisTlsConfig>,
+}
+
+const REDIS_PY_DEFAULT_MAX_CONNECTIONS: usize = 1 << 31;
 
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
+    Gcs(GcsCacheConfig),
+    Disk(DiskCacheConfig),
+    AzureBlob(AzureBlobCacheConfig),
 }
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
@@ -90,6 +122,8 @@ pub(super) enum UnsupportedCacheConfig {
     RedisCredentials,
     RedisConnection,
     RedisOption,
+    GcsBucket,
+    DiskStore,
 }
 
 impl UnsupportedCacheConfig {
@@ -100,6 +134,8 @@ impl UnsupportedCacheConfig {
             Self::RedisCredentials => "native Redis credentials require Python",
             Self::RedisConnection => "native Redis connection type is not implemented",
             Self::RedisOption => "native Redis configuration requires Python",
+            Self::GcsBucket => "native GCS cache requires a configured bucket name",
+            Self::DiskStore => "native disk cache requires the built-in diskcache store",
         }
     }
 }
@@ -142,14 +178,31 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::Gcs) => match project_gcs(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::Gcs(backend),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
+            Some(CacheType::Disk) => match project_disk(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::Disk(backend),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
+            Some(CacheType::AzureBlob) => project_azure_blob(&backend).map(|backend| {
+                CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::AzureBlob(backend),
+                }))
+            }),
             Some(
                 CacheType::RedisSemantic
                 | CacheType::ValkeySemantic
                 | CacheType::S3
-                | CacheType::Disk
-                | CacheType::QdrantSemantic
-                | CacheType::AzureBlob
-                | CacheType::Gcs,
+                | CacheType::QdrantSemantic,
             )
             | None => Ok(CacheConfigProjection::Unsupported(
                 UnsupportedCacheConfig::Backend,
@@ -158,12 +211,14 @@ impl NativeCacheConfig {
     }
 
     pub(super) fn service_mismatch(&self, service: &NativeResponseCache) -> Option<&'static str> {
-        if service.default_ttl()
-            != Some(match &self.backend {
-                CacheBackendConfig::Memory(config) => config.default_ttl,
-                CacheBackendConfig::Redis(config) => config.default_ttl,
-            })
-        {
+        let default_ttl = match &self.backend {
+            CacheBackendConfig::Memory(config) => Some(config.default_ttl),
+            CacheBackendConfig::Redis(config) => Some(config.default_ttl),
+            CacheBackendConfig::Disk(_)
+            | CacheBackendConfig::AzureBlob(_)
+            | CacheBackendConfig::Gcs(_) => None,
+        };
+        if service.default_ttl() != default_ttl {
             return Some("facade and native backend default TTLs must match");
         }
         match &self.backend {
@@ -182,11 +237,74 @@ impl NativeCacheConfig {
             CacheBackendConfig::Redis(_) if service.kind() != "redis" => {
                 Some("facade and native backend types must match")
             }
+            CacheBackendConfig::Redis(config) if service.topology() != Some(&config.topology) => {
+                Some("facade and native backend topologies must match")
+            }
             CacheBackendConfig::Redis(config) => (service.namespace()
                 != config.namespace.as_deref())
             .then_some("facade and native backend namespaces must match"),
+            CacheBackendConfig::Gcs(_) if service.kind() != "gcs" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::Gcs(config)
+                if service
+                    .gcs_backend()
+                    .is_none_or(|backend| backend.bucket_name() != config.bucket_name) =>
+            {
+                Some("facade and native backend buckets must match")
+            }
+            CacheBackendConfig::Gcs(config)
+                if service
+                    .gcs_backend()
+                    .is_none_or(|backend| backend.key_prefix() != config.key_prefix) =>
+            {
+                Some("facade and native backend key prefixes must match")
+            }
+            CacheBackendConfig::Gcs(config)
+                if service.gcs_backend().is_none_or(|backend| {
+                    backend.path_service_account() != config.path_service_account.as_deref()
+                }) =>
+            {
+                Some("facade and native backend credentials must match")
+            }
+            CacheBackendConfig::Gcs(_) => None,
+            CacheBackendConfig::Disk(_) if service.kind() != "disk" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::Disk(config) => {
+                let Some(directory) = service.directory() else {
+                    return Some("facade and native backend types must match");
+                };
+                let native = std::fs::canonicalize(directory).ok();
+                let facade = std::fs::canonicalize(&config.directory).ok();
+                (native != facade).then_some("facade and native backend directories must match")
+            }
+            CacheBackendConfig::AzureBlob(config) => match service.azure_blob_identity() {
+                None => Some("facade and native backend types must match"),
+                Some((account_url, container))
+                    if account_url != config.account_url || container != config.container =>
+                {
+                    Some("facade and native backend containers must match")
+                }
+                Some(_) => None,
+            },
         }
     }
+}
+
+#[inline(never)]
+fn project_azure_blob(backend: &Bound<'_, PyAny>) -> PyResult<AzureBlobCacheConfig> {
+    let client = backend.getattr("container_client")?;
+    let container = client.getattr("container_name")?.extract::<String>()?;
+    let url = client.getattr("url")?.extract::<String>()?;
+    let account_url = url
+        .strip_suffix(container.as_str())
+        .and_then(|url| url.strip_suffix('/'))
+        .ok_or_else(|| PyValueError::new_err("Azure Blob container URL is malformed"))?;
+    Ok(AzureBlobCacheConfig {
+        account_url: account_url.to_string(),
+        container,
+    })
 }
 
 #[inline(never)]
@@ -202,13 +320,42 @@ fn project_memory(backend: &Bound<'_, PyAny>) -> PyResult<MemoryCacheConfig> {
 }
 
 #[inline(never)]
+fn project_gcs(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<GcsCacheConfig, UnsupportedCacheConfig>> {
+    let bucket_name = match backend.getattr("bucket_name")?.extract::<Option<String>>() {
+        Ok(Some(bucket_name)) if !bucket_name.is_empty() => bucket_name,
+        _ => return Ok(Err(UnsupportedCacheConfig::GcsBucket)),
+    };
+    Ok(Ok(GcsCacheConfig {
+        bucket_name,
+        key_prefix: backend.getattr("key_prefix")?.extract::<String>()?,
+        path_service_account: backend
+            .getattr("path_service_account")?
+            .extract::<Option<String>>()?,
+    }))
+}
+
+#[inline(never)]
+fn project_disk(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<DiskCacheConfig, UnsupportedCacheConfig>> {
+    let store = backend.getattr("disk_cache")?;
+    if !instance_class_is(&store, "diskcache.core", "Cache")?
+        || !instance_class_is(&store.getattr("_disk")?, "diskcache.core", "Disk")?
+    {
+        return Ok(Err(UnsupportedCacheConfig::DiskStore));
+    }
+    Ok(Ok(DiskCacheConfig {
+        directory: PathBuf::from(store.getattr("directory")?.extract::<String>()?),
+    }))
+}
+
+#[inline(never)]
 fn project_redis(
     backend: &Bound<'_, PyAny>,
 ) -> PyResult<Result<RedisCacheConfig, UnsupportedCacheConfig>> {
     let source = backend.getattr("redis_kwargs")?.cast_into::<PyDict>()?;
-    if has_value(&source, "startup_nodes")? {
-        return Ok(Err(UnsupportedCacheConfig::RedisTopology));
-    }
     if has_value(&source, "sentinel_nodes")? {
         return Ok(Err(UnsupportedCacheConfig::RedisTopology));
     }
@@ -248,26 +395,25 @@ fn project_redis(
     }
 
     let client = backend.getattr("redis_client")?;
-    let pool = client.getattr("connection_pool")?;
-    if !instance_class_is(&pool, "redis.connection", "ConnectionPool")? {
-        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
-    }
-    let resolved = pool.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
-    for key in ["credential_provider", "redis_connect_func"] {
-        if has_value(&resolved, key)? {
-            return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
-        }
-    }
-    let connection_class = resolved
-        .get_item("connection_class")?
-        .unwrap_or(pool.getattr("connection_class")?);
-    let tls = if class_is(&connection_class, "redis.connection", "Connection")? {
-        None
-    } else if class_is(&connection_class, "redis.connection", "SSLConnection")? {
-        Some(project_tls(&resolved)?)
+    let projection = if has_value(&source, "startup_nodes")? {
+        project_cluster_client(&source, &client)?
     } else {
-        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+        project_standalone_client(&client)?
     };
+    let RedisClientProjection {
+        topology,
+        host,
+        port,
+        pool_size,
+        resolved,
+        tls,
+    } = match projection {
+        Ok(projection) => projection,
+        Err(reason) => return Ok(Err(reason)),
+    };
+    if has_value(&resolved, "credential_provider")? {
+        return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
+    }
 
     let protocol = match optional_i64(&resolved, "protocol")?.unwrap_or(2) {
         2 => RedisProtocol::Resp2,
@@ -280,15 +426,15 @@ fn project_redis(
         default_ttl: duration(backend.getattr("default_ttl")?.extract::<f64>()?)?,
         namespace: optional_attribute_string(backend, "namespace")?,
         flush_size: backend.getattr("redis_flush_size")?.extract::<usize>()?,
+        topology,
         connection: RedisConnectionConfig {
-            host: required_string(&resolved, "host")?,
-            port: u16::try_from(required_i64(&resolved, "port")?)
-                .map_err(|_| PyValueError::new_err("invalid Redis port"))?,
+            host,
+            port,
             database: optional_i64(&resolved, "db")?.unwrap_or(0),
             username: optional_dict_string(&resolved, "username")?,
             password: optional_dict_string(&resolved, "password")?,
             protocol,
-            pool_size: pool.getattr("max_connections")?.extract::<usize>()?,
+            pool_size,
             read_timeout: optional_dict_duration(&resolved, "socket_timeout")?,
             connect_timeout: optional_dict_duration(&resolved, "socket_connect_timeout")?,
             socket_keepalive: optional_bool(&resolved, "socket_keepalive")?,
@@ -297,6 +443,128 @@ fn project_redis(
             tls,
         },
     }))
+}
+
+#[inline(never)]
+fn project_standalone_client<'py>(
+    client: &Bound<'py, PyAny>,
+) -> PyResult<Result<RedisClientProjection<'py>, UnsupportedCacheConfig>> {
+    let pool = client.getattr("connection_pool")?;
+    if !instance_class_is(&pool, "redis.connection", "ConnectionPool")? {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    let resolved = pool.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
+    if has_value(&resolved, "redis_connect_func")? {
+        return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
+    }
+    let connection_class = resolved
+        .get_item("connection_class")?
+        .unwrap_or(pool.getattr("connection_class")?);
+    let tls = if class_is(&connection_class, "redis.connection", "Connection")? {
+        None
+    } else if class_is(&connection_class, "redis.connection", "SSLConnection")? {
+        Some(project_tls(&resolved)?)
+    } else {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    };
+    Ok(Ok(RedisClientProjection {
+        topology: RedisTopology::Standalone,
+        host: required_string(&resolved, "host")?,
+        port: port(required_i64(&resolved, "port")?)?,
+        pool_size: pool.getattr("max_connections")?.extract::<usize>()?,
+        resolved,
+        tls,
+    }))
+}
+
+#[inline(never)]
+fn project_cluster_client<'py>(
+    source: &Bound<'py, PyDict>,
+    client: &Bound<'py, PyAny>,
+) -> PyResult<Result<RedisClientProjection<'py>, UnsupportedCacheConfig>> {
+    let Some(startup_nodes) = startup_nodes(source)? else {
+        return Ok(Err(UnsupportedCacheConfig::RedisTopology));
+    };
+    if !instance_class_is(client, "redis.cluster", "RedisCluster")? {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    let nodes = client.getattr("nodes_manager")?;
+    if !class_is(
+        &nodes.getattr("connection_pool_class")?,
+        "redis.connection",
+        "ConnectionPool",
+    )? {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    let resolved = nodes.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
+    if let Some(connect) = resolved.get_item("redis_connect_func")?
+        && !connect.is_none()
+    {
+        let own_hook = connect
+            .getattr("__self__")
+            .is_ok_and(|owner| owner.is(client))
+            && connect
+                .getattr("__func__")
+                .and_then(|function| Ok(function.is(&client.get_type().getattr("on_connect")?)))
+                .unwrap_or(false);
+        if !own_hook {
+            return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
+        }
+    }
+    let tls = if optional_bool(&resolved, "ssl")?.unwrap_or(false) {
+        Some(project_tls(&resolved)?)
+    } else {
+        None
+    };
+    let first = &startup_nodes[0];
+    Ok(Ok(RedisClientProjection {
+        host: first.host.clone(),
+        port: first.port,
+        pool_size: optional_i64(&resolved, "max_connections")?
+            .map(|value| {
+                usize::try_from(value).map_err(|_| PyValueError::new_err("invalid Redis pool size"))
+            })
+            .transpose()?
+            .unwrap_or(REDIS_PY_DEFAULT_MAX_CONNECTIONS),
+        topology: RedisTopology::Cluster { startup_nodes },
+        resolved,
+        tls,
+    }))
+}
+
+#[inline(never)]
+fn startup_nodes(source: &Bound<'_, PyDict>) -> PyResult<Option<Vec<RedisNode>>> {
+    let Some(nodes) = source.get_item("startup_nodes")? else {
+        return Ok(None);
+    };
+    let Ok(nodes) = nodes.cast_into::<PyList>() else {
+        return Ok(None);
+    };
+    if nodes.is_empty() {
+        return Ok(None);
+    }
+    let mut parsed = Vec::with_capacity(nodes.len());
+    for node in nodes.iter() {
+        let Ok(node) = node.cast_into::<PyDict>() else {
+            return Ok(None);
+        };
+        if node.len() != 2 || !has_value(&node, "host")? || !has_value(&node, "port")? {
+            return Ok(None);
+        }
+        let (Ok(host), Ok(port)) = (
+            required_string(&node, "host"),
+            required_i64(&node, "port").and_then(port),
+        ) else {
+            return Ok(None);
+        };
+        parsed.push(RedisNode { host, port });
+    }
+    Ok(Some(parsed))
+}
+
+#[inline(never)]
+fn port(value: i64) -> PyResult<u16> {
+    u16::try_from(value).map_err(|_| PyValueError::new_err("invalid Redis port"))
 }
 
 #[inline(never)]
@@ -467,11 +735,26 @@ mod tests {
 
     use pyo3::{prelude::*, types::PyDict};
 
+    use litellm_cache_redis::{RedisNode, RedisTopology};
+
     use super::{
-        CacheBackendConfig, CacheConfigProjection, CertificateRequirement, NativeCacheConfig,
-        RedisProtocol,
+        CacheBackendConfig, CacheConfigProjection, CachePolicy, CertificateRequirement,
+        DiskCacheConfig, GcsCacheConfig, NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
     };
     use crate::cache::native::NativeResponseCache;
+
+    fn cluster_facade<'py>(py: Python<'py>, startup_nodes: &str, hook: &str) -> Bound<'py, PyAny> {
+        facade(
+            py,
+            &format!(
+                "RedisCluster = type('RedisCluster', (), {{'__module__': 'redis.cluster', 'on_connect': lambda self, connection: None}})\n\
+                 client = RedisCluster()\n\
+                 client.nodes_manager = SimpleNamespace(connection_pool_class=ConnectionPool, connection_kwargs={{'password': 'secret', 'redis_connect_func': {hook}, 'protocol': 3, 'ssl': True, 'ssl_cert_reqs': 'none'}})\n\
+                 backend = SimpleNamespace(default_ttl=120, namespace='team', redis_flush_size=100, redis_kwargs={{'startup_nodes': {startup_nodes}, 'password': 'secret'}}, redis_client=client)\n\
+                 facade = SimpleNamespace(type='redis', mode='default-on', ttl=None, namespace='team', supported_call_types=None, redis_flush_size=100, semantic_cache_scope='key', cache=backend)"
+            ),
+        )
+    }
 
     fn facade<'py>(py: Python<'py>, body: &str) -> Bound<'py, PyAny> {
         let locals = PyDict::new(py);
@@ -527,6 +810,71 @@ mod tests {
             assert_eq!(
                 matching_config.service_mismatch(&mismatched),
                 Some("facade and native backend item limits must match")
+            );
+        });
+    }
+
+    #[test]
+    fn projects_gcs_configuration() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "backend = SimpleNamespace(bucket_name='bucket', key_prefix='cache/', path_service_account='credentials.json')\n\
+                 facade = SimpleNamespace(type='gcs', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("GCS cache should be supported");
+            };
+            let CacheBackendConfig::Gcs(gcs) = config.backend else {
+                panic!("expected GCS configuration");
+            };
+            assert_eq!(
+                gcs,
+                GcsCacheConfig {
+                    bucket_name: "bucket".into(),
+                    key_prefix: "cache/".into(),
+                    path_service_account: Some("credentials.json".into()),
+                }
+            );
+            let matching = NativeResponseCache::gcs(
+                litellm_cache_gcs::GcsConfig {
+                    bucket_name: "bucket".into(),
+                    gcs_path: Some("cache/".into()),
+                    path_service_account: Some("credentials.json".into()),
+                    endpoint: litellm_cache_gcs::DEFAULT_ENDPOINT.into(),
+                },
+                Some("token".into()),
+            )
+            .unwrap();
+            let matching_config = NativeCacheConfig {
+                policy: config.policy,
+                backend: CacheBackendConfig::Gcs(gcs),
+            };
+            assert_eq!(matching_config.service_mismatch(&matching), None);
+        });
+    }
+
+    #[test]
+    fn rejects_gcs_without_a_bucket_name() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "backend = SimpleNamespace(bucket_name=None, key_prefix='', path_service_account=None)\n\
+                 facade = SimpleNamespace(type='gcs', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("GCS cache without a bucket should be unsupported");
+            };
+            assert!(matches!(&reason, UnsupportedCacheConfig::GcsBucket));
+            assert_eq!(
+                reason.message(),
+                "native GCS cache requires a configured bucket name"
             );
         });
     }
@@ -589,6 +937,168 @@ mod tests {
                 panic!("dynamic authentication must stay on Python");
             };
             assert_eq!(reason.message(), "native Redis credentials require Python");
+        });
+    }
+    #[test]
+    fn projects_builtin_disk_configuration_and_rejects_custom_stores() {
+        Python::initialize();
+        Python::attach(|py| {
+            let root =
+                std::env::temp_dir().join(format!("litellm-disk-config-{}", std::process::id()));
+            let directory = root.to_string_lossy();
+            let disk_facade = facade(
+                py,
+                &format!(
+                    "Cache = type('Cache', (), {{'__module__': 'diskcache.core'}})\n\
+                     Disk = type('Disk', (), {{'__module__': 'diskcache.core'}})\n\
+                     store = Cache()\n\
+                     store._disk = Disk()\n\
+                     store.directory = {directory:?}\n\
+                     backend = SimpleNamespace(disk_cache=store)\n\
+                     facade = SimpleNamespace(type='disk', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)"
+                ),
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&disk_facade).unwrap()
+            else {
+                panic!("disk cache should be supported");
+            };
+            let CacheBackendConfig::Disk(disk) = config.backend else {
+                panic!("expected disk configuration");
+            };
+            assert_eq!(disk.directory, root);
+            let matching = NativeResponseCache::disk(&directory).unwrap();
+            assert_eq!(
+                (NativeCacheConfig {
+                    policy: config.policy,
+                    backend: CacheBackendConfig::Disk(disk),
+                })
+                .service_mismatch(&matching),
+                None
+            );
+            let other = NativeResponseCache::disk(&root.join("other").to_string_lossy()).unwrap();
+            let mismatch = NativeCacheConfig {
+                policy: CachePolicy {
+                    mode: "default-on".into(),
+                    ttl: None,
+                    namespace: None,
+                    supported_call_types: None,
+                    redis_flush_size: None,
+                    semantic_cache_scope: "key".into(),
+                },
+                backend: CacheBackendConfig::Disk(DiskCacheConfig {
+                    directory: root.clone(),
+                }),
+            };
+            assert_eq!(
+                mismatch.service_mismatch(&other),
+                Some("facade and native backend directories must match")
+            );
+
+            let custom = facade(
+                py,
+                &format!(
+                    "CustomCache = type('CustomCache', (), {{'__module__': 'mypkg'}})\n\
+                     CustomDisk = type('CustomDisk', (), {{'__module__': 'mypkg'}})\n\
+                     store = CustomCache()\n\
+                     store._disk = CustomDisk()\n\
+                     store.directory = {directory:?}\n\
+                     backend = SimpleNamespace(disk_cache=store)\n\
+                     facade = SimpleNamespace(type='disk', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)"
+                ),
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&custom).unwrap()
+            else {
+                panic!("custom disk store must stay on Python");
+            };
+            assert_eq!(
+                reason.message(),
+                "native disk cache requires the built-in diskcache store"
+            );
+        });
+    }
+
+    #[test]
+    fn projects_cluster_startup_nodes_as_redis_topology() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = cluster_facade(
+                py,
+                "[{'host': 'node-a', 'port': 7000}, {'host': 'node-b', 'port': 7001}]",
+                "client.on_connect",
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("cluster startup nodes should project natively");
+            };
+            let CacheBackendConfig::Redis(redis) = &config.backend else {
+                panic!("expected Redis configuration");
+            };
+            let expected = RedisTopology::Cluster {
+                startup_nodes: vec![
+                    RedisNode {
+                        host: "node-a".into(),
+                        port: 7000,
+                    },
+                    RedisNode {
+                        host: "node-b".into(),
+                        port: 7001,
+                    },
+                ],
+            };
+            assert_eq!(redis.topology, expected);
+            assert_eq!(redis.connection.host, "node-a");
+            assert_eq!(redis.connection.port, 7000);
+            assert_eq!(redis.connection.password.as_deref(), Some("secret"));
+            assert_eq!(redis.connection.protocol, RedisProtocol::Resp3);
+            assert_eq!(
+                redis
+                    .connection
+                    .tls
+                    .as_ref()
+                    .unwrap()
+                    .certificate_requirement,
+                CertificateRequirement::None
+            );
+        });
+    }
+
+    #[test]
+    fn malformed_startup_nodes_and_foreign_connect_hooks_stay_on_python() {
+        Python::initialize();
+        Python::attach(|py| {
+            for (startup_nodes, hook, message) in [
+                (
+                    "[{'host': 'node-a', 'port': 7000, 'server_type': 'primary'}]",
+                    "client.on_connect",
+                    "native Redis topology is not implemented",
+                ),
+                (
+                    "[{'host': 'node-a', 'port': 'seven'}]",
+                    "client.on_connect",
+                    "native Redis topology is not implemented",
+                ),
+                (
+                    "[]",
+                    "client.on_connect",
+                    "native Redis topology is not implemented",
+                ),
+                (
+                    "[{'host': 'node-a', 'port': 7000}]",
+                    "lambda connection: None",
+                    "native Redis credentials require Python",
+                ),
+            ] {
+                let facade = cluster_facade(py, startup_nodes, hook);
+                let CacheConfigProjection::Unsupported(reason) =
+                    NativeCacheConfig::project(&facade).unwrap()
+                else {
+                    panic!("{startup_nodes} with {hook} must stay on Python");
+                };
+                assert_eq!(reason.message(), message, "{startup_nodes} with {hook}");
+            }
         });
     }
 }

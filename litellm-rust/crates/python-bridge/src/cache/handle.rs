@@ -1,5 +1,8 @@
-use litellm_host_python::release_gil;
+use litellm_cache_redis::{RedisNode, RedisTopology};
+use litellm_host_python::{release_gil, run_sync_value};
 use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*};
+
+use litellm_cache_gcs::{DEFAULT_ENDPOINT, GcsConfig};
 
 use super::{cache_error, facade::FacadeGuard, native::NativeResponseCache, request::duration};
 
@@ -34,16 +37,80 @@ impl CacheTestHandle {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (url, *, ttl_seconds=60.0, namespace=None))]
+    #[pyo3(signature = (url, *, ttl_seconds=60.0, namespace=None, startup_nodes=None))]
     fn redis(
         py: Python<'_>,
         url: String,
         ttl_seconds: f64,
         namespace: Option<String>,
+        startup_nodes: Option<Vec<(String, u16)>>,
     ) -> PyResult<Self> {
         let ttl = Some(duration(ttl_seconds)?);
-        let service = release_gil(py, move || NativeResponseCache::redis(&url, ttl, namespace))
+        let topology = match startup_nodes {
+            None => RedisTopology::Standalone,
+            Some(nodes) => RedisTopology::Cluster {
+                startup_nodes: nodes
+                    .into_iter()
+                    .map(|(host, port)| RedisNode { host, port })
+                    .collect(),
+            },
+        };
+        let service = release_gil(py, move || {
+            NativeResponseCache::redis(&url, &topology, ttl, namespace)
+        })
+        .map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (bucket_name, *, gcs_path=None, path_service_account=None, endpoint=None, token=None))]
+    fn gcs(
+        py: Python<'_>,
+        bucket_name: String,
+        gcs_path: Option<String>,
+        path_service_account: Option<String>,
+        endpoint: Option<String>,
+        token: Option<String>,
+    ) -> PyResult<Self> {
+        let config = GcsConfig {
+            bucket_name,
+            gcs_path,
+            path_service_account,
+            endpoint: endpoint.unwrap_or_else(|| DEFAULT_ENDPOINT.to_string()),
+        };
+        let service = release_gil(py, move || NativeResponseCache::gcs(config, token))
             .map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (directory))]
+    fn disk(py: Python<'_>, directory: String) -> PyResult<Self> {
+        let service =
+            release_gil(py, move || NativeResponseCache::disk(&directory)).map_err(cache_error)?;
+        Ok(Self {
+            service,
+            guard: None,
+            pid: std::process::id(),
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (account_url, container))]
+    fn azure_blob(py: Python<'_>, account_url: String, container: String) -> PyResult<Self> {
+        let service = run_sync_value(py, async move {
+            NativeResponseCache::azure_blob(&account_url, &container)
+                .await
+                .map_err(cache_error)
+        })?;
         Ok(Self {
             service,
             guard: None,
