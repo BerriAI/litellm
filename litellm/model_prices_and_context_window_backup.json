@@ -41580,7 +41580,7 @@
     },
     "openrouter/deepseek/deepseek-v4-pro-0813": {
         "input_cost_per_token": 5.7948e-07,
-        "input_cost_per_token_cache_hit": 4.4e-08,
+        "input_cost_per_token_cache_hit": 1.8438e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 1048576,
         "max_output_tokens": 393216,
