@@ -617,6 +617,15 @@ class TestProxyInitializationHelpers:
             assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
 
+            result = runner.invoke(
+                run_server, ["--local", "--skip_server_startup", "--telemetry", "False"]
+            )
+            assert (
+                result.exit_code == 0
+            ), f"exit_code={result.exit_code}, output={result.output}"
+            assert "Skipping server startup" in result.output
+            assert "telemetry" not in runner.invoke(run_server, ["--help"]).output
+
             # --- normal startup ---
             mock_uvicorn_run.reset_mock()
 

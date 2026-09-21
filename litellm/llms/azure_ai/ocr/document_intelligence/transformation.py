@@ -12,7 +12,7 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import quote
 
 import httpx
@@ -127,7 +127,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
 
     def map_ocr_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
     ) -> dict:
@@ -164,7 +164,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             raise UnsupportedParamsError(message=f"{e}", model=model, llm_provider="azure_ai") from e
 
     @staticmethod
-    def _normalize_pages_param(pages: Any) -> str:
+    def _normalize_pages_param(pages: object) -> str:
         """
         Convert a caller-provided `pages` value to Azure DI's query-string
         form. Azure expects 1-based page numbers, grammar: `^(\\d+(-\\d+)?)(,\\s*(\\d+(-\\d+)?))*$`.
@@ -412,7 +412,7 @@ class AzureDocumentIntelligenceOCRConfig(BaseOCRConfig):
             raise ValueError("Document URL is required")
 
         # Build Azure DI request
-        data: Final[dict[str, Any]] = {}
+        data: Final[dict[str, str]] = {}
 
         # Check if it's a data URI (base64)
         if document_url.startswith("data:"):

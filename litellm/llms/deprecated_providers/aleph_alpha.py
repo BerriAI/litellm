@@ -146,7 +146,7 @@ class AlephAlphaConfig:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
         return {
             k: v
             for k, v in cls.__dict__.items()
