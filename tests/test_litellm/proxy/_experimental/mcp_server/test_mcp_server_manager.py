@@ -4774,6 +4774,73 @@ class TestMCPServerManager:
         assert forced.status == "healthy"
 
     @pytest.mark.asyncio
+    async def test_registry_replacement_drops_cached_health(self):
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="replaced-server",
+            name="replaced-server",
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://replaced-server.example",
+        )
+        replacement = MCPServer(
+            server_id=server.server_id,
+            name=server.name,
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://replaced-server.example/v2",
+        )
+        manager.registry[server.server_id] = server
+        manager.get_mcp_server_by_id = MagicMock(side_effect=lambda _server_id: manager.registry.get(_server_id))
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock(run_with_session=AsyncMock(return_value="ok")))
+
+        cached = await manager.health_check_server(server.server_id)
+        with patch.object(manager, "build_mcp_server_from_table", new=AsyncMock(return_value=replacement)):
+            await manager.update_server(
+                LiteLLM_MCPServerTable(
+                    server_id=server.server_id,
+                    server_name=server.name,
+                    url=replacement.url,
+                    transport=MCPTransport.http,
+                    approval_status="active",
+                )
+            )
+        after_update = await manager.health_check_server(server.server_id)
+
+        manager.remove_server(
+            LiteLLM_MCPServerTable(
+                server_id=server.server_id,
+                server_name=server.name,
+                url=replacement.url,
+                transport=MCPTransport.http,
+            )
+        )
+        manager.registry[server.server_id] = server
+        after_remove = await manager.health_check_server(server.server_id)
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=MagicMock(table=MagicMock(find_many=AsyncMock(return_value=[]))),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+        ):
+            await manager.reload_servers_from_database()
+        manager.registry[server.server_id] = server
+        after_reload = await manager.health_check_server(server.server_id)
+
+        assert cached.status == "healthy"
+        assert after_update.last_health_check != cached.last_health_check
+        assert after_remove.last_health_check != after_update.last_health_check
+        assert after_reload.last_health_check != after_remove.last_health_check
+        assert manager._create_mcp_client.await_count == 4
+
+    @pytest.mark.asyncio
     async def test_health_check_shares_one_probe_across_concurrent_misses(self):
         manager = MCPServerManager()
         server = MCPServer(

@@ -6602,6 +6602,7 @@ class MCPServerManager:
         for server_id in previous_registry.keys() | registered_registry.keys():
             if previous_registry.get(server_id) != registered_registry.get(server_id):
                 self._invalidate_discovery_lists(server_id)
+                self._health_check_cache.pop(server_id, None)
         self.registry = registered_registry
         # A discovery task may have published into ``previous_registry`` while
         # this replacement was being staged. Reconcile every published entry
