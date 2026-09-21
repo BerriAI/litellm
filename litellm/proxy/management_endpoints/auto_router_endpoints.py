@@ -8,7 +8,6 @@ POST /auto_router/validate_complexity_router_config - Dry-run the complexity-rou
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
-from operator import attrgetter
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Protocol
 from uuid import uuid4
@@ -790,14 +789,18 @@ async def get_auto_router_benchmarks(
     ] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
     api_key: Annotated[str | None, Query(description="Filter to one virtual key token hash")] = None,
+    user_id: Annotated[
+        str | None, Query(min_length=1, description="Filter to one canonical internal user recorded on each turn")
+    ] = None,
 ) -> AutoRouterBenchmarksResponse:
     """
     Benchmarks for the auto-router dashboard: session shape, savings against the configured
     baseline, and prompt-caching behaviour bucketed by what the router did.
 
-    Reads the LiteLLM_AutoRouterSession rollup, folded once per request at spend-write time,
-    so this endpoint never scans LiteLLM_SpendLogs. A session is in the window when it
-    overlaps it: its last turn is on or after start_date and its first turn is on or before
+    Reads session rollups folded once per request at spend-write time, so this endpoint
+    never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
+    internal user when written; older key-only history remains outside user views. A session
+    is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
     over that bucket's turns.
 
@@ -827,6 +830,7 @@ async def get_auto_router_benchmarks(
         start_day.isoformat(),
         (end_day + timedelta(days=1)).isoformat(),
         api_key,
+        user_id,
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
     groups: Final = (
@@ -1281,6 +1285,10 @@ def _slices(rows: Sequence[_AttemptAggRow]) -> tuple[ShadowEvalSlice, ...]:
         )
         for row in sorted(rows, key=lambda r: r.turn_count, reverse=True)
     )
+
+
+def _leg_group_id(leg: "_LegRow") -> str:
+    return leg.group_id
 
 
 class _LegRow(BaseModel):
@@ -1787,10 +1795,7 @@ async def list_shadow_eval_jobs(
         or ()
     )
     by_group: Final[Mapping[str, tuple[_LegRow, ...]]] = MappingProxyType(
-        {
-            group_id: tuple(group)
-            for group_id, group in groupby(sorted(legs, key=attrgetter("group_id")), key=attrgetter("group_id"))
-        }
+        {group_id: tuple(group) for group_id, group in groupby(sorted(legs, key=_leg_group_id), key=_leg_group_id)}
     )
     newest_first: Final = sorted(
         by_group, key=lambda group_id: max(leg.created_at for leg in by_group[group_id]), reverse=True

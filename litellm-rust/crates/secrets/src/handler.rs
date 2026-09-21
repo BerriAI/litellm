@@ -13,6 +13,12 @@ pub enum SecretManager {
     GoogleKms(crate::google::GoogleKms),
     #[cfg(feature = "google")]
     GoogleSecretManager(crate::google::GoogleSecretManager),
+    #[cfg(feature = "hashicorp")]
+    HashicorpVault(crate::hashicorp::HashicorpVault),
+    #[cfg(feature = "azure")]
+    AzureKeyVault(crate::azure::AzureKeyVault),
+    #[cfg(feature = "cyberark")]
+    Cyberark(crate::cyberark::CyberArkSecretManager),
 }
 
 impl SecretManager {
@@ -27,6 +33,12 @@ impl SecretManager {
             Self::GoogleKms(_) => KeyManagementSystem::GoogleKms,
             #[cfg(feature = "google")]
             Self::GoogleSecretManager(_) => KeyManagementSystem::GoogleSecretManager,
+            #[cfg(feature = "hashicorp")]
+            Self::HashicorpVault(_) => KeyManagementSystem::HashicorpVault,
+            #[cfg(feature = "azure")]
+            Self::AzureKeyVault(_) => KeyManagementSystem::AzureKeyVault,
+            #[cfg(feature = "cyberark")]
+            Self::Cyberark(_) => KeyManagementSystem::Cyberark,
         }
     }
 }
@@ -77,6 +89,23 @@ pub async fn get_secret_from_manager(
         SecretManager::GoogleSecretManager(client) => client
             .get_secret_from_google_secret_manager(secret_name)
             .await
+            .map_err(Error::from),
+        #[cfg(feature = "hashicorp")]
+        SecretManager::HashicorpVault(client) => client
+            .async_read_secret(secret_name)
+            .await
+            .map(|value| value.map(Secret::String))
+            .map_err(Error::from),
+        #[cfg(feature = "azure")]
+        SecretManager::AzureKeyVault(client) => client
+            .get_secret_from_azure_key_vault(secret_name)
+            .await
+            .map_err(Error::from),
+        #[cfg(feature = "cyberark")]
+        SecretManager::Cyberark(client) => client
+            .async_read_secret(secret_name)
+            .await
+            .map(|value| value.map(Secret::String))
             .map_err(Error::from),
     }
 }

@@ -84,13 +84,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         typical_p: float | None = None,
         watermark: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[dict[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
         return super().get_config()
 
     def get_special_options_params(self):
@@ -352,17 +352,17 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         model: str,
         data: dict,
         api_key: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, str]]:
         streamed_response: Final = CustomStreamWrapper(
             completion_stream=response.iter_lines(),
             model=model,
             custom_llm_provider="huggingface",
             logging_obj=logging_obj,
         )
-        content = ""
+        content: str = ""
         for chunk in streamed_response:
             content += chunk["choices"][0]["delta"]["content"]
-        completion_response: Final[list[dict[str, Any]]] = [{"generated_text": content}]
+        completion_response: Final[list[dict[str, str]]] = [{"generated_text": content}]
         ## LOGGING
         logging_obj.post_call(
             input=data,
