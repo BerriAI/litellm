@@ -31136,6 +31136,8 @@ export interface components {
             rpm?: number | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
+            /** S3 Bucket Owner */
+            s3_bucket_owner?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
             /** S3 Endpoint Url */
@@ -41860,6 +41862,8 @@ export interface components {
             rpm?: number | null;
             /** S3 Bucket Name */
             s3_bucket_name?: string | null;
+            /** S3 Bucket Owner */
+            s3_bucket_owner?: string | null;
             /** S3 Encryption Key Id */
             s3_encryption_key_id?: string | null;
             /** S3 Endpoint Url */
