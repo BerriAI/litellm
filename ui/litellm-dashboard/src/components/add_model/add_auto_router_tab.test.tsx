@@ -669,6 +669,81 @@ describe("AddAutoRouterTab", () => {
     });
   });
 
+  it("blocks invalid success thresholds and creates a heuristic v2 router with explicit zero", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "threshold-router" } });
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(screen.getByRole("radio", { name: /^Heuristic v2/ }));
+
+    const threshold = screen.getByRole("textbox", { name: "Success threshold" });
+    expect(threshold).toHaveValue("");
+    fireEvent.change(threshold, { target: { value: "invalid" } });
+    fireEvent.blur(threshold);
+    expect(threshold).toHaveValue("invalid");
+    expect(threshold).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    expect(screen.getByTestId("auto-router-test-routing-btn")).toBeDisabled();
+
+    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    await user.click(screen.getByRole("radio", { name: /^Heuristic v2/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.01" } });
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).toMatchObject({
+      classifier_type: "heuristic_v2",
+      heuristic_v2_success_threshold: 0,
+    });
+  });
+
+  it("clears an invalid threshold draft when automatic setup replaces the configuration", async () => {
+    const user = userEvent.setup();
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    const automaticSetup = await screen.findByRole("button", { name: "Configure automatically" });
+    await waitFor(() => expect(automaticSetup).toBeEnabled());
+    await user.click(automaticSetup);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "reset-threshold-router" } });
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "1.1" } });
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+
+    await user.click(automaticSetup);
+    expect(screen.getByRole("textbox", { name: "Success threshold" })).toHaveValue("");
+    expect(screen.getByRole("textbox", { name: "Success threshold" })).toHaveAttribute("aria-invalid", "false");
+    await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
+      "heuristic_v2_success_threshold",
+    );
+  });
+
+  it("clears an invalid inactive threshold before creating the router", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getMissingTiersError).mockReturnValue(null);
+    renderWithProviders(<Harness />);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "clear-threshold-router" } });
+    expandDetailedConfiguration();
+    await user.click(screen.getByText("Advanced: Classification Method"));
+    await user.click(screen.getByRole("radio", { name: /^Heuristic v2/ }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Success threshold" }), { target: { value: "invalid" } });
+    await user.click(screen.getByRole("radio", { name: /^Heuristic \(default\)/ }));
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Clear Heuristic v2 threshold" }));
+    expect(screen.queryByRole("region", { name: "Inactive Heuristic v2 threshold" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls.at(-1)?.[0].complexity_router_config).not.toHaveProperty(
+      "heuristic_v2_success_threshold",
+    );
+  });
+
   it("carries a context-window escalation opt-out through to the create payload", async () => {
     const user = userEvent.setup();
     vi.mocked(getMissingTiersError).mockReturnValue(null);
