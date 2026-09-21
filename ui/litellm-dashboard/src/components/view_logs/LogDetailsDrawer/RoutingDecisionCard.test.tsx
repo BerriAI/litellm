@@ -184,7 +184,7 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Default model, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("Default model, classifier failed")).toBeInTheDocument();
     expect(screen.queryByText("Tier")).not.toBeInTheDocument();
   });
 
@@ -201,7 +201,7 @@ describe("RoutingDecisionCard", () => {
         }}
       />,
     );
-    expect(screen.getByText("Fallback tier, LLM classifier failed")).toBeInTheDocument();
+    expect(screen.getByText("Fallback tier, classifier failed")).toBeInTheDocument();
     expect(screen.getByText("SECURITY_REVIEW")).toBeInTheDocument();
   });
 

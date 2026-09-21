@@ -145,7 +145,7 @@ export const CUSTOM_TIER_RESTRICTIONS = {
   heuristicClassifier: {
     omit: ["heuristic_first_max_tier", "hybrid_boundary_margin"],
     reason:
-      "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM classifier. " +
+      "The heuristic scorer only produces the built-in tiers, so an edited set needs the LLM or JEV classifier. " +
       "Heuristic first and hybrid are out for the same reason: their local scorer decides the traffic it is sure of",
   },
   heuristicScoring: {
