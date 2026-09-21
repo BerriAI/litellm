@@ -2,8 +2,10 @@ use litellm_cache::SemanticCacheContext;
 use serde_json::Value;
 
 pub fn prompt_from_context(context: &SemanticCacheContext) -> Option<String> {
-    if !context.messages.is_empty() {
-        return Some(messages_text(&context.messages));
+    if let Some(messages) = context.messages.as_ref().and_then(Value::as_array)
+        && !messages.is_empty()
+    {
+        return Some(messages_text(messages));
     }
     let input = context.input.as_ref()?;
     let mut parts = Vec::new();

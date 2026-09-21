@@ -2,7 +2,7 @@ mod cache;
 mod topology;
 
 pub mod connection {
-    pub use crate::cache::{ConnectionRef, Connections, ttl_seconds};
+    pub use crate::cache::{ConnectionRef, Connections};
 }
 
 pub use cache::{

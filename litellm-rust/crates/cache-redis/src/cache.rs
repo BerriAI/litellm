@@ -40,6 +40,7 @@ const CLAIM_SCRIPT: &str = concat!(
 );
 const CLAIM_ATTEMPTS: usize = 8;
 
+#[allow(private_interfaces)]
 pub enum Connections<C> {
     Pool(r2d2::Pool<ConnectionManager>),
     Cluster(r2d2::Pool<ClusterConnectionManager>),
@@ -50,21 +51,6 @@ impl<C> Connections<C>
 where
     C: redis::ConnectionLike + Send + 'static,
 {
-    pub fn pooled(url: &str, timeout: Duration, pool_size: u32) -> Result<Self, Error> {
-        let pool = r2d2::Pool::builder()
-            .max_size(pool_size)
-            .min_idle(Some(0))
-            .connection_timeout(timeout)
-            .test_on_check_out(false)
-            .build(ConnectionManager::open(url)?)
-            .map_err(|_| Error::Unavailable)?;
-        Ok(Self::Pool(pool))
-    }
-
-    pub fn fixed(connection: C) -> Self {
-        Self::Fixed(Mutex::new(connection))
-    }
-
     pub fn execute<T>(
         &self,
         operation: impl FnOnce(&mut ConnectionRef<'_>) -> Result<T, Error>,
@@ -98,6 +84,19 @@ where
             .await
             .map_err(|_| Error::Unavailable)?
     }
+
+    pub fn fixed(connection: C) -> Self {
+        Self::Fixed(Mutex::new(connection))
+    }
+
+    pub fn open(url: &str, topology: &RedisTopology) -> Result<Self, Error> {
+        match topology {
+            RedisTopology::Standalone => Ok(Self::Pool(pool(ConnectionManager::open(url)?)?)),
+            RedisTopology::Cluster { startup_nodes } => Ok(Self::Cluster(pool(
+                ClusterConnectionManager::open(url, startup_nodes)?,
+            )?)),
+        }
+    }
 }
 
 pub struct RedisCache<S, C = redis::Connection> {
@@ -119,12 +118,7 @@ impl<S: CacheCodec> RedisCache<S> {
         default_ttl: Option<Duration>,
         codec: S,
     ) -> Result<Self, Error> {
-        let connections = match topology {
-            RedisTopology::Standalone => Connections::Pool(pool(ConnectionManager::open(url)?)?),
-            RedisTopology::Cluster { startup_nodes } => {
-                Connections::Cluster(pool(ClusterConnectionManager::open(url, startup_nodes)?)?)
-            }
-        };
+        let connections = Connections::open(url, topology)?;
         Ok(Self {
             connections: Arc::new(connections),
             default_ttl: default_ttl.unwrap_or(DEFAULT_TTL),
@@ -224,22 +218,10 @@ where
     }
 
     fn ttl_seconds(ttl: Duration) -> u64 {
-        ttl_seconds(ttl)
+        ttl.as_secs()
+            .saturating_add(u64::from(ttl.subsec_nanos() > 0))
+            .max(1)
     }
-
-    async fn run_blocking<T, F>(connections: Arc<Connections<C>>, operation: F) -> Result<T, Error>
-    where
-        T: Send + 'static,
-        F: FnOnce(&mut ConnectionRef<'_>) -> Result<T, Error> + Send + 'static,
-    {
-        Connections::run_blocking(connections, operation).await
-    }
-}
-
-pub fn ttl_seconds(ttl: Duration) -> u64 {
-    ttl.as_secs()
-        .saturating_add(u64::from(ttl.subsec_nanos() > 0))
-        .max(1)
 }
 
 fn namespaced_key(namespace: Option<&str>, key: &str) -> String {
@@ -338,7 +320,7 @@ where
         if entries.is_empty() {
             return Ok(());
         }
-        Self::run_blocking(Arc::clone(&self.connections), move |connection| {
+        Connections::run_blocking(Arc::clone(&self.connections), move |connection| {
             let commands = entries
                 .into_iter()
                 .map(|(key, payload)| {
@@ -357,7 +339,7 @@ where
     }
 
     async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
-        match Self::run_blocking(Arc::clone(&self.connections), |connection| {
+        match Connections::run_blocking(Arc::clone(&self.connections), |connection| {
             Ok(match connection.ping() {
                 Ok(_) => CacheConnectionResult {
                     status: CacheConnectionStatus::Success,

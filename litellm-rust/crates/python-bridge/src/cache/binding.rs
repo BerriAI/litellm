@@ -14,7 +14,6 @@ use super::{
     future::{ready_none, ready_value},
     native::NativeResponseCache,
     request::{now, request, requests},
-    semantic::{SemanticOperation, drive},
 };
 
 pub(super) enum CacheBinding {
@@ -57,17 +56,7 @@ impl ResolvedCache {
             CacheBinding::Disabled => ready_none(py)?,
             CacheBinding::Native(service) => {
                 let request = request(input)?;
-                if service.semantic_embedder().is_some() {
-                    return Ok(ExecutionStep::Await(
-                        drive(py, service.clone(), SemanticOperation::Lookup(request))?.unbind(),
-                    ));
-                }
-                let service = service.clone();
-                run_async(
-                    py,
-                    async move { service.async_lookup(&request, now()).await },
-                    cache_error,
-                )?
+                service.async_lookup_py(py, request)?
             }
             CacheBinding::PythonCallback(callback) => callback.async_lookup(py, kwargs)?,
         };
@@ -185,19 +174,7 @@ impl ResolvedCache {
             CacheBinding::Native(service) => {
                 let request = self::request(request)?;
                 let response: Value = from_py(response)?;
-                if service.semantic_embedder().is_some() {
-                    return drive(
-                        py,
-                        service.clone(),
-                        SemanticOperation::Store(request, response),
-                    );
-                }
-                let service = service.clone();
-                run_async(
-                    py,
-                    async move { service.async_store(&request, response, now()).await },
-                    cache_error,
-                )
+                service.async_store_py(py, request, response)
             }
             CacheBinding::PythonCallback(callback) => {
                 callback.async_store(py, response, callback_kwargs)
@@ -253,20 +230,8 @@ impl ResolvedCache {
                         "batch cache requests and responses must have equal lengths",
                     ));
                 }
-                let entries = requests.into_iter().zip(responses).collect::<Vec<_>>();
-                if service.semantic_embedder().is_some() {
-                    return drive(
-                        py,
-                        service.clone(),
-                        SemanticOperation::StoreBatch(entries.into()),
-                    );
-                }
-                let service = service.clone();
-                run_async(
-                    py,
-                    async move { service.async_store_batch(entries, now()).await },
-                    cache_error,
-                )
+                let entries = requests.into_iter().zip(responses).collect();
+                service.async_store_batch_py(py, entries)
             }
             CacheBinding::PythonCallback(callback) => {
                 callback.async_store_batch(py, callback_result, callback_kwargs)

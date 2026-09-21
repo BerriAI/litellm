@@ -11,12 +11,16 @@ import uuid
 import weakref
 from collections.abc import Callable, Generator
 from contextlib import ExitStack
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Final, Protocol, cast
+from unittest.mock import Mock
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import boto3
+import botocore.config
 import diskcache
 import fakeredis
 import pytest
@@ -26,17 +30,19 @@ from azure.storage.blob import ContainerClient
 import litellm
 from litellm.caching.azure_blob_cache import AzureBlobCache
 from litellm.caching.caching import Cache, disable_cache, enable_cache, update_cache
-from litellm.caching.gcs_cache import GCSCache
 from litellm.caching.disk_cache import DiskCache
+from litellm.caching.gcs_cache import GCSCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cluster_cache import RedisClusterCache
 from litellm.caching.redis_semantic_cache import RedisSemanticCache
+from litellm.caching.s3_cache import S3Cache
 from litellm.rust_bridge import _native
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.llms.custom_llm import CustomLLMItem
 from litellm.types.utils import EmbeddingResponse
 from tests.test_litellm_rust.support.fake_gcs import FakeGcs
 from tests.test_litellm_rust.support.isolation import rebound
+from tests.test_litellm_rust.support.s3_stub import S3Stub
 
 _CacheTestHandle: Final = _native._CacheTestHandle  # pyright: ignore[reportPrivateUsage]  # test-only handle has no public module name
 _CacheTestResolver: Final = _native._CacheTestResolver  # pyright: ignore[reportPrivateUsage]  # test-only resolver has no public module name
@@ -436,15 +442,20 @@ def test_azure_blob_facade_serves_natively_and_python_reads_the_same_blobs(azure
     assert handle.backend == "azure-blob"
     account_url: Final = backend.container_client.url.removesuffix(f"/{backend.container_client.container_name}")
     with pytest.raises(TypeError, match="containers must match"):
-        _native._CacheTestHandle.azure_blob(account_url, f"{backend.container_client.container_name}-other")._bind_facade(
-            azure_blob_facade
-        )
+        _native._CacheTestHandle.azure_blob(
+            account_url, f"{backend.container_client.container_name}-other"
+        )._bind_facade(azure_blob_facade)
     handle._bind_facade(azure_blob_facade)
     resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=azure_blob_facade))
     native: Final = resolver.resolve()
     assert native.kind == "native"
 
-    response: Final = {"choices": [{"text": "caf\u00e9 \u2603"}], "usage": {"total_tokens": 3}, "flag": True, "empty": None}
+    response: Final = {
+        "choices": [{"text": "caf\u00e9 \u2603"}],
+        "usage": {"total_tokens": 3},
+        "flag": True,
+        "empty": None,
+    }
     native.store({**request("sync"), "ttl_seconds": 0.001}, response)
     native.store(request("sync"), {"choices": [{"text": "second"}]})
     time.sleep(0.01)
@@ -499,7 +510,9 @@ async def test_azure_blob_native_async_writes_overwrite_batch_and_flush_like_pyt
     await binding.async_store({**request("async"), "ttl_seconds": 0.001}, {"value": 2})
     time.sleep(0.01)
     assert await binding.async_lookup(request("async")) == {"value": 2}
-    assert await backend.async_get_cache("async") == json.loads(backend.container_client.download_blob("async").readall())
+    assert await backend.async_get_cache("async") == json.loads(
+        backend.container_client.download_blob("async").readall()
+    )
     assert cast(CacheLookup, azure_blob_facade).get_cache(cache_key="async") == {"value": 2}
 
     await binding.async_store_batch([request("first"), request("second")], [{"value": 3}, {"value": 4}])
@@ -544,6 +557,8 @@ async def test_redis_facade_buffers_native_async_writes(redis_url: str) -> None:
     assert client.get("second") is not None
     await facade.cache.disconnect()
     client.close()
+
+
 async def test_disk_reads_python_entries_and_python_reads_native_entries(tmp_path: Path) -> None:
     disk_cache: Final = DiskCache(disk_cache_dir=str(tmp_path))
     response: Final = {"choices": [{"text": "cached"}], "usage": {"total_tokens": 3}}
@@ -650,6 +665,183 @@ async def test_disk_native_batch_lookup_and_store_report_partial_hits(tmp_path: 
         "values": [{"value": 1}, {"value": 2}, None],
         "missing_indices": [2],
     }
+
+
+@pytest.fixture
+def s3_stub() -> Generator[S3Stub]:
+    stub: Final = S3Stub()
+    try:
+        yield stub
+    finally:
+        stub.close()
+
+
+def python_s3(url: str) -> S3Cache:
+    return S3Cache(
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+    )
+
+
+async def test_s3_reads_python_entries_and_writes_with_python_metadata(s3_stub: S3Stub) -> None:
+    python_cache: Final = python_s3(s3_stub.url)
+    response: Final = {"choices": [{"text": "cached"}], "usage": {"total_tokens": 3}}
+    python_cache.set_cache("sync:key", {"timestamp": time.time(), "response": response}, ttl=90)
+    python_cache.set_cache("plain", {"timestamp": time.time(), "response": response})
+    s3_stub.put_object("team/malformed", b"not a cache entry")
+    s3_stub.put_object(
+        "team/expired",
+        json.dumps({"timestamp": time.time(), "response": response}).encode(),
+        {"expires": "Thu, 01 Jan 1970 00:00:00 GMT"},
+    )
+    binding: Final = _native._CacheTestResolver(
+        SimpleNamespace(
+            cache=_native._CacheTestHandle.s3(
+                "cache-bucket",
+                region="us-east-1",
+                endpoint_url=s3_stub.url,
+                key_prefix="team/",
+                access_key_id="key",
+                secret_access_key="secret",
+            )
+        )
+    ).resolve()
+
+    assert binding.lookup(request("sync:key")) == response
+    assert await binding.async_lookup(request("plain")) == response
+    assert binding.lookup(request("malformed")) is None
+    assert binding.lookup(request("expired")) is None
+    assert binding.lookup(request("absent")) is None
+
+    binding.store({**request("native:key"), "ttl_seconds": 90.0}, response)
+    await binding.async_store(request("no_ttl"), response)
+    stored: Final = s3_stub.objects["team/native/key"]
+    assert stored.headers["content-type"] == "application/json"
+    assert stored.headers["content-language"] == "en"
+    assert stored.headers["content-disposition"] == 'inline; filename="team/native/key.json"'
+    assert stored.headers["cache-control"] == "immutable, max-age=90, s-maxage=90"
+    expires: Final = cast(datetime, s3_stub.expires("team/native/key"))
+    remaining: Final = (expires - datetime.now(expires.tzinfo)).total_seconds()
+    assert 60 < remaining <= 91
+    no_ttl: Final = s3_stub.objects["team/no_ttl"]
+    assert no_ttl.headers["cache-control"] == "immutable, max-age=31536000, s-maxage=31536000"
+    assert "expires" not in no_ttl.headers
+    assert python_cache.get_cache("native:key")["response"] == response
+
+    partial: Final = await binding.async_lookup_batch([request("native:key"), request("absent"), request("malformed")])
+    assert partial == {"values": [response, None, None], "missing_indices": [1, 2]}
+
+
+def test_s3_facade_binds_only_exact_configuration_and_falls_back_on_mutation(s3_stub: S3Stub) -> None:
+    facade: Final = Cache(
+        type=LiteLLMCacheType.S3,
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=s3_stub.url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+    )
+    handle: Final = _native._CacheTestHandle.s3(
+        "cache-bucket",
+        region="us-east-1",
+        endpoint_url=s3_stub.url,
+        key_prefix="team/",
+        access_key_id="key",
+        secret_access_key="secret",
+    )
+    with pytest.raises(TypeError, match="buckets must match"):
+        _native._CacheTestHandle.s3("other", region="us-east-1", endpoint_url=s3_stub.url)._bind_facade(facade)
+    with pytest.raises(TypeError, match="key prefixes must match"):
+        _native._CacheTestHandle.s3(
+            "cache-bucket", region="us-east-1", endpoint_url=s3_stub.url, key_prefix="other/"
+        )._bind_facade(facade)
+    handle._bind_facade(facade)
+    resolver: Final = _native._CacheTestResolver(SimpleNamespace(cache=facade))
+    binding: Final = resolver.resolve()
+    assert binding.kind == "native"
+
+    handler: Final = Mock()
+    facade.cache.s3_client.meta.events.register("before-call.s3.*", handler)
+    binding.store(request("native"), {"answer": 1})
+    assert binding.lookup(request("native")) == {"answer": 1}
+    assert handler.call_count == 0
+    assert "team/native" in s3_stub.objects
+
+    with rebound(facade.cache, "bucket_name", "other"):
+        assert resolver.resolve().kind == "python_callback"
+    other_client: Final = boto3.client(
+        "s3",
+        region_name="us-east-1",
+        endpoint_url=s3_stub.url,
+        aws_access_key_id="key",
+        aws_secret_access_key="secret",
+    )
+    with rebound(facade.cache, "s3_client", other_client):
+        assert resolver.resolve().kind == "python_callback"
+
+    class CustomS3Cache(S3Cache):
+        pass
+
+    subclassed: Final = Cache(
+        type=LiteLLMCacheType.S3,
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=s3_stub.url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+    )
+    subclassed.cache = CustomS3Cache(
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=s3_stub.url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+    )
+    with pytest.raises(TypeError):
+        handle._bind_facade(subclassed)
+    assert _native._CacheTestResolver(SimpleNamespace(cache=subclassed)).resolve().kind == "python_callback"
+
+
+def test_s3_facade_rejects_configurations_that_require_python(s3_stub: S3Stub) -> None:
+    handle: Final = _native._CacheTestHandle.s3(
+        "cache-bucket",
+        region="us-east-1",
+        endpoint_url=s3_stub.url,
+        key_prefix="team/",
+        access_key_id="key",
+        secret_access_key="secret",
+    )
+    unverified: Final = Cache(
+        type=LiteLLMCacheType.S3,
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url="https://s3.example.test",
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+        s3_verify=False,
+    )
+    with pytest.raises(TypeError, match="requires Python"):
+        handle._bind_facade(unverified)
+    proxied: Final = Cache(
+        type=LiteLLMCacheType.S3,
+        s3_bucket_name="cache-bucket",
+        s3_region_name="us-east-1",
+        s3_endpoint_url=s3_stub.url,
+        s3_aws_access_key_id="key",
+        s3_aws_secret_access_key="secret",
+        s3_path="team",
+        s3_config=botocore.config.Config(proxies={"https": "http://proxy.test"}),
+    )
+    with pytest.raises(TypeError, match="requires Python"):
+        handle._bind_facade(proxied)
 
 
 async def test_gcs_reads_python_entries_and_writes_python_compatible_objects(
@@ -787,6 +979,7 @@ async def test_gcs_facade_binds_only_exact_matching_configuration(
         assert resolver.resolve().kind == "python_callback"
     with rebound(facade.cache, "path_service_account", "sa.json"):
         assert resolver.resolve().kind == "python_callback"
+
     def no_get_cache(*args: object, **kwargs: object) -> None:
         return None
 
@@ -921,7 +1114,9 @@ async def test_redis_cluster_facade_serves_multi_slot_batches_and_scoped_flush_n
 
     await binding.async_flush()
 
-    remaining: Final = tuple(sorted(key for node in client.get_primaries() for key in client.keys("parity:*", target_nodes=node)))
+    remaining: Final = tuple(
+        sorted(key for node in client.get_primaries() for key in client.keys("parity:*", target_nodes=node))
+    )
     assert remaining == (), remaining
     assert client.get("unscoped") == b"stays"
     client.delete("unscoped")

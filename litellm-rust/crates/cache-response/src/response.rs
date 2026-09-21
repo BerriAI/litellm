@@ -1,22 +1,21 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, Error,
-    ExactCacheContext, FlushCache,
+    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, Error, FlushCache,
 };
 use serde_json::Value;
 
 use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
 
 #[derive(Clone)]
-pub struct ResponseCacheRequest<C: CacheContext = ExactCacheContext> {
+pub struct ResponseCacheRequest<C: CacheContext = litellm_cache::ExactCacheContext> {
     pub key: CacheKeyInput,
     pub controls: CacheControls,
     pub context: C,
     pub max_age: Option<Duration>,
 }
 
-impl ResponseCacheRequest<ExactCacheContext> {
+impl<C: CacheContext + Default> ResponseCacheRequest<C> {
     pub fn new(key: CacheKeyInput) -> Self {
         Self {
             key,
@@ -27,17 +26,24 @@ impl ResponseCacheRequest<ExactCacheContext> {
                 default_on: true,
                 ..Default::default()
             },
-            context: ExactCacheContext::default(),
+            context: C::default(),
             max_age: None,
         }
     }
 }
 
-pub struct ResponseCache<B: BaseCache<Value = CacheEntry>> {
+pub struct ResponseCache<B: BaseCache<Value = CacheEntry>>
+where
+    B::Context: Default + PartialEq,
+{
     backend: Arc<B>,
 }
 
-impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
+impl<B> ResponseCache<B>
+where
+    B: BaseCache<Value = CacheEntry>,
+    B::Context: Default + PartialEq,
+{
     pub fn new(backend: Arc<B>) -> Self {
         Self { backend }
     }
@@ -46,10 +52,11 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         &self.backend
     }
 
-    pub fn default_ttl(&self) -> Option<Duration>
-    where
-        B::Context: Default,
-    {
+    pub fn backend_arc(&self) -> &Arc<B> {
+        &self.backend
+    }
+
+    pub fn default_ttl(&self) -> Option<Duration> {
         self.backend.get_ttl(&B::Context::default())
     }
 
@@ -199,10 +206,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
         &self,
         entries: Vec<(ResponseCacheRequest<B::Context>, Value)>,
         now: Duration,
-    ) -> Result<(), Error>
-    where
-        B::Context: PartialEq,
-    {
+    ) -> Result<(), Error> {
         self.async_store_entries(
             entries
                 .into_iter()
@@ -217,10 +221,7 @@ impl<B: BaseCache<Value = CacheEntry>> ResponseCache<B> {
     pub async fn async_store_entries(
         &self,
         entries: Vec<(ResponseCacheRequest<B::Context>, Value, Duration)>,
-    ) -> Result<(), Error>
-    where
-        B::Context: PartialEq,
-    {
+    ) -> Result<(), Error> {
         let writable = entries
             .into_iter()
             .filter(|(request, _, _)| request.controls.writes())

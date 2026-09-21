@@ -131,8 +131,8 @@ fn associated_context_preserves_backend_specific_lookup_inputs() {
 fn semantic_context_with_ttl_preserves_lookup_inputs() {
     let context = SemanticCacheContext {
         input: Some(serde_json::json!("text")),
-        messages: vec![serde_json::json!({"role": "user", "content": "hi"})],
-        metadata: serde_json::Map::from_iter([("key".into(), serde_json::json!("value"))]),
+        messages: Some(serde_json::json!([{"role": "user", "content": "hi"}])),
+        metadata: Some(serde_json::json!({"key": "value"})),
         scope: Some("scope".into()),
         ttl: None,
     };
