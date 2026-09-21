@@ -5071,3 +5071,55 @@ def test_completion_cost_ocr_ignores_deployment_pricing_without_custom_pricing_f
         litellm_logging_obj=logging_obj,
     )
     assert cost == 0.0
+
+
+QWEN3_NEXT_US_INPUT_RATE: Final = 1.5e-07
+QWEN3_NEXT_US_OUTPUT_RATE: Final = 1.2e-06
+
+QWEN3_NEXT_REGIONAL_RATES: Final = (
+    ("ap-northeast-1", 1.8e-07, 1.45e-06),
+    ("ap-south-1", 1.8e-07, 1.41e-06),
+    ("ap-southeast-2", 1.545e-07, 1.236e-06),
+    ("eu-west-1", 1.8e-07, 1.41e-06),
+    ("eu-west-2", 2.3e-07, 1.86e-06),
+    ("sa-east-1", 1.8e-07, 1.45e-06),
+)
+
+
+@pytest.mark.parametrize(("region", "input_rate", "output_rate"), QWEN3_NEXT_REGIONAL_RATES)
+def test_cost_per_token_bedrock_qwen3_next_bills_at_published_regional_rate(
+    monkeypatch: pytest.MonkeyPatch, region: str, input_rate: float, output_rate: float
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    prompt_tokens, completion_tokens = 1000, 500
+
+    prompt_usd, completion_usd = cost_per_token(
+        model=f"bedrock/{region}/qwen.qwen3-next-80b-a3b",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider="bedrock",
+    )
+
+    assert prompt_usd == pytest.approx(prompt_tokens * input_rate)
+    assert completion_usd == pytest.approx(completion_tokens * output_rate)
+    assert prompt_usd != pytest.approx(prompt_tokens * QWEN3_NEXT_US_INPUT_RATE)
+    assert completion_usd != pytest.approx(completion_tokens * QWEN3_NEXT_US_OUTPUT_RATE)
+
+
+def test_cost_per_token_bedrock_qwen3_next_us_rate_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    prompt_tokens, completion_tokens = 1000, 500
+
+    for model in ("bedrock/qwen.qwen3-next-80b-a3b", "bedrock/us-east-1/qwen.qwen3-next-80b-a3b"):
+        prompt_usd, completion_usd = cost_per_token(
+            model=model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            custom_llm_provider="bedrock",
+        )
+        assert prompt_usd == pytest.approx(prompt_tokens * QWEN3_NEXT_US_INPUT_RATE)
+        assert completion_usd == pytest.approx(completion_tokens * QWEN3_NEXT_US_OUTPUT_RATE)
