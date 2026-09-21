@@ -9539,6 +9539,41 @@ def test_get_model_listing_info_returns_none_for_unknown_name():
     assert router.get_model_listing_info("not-a-real-model") is None
 
 
+def test_highest_configured_price_quotes_the_dearest_deployment_across_both_sources():
+    """Custom pricing is accepted in model_info and in litellm_params, so both are read.
+
+    A group whose deployments disagree quotes the dearest, matching what
+    get_model_group_info reports: a caller pricing against the cheapest member
+    under-funds the request that lands on the dearest one.
+    """
+    model_infos = ({"input_cost_per_token": 3e-07}, {"mode": "chat"})
+    params = ({"model": "openai/gpt-4o-mini"}, {"input_cost_per_token": 9e-07})
+
+    highest = litellm.Router._highest_configured_price(model_infos, params, "input_cost_per_token")
+
+    assert highest == 9e-07, f"expected the dearer deployment's price, got {highest}"
+
+
+def test_highest_configured_price_is_none_when_no_deployment_configures_one():
+    """Nothing configured means the cost map answers instead, so this must not report 0."""
+    model_infos = ({"mode": "chat"},)
+    params = ({"model": "openai/gpt-4o-mini"},)
+
+    highest = litellm.Router._highest_configured_price(model_infos, params, "input_cost_per_token")
+
+    assert highest is None, f"expected no configured price, got {highest}"
+
+
+def test_highest_configured_price_ignores_a_malformed_configured_value():
+    """model_info reaches the listing uncoerced, so a config typo must not become a price."""
+    model_infos = ({"input_cost_per_token": ""},)
+    params = ({"model": "openai/gpt-4o-mini", "input_cost_per_token": -1e-06},)
+
+    highest = litellm.Router._highest_configured_price(model_infos, params, "input_cost_per_token")
+
+    assert highest is None, f"expected malformed and negative values to be dropped, got {highest}"
+
+
 def test_get_model_listing_info_carries_configured_limits():
     router = litellm.Router(
         model_list=[
