@@ -44,16 +44,15 @@ class OpenrouterTextToSpeechConfig(BaseTextToSpeechConfig):
     def is_trusted_api_base(self, api_base: str | None) -> bool:
         if not api_base:
             return True
+        configured_base: Final = get_secret_str("OPENROUTER_API_BASE") or litellm.api_base
         parsed: Final = urlparse(api_base)
         scheme: Final = parsed.scheme.lower()
         if scheme != "https":
-            configured_base: Final = get_secret_str("OPENROUTER_API_BASE") or litellm.api_base
             return bool(
                 configured_base is not None
                 and api_base.rstrip("/") == configured_base.rstrip("/")
                 and parsed.hostname in ("localhost", "127.0.0.1")
             )
-        configured_base: Final = get_secret_str("OPENROUTER_API_BASE") or litellm.api_base
         if configured_base is not None and api_base.rstrip("/") == configured_base.rstrip("/"):
             return True
         hostname: Final = parsed.hostname or ""
