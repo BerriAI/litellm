@@ -1,3 +1,4 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 """
 Tests for MCP tool search feature.
 
@@ -572,7 +573,7 @@ class TestCallToolRestApiVirtualTools:
         mock_tool.input_schema = {"type": "object", "properties": {}}
 
         with patch(
-            "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+            "litellm.proxy._experimental.mcp_server.operations._list_mcp_tools",
             new_callable=AsyncMock,
             return_value=AggregateToolListing(tools=[mock_tool], outcomes={}),
         ):
@@ -616,12 +617,12 @@ class TestCallToolRestApiVirtualTools:
 
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
                 return_value=[MagicMock()],
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+                "litellm.proxy._experimental.mcp_server.operations.execute_mcp_tool",
                 new_callable=AsyncMock,
                 return_value=fake_result,
             ) as mock_execute,
@@ -669,12 +670,12 @@ class TestCallToolRestApiVirtualTools:
                 return_value="203.0.113.7",
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
                 return_value=[MagicMock()],
             ) as mock_allowed,
             patch(
-                "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+                "litellm.proxy._experimental.mcp_server.operations.execute_mcp_tool",
                 new_callable=AsyncMock,
                 return_value=fake_result,
             ),
@@ -699,7 +700,7 @@ class TestCallToolRestApiVirtualTools:
                 return_value="203.0.113.7",
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+                "litellm.proxy._experimental.mcp_server.operations._list_mcp_tools",
                 new_callable=AsyncMock,
                 return_value=AggregateToolListing(tools=[], outcomes={}),
             ) as mock_list,
@@ -832,7 +833,7 @@ class TestCallToolRestApiVirtualTools:
                 "litellm.proxy.proxy_server.proxy_logging_obj", key_limits
             ),
             patch(  # test-quality-ok: the authorized catalog is the seam every virtual tool shares; the ranking under test stays real
-                "litellm.proxy._experimental.mcp_server.server._list_mcp_tools",
+                "litellm.proxy._experimental.mcp_server.operations._list_mcp_tools",
                 new_callable=AsyncMock,
                 return_value=AggregateToolListing(tools=list(CATALOG), outcomes={}),
             ) as mock_list,
@@ -939,7 +940,7 @@ class TestDispatchVirtualMcpTool:
             new_callable=AsyncMock,
             return_value="SEARCH_RESULT",
         ) as mock_search:
-            result = await srv._dispatch_virtual_mcp_tool(
+            result = await mcp_operations._dispatch_virtual_mcp_tool(
                 name=MCP_TOOL_SEARCH_TOOL_NAME,
                 arguments={"query": "q", "top_k": 3},
                 user_api_key_auth=uak,
@@ -961,7 +962,7 @@ class TestDispatchVirtualMcpTool:
             new_callable=AsyncMock,
             return_value="AGENT_RESULT",
         ) as mock_agent_search:
-            result = await srv._dispatch_virtual_mcp_tool(
+            result = await mcp_operations._dispatch_virtual_mcp_tool(
                 name=AGENT_SEARCH_TOOL_NAME,
                 arguments={"query": "translate a document", "top_k": "2"},
                 user_api_key_auth=uak,
@@ -996,7 +997,7 @@ class TestDispatchVirtualMcpTool:
             new_callable=AsyncMock,
             return_value="CALL_RESULT",
         ) as mock_call:
-            result = await srv._dispatch_virtual_mcp_tool(
+            result = await mcp_operations._dispatch_virtual_mcp_tool(
                 name=MCP_TOOL_CALL_TOOL_NAME,
                 arguments={"tool_name": "math-add", "arguments": {"a": 1, "b": 2}},
                 user_api_key_auth=uak,
@@ -1027,8 +1028,7 @@ class TestDispatchVirtualMcpTool:
         sentinel_logging_obj = object()
         with (
             patch.object(
-                srv,
-                "_build_virtual_call_logging_obj",
+                mcp_operations, "_build_virtual_call_logging_obj",
                 new_callable=AsyncMock,
                 return_value=sentinel_logging_obj,
             ) as mock_build,
@@ -1038,7 +1038,7 @@ class TestDispatchVirtualMcpTool:
                 return_value="CALL_RESULT",
             ) as mock_call,
         ):
-            await srv._dispatch_virtual_mcp_tool(
+            await mcp_operations._dispatch_virtual_mcp_tool(
                 name=MCP_TOOL_CALL_TOOL_NAME,
                 arguments={"tool_name": "math-add", "arguments": {"a": 1}},
                 user_api_key_auth=uak,
@@ -1060,7 +1060,7 @@ class TestDispatchVirtualMcpTool:
             new_callable=AsyncMock,
             return_value="SEARCH_RESULT",
         ) as mock_search:
-            await srv._dispatch_virtual_mcp_tool(
+            await mcp_operations._dispatch_virtual_mcp_tool(
                 name=MCP_TOOL_SEARCH_TOOL_NAME,
                 arguments={"query": "issue", "top_k": "not-a-number"},
                 user_api_key_auth=uak,
@@ -1083,12 +1083,12 @@ class TestDispatchVirtualMcpTool:
         fake = CallToolResult(content=[TextContent(type="text", text="ok")], isError=False)
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
                 return_value=[MagicMock()],
             ) as mock_allowed,
             patch(
-                "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+                "litellm.proxy._experimental.mcp_server.operations.execute_mcp_tool",
                 new_callable=AsyncMock,
                 return_value=fake,
             ) as mock_exec,
@@ -1130,12 +1130,12 @@ class TestDispatchVirtualMcpTool:
         uak = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
                 new_callable=AsyncMock,
                 return_value=[],
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.execute_mcp_tool",
+                "litellm.proxy._experimental.mcp_server.operations.execute_mcp_tool",
                 new_callable=AsyncMock,
             ) as mock_exec,
         ):
@@ -1217,7 +1217,7 @@ class TestMcpServerToolCallErrorHandling:
                 return_value=(uak, None, None, None, None, None, None),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server._dispatch_virtual_mcp_tool",
+                "litellm.proxy._experimental.mcp_server.operations._dispatch_virtual_mcp_tool",
                 new_callable=AsyncMock,
                 side_effect=HTTPException(status_code=403, detail="User not allowed to call this tool"),
             ),
@@ -1254,7 +1254,7 @@ async def test_handle_mcp_tool_call_scoped_denial_names_the_binding_agent() -> N
         ]
 
     with patch(  # test-quality-ok: the permission resolver is a module-level function; the suite's only seam
-        "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+        "litellm.proxy._experimental.mcp_server.operations._get_allowed_mcp_servers",
         new=AsyncMock(side_effect=resolve),
     ):
         with pytest.raises(HTTPException) as exc_info:
