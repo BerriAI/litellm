@@ -3,23 +3,24 @@
 from __future__ import annotations
 
 import time
+from typing import Final
 
 import pytest
 
 from e2e_config import unique_marker
-from e2e_http import Success, unwrap
+from e2e_http import unwrap
 from guardrails_client import (
     BlockedWordBody,
     ContentFilterParamsBody,
     GuardrailsClient,
 )
 from lifecycle import ResourceManager
+from models import ChatResponse, GuardrailInformationEntry
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "gpt-4.1-mini"
-GUARDRAIL_PROPAGATION_DEADLINE_SECONDS = 40.0
-GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS = 5.0
+GUARDRAIL_PROPAGATION_DEADLINE_SECONDS: Final = 40.0
+GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS: Final = 5.0
 
 
 def _register_content_filter(client: GuardrailsClient, resources: ResourceManager, *, name: str) -> None:
@@ -34,6 +35,26 @@ def _register_content_filter(client: GuardrailsClient, resources: ResourceManage
     resources.defer(lambda: client.delete_guardrail(guardrail_id))
 
 
+def _opted_in_entries(
+    client: GuardrailsClient,
+    key: str,
+    model: str,
+    name: str,
+) -> tuple[ChatResponse, tuple[GuardrailInformationEntry, ...]]:
+    response = unwrap(
+        client.chat(
+            key,
+            model,
+            "Reply with the single word OK.",
+            guardrails=[name],
+            include_guardrail_response=True,
+            max_tokens=16,
+        )
+    )
+    entries = tuple(entry for entry in response.guardrail_information or () if entry.guardrail_name == name)
+    return response, entries
+
+
 class TestGuardrailInformationResponse:
     @pytest.mark.covers(
         "guardrail.litellm_content_filter.pre_call.returns_guardrail_information",
@@ -44,37 +65,29 @@ class TestGuardrailInformationResponse:
     ) -> None:
         name = f"e2e-guardrail-information-{unique_marker()}"
         _register_content_filter(client, resources, name=name)
+        model = client.create_backend_model(
+            resources,
+            prefix="e2e-guardrail-info-backend",
+            backend="openai/gpt-4.1-mini",
+            api_key="os.environ/OPENAI_API_KEY",
+        )
         deadline = time.monotonic() + GUARDRAIL_PROPAGATION_DEADLINE_SECONDS
-        last_result = None
 
         while True:
-            last_result = client.chat(
-                scoped_key,
-                MODEL,
-                "Reply with the single word OK.",
-                guardrails=[name],
-                include_guardrail_response=True,
-                max_tokens=16,
-            )
-            if isinstance(last_result, Success):
-                response = unwrap(last_result)
-                assert response.guardrail_information is not None, (
-                    f"opted-in response must include guardrail information; response: {response}"
+            response, entries = _opted_in_entries(client, scoped_key, model, name)
+            if len(entries) == 1:
+                entry = entries[0]
+                assert entry.guardrail_status == "success", (
+                    f"guardrail information should report a successful run, got {entry!r}; response: {response}"
                 )
-                entries = [entry for entry in response.guardrail_information if entry.guardrail_name == name]
-                if len(entries) == 1:
-                    entry = entries[0]
-                    assert entry.guardrail_status == "success", (
-                        f"guardrail information should report a successful run, got {entry!r}; response: {response}"
-                    )
-                    assert entry.duration is not None and entry.duration >= 0, (
-                        f"guardrail information should report a non-negative duration; response: {response}"
-                    )
-                    return
+                assert entry.duration is not None and entry.duration >= 0, (
+                    f"guardrail information should report a non-negative duration; response: {response}"
+                )
+                return
             if time.monotonic() >= deadline:
                 pytest.fail(
                     f"guardrail information did not report exactly one successful {name!r} entry within "
-                    f"{GUARDRAIL_PROPAGATION_DEADLINE_SECONDS}s; response: {last_result}"
+                    f"{GUARDRAIL_PROPAGATION_DEADLINE_SECONDS}s; response: {response}"
                 )
             time.sleep(GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS)
 
@@ -83,17 +96,23 @@ class TestGuardrailInformationResponse:
     ) -> None:
         name = f"e2e-guardrail-information-default-{unique_marker()}"
         _register_content_filter(client, resources, name=name)
+        model = client.create_backend_model(
+            resources,
+            prefix="e2e-guardrail-info-backend",
+            backend="openai/gpt-4.1-mini",
+            api_key="os.environ/OPENAI_API_KEY",
+        )
 
         response = unwrap(
             client.chat(
                 scoped_key,
-                MODEL,
+                model,
                 "Reply with the single word OK.",
                 guardrails=[name],
                 max_tokens=16,
             )
         )
 
-        assert response.guardrail_information is None, (
+        assert "guardrail_information" not in response.model_fields_set, (
             f"guardrail information must remain absent without include_guardrail_response, got {response}"
         )

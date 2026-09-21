@@ -1375,6 +1375,7 @@ def _override_openai_response_model(
 
 
 _METADATA_BUCKET_KEYS: Final = ("metadata", "litellm_metadata")
+_RESPONSE_REDACTED_KEYS: Final = frozenset({"keyword", "snippet", "match", "regex"})
 
 
 def _request_metadata_buckets(request_data: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
@@ -1385,7 +1386,22 @@ def include_guardrail_response_requested(request_data: Mapping[str, object]) -> 
     return any(bucket.get("include_guardrail_response") is True for bucket in _request_metadata_buckets(request_data))
 
 
-def attach_guardrail_information(response: object, request_data: Mapping[str, object]) -> None:
+def _redact_guardrail_entry(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {  # mutable-ok: fresh redacted mapping
+            key: (
+                "[REDACTED]"
+                if key in _RESPONSE_REDACTED_KEYS and isinstance(item, str)
+                else _redact_guardrail_entry(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list | tuple):
+        return [_redact_guardrail_entry(item) for item in value]  # mutable-ok: response list contract
+    return value
+
+
+def attach_guardrail_information(response: object, request_data: Mapping[str, object]) -> object:
     recorded: Final = next(
         (
             entries
@@ -1397,12 +1413,14 @@ def attach_guardrail_information(response: object, request_data: Mapping[str, ob
         ),
         (),
     )
-    guardrail_information: Final = list(recorded)  # mutable-ok: response list API
+    guardrail_information: Final = [  # mutable-ok: response list contract
+        _redact_guardrail_entry(entry) for entry in recorded
+    ]
     if isinstance(response, dict):
-        response["guardrail_information"] = guardrail_information
-        return
+        return response | MappingProxyType({"guardrail_information": guardrail_information})
     if isinstance(response, BaseModel) and response.model_config.get("extra") == "allow":
-        setattr(response, "guardrail_information", guardrail_information)
+        return response.model_copy(update=MappingProxyType({"guardrail_information": guardrail_information}))
+    return response
 
 
 class CostBreakdownHeaderValues(NamedTuple):
@@ -2901,7 +2919,7 @@ class ProxyBaseLLMRequestProcessing:
             response.pop("_hidden_params", None)
 
         if include_guardrail_response_requested(self.data):
-            attach_guardrail_information(response=response, request_data=self.data)
+            response = attach_guardrail_information(response=response, request_data=self.data)
 
         # Call response headers hook for non-streaming success
         callback_headers = await proxy_logging_obj.post_call_response_headers_hook(

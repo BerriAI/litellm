@@ -63,32 +63,94 @@ def test_attach_guardrail_information_copies_recorded_entries_onto_model_respons
     ]
     response = litellm.ModelResponse()
 
-    attach_guardrail_information(
+    result = attach_guardrail_information(
         response=response,
         request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
     )
 
-    assert response.model_dump()["guardrail_information"] == recorded
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
+    assert "guardrail_information" not in response.model_dump()
 
 
 def test_attach_guardrail_information_reports_empty_list_when_nothing_ran():
     response = litellm.ModelResponse()
 
-    attach_guardrail_information(response=response, request_data={})
+    result = attach_guardrail_information(response=response, request_data={})
 
-    assert response.model_dump()["guardrail_information"] == []
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == []
+    assert "guardrail_information" not in response.model_dump()
 
 
 def test_attach_guardrail_information_sets_key_on_dict_response():
     recorded = [{"guardrail_name": "first", "guardrail_status": "success"}]
     response = {"id": "x"}
 
-    attach_guardrail_information(
+    result = attach_guardrail_information(
         response=response,
         request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
     )
 
-    assert response == {"id": "x", "guardrail_information": recorded}
+    assert isinstance(result, dict)
+    assert result == {"id": "x", "guardrail_information": recorded}
+    assert response == {"id": "x"}
+
+
+def test_attach_guardrail_information_redacts_matched_content():
+    recorded = [
+        {
+            "guardrail_name": "cf",
+            "guardrail_status": "success",
+            "guardrail_response": [
+                {"type": "blocked_word", "keyword": "secret-word", "action": "MASK"}
+            ],
+            "match_details": [{"snippet": "secret-word", "detection_method": "keyword"}],
+        }
+    ]
+
+    result = attach_guardrail_information(
+        response={"id": "x"},
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert isinstance(result, dict)
+    guardrail_information = result["guardrail_information"]
+    assert isinstance(guardrail_information, list)
+    assert guardrail_information[0]["guardrail_response"][0]["keyword"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["snippet"] == "[REDACTED]"
+    assert guardrail_information[0]["match_details"][0]["detection_method"] == "keyword"
+    assert "secret-word" not in json.dumps(result)
+
+
+def test_attach_guardrail_information_leaves_cached_dict_response_untouched():
+    recorded = [{"guardrail_name": "cf", "guardrail_status": "success"}]
+    cached = {"id": "x", "content": []}
+
+    result = attach_guardrail_information(
+        response=cached,
+        request_data={
+            "metadata": {
+                "include_guardrail_response": True,
+                "standard_logging_guardrail_information": recorded,
+            }
+        },
+    )
+
+    assert "guardrail_information" not in cached
+    assert result is not cached
+    assert isinstance(result, dict)
+    assert result["guardrail_information"] == recorded
+
+    original = litellm.ModelResponse()
+    copied = attach_guardrail_information(
+        response=original,
+        request_data={"metadata": {"standard_logging_guardrail_information": recorded}},
+    )
+
+    assert "guardrail_information" not in original.model_dump()
+    assert isinstance(copied, litellm.ModelResponse)
+    assert copied.model_dump()["guardrail_information"] == recorded
 
 
 def test_include_guardrail_response_requested_reads_flag_from_metadata_when_router_seeded_litellm_metadata():
@@ -107,9 +169,10 @@ def test_include_guardrail_response_requested_reads_flag_from_metadata_when_rout
     assert include_guardrail_response_requested(request_data) is True
 
     response = litellm.ModelResponse()
-    attach_guardrail_information(response=response, request_data=request_data)
+    result = attach_guardrail_information(response=response, request_data=request_data)
 
-    assert response.model_dump()["guardrail_information"] == recorded
+    assert isinstance(result, litellm.ModelResponse)
+    assert result.model_dump()["guardrail_information"] == recorded
 
 
 def test_include_guardrail_response_requested_is_false_without_exact_true():
