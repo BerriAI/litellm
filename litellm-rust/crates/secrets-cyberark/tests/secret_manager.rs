@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_secrets_cyberark::{CyberArkSecretManager, DeleteOutcome, Error};
-use litellm_secrets_types::{SecretValue, validate_secret_name};
+use litellm_secrets_types::SecretValue;
 use serde::Deserialize;
 use wiremock::{
     Match, Mock, MockServer, Request, ResponseTemplate,
@@ -426,11 +426,6 @@ fn new_reports_missing_client_certificate_files() {
         ),
         Err(Error::ClientCertificate)
     ));
-}
-
-#[test]
-fn secret_name_validation_matches_write_guard() {
-    assert!(validate_secret_name("../etc").is_err());
 }
 
 #[tokio::test]

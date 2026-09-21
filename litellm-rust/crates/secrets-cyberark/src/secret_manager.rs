@@ -116,13 +116,9 @@ impl CyberArkSecretManager {
             .get(CYBERARK_REFRESH_INTERVAL)
             .map(|value| {
                 value
-                    .parse::<i64>()
+                    .parse::<u64>()
+                    .map(Duration::from_secs)
                     .map_err(|_| Error::RefreshInterval)
-                    .map(|seconds| match seconds {
-                        seconds if seconds < 0 => Duration::from_nanos(1),
-                        0 => DEFAULT_REFRESH_INTERVAL,
-                        seconds => Duration::from_secs(seconds as u64),
-                    })
             })
             .transpose()?;
         Ok(Self::with_client(
