@@ -2688,6 +2688,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "serde_with",
  "tokio",
  "tokio-tungstenite",
 ]
