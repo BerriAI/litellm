@@ -23294,6 +23294,46 @@
           ]
         }
       },
+      "/.well-known/oauth-authorization-server/mcp-connect/{bootstrap}": {
+        "get": {
+          "operationId": "connection_authorization_metadata__well_known_oauth_authorization_server_mcp_connect__bootstrap__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "bootstrap",
+              "required": true,
+              "schema": {
+                "title": "Bootstrap",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Connection Authorization Metadata",
+          "tags": [
+            "mcp_byok_oauth"
+          ]
+        }
+      },
       "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
         "get": {
           "description": "OAuth authorization server discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-authorization-server/mcp/{server_name}",
@@ -23463,6 +23503,24 @@
         "get": {
           "description": "OAuth protected resource discovery for the aggregate /mcp endpoint.\n\nThe single-segment ``/mcp`` path does not collide with any per-server PRM pattern\n(those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously\ndescribes the aggregate resource.",
           "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "connection",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Connection"
+              }
+            }
+          ],
           "responses": {
             "200": {
               "content": {
@@ -23471,6 +23529,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "summary": "Oauth Protected Resource Aggregate",
@@ -23617,6 +23685,24 @@
             "flow"
           ],
           "title": "Body_authorize_complete_authorize_complete_post",
+          "type": "object"
+        },
+        "Body_complete_connection_authorize_connection_complete_post": {
+          "properties": {
+            "decision": {
+              "title": "Decision",
+              "type": "string"
+            },
+            "flow": {
+              "title": "Flow",
+              "type": "string"
+            }
+          },
+          "required": [
+            "flow",
+            "decision"
+          ],
+          "title": "Body_complete_connection_authorize_connection_complete_post",
           "type": "object"
         },
         "Body_introspect_endpoint_introspect_post": {
@@ -25568,6 +25654,46 @@
           ]
         }
       },
+      "/.well-known/oauth-authorization-server/mcp-connect/{bootstrap}": {
+        "get": {
+          "operationId": "connection_authorization_metadata__well_known_oauth_authorization_server_mcp_connect__bootstrap__get_2",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "bootstrap",
+              "required": true,
+              "schema": {
+                "title": "Bootstrap",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Connection Authorization Metadata",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
       "/.well-known/oauth-authorization-server/mcp/{mcp_server_name}": {
         "get": {
           "description": "OAuth authorization server discovery endpoint using standard MCP URL pattern.\n\nStandard pattern: /mcp/{server_name}\nDiscovery path: /.well-known/oauth-authorization-server/mcp/{server_name}",
@@ -25737,6 +25863,24 @@
         "get": {
           "description": "OAuth protected resource discovery for the aggregate /mcp endpoint.\n\nThe single-segment ``/mcp`` path does not collide with any per-server PRM pattern\n(those are two-segment: ``/mcp/{server}`` or ``/{server}/mcp``), so this unambiguously\ndescribes the aggregate resource.",
           "operationId": "oauth_protected_resource_aggregate__well_known_oauth_protected_resource_mcp_get_2",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "connection",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Connection"
+              }
+            }
+          ],
           "responses": {
             "200": {
               "content": {
@@ -25745,6 +25889,16 @@
                 }
               },
               "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
             }
           },
           "summary": "Oauth Protected Resource Aggregate",
@@ -26058,6 +26212,45 @@
             }
           },
           "summary": "Authorize Complete",
+          "tags": [
+            "mcp_discoverable"
+          ]
+        }
+      },
+      "/authorize/connection/complete": {
+        "post": {
+          "operationId": "complete_connection_authorize_connection_complete_post",
+          "requestBody": {
+            "content": {
+              "application/x-www-form-urlencoded": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_complete_connection_authorize_connection_complete_post"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "summary": "Complete Connection",
           "tags": [
             "mcp_discoverable"
           ]
@@ -26501,6 +26694,22 @@
                 ],
                 "title": "Mcp Server Name"
               }
+            },
+            {
+              "in": "query",
+              "name": "connection",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Connection"
+              }
             }
           ],
           "responses": {
@@ -26854,6 +27063,22 @@
                   }
                 ],
                 "title": "Mcp Server Name"
+              }
+            },
+            {
+              "in": "query",
+              "name": "connection",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Connection"
               }
             }
           ],
