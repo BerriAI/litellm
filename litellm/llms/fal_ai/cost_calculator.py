@@ -55,17 +55,40 @@ def _image_dimensions(image: object) -> tuple[int, int] | None:
     return width, height
 
 
-def _response_size(image: object) -> str | None:
-    dimensions: Final = _image_dimensions(image)
-    if dimensions is None:
-        return None
-    width, height = dimensions
-    return f"{width}-x-{height}"
-
-
 def _keyed_quality(optional_params: Mapping[str, object]) -> str:
     raw_quality: Final = optional_params.get("quality")
     return raw_quality if isinstance(raw_quality, str) and raw_quality != "auto" else FAL_KEYED_PRICING_DEFAULT_QUALITY
+
+
+def _parse_keyed_dimensions(size: str | None) -> tuple[int, int] | None:
+    if size is None:
+        return None
+    parts: Final = tuple(size.split("-x-"))
+    if len(parts) != 2:
+        return None
+    try:
+        width, height = (int(part) for part in parts)
+    except ValueError:
+        return None
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def _keyed_rows(model: str, quality: str) -> tuple[tuple[int, int, float], ...]:
+    prefix: Final = f"fal_ai/{quality}/"
+    suffix: Final = f"/{model}"
+    return tuple(
+        (width, height, float(raw_cost))
+        for key in litellm.model_cost
+        if isinstance(key, str) and key.startswith(prefix) and key.endswith(suffix)
+        for size in (key[len(prefix) : -len(suffix)],)
+        for dimensions in (_parse_keyed_dimensions(size),)
+        if dimensions is not None
+        for entry in (_entry(key),)
+        if entry is not None
+        for raw_cost in (entry.get("output_cost_per_image"),)
+        if isinstance(raw_cost, (int, float))
+        for width, height in (dimensions,)
+    )
 
 
 def _keyed_cost_per_image(
@@ -74,18 +97,14 @@ def _keyed_cost_per_image(
     optional_params: Mapping[str, object],
 ) -> float | None:
     quality: Final = _keyed_quality(optional_params)
-    request_size: Final = _keyed_size(optional_params) or FAL_TEXT_TO_IMAGE_DEFAULT_SIZE
-    sizes: Final = (_response_size(image), request_size, FAL_TEXT_TO_IMAGE_DEFAULT_SIZE)
-    for size in sizes:
-        if size is None:
-            continue
-        keyed_entry = _entry(f"fal_ai/{quality}/{size}/{model}")
-        if keyed_entry is None:
-            continue
-        keyed_cost = keyed_entry.get("output_cost_per_image")
-        if isinstance(keyed_cost, (int, float)):
-            return float(keyed_cost)
-    return None
+    rows: Final = _keyed_rows(model, quality)
+    if not rows:
+        return None
+    target_dimensions: Final = (
+        _image_dimensions(image) or _parse_keyed_dimensions(_keyed_size(optional_params)) or (1024, 768)
+    )
+    target_pixels: Final = target_dimensions[0] * target_dimensions[1]
+    return min(rows, key=lambda row: (abs(row[0] * row[1] - target_pixels), row[0] * row[1]))[2]
 
 
 def _flat_cost_per_image(
@@ -129,7 +148,7 @@ def cost_calculator(
         )
         for image in images
     )
-    if all(cost is not None for cost in keyed_costs):
+    if not any(cost is None for cost in keyed_costs):
         return sum(cost for cost in keyed_costs if cost is not None)
     model_info: Final = litellm.get_model_info(
         model=normalized_model,
@@ -144,10 +163,12 @@ def cost_calculator(
         float(raw_output_cost_per_pixel) if isinstance(raw_output_cost_per_pixel, (int, float)) else None
     )
     return sum(
-        _flat_cost_per_image(
+        keyed_cost
+        if keyed_cost is not None
+        else _flat_cost_per_image(
             image=image,
             output_cost_per_image=output_cost_per_image,
             output_cost_per_pixel=output_cost_per_pixel,
         )
-        for image in images
+        for image, keyed_cost in zip(images, keyed_costs)
     )

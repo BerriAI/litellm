@@ -36,6 +36,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    FieldSerializationInfo,
     JsonValue,
     PrivateAttr,
     SkipValidation,
@@ -2555,8 +2556,25 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
     @field_serializer("data")
-    def _serialize_image_data(self, data: Sequence[OpenAIImage] | None) -> Sequence[Mapping[str, object]] | None:
-        return None if data is None else [image.model_dump() for image in data]
+    def _serialize_image_data(
+        self,
+        data: Sequence[OpenAIImage] | None,
+        info: FieldSerializationInfo,
+    ) -> Sequence[Mapping[str, object]] | None:
+        return (
+            None
+            if data is None
+            else [
+                image.model_dump(
+                    mode=info.mode,
+                    exclude_none=info.exclude_none,
+                    exclude_unset=info.exclude_unset,
+                    exclude_defaults=info.exclude_defaults,
+                    by_alias=info.by_alias,
+                )
+                for image in data
+            ]
+        )
 
     def __init__(
         self,
