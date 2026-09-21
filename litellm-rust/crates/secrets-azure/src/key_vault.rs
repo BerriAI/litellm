@@ -1,21 +1,28 @@
 use std::sync::Arc;
 
-use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
+use litellm_auth_azure::{AzureAuthInputs, AzureAuthService, ConfigValue};
+use litellm_auth_types::{InputSource, Sourced};
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{Secret, SecretValue};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
 use crate::Error;
 
 const AZURE_KEY_VAULT_URI: &str = "AZURE_KEY_VAULT_URI";
 const API_VERSION: &str = "7.4";
+const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'.')
+    .remove(b'_')
+    .remove(b'~');
 
 #[derive(Clone)]
 pub struct AzureKeyVault {
     client: reqwest::Client,
     vault: reqwest::Url,
     auth: Arc<AzureAuthService>,
-    inputs: AzureAuthInputs,
+    inputs: Arc<AzureAuthInputs>,
     environment: Arc<dyn Lookup + Send + Sync>,
 }
 
@@ -33,21 +40,19 @@ impl AzureKeyVault {
         if vault.host_str().is_none() {
             return Err(Error::VaultUri);
         }
-        let scope = scope_for(&vault);
-        let inputs = AzureAuthInputs::from_sourced_optional_params(
-            serde_json::json!({
-                "azure_scope": scope,
-                "enable_azure_ad_token_refresh": true,
-            })
-            .as_object()
-            .expect("static Azure auth inputs object"),
-            &std::collections::BTreeMap::new(),
-        )?;
+        let inputs = AzureAuthInputs {
+            azure_scope: ConfigValue::Value(Sourced::new(
+                scope_for(&vault),
+                InputSource::Deployment,
+            )),
+            enable_azure_ad_token_refresh: Sourced::new(true, InputSource::Deployment),
+            ..AzureAuthInputs::default()
+        };
         Ok(Self {
             client,
             vault,
             auth: Arc::new(AzureAuthService::default()),
-            inputs,
+            inputs: Arc::new(inputs),
             environment,
         })
     }
@@ -80,7 +85,7 @@ impl AzureKeyVault {
             .get_azure_ad_token(&self.inputs, &|key| self.environment.get(key))
             .await?
             .ok_or(Error::MissingCredentials)?;
-        let encoded_name = encode_name(name);
+        let encoded_name = percent_encoding::utf8_percent_encode(name, PATH_SEGMENT);
         let url = self
             .vault
             .join(&format!("secrets/{encoded_name}?api-version={API_VERSION}"))
@@ -110,13 +115,4 @@ fn scope_for(vault: &reqwest::Url) -> String {
         .split_once('.')
         .map_or(host, |(_, remainder)| remainder);
     format!("https://{resource}/.default")
-}
-
-fn encode_name(name: &str) -> String {
-    percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC)
-        .to_string()
-        .replace("%2D", "-")
-        .replace("%2E", ".")
-        .replace("%5F", "_")
-        .replace("%7E", "~")
 }

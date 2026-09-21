@@ -160,7 +160,9 @@ fn manager_without_credentials(server: &MockServer) -> AzureKeyVault {
     AzureKeyVault::with_client(
         reqwest::Client::new(),
         server.uri().parse().unwrap(),
-        Arc::new(|_: &str| None),
+        Arc::new(|name: &str| {
+            (name == "AZURE_CREDENTIAL").then(|| "ClientSecretCredential".to_owned())
+        }),
     )
     .unwrap()
 }
