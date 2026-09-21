@@ -277,24 +277,6 @@ def _jsonrpc_text_has_top_level_method(text: str) -> bool:
     return False
 
 
-def _utf8_boundary_prefix(data: bytes) -> bytes:
-    """``data`` with any trailing incomplete UTF-8 sequence removed.
-
-    Cutting a body at a fixed byte budget can land in the middle of a multibyte
-    character, and ``json.loads`` on such bytes raises ``UnicodeDecodeError``
-    rather than ``JSONDecodeError``. Trimming to a character boundary keeps the
-    truncated peek decodable so callers only have to handle malformed JSON.
-    """
-    for trailing in range(0, min(3, len(data)) + 1):
-        candidate = data[: len(data) - trailing]
-        try:
-            candidate.decode("utf-8")
-        except UnicodeDecodeError:
-            continue
-        return candidate
-    return data
-
-
 def _mcp_meta_trace_carrier(req_ctx: object) -> dict[str, str] | None:
     """The W3C trace context (``traceparent``/``tracestate``) the MCP client
     propagated in the request's ``params._meta`` (SEP-414), or ``None``.
@@ -4057,7 +4039,7 @@ if MCP_AVAILABLE:
                 # directly from the original `receive` via wrapped_receive.
                 break
 
-        return consumed_messages, _utf8_boundary_prefix(b"".join(body_chunks))
+        return consumed_messages, b"".join(body_chunks)
 
     async def _handle_stale_mcp_session(
         scope: Scope,
