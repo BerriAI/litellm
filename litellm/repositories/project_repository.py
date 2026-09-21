@@ -2,7 +2,8 @@
 Project repository for database operations on LiteLLM_ProjectTable.
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.repositories.base_repository import BaseRepository
@@ -43,14 +44,14 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
         description: str | None = None,
         team_id: str | None = None,
         budget_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: Mapping[str, object] | None = None,
         models: list[str] | None = None,
         model_rpm_limit: dict[str, int] | None = None,
         model_tpm_limit: dict[str, int] | None = None,
         object_permission_id: str | None = None,
     ) -> LiteLLM_ProjectTable:
         """Create a new project."""
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "created_by": created_by,
             "updated_by": created_by,
         }
@@ -85,7 +86,7 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
         description: str | None = None,
         team_id: str | None = None,
         budget_id: str | None = None,
-        metadata: dict[str, Any] | None = None,
+        metadata: Mapping[str, object] | None = None,
         models: list[str] | None = None,
         model_rpm_limit: dict[str, int] | None = None,
         model_tpm_limit: dict[str, int] | None = None,
@@ -93,7 +94,7 @@ class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):
         object_permission_id: str | None = None,
     ) -> LiteLLM_ProjectTable | None:
         """Update a project."""
-        data: Final[dict[str, Any]] = {"updated_by": updated_by}
+        data: Final[dict[str, object]] = {"updated_by": updated_by}
         if project_alias is not None:
             data["project_alias"] = project_alias
         if description is not None:

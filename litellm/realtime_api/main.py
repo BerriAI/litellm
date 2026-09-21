@@ -55,11 +55,11 @@ bedrock_realtime: Final = BedrockRealtime()
 xai_realtime: Final = XAIRealtime()
 vertex_llm_base: Final = VertexBase()
 base_llm_http_handler = BaseLLMHTTPHandler()
-_EMPTY_MODEL_PARAMS: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_MODEL_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 _EMPTY_AUTH_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
-def _model_params_with_stored_credentials(model_params: Mapping[str, Any]) -> Mapping[str, Any]:
+def _model_params_with_stored_credentials(model_params: Mapping[str, object]) -> Mapping[str, object]:
     credential_name: Final = model_params.get("litellm_credential_name")
     credential_values: Final = (
         CredentialAccessor.get_credential_values(credential_name)

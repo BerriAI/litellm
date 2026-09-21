@@ -4,7 +4,7 @@ import re
 import traceback
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Any, Final, Protocol, cast
+from typing import Final, Protocol, cast
 
 import httpx
 
@@ -194,7 +194,7 @@ def _get_response_headers(original_exception: Exception) -> httpx.Headers | None
     _response_headers: httpx.Headers | None = None
     try:
         _response_headers = getattr(original_exception, "headers", None)
-        error_response: Final = getattr(original_exception, "response", None)
+        error_response: Final[object] = getattr(original_exception, "response", None)
         if not _response_headers and error_response:
             _response_headers = getattr(error_response, "headers", None)
         if not _response_headers:
@@ -211,7 +211,7 @@ def _accepted_init_kwargs(exception_class: type[Exception], candidates: Mapping[
 
 
 def extract_and_raise_litellm_exception(
-    response: Any | None,
+    response: object | None,
     error_str: str,
     model: str,
     custom_llm_provider: str,

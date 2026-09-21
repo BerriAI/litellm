@@ -93,13 +93,13 @@ class SensitiveDataMasker:
 
     def _mask_sequence(
         self,
-        values: list[Any],
+        values: Sequence[object],
         depth: int,
         max_depth: int,
         excluded_keys: set[str] | None,
         key_is_sensitive: bool,
-    ) -> list[Any]:
-        masked_items: Final[list[Any]] = []
+    ) -> Sequence[object]:
+        masked_items: Final[list[object]] = []
         if depth >= max_depth:
             return values
 
@@ -222,7 +222,7 @@ class _PayloadWalker:
         return [self.walk(item, key_is_sensitive, depth + 1) for item in node]
 
 
-def mask_sensitive_keys(data: dict[str, Any], sensitive_fields: set[str]) -> dict[str, Any]:
+def mask_sensitive_keys(data: Mapping[str, object], sensitive_fields: set[str]) -> dict[str, object]:
     """Return a new dict with values masked for keys listed in ``sensitive_fields``.
 
     Unlike :meth:`SensitiveDataMasker.mask_dict`, this does exact key-name
@@ -234,7 +234,7 @@ def mask_sensitive_keys(data: dict[str, Any], sensitive_fields: set[str]) -> dic
     range and are replaced with a fixed-length all-mask string, so a short
     credential is never returned verbatim.
     """
-    masked: Final[dict[str, Any]] = {}
+    masked: Final[dict[str, object]] = {}
     mask_char: Final = _default_masker.mask_char
     min_visible: Final = _default_masker.visible_prefix + _default_masker.visible_suffix
     for key, value in data.items():

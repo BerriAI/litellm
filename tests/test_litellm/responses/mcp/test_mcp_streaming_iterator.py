@@ -11,7 +11,11 @@ from litellm.responses.mcp.mcp_streaming_iterator import (
     MAX_MCP_TOOL_CALL_ROUNDS,
     MCPEnhancedStreamingIterator,
 )
-from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 
 # `litellm.__init__` re-exports a function named `responses`, which shadows the
 # `litellm.responses` subpackage as an attribute — `import litellm.responses.main`
@@ -55,6 +59,10 @@ def _function_call(call_id: str, name: str, arguments: str = "{}"):
 
 def _text_message(text: str):
     return {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
+
+
+def _item_type(item: dict[str, object] | BaseLiteLLMOpenAIResponseObject) -> str:
+    return str(item["type"]) if isinstance(item, dict) else str(item.type)
 
 
 def _tool_call_stream(call_id: str, tool_name: str, response_id: str = "resp-1") -> _FakeAsyncStream:
@@ -136,11 +144,14 @@ async def test_second_round_tool_call_is_executed_and_reaches_final_text(monkeyp
     assert iterator.tool_call_round == 2
 
     # The stream reached round 3 and produced the final text response instead
-    # of stopping after round 1 or round 2.
+    # of stopping after round 1 or round 2. The client sees one lifecycle whose
+    # final output lists every round's items in order, each executed call as
+    # the gateway's mcp_call rather than the function_call the model emitted.
     completed_chunks = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
-    assert len(completed_chunks) == 3
+    assert len(completed_chunks) == 1
     final_output = completed_chunks[-1].response.output
-    assert final_output[0]["content"][0]["text"] == "Here's what I found after retrying."
+    assert [_item_type(item) for item in final_output] == ["mcp_call", "mcp_call", "message"]
+    assert final_output[-1]["content"][0]["text"] == "Here's what I found after retrying."
 
 
 @pytest.mark.asyncio
@@ -209,7 +220,7 @@ async def test_continuation_id_is_final_round_not_interim_tool_call(monkeypatch)
     chunks = [chunk async for chunk in iterator]
     completed = [c for c in chunks if getattr(c, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
 
-    assert completed[-1].response.output[0]["content"][0]["text"] == "The first item is Alpha."
+    assert completed[-1].response.output[-1]["content"][0]["text"] == "The first item is Alpha."
     assert completed[-1].response.id == "resp-final"
     assert completed[-1].response.id != "resp-interim"
 
@@ -282,7 +293,9 @@ async def test_streaming_follow_up_replays_reasoning_when_store_is_false(monkeyp
         base_iterator=_FakeAsyncStream(
             [
                 _output_item_added_chunk(),
-                _completed_chunk([_reasoning_item("gAAAAA-opaque-blob"), _function_call("call_1", "read_wiki_contents")]),
+                _completed_chunk(
+                    [_reasoning_item("gAAAAA-opaque-blob"), _function_call("call_1", "read_wiki_contents")]
+                ),
             ]
         ),
         mcp_events=[],
@@ -318,7 +331,9 @@ async def test_streaming_follow_up_keeps_previous_response_id_when_stored(monkey
         base_iterator=_FakeAsyncStream(
             [
                 _output_item_added_chunk(),
-                _completed_chunk([_reasoning_item("gAAAAA-opaque-blob"), _function_call("call_1", "read_wiki_contents")]),
+                _completed_chunk(
+                    [_reasoning_item("gAAAAA-opaque-blob"), _function_call("call_1", "read_wiki_contents")]
+                ),
             ]
         ),
         mcp_events=[],
@@ -338,3 +353,138 @@ async def test_streaming_follow_up_keeps_previous_response_id_when_stored(monkey
     follow_up_kwargs = aresponses_mock.call_args_list[0].kwargs
     assert follow_up_kwargs["previous_response_id"] == "resp_prev"
     assert not [item for item in follow_up_kwargs["input"] if item.get("type") == "reasoning"]
+
+
+def _event(event_type: ResponsesAPIStreamEvents, **fields: object) -> SimpleNamespace:
+    return SimpleNamespace(type=event_type, **fields)
+
+
+def _lifecycle_round(response_id: str, item: dict[str, object], sequence_start: int = 0) -> list[SimpleNamespace]:
+    """One upstream Responses round as a provider streams it: its own id, indexes from 0, numbering from 0."""
+    return [
+        _event(
+            ResponsesAPIStreamEvents.RESPONSE_CREATED,
+            response=ResponsesAPIResponse(id=response_id, created_at=0, output=[]),
+            sequence_number=sequence_start,
+        ),
+        _event(
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, output_index=0, item=item, sequence_number=sequence_start + 1
+        ),
+        _event(
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=item, sequence_number=sequence_start + 2
+        ),
+        _completed_chunk([item], response_id=response_id),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_auto_execute_rounds_share_one_public_lifecycle(monkeypatch):
+    """
+    Every auto-execute round is a distinct upstream response, but the client
+    reads one stream. It must see one response.created, one response.completed,
+    and no output_index reused for a different item, otherwise accumulating
+    clients such as the OpenAI SDK's responses.stream() abort mid-stream.
+    """
+    _mock_mcp_environment(monkeypatch)
+
+    follow_up = _FakeAsyncStream(_lifecycle_round("resp-final", _text_message("Alpha.")))
+    monkeypatch.setattr(responses_main_module, "aresponses", AsyncMock(side_effect=[follow_up]))
+
+    iterator = _make_iterator(_lifecycle_round("resp-interim", _function_call("call_1", "read_wiki_contents")))
+    chunks = [chunk async for chunk in iterator]
+    types = [chunk.type for chunk in chunks]
+
+    assert types.count(ResponsesAPIStreamEvents.RESPONSE_CREATED) == 1
+    assert types.count(ResponsesAPIStreamEvents.RESPONSE_COMPLETED) == 1
+    assert types[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+
+    # The function call, the gateway's mcp_call, and the final message each own an index.
+    added = [c for c in chunks if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED]
+    assert [(c.output_index, _item_type(c.item)) for c in added] == [
+        (0, "function_call"),
+        (1, "mcp_call"),
+        (2, "message"),
+    ]
+    mcp_item_ids = {c.item_id for c in chunks if c.type == ResponsesAPIStreamEvents.MCP_CALL_IN_PROGRESS}
+    mcp_done = [
+        c for c in chunks if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(c.item) == "mcp_call"
+    ]
+    assert [c.output_index for c in mcp_done] == [1]
+    assert {c.item.id for c in mcp_done} == mcp_item_ids
+    round_two = [
+        c for c in chunks if getattr(c, "item_id", None) is None and getattr(c, "output_index", None) is not None
+    ]
+    assert max(c.output_index for c in round_two) == 2
+
+    # The single completed event lists every round's items and keeps the final round's id for continuation.
+    completed = chunks[-1]
+    assert completed.response.id == "resp-final"
+    assert [_item_type(item) for item in completed.response.output] == ["mcp_call", "message"]
+    assert completed.response.output[-1]["content"][0]["text"] == "Alpha."
+    # The proxy serializes every chunk; the merged output must still be a valid response.
+    assert '"type":"mcp_call"' in completed.response.model_dump_json(exclude_none=True, exclude_unset=True)
+
+    # Numbering stays strictly increasing across rounds and gateway events.
+    sequence_numbers = [c.sequence_number for c in chunks if getattr(c, "sequence_number", None) is not None]
+    assert sequence_numbers == sorted(sequence_numbers)
+    assert len(set(sequence_numbers)) == len(sequence_numbers)
+
+
+@pytest.mark.asyncio
+async def test_final_output_lists_executed_call_as_completed_mcp_call(monkeypatch):
+    """
+    A function_call the gateway executed must not reach the final output: an
+    agent framework reading it (the OpenAI Agents SDK) tries to run a tool the
+    caller never declared and aborts the run. The final output lists the
+    gateway's completed mcp_call in its place, next to the round's other items.
+    """
+    _mock_mcp_environment(monkeypatch)
+
+    follow_up = _FakeAsyncStream(_lifecycle_round("resp-final", _text_message("Alpha.")))
+    monkeypatch.setattr(responses_main_module, "aresponses", AsyncMock(side_effect=[follow_up]))
+
+    reasoning = {"type": "reasoning", "id": "rs_1", "summary": []}
+    iterator = _make_iterator(
+        [
+            _created_chunk("resp-interim"),
+            _completed_chunk([reasoning, _function_call("call_1", "read_wiki_contents")], response_id="resp-interim"),
+        ]
+    )
+    chunks = [chunk async for chunk in iterator]
+
+    final_output = chunks[-1].response.output
+    assert [_item_type(item) for item in final_output] == ["reasoning", "mcp_call", "message"]
+    executed_call = final_output[1]
+    assert executed_call["status"] == "completed"
+    assert executed_call["name"] == "read_wiki_contents"
+    assert executed_call["arguments"] == "{}"
+
+    done_mcp_items = [
+        c.item for c in chunks if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(c.item) == "mcp_call"
+    ]
+    assert [item.status for item in done_mcp_items] == ["completed"]
+
+
+@pytest.mark.asyncio
+async def test_stream_without_auto_execute_is_forwarded_unchanged(monkeypatch):
+    """With approval required there is one round, and it passes through untouched."""
+    _mock_mcp_environment(monkeypatch)
+    aresponses_mock = AsyncMock()
+    monkeypatch.setattr(responses_main_module, "aresponses", aresponses_mock)
+
+    upstream = _lifecycle_round("resp-1", _function_call("call_1", "read_wiki_contents"))
+    iterator = MCPEnhancedStreamingIterator(
+        base_iterator=_FakeAsyncStream(list(upstream)),
+        mcp_events=[],
+        tool_server_map={"read_wiki_contents": "deepwiki"},
+        mcp_tools_with_litellm_proxy=[{"require_approval": "always"}],
+        user_api_key_auth=None,
+        original_request_params={"model": "gpt-4", "input": "hi", "tools": [{"type": "mcp"}]},
+    )
+
+    chunks = [chunk async for chunk in iterator]
+
+    assert chunks == upstream
+    assert [c.output_index for c in chunks if hasattr(c, "output_index")] == [0, 0]
+    assert [c.sequence_number for c in chunks if hasattr(c, "sequence_number")] == [0, 1, 2]
+    aresponses_mock.assert_not_called()
