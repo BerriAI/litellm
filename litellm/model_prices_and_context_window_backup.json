@@ -11175,6 +11175,7 @@
         "deprecation_date": "2026-10-01"
     },
     "azure_ai/MAI-Image-2.5-Pro": {
+        "deprecation_date": "2026-10-01",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
