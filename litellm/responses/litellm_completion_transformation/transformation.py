@@ -454,6 +454,7 @@ class LiteLLMCompletionResponsesConfig:
             "stream": stream,
             "metadata": kwargs.get("metadata"),
             "service_tier": kwargs.get("service_tier"),
+            "safety_identifier": responses_api_request.get("safety_identifier"),
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning.effort,

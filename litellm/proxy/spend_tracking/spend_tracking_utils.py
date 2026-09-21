@@ -9,7 +9,7 @@ from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -137,7 +137,15 @@ def _get_router_metadata_for_spend_log(
     )
 
 
-_STAMPED_METADATA_KEYS: Final = frozenset(("router_metadata", "azure_spillover"))
+_STAMPED_METADATA_KEYS: Final = frozenset(
+    (
+        "router_metadata",
+        "azure_spillover",
+        "autorouter_savings",
+        "autorouter_savings_estimate",
+        "autorouter_baseline_observation",
+    )
+)
 
 
 def _get_spend_logs_metadata(
@@ -156,6 +164,8 @@ def _get_spend_logs_metadata(
     cost_breakdown: CostBreakdown | None = None,
     litellm_call_id: str | None = None,
     autorouter_savings: float | None = None,
+    autorouter_savings_estimate: Mapping[str, JsonValue] | None = None,
+    autorouter_baseline_observation: str | None = None,
     router_metadata: SpendLogsRouterMetadata | None = None,
     azure_spillover: AzureSpillover | None = None,
 ) -> SpendLogsMetadata:
@@ -196,6 +206,8 @@ def _get_spend_logs_metadata(
             cost_breakdown=None,
             compression_savings=None,
             autorouter_savings=autorouter_savings,
+            autorouter_savings_estimate=autorouter_savings_estimate,
+            autorouter_baseline_observation=autorouter_baseline_observation,
             litellm_gateway_injected_cache=None,
             litellm_call_id=litellm_call_id,
             router_metadata=router_metadata,
@@ -207,7 +219,12 @@ def _get_spend_logs_metadata(
 
     # Filter the metadata dictionary to include only the specified keys
     clean_metadata: Final = SpendLogsMetadata(
-        **{key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS},
+        **MappingProxyType(
+            {key: metadata.get(key) for key in SpendLogsMetadata.__annotations__ if key not in _STAMPED_METADATA_KEYS}
+        ),
+        autorouter_savings=autorouter_savings,
+        autorouter_savings_estimate=autorouter_savings_estimate,
+        autorouter_baseline_observation=autorouter_baseline_observation,
         router_metadata=router_metadata,
         azure_spillover=azure_spillover,
     )
@@ -231,7 +248,6 @@ def _get_spend_logs_metadata(
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
     clean_metadata["cost_breakdown"] = cost_breakdown
-    clean_metadata["autorouter_savings"] = autorouter_savings
     clean_metadata["litellm_call_id"] = litellm_call_id
 
     return clean_metadata
@@ -659,6 +675,16 @@ def get_logging_payload(
         ),
         autorouter_savings=(
             standard_logging_payload.get("autorouter_savings", None) if standard_logging_payload is not None else None
+        ),
+        autorouter_savings_estimate=(
+            standard_logging_payload.get("autorouter_savings_estimate")
+            if standard_logging_payload is not None
+            else None
+        ),
+        autorouter_baseline_observation=(
+            standard_logging_payload.get("autorouter_baseline_observation")
+            if standard_logging_payload is not None
+            else None
         ),
         litellm_call_id=litellm_call_id,
         router_metadata=_get_router_metadata_for_spend_log(

@@ -1,5 +1,4 @@
 general_settings:
-  max_parallel_requests: 100
   proxy_batch_write_at: 5
   enable_jwt_auth: true
   litellm_jwtauth:
@@ -64,6 +63,23 @@ model_list:
     litellm_params:
       model: openai/text-embedding-3-small
       api_key: os.environ/OPENAI_API_KEY
+
+files_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
+  - custom_llm_provider: azure
+    api_base: os.environ/AZURE_API_BASE
+    api_key: os.environ/AZURE_API_KEY
+    api_version: 2025-04-01-preview
+  - custom_llm_provider: vertex_ai
+    vertex_project: os.environ/VERTEXAI_PROJECT
+    vertex_location: us-central1
+    vertex_credentials: os.environ/VERTEXAI_CREDENTIALS
+    bucket_name: os.environ/GCS_BUCKET_NAME
+
+finetune_settings:
+  - custom_llm_provider: openai
+    api_key: os.environ/OPENAI_API_KEY
 
 mcp_servers:
   devin:

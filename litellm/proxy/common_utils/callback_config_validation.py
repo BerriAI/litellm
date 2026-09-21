@@ -11,14 +11,18 @@ from typing import Final
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
+_LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
+_LANGFUSE_SPAN_SCOPE_VAR: Final = "langfuse_span_scope"
 
 
 def callback_config_error(callback_name: str | None, callback_vars: Mapping[str, str] | None) -> str | None:
     if not callback_vars:
         return None
-    env_error: Final = _langfuse_environment_error(callback_vars)
-    if env_error is not None:
-        return env_error
+    langfuse_error: Final = _langfuse_environment_error(callback_vars) or _langfuse_span_scope_error(
+        callback_name, callback_vars
+    )
+    if langfuse_error is not None:
+        return langfuse_error
     if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
@@ -44,6 +48,25 @@ def _langfuse_environment_error(callback_vars: Mapping[str, str]) -> str | None:
     return None
 
 
+def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping[str, str]) -> str | None:
+    value: Final = callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
+    if value is None:
+        return None
+    if callback_name != _LANGFUSE_OTEL_CALLBACK:
+        return (
+            f"{_LANGFUSE_SPAN_SCOPE_VAR} applies to the {_LANGFUSE_OTEL_CALLBACK} callback only, not {callback_name!r}"
+        )
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_langfuse_span_scope_value,
+    )
+
+    try:
+        validate_langfuse_span_scope_value(value)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
 # Which credential family a dynamic variable belongs to. The families are the
 # integrations that share one account: every langfuse_* variable configures the
 # same Langfuse project whether it rides the classic callback or the OTel one,
@@ -63,13 +86,18 @@ _VAR_FAMILIES: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 
+_FAMILY_OPTION_VARS: Final[frozenset[str]] = frozenset({_LANGFUSE_SPAN_SCOPE_VAR})
+
 
 def _family_of(var: str) -> str | None:
     """The credential family ``var`` configures, or ``None`` if it configures none.
 
     ``turn_off_message_logging`` and friends belong to no backend, so they carry
-    no credentials anyone could redirect.
+    no credentials anyone could redirect. ``langfuse_span_scope`` shares the Langfuse
+    prefix but is a fixed enum choosing what the family exports, not where to.
     """
+    if var in _FAMILY_OPTION_VARS:
+        return None
     return next((family for prefix, family in _VAR_FAMILIES.items() if var.startswith(prefix)), None)
 
 
@@ -129,6 +157,24 @@ def cross_entry_family_error(
     )
 
 
+def conflicting_span_scope_error(
+    callback_vars: Mapping[str, str] | None,
+    stored_vars_by_entry: Sequence[Mapping[str, str]],
+) -> str | None:
+    incoming: Final = None if callback_vars is None else callback_vars.get(_LANGFUSE_SPAN_SCOPE_VAR)
+    if incoming is None:
+        return None
+    return next(
+        (
+            f"{_LANGFUSE_SPAN_SCOPE_VAR} is already set to {stored!r} by another callback entry. "
+            f"Every entry shares one scope: remove that entry or send the same value."
+            for entry in stored_vars_by_entry
+            if (stored := entry.get(_LANGFUSE_SPAN_SCOPE_VAR)) not in (None, incoming)
+        ),
+        None,
+    )
+
+
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:
     """Validate every ``logging`` entry of a team/key metadata payload."""
     if not metadata:
@@ -136,23 +182,34 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     entries: Final = metadata.get("logging")
     if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
         return None
+    entry_vars: Final = tuple(_entry_callback_vars(entry) for entry in entries)
     return next(
-        (error for error in (_logging_entry_error(entry) for entry in entries) if error is not None),
+        (
+            error
+            for error in (
+                *(_logging_entry_error(entry) for entry in entries),
+                *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
+            )
+            if error is not None
+        ),
         None,
     )
+
+
+def _entry_callback_vars(entry: object) -> Mapping[str, str]:
+    callback_vars: Final = entry.get("callback_vars") if isinstance(entry, Mapping) else None
+    if not isinstance(callback_vars, Mapping):
+        return MappingProxyType({})
+    return MappingProxyType({str(key): str(value) for key, value in callback_vars.items()})
 
 
 def _logging_entry_error(entry: object) -> str | None:
     if not isinstance(entry, Mapping):
         return None
     callback_name: Final = entry.get("callback_name")
-    callback_vars: Final = entry.get("callback_vars")
-    if not isinstance(callback_name, str) or not isinstance(callback_vars, Mapping):
+    if not isinstance(callback_name, str) or not isinstance(entry.get("callback_vars"), Mapping):
         return None
-    return callback_config_error(
-        callback_name,
-        MappingProxyType({str(key): str(value) for key, value in callback_vars.items()}),
-    )
+    return callback_config_error(callback_name, _entry_callback_vars(entry))
 
 
 def _newrelic_config_error(callback_vars: Mapping[str, str]) -> str | None:

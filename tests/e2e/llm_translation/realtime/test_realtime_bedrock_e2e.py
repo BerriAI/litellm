@@ -3,6 +3,15 @@
 Customer path: open /v1/realtime, session.update, conversation.item.create,
 response.create, and receive a completed response. A hang with no response.done
 is the regression.
+
+NOVA_SONIC pins a vendor-owned model id, which AWS retires on its own schedule.
+Source: `aws bedrock list-foundation-models --region us-east-1`, checked
+2026-09-19, where amazon.nova-2-sonic-v1:0 is ACTIVE and its predecessor
+amazon.nova-sonic-v1:0 answers GetFoundationModel with "This model version has
+reached the end of its life". A retired id does not fail loudly here: Bedrock
+ends the bidirectional stream instead of erroring, so the proxy closes the
+client socket with 1000 OK and this test reads it as a hang. Re-check the id
+against that command before concluding litellm broke.
 """
 
 from __future__ import annotations
@@ -25,7 +34,7 @@ from realtime_client import (
 
 pytestmark = pytest.mark.e2e
 
-NOVA_SONIC = "bedrock/amazon.nova-sonic-v1:0"
+NOVA_SONIC = "bedrock/amazon.nova-2-sonic-v1:0"
 
 
 class TestNovaSonicRealtime:
