@@ -13,7 +13,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.llms import load_guardrail_translation_mappings
+from litellm.llms import discover_guardrail_translation_mappings, load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
@@ -59,6 +59,14 @@ class RecordingGuardrail(CustomGuardrail):
     async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
         self.apply_calls.append({"inputs": inputs, "input_type": input_type})
         return {"texts": inputs.get("texts", [])}
+
+
+class RewritingGuardrail(RecordingGuardrail):
+    """Records like RecordingGuardrail and hands back a visibly rewritten text."""
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        recorded = await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+        return {"texts": [f"{text} [GUARDRAILED]" for text in recorded["texts"]]}
 
 
 class _NoopTranslation(BaseTranslation):
@@ -359,6 +367,38 @@ class TestUnifiedLLMGuardrails:
             )
 
             assert guardrail.event_history == [GuardrailEventHooks.pre_mcp_call]
+
+        @pytest.mark.asyncio
+        @pytest.mark.parametrize(
+            "call_type",
+            ["avideo_generation", "acreate_video", "avideo_remix", "avideo_edit", "avideo_extension"],
+        )
+        async def test_video_routes_scan_prompt_and_keep_rewrite(self, monkeypatch, call_type: str) -> None:
+            """LIT-6685: /v1/videos dispatches call_type="avideo_generation", which the
+            hook once swallowed as an unknown CallTypes value and returned unscanned.
+            Runs against the discovered handler map so the video package must really exist."""
+            _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
+            handler = UnifiedLLMGuardrails()
+            guardrail = RewritingGuardrail()
+            data = {
+                "guardrail_to_apply": guardrail,
+                "model": "veo-3.1-fast",
+                "prompt": "a paper boat on a stream",
+                "seconds": "4",
+            }
+
+            result = await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                cache=DualCache(),
+                data=data,
+                call_type=call_type,
+            )
+
+            assert guardrail.event_history == [GuardrailEventHooks.pre_call]
+            assert [call["inputs"]["texts"] for call in guardrail.apply_calls] == [["a paper boat on a stream"]]
+            assert guardrail.apply_calls[0]["inputs"]["model"] == "veo-3.1-fast"
+            assert result["prompt"] == "a paper boat on a stream [GUARDRAILED]"
+            assert result["seconds"] == "4"
 
     class TestAsyncModerationHook:
         @pytest.mark.asyncio
