@@ -7,8 +7,6 @@ use pyo3::{
 
 use super::future::ready_none;
 
-/// A custom Python cache object, driven through the built-in `Cache` API so a `Cache` subclass
-/// works unchanged.
 pub(super) struct PythonCallback(Py<PyAny>);
 
 impl PythonCallback {
@@ -61,8 +59,6 @@ impl PythonCallback {
         )
     }
 
-    /// The built-in `Cache` API has no batch read, so the callback receives one
-    /// `get_cache(**kwargs)` call per request, in order, and the results come back as a list.
     pub(super) fn lookup_batch<'py>(
         &self,
         py: Python<'py>,
@@ -98,8 +94,6 @@ impl PythonCallback {
             .call_method1("gather", PyTuple::new(py, awaitables)?)
     }
 
-    /// Receives the caller's original result, because the built-in
-    /// `Cache.async_add_cache_pipeline` splits the batch itself.
     pub(super) fn async_store_batch<'py>(
         &self,
         py: Python<'py>,
@@ -116,7 +110,6 @@ impl PythonCallback {
         )
     }
 
-    /// The built-in `Cache` facade has no flush of its own; its backend does.
     pub(super) fn async_flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let object = self.0.bind(py);
         let backend = match object.getattr_opt("cache")? {

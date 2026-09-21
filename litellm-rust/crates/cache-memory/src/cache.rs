@@ -228,7 +228,6 @@ where
             .get(key)
             .filter(|existing| eligible.is_empty() || eligible.contains(existing))
             .cloned();
-        // Matches the Redis claim: an unconditional claim only extends its own winner.
         if let Some(existing) = &existing
             && eligible.is_empty()
             && *existing != candidate

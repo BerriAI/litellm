@@ -125,8 +125,6 @@ impl ResolvedCache {
         }
     }
 
-    /// Native bindings return `{values, missing_indices}`, while a Python callback returns the
-    /// list of its per-request results.
     #[pyo3(signature = (requests, *, callback_kwargs=None))]
     fn lookup_batch(
         &self,
@@ -222,7 +220,6 @@ impl ResolvedCache {
         }
     }
 
-    /// A Python callback receives the caller's original result through `callback_result`.
     #[pyo3(signature = (requests, responses, *, callback_result=None, callback_kwargs=None))]
     fn async_store_batch<'py>(
         &self,
