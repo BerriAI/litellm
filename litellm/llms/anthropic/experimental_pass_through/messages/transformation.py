@@ -158,14 +158,14 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     if content_type != "text":
                         filtered_list.append(content_block)
                         continue
-                    stripped_text: Final[str | None] = strip_claude_code_identity(text)
+                    stripped_text = strip_claude_code_identity(text)
                     if stripped_text is None:
                         continue
                     # Only copy the block when the text changed.
                     if stripped_text == text:
                         filtered_list.append(content_block)
                     else:
-                        rewritten: Final = {**content_block, "text": stripped_text}  # mutable-ok: API message payload
+                        rewritten = {**content_block, "text": stripped_text}  # mutable-ok: API message payload
                         filtered_list.append(rewritten)
                 else:
                     # Keep non-dict items as-is
