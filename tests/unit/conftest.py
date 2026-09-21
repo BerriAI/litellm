@@ -5,7 +5,7 @@ from typing import Final
 import pytest
 from pytest_socket import enable_socket, socket_allow_hosts
 
-os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+os.environ.update(LITELLM_LOCAL_MODEL_COST_MAP="True")
 
 import litellm  # noqa: E402  # litellm reads LITELLM_LOCAL_MODEL_COST_MAP at import
 import litellm.router as litellm_router_module  # noqa: E402  # same import-time dependency
