@@ -10,12 +10,11 @@ Verifies that:
 """
 
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from unittest.mock import AsyncMock, MagicMock, patch
-
 
 SAMPLE_ARN = "arn:aws:bedrock-agentcore:us-west-2:123456789:runtime/my_agent"
 SAMPLE_MODEL = f"bedrock/agentcore/{SAMPLE_ARN}"
