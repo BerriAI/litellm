@@ -550,6 +550,8 @@ class TestUpdateLitellmSettingOrdering:
                 }
             })
 
+        saved_configs = []
+
         async def mock_save_config(new_config=None):
             saved_configs.append(new_config)
 
@@ -579,7 +581,7 @@ class TestUpdateLitellmSettingOrdering:
 
         # Saved config should contain the new value
         assert len(saved_configs) == 1
-        saved_settings = saved_configs[0]["litellm_settings"]["default_team_params"]
+        saved_settings = saved_configs[0].litellm_settings["default_team_params"]
         assert saved_settings == expected
 
         # Return value should reflect the new settings
