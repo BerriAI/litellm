@@ -705,6 +705,7 @@ class RerankBody(BaseModel):
     query: str
     documents: list[str]
     top_n: int
+    cache: dict[str, bool] | None = {"no-cache": True}
 
 
 class RerankItem(BaseModel):
