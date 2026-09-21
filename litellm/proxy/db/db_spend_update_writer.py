@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, Type
 from urllib.parse import quote, unquote
 
 from pydantic import TypeAdapter
-from typing_extensions import LiteralString, ReadOnly, TypedDict, assert_never
+from typing_extensions import LiteralString, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -142,17 +142,15 @@ _EntitySpendTable: TypeAlias = Literal[
 
 
 def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable) -> BatchTable:
-    match table_accessor:
-        case "litellm_tagtable":
-            return batcher.litellm_tagtable
-        case "litellm_agentstable":
-            return batcher.litellm_agentstable
-        case "litellm_modelaccessgroupbudgettable":
-            return batcher.litellm_modelaccessgroupbudgettable
-        case "litellm_projecttable":
-            return batcher.litellm_projecttable
-        case _ as unreachable:
-            assert_never(unreachable)
+    tables: Final[Mapping[_EntitySpendTable, BatchTable]] = MappingProxyType(
+        {
+            "litellm_tagtable": batcher.litellm_tagtable,
+            "litellm_agentstable": batcher.litellm_agentstable,
+            "litellm_modelaccessgroupbudgettable": batcher.litellm_modelaccessgroupbudgettable,
+            "litellm_projecttable": batcher.litellm_projecttable,
+        }
+    )
+    return tables[table_accessor]
 
 
 class _SpendBatchManager(Protocol):
