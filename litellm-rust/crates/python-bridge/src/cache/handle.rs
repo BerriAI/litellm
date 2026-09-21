@@ -1,3 +1,4 @@
+use litellm_cache_redis::{RedisNode, RedisTopology};
 use litellm_host_python::release_gil;
 use pyo3::{PyTraverseError, PyVisit, exceptions::PyRuntimeError, prelude::*};
 
@@ -37,16 +38,28 @@ impl CacheTestHandle {
     }
 
     #[staticmethod]
-    #[pyo3(signature = (url, *, ttl_seconds=60.0, namespace=None))]
+    #[pyo3(signature = (url, *, ttl_seconds=60.0, namespace=None, startup_nodes=None))]
     fn redis(
         py: Python<'_>,
         url: String,
         ttl_seconds: f64,
         namespace: Option<String>,
+        startup_nodes: Option<Vec<(String, u16)>>,
     ) -> PyResult<Self> {
         let ttl = Some(duration(ttl_seconds)?);
-        let service = release_gil(py, move || NativeResponseCache::redis(&url, ttl, namespace))
-            .map_err(cache_error)?;
+        let topology = match startup_nodes {
+            None => RedisTopology::Standalone,
+            Some(nodes) => RedisTopology::Cluster {
+                startup_nodes: nodes
+                    .into_iter()
+                    .map(|(host, port)| RedisNode { host, port })
+                    .collect(),
+            },
+        };
+        let service = release_gil(py, move || {
+            NativeResponseCache::redis(&url, &topology, ttl, namespace)
+        })
+        .map_err(cache_error)?;
         Ok(Self {
             service,
             guard: None,

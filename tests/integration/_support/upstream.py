@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from collections import deque
 from collections.abc import Mapping
 import json
@@ -22,6 +23,8 @@ from starlette.routing import Route
 
 from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
 from integration.cost_calculation.cost_tracking_case import (
+    BinaryResponse,
+    EventStreamEvent,
     EventStreamResponse,
     JsonResponse,
     SseResponse,
@@ -193,9 +196,11 @@ class Provider:
 
     async def scripted(self, request: Request) -> Response:
         segments: Final = tuple(segment for segment in cast(str, request.path_params["path"]).split("/") if segment)
-        if not segments:
-            return JSONResponse({"error": "Unknown scenario"}, status_code=404)
-        scenario_id: Final = segments[0].split(":", 1)[0]
+        scenario_id: Final = (
+            segments[0].split(":", 1)[0]
+            if segments and self.scenario_store.get(segments[0].split(":", 1)[0]) is not None
+            else request.headers.get("x-scripted-scenario", "")
+        )
         response: Final = self.scenario_store.get(scenario_id)
         if response is None:
             return JSONResponse({"error": "Unknown scenario"}, status_code=404)
@@ -210,6 +215,12 @@ class Provider:
                         "$REQUEST_ID", scenario_id
                     ).encode(),
                     media_type=response.content_type,
+                    status_code=response.status,
+                )
+            case BinaryResponse():
+                return Response(
+                    content=b"\x00" * response.length,
+                    media_type=response.content_type,
                 )
             case SseResponse():
                 stream_body: Final = ("\n\n".join(response.frames) + "\n\n").replace(
@@ -217,8 +228,25 @@ class Provider:
                 )
                 return Response(content=stream_body.encode(), media_type=response.content_type)
             case EventStreamResponse():
+                events: Final = (
+                    tuple(
+                        EventStreamEvent(
+                            event_type="chunk",
+                            payload={
+                                "bytes": base64.b64encode(
+                                    json.dumps(event.payload, separators=(",", ":"))
+                                    .replace("$REQUEST_ID", scenario_id)
+                                    .encode()
+                                ).decode(),
+                            },
+                        )
+                        for event in response.events
+                    )
+                    if response.framing == "invoke"
+                    else response.events
+                )
                 event_body: Final = b"".join(
-                    _aws_event_frame(event.event_type, event.payload, scenario_id) for event in response.events
+                    _aws_event_frame(event.event_type, event.payload, scenario_id) for event in events
                 )
                 return Response(content=event_body, media_type=response.content_type)
 

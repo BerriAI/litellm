@@ -40,22 +40,30 @@ class CostRow(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     spend: float | None = None
+    status: str | None = None
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     metadata: CostMetadata | None = None
 
     @property
-    def breakdown(self) -> CostBreakdown:
-        assert self.metadata is not None and self.metadata.cost_breakdown is not None
-        return self.metadata.cost_breakdown
+    def breakdown(self) -> CostBreakdown | None:
+        return self.metadata.cost_breakdown if self.metadata is not None else None
+
+
+class FailureRow(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    spend: float
+    status: str
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
 
 
 def approx_equal(actual: float, expected: float) -> bool:
     return abs(actual - expected) <= max(1e-9, abs(expected) * 1e-2)
 
 
-def assert_total_is_sum_of_components(row: CostRow, context: str) -> None:
-    breakdown: Final = row.breakdown
+def assert_total_is_sum_of_components(row: CostRow, breakdown: CostBreakdown, context: str) -> None:
     total: Final = sum(
         cost or 0.0
         for cost in (breakdown.input_cost, breakdown.output_cost, breakdown.tool_usage_cost)
@@ -74,7 +82,7 @@ def _row(value: Mapping[str, object]) -> CostRow | None:
     metadata_value: Final = value.get("metadata")
     metadata: Final = json.loads(metadata_value) if isinstance(metadata_value, str) else metadata_value
     parsed: Final = CostRow.model_validate({**value, "metadata": metadata})
-    return parsed if parsed.metadata and parsed.metadata.cost_breakdown else None
+    return parsed if parsed.metadata is not None or (parsed.spend is not None and parsed.status is not None) else None
 
 
 def poll_cost_row(key: str) -> CostRow:
@@ -82,10 +90,33 @@ def poll_cost_row(key: str) -> CostRow:
 
     def read() -> CostRow | None:
         rows: Final = read_rows(
-            'SELECT spend, metadata, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+            'SELECT spend, status, metadata, prompt_tokens, completion_tokens '
+            'FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
             (digest,),
         )
         return next((parsed for row in rows if (parsed := _row(row)) is not None), None)
+
+    result: Final = eventually(read, lambda row: row is not None, seconds=60)
+    assert result is not None
+    return result
+
+
+def poll_failure_row(key: str) -> FailureRow:
+    digest: Final = sha256(key.encode()).hexdigest()
+
+    def read() -> FailureRow | None:
+        rows: Final = read_rows(
+            'SELECT spend, status, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE api_key=%s',
+            (digest,),
+        )
+        return next(
+            (
+                parsed
+                for row in rows
+                if (parsed := FailureRow.model_validate(row)).status == "failure"
+            ),
+            None,
+        )
 
     result: Final = eventually(read, lambda row: row is not None, seconds=60)
     assert result is not None
@@ -133,8 +164,20 @@ def register_scenario_deployment(
         "api_base": handle.api_base(),
         **case.litellm_params,
         **(
+            {
+                key: value
+                for key, value in (
+                    ("input_cost_per_token", case.deployment.input_cost_per_token),
+                    ("output_cost_per_token", case.deployment.output_cost_per_token),
+                )
+                if value is not None
+            }
+            if case.deployment is not None
+            else {}
+        ),
+        **(
             {"vertex_credentials": _vertex_service_account_json(control_url)}
-            if case.rates.litellm_provider == "vertex_ai-language-models"
+            if case.rates.litellm_provider.startswith("vertex_ai")
             else {}
         ),
     }
