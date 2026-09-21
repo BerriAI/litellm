@@ -460,18 +460,37 @@ def _message_text(content: object) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _estimated_tool_result_characters(content: object) -> int:
+    if isinstance(content, str):
+        return len(content)
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        len(part)
+        if isinstance(part, str)
+        else len(text)
+        if isinstance(part, Mapping) and isinstance(text := part.get("text"), str)
+        else 0
+        for part in content
+    )
+
+
 def _estimated_content_characters(content: object) -> int:
     if isinstance(content, str):
         return len(content)
-    if isinstance(content, list):
-        return sum(_estimated_content_characters(part) for part in content)
-    if isinstance(content, Mapping):
-        content_type: Final = content.get("type")
-        if content_type == "text":
-            return _estimated_content_characters(content.get("text"))
-        if content_type == "tool_result":
-            return _estimated_content_characters(content.get("content"))
-    return 0
+    if not isinstance(content, list):
+        return 0
+    text_characters: Final = sum(
+        len(text)
+        for part in content
+        if isinstance(part, Mapping) and part.get("type") == "text" and isinstance(text := part.get("text"), str)
+    )
+    tool_result_characters: Final = sum(
+        _estimated_tool_result_characters(part.get("content"))
+        for part in content
+        if isinstance(part, Mapping) and part.get("type") == "tool_result"
+    )
+    return text_characters + tool_result_characters
 
 
 def _estimated_conversation_tokens(messages: Sequence[Mapping[str, object]] | None) -> int:
