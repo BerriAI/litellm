@@ -271,13 +271,13 @@ def optionally_handle_anthropic_oauth(
             api_base,
         )
         for name in tuple(headers):
-            name_lower: Final = name.lower()
+            name_lower = name.lower()
             if name_lower in ("authorization", "x-api-key") and is_anthropic_oauth_key(headers[name]):
                 headers.pop(name)
             elif name_lower == "anthropic-beta":
-                existing_beta: Final = headers.get(name)
+                existing_beta = headers.get(name)
                 if existing_beta:
-                    filtered_betas: Final = tuple(
+                    filtered_betas = tuple(
                         b.strip()
                         for b in existing_beta.split(",")
                         if b.strip() and b.strip() != ANTHROPIC_OAUTH_BETA_HEADER
