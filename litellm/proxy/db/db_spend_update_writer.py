@@ -141,16 +141,18 @@ _EntitySpendTable: TypeAlias = Literal[
 ]
 
 
+_ENTITY_SPEND_TABLES: Final[Mapping[_EntitySpendTable, Callable[[_SpendBatch], BatchTable]]] = MappingProxyType(
+    {
+        "litellm_tagtable": lambda batcher: batcher.litellm_tagtable,
+        "litellm_agentstable": lambda batcher: batcher.litellm_agentstable,
+        "litellm_modelaccessgroupbudgettable": lambda batcher: batcher.litellm_modelaccessgroupbudgettable,
+        "litellm_projecttable": lambda batcher: batcher.litellm_projecttable,
+    }
+)
+
+
 def _entity_spend_table(batcher: _SpendBatch, table_accessor: _EntitySpendTable) -> BatchTable:
-    tables: Final[Mapping[_EntitySpendTable, BatchTable]] = MappingProxyType(
-        {
-            "litellm_tagtable": batcher.litellm_tagtable,
-            "litellm_agentstable": batcher.litellm_agentstable,
-            "litellm_modelaccessgroupbudgettable": batcher.litellm_modelaccessgroupbudgettable,
-            "litellm_projecttable": batcher.litellm_projecttable,
-        }
-    )
-    return tables[table_accessor]
+    return _ENTITY_SPEND_TABLES[table_accessor](batcher)
 
 
 class _SpendBatchManager(Protocol):
