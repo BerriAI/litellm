@@ -1336,6 +1336,54 @@
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[us.anthropic.claude-opus-5-v1:0-stream_full_usage]": [
       "quota_management.spend_tracking.scripted_wire.logs_cost"
     ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[whisper-next-transcriptions-per-second]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[whisper-verbose-next-transcriptions-duration]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-4o-transcribe-next-transcriptions-tokens]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[nova-next-transcriptions-per-second]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-whisper-next-transcriptions-deployment]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[tts-next-speech-per-character]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[tts-next-hd-speech-per-character]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-tts-next-speech-deployment]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dall-e-3-next-images-standard]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dall-e-3-next-images-hd]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dall-e-3-next-images-wide]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[dall-e-3-next-images-two]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-image-next-images-low]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[imagen-next-images-one]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[amazon-nova-canvas-next-images-one]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
+    "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[gpt-image-next-images-edit]": [
+    "quota_management.spend_tracking.cost_matrix.logs_cost"
+    ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[azure-text-embeddings-4-large-deployment]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
