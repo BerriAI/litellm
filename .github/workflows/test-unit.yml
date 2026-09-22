@@ -103,11 +103,11 @@ jobs:
 
           - shard: Web IQ
             artifact-name: llm-webiq
-            test-path: "tests/unit/llms/webiq"
-            workers: 0
+            test-path: "tests/unit/llms/webiq tests/unit/test_socket_policy.py"
+            workers: 2
             reruns: 0
             timeout-minutes: 5
-            job-timeout-minutes: 30
+            job-timeout-minutes: 45
 
           - shard: misc
             artifact-name: misc
