@@ -183,6 +183,7 @@ jobs:
           cat "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" >> "${GITHUB_ENV}"
 
       - name: Run the selected tests three times
+        id: tests
         env:
           TESTS: ${{ needs.detect.outputs.tests }}
           E2E_FIXTURE_MODE: live
@@ -228,6 +229,15 @@ jobs:
           uv run --no-sync python .github/e2e-stack/redact_output.py \
             --values tests/e2e/.env --values "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" \
             --out "${RUNNER_TEMP}/e2e-redacted" "${RUNNER_TEMP}"/e2e-pass-*.log "${RUNNER_TEMP}"/e2e-pass-*.xml
+
+      - name: Redact the gateway logs of a failed run
+        if: always() && steps.boot.outcome == 'success' && steps.tests.outcome != 'success'
+        run: |
+          umask 077
+          shopt -s nullglob
+          uv run --no-sync python .github/e2e-stack/redact_output.py \
+            --values tests/e2e/.env --values "${RUNNER_TEMP}/litellm-e2e-stack/stack.env" \
+            --out "${RUNNER_TEMP}/e2e-redacted" "${RUNNER_TEMP}"/litellm-e2e-stack/logs/gateway-*.log
 
       - name: Keep the redacted pytest output
         if: always() && steps.boot.outcome == 'success'
