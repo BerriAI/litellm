@@ -273,3 +273,12 @@ def create_proxy_test_client(
     # Initialize proxy
     asyncio.run(initialize(config=config_fp, debug=init_options.get("debug", False)))
     return TestClient(app)
+
+
+@pytest.fixture
+def fresh_agent_read_through(monkeypatch):
+    from litellm.proxy.common_utils import registry_read_through
+
+    read_through = registry_read_through.RegistryReadThrough(resync=registry_read_through._resync_agents)
+    monkeypatch.setattr(registry_read_through, "agent_registry_read_through", read_through)
+    return read_through
