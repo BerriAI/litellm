@@ -121,6 +121,10 @@ start_proxy() {
       "LITELLM_MODEL_COST_MAP_URL=$INTEGRATION_UPSTREAM_URL/_cost_map"
       "MODEL_COST_MAP_MIN_MODEL_COUNT=1"
       "MODEL_COST_MAP_MAX_SHRINK_RATIO=0"
+      "GEMINI_API_BASE=$INTEGRATION_UPSTREAM_URL"
+      "ANTHROPIC_API_BASE=$INTEGRATION_UPSTREAM_URL"
+      "GEMINI_API_KEY=sk-scripted-provider"
+      "ANTHROPIC_API_KEY=sk-scripted-provider"
     )
   else
     cost_map_env=("LITELLM_LOCAL_MODEL_COST_MAP=True")

@@ -201,6 +201,14 @@ async def test_returned_user_api_key_auth(user_role, expected_role):
     assert new_obj.user_role == expected_role
 
 
+class _NoMembershipRowPrisma:
+    class db:
+        class litellm_teammembership:
+            @staticmethod
+            async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
+                return None
+
+
 @pytest.mark.parametrize("key_ownership", ["user_key", "team_key"])
 @pytest.mark.asyncio
 async def test_aaauser_personal_budgets(key_ownership):
@@ -253,7 +261,7 @@ async def test_aaauser_personal_budgets(key_ownership):
 
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
-    setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
+    setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
 
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")

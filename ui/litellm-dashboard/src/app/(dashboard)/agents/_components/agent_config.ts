@@ -313,6 +313,10 @@ export const buildAgentDataFromForm = (values: any, existingAgent?: any) => {
   return agentData;
 };
 
+export const parseAccessGroupIdsForForm = (agent: { access_group_ids?: string[] | null }) => ({
+  access_group_ids: agent.access_group_ids ?? [],
+});
+
 export const parseMcpPermissionsForForm = (agent: any) => ({
   allowed_mcp_servers_and_groups: {
     servers: agent.object_permission?.mcp_servers ?? [],
@@ -377,5 +381,6 @@ export const parseAgentForForm = (agent: any) => {
     // extra_headers: already an array of strings
     extra_headers: agent.extra_headers ?? [],
     ...parseMcpPermissionsForForm(agent),
+    ...parseAccessGroupIdsForForm(agent),
   };
 };
