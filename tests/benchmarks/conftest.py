@@ -13,10 +13,11 @@ import sys
 from collections.abc import Callable, Iterator
 from concurrent.futures import Future
 from pathlib import Path
-from typing import ParamSpec, TypeVar
+from typing import Final, ParamSpec, TypeVar
 
 import pytest
 
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_source_info
 from litellm.litellm_core_utils.thread_pool_executor import executor
 
 P = ParamSpec("P")
@@ -24,6 +25,10 @@ R = TypeVar("R")
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    catalog: Final = get_model_cost_map_source_info()
+    if catalog["source"] != "local" or not catalog["is_env_forced"]:
+        raise pytest.UsageError("Set LITELLM_LOCAL_MODEL_COST_MAP=True before importing litellm for benchmarks")
+    print(f"Benchmark catalog: {catalog['source_revision']} (bundled)")  # noqa: T201  # record benchmark input provenance
     if os.environ.get("LITELLM_REQUIRE_INSTALLED_WHEEL") != "1":
         return
 
