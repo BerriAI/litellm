@@ -2270,7 +2270,9 @@ def _system_content_as_text_parts(content: object) -> tuple[object, ...]:
 def _merge_system_message_run(run: Sequence[AllMessageValues]) -> AllMessageValues:
     if len(run) == 1:
         return run[0]
-    contents: Final = tuple(message.get("content") for message in run)
+    contents: Final = tuple(content for content in (message.get("content") for message in run) if content is not None)
+    if not contents:
+        return run[0]
     if all(isinstance(content, str) for content in contents):
         joined_text: Final = "\n\n".join(cast(tuple[str, ...], contents))  # cast-ok: every content is a str
         return cast(AllMessageValues, {**run[0], "content": joined_text})  # cast-ok: dict spread keeps message shape

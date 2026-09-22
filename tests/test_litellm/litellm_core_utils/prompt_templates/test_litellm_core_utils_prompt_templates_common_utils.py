@@ -1917,3 +1917,25 @@ class TestMergeConsecutiveSystemMessages:
 
         assert merged == before
         assert [message is original for message, original in zip(merged, messages)] == [True] * len(messages)
+
+    @pytest.mark.parametrize(
+        ("messages", "expected_content"),
+        [
+            ([{"role": "system"}, {"role": "system", "content": "Skills: none."}], "Skills: none."),
+            ([{"role": "system", "content": "You are terse."}, {"role": "system"}], "You are terse."),
+            (
+                [{"role": "system"}, {"role": "system", "content": [{"type": "text", "text": "Be brief."}]}],
+                [{"type": "text", "text": "Be brief."}],
+            ),
+        ],
+        ids=["missing-then-str", "str-then-missing", "missing-then-list"],
+    )
+    def test_skips_system_messages_without_content_when_merging(self, messages, expected_content):
+        merged = merge_consecutive_system_messages([*messages, {"role": "user", "content": "Hello"}])
+
+        assert merged == [{"role": "system", "content": expected_content}, {"role": "user", "content": "Hello"}]
+
+    def test_keeps_the_first_message_when_no_system_message_in_the_run_has_content(self):
+        merged = merge_consecutive_system_messages([{"role": "system"}, {"role": "system"}, {"role": "user", "content": "Hi"}])
+
+        assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]
