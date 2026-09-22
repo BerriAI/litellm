@@ -1,3 +1,4 @@
+import sys
 from typing import Final
 from unittest.mock import AsyncMock, Mock
 
@@ -85,6 +86,16 @@ class TestFalAIVideoTransformation:
         assert isinstance(mapped["duration"], int)
         assert mapped["reference_image_urls"] == [url]
         assert "image_url" not in mapped
+
+    def test_map_openai_params_h3_keeps_auto_duration_literal(self):
+        assert self.config.map_openai_params({"seconds": "auto"}, H3_TEXT_MODEL, False) == {"duration": "auto"}
+
+    def test_map_openai_params_h3_size_beyond_tiers_uses_top_resolution(self):
+        side = str(sys.maxsize + 1)
+        assert self.config.map_openai_params({"size": f"{side}x{side}"}, H3_TEXT_MODEL, False) == {
+            "resolution": "4K",
+            "aspect_ratio": "1:1",
+        }
 
     def test_transform_video_create_request(self):
         body, files, url = self.config.transform_video_create_request(
