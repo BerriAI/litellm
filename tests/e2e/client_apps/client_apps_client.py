@@ -95,6 +95,7 @@ def _codex_config(model: str) -> str:
         (
             f'model = "{model}"',
             'model_provider = "litellm"',
+            'sandbox_mode = "danger-full-access"',
             "",
             "[features]",
             "plugins = false",

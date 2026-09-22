@@ -3,7 +3,14 @@
 model provider (`wire_api = "responses"`, so `/v1/responses`): it runs a shell
 command, reads its output, and answers. Client side the JSONL events carry the
 completed command execution and the agent message; proxy side the spend rows
-carry real spend and `stream: true` (Codex always streams the Responses API)."""
+carry real spend and `stream: true` (Codex always streams the Responses API).
+
+The throwaway config turns Codex's sandbox off (`sandbox_mode =
+"danger-full-access"`): its Linux sandbox is bubblewrap, which cannot set up
+its network namespace inside a CI container, so the model would only ever see
+`bwrap: ... Operation not permitted` instead of running the command. The
+workspace is an empty temp dir and the environment is allowlisted, so nothing
+of value is reachable without the sandbox."""
 
 from __future__ import annotations
 
