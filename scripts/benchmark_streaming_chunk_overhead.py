@@ -40,10 +40,12 @@ from litellm.litellm_core_utils.streaming_handler import (
 )  # noqa: E402
 from litellm.types.utils import (  # noqa: E402
     Delta,
-    GenericStreamingChunk as GChunk,
     ModelResponseStream,
     StreamingChoices,
     Usage,
+)
+from litellm.types.utils import (
+    GenericStreamingChunk as GChunk,
 )
 
 # ---------------------------------------------------------------------------

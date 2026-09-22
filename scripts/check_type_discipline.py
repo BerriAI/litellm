@@ -111,19 +111,19 @@ Exit code 1 if any violation is found. Stdlib only.
 """
  
 from __future__ import annotations
- 
+
 import ast
 import io
 import os
 import re
 import sys
 import tokenize
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from multiprocessing import Pool
 from pathlib import Path
-from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import NamedTuple
- 
+
 # Mutable collection types, banned in *every* annotation. Name-based, so `dict`,
 # `typing.Dict`, `collections.deque`, and `collections.abc.MutableMapping` all match
 # however they were imported. The read-only interfaces (Mapping, Sequence, the

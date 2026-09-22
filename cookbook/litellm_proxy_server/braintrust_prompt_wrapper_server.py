@@ -18,10 +18,9 @@ import os
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, Header, Query
-from fastapi.responses import JSONResponse
 import uvicorn
-
+from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 app = FastAPI(
     title="Braintrust Prompt Wrapper",

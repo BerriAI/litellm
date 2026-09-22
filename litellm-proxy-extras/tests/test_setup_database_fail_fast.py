@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-
 from litellm_proxy_extras.utils import (
     ProxyExtrasDBManager,
     _max_migration_timestamp,
