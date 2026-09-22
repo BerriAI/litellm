@@ -86,3 +86,42 @@ def test_opus_5_5_thinking_profile(local_model_cost_map, model):
     assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
     assert AnthropicModelInfo._is_always_on_thinking_model(model, "anthropic") is True
     assert AnthropicModelInfo.forced_tool_use_unsupported(model.removeprefix("anthropic/")) is True
+
+
+BEDROCK_OPUS_5_5_VARIANTS = tuple(m.replace("claude-opus-5", "claude-opus-5-5") for m in BEDROCK_OPUS_5_VARIANTS)
+
+
+def test_opus_5_5_bedrock_present_in_bundled_backup():
+    backup = GetModelCostMap.load_local_model_cost_map()
+    root = _load_root_cost_map()
+    for model in BEDROCK_OPUS_5_5_VARIANTS:
+        assert backup[model] == root[model]
+
+
+def test_opus_5_5_registered_for_bedrock_converse():
+    assert "anthropic.claude-opus-5-5" in BEDROCK_CONVERSE_MODELS
+
+
+@pytest.mark.parametrize("model_name", BEDROCK_OPUS_5_5_VARIANTS)
+def test_opus_5_5_bedrock_pricing(model_name, local_model_cost_map):
+    import litellm
+
+    info = litellm.get_model_info(model_name, custom_llm_provider="bedrock")
+    multiplier = 1.0 if model_name.split(".")[0] in ("anthropic", "global") else 1.1
+    assert info["input_cost_per_token"] == pytest.approx(4e-06 * multiplier)
+    assert info["output_cost_per_token"] == pytest.approx(2e-05 * multiplier)
+    assert info["cache_creation_input_token_cost"] == pytest.approx(5e-06 * multiplier)
+    assert info["cache_read_input_token_cost"] == pytest.approx(2e-07 * multiplier)
+    assert info["max_input_tokens"] == 1_000_000
+    assert info["max_output_tokens"] == 128_000
+
+
+@pytest.mark.parametrize("model_name", BEDROCK_OPUS_5_5_VARIANTS)
+def test_opus_5_5_bedrock_thinking_profile(model_name, local_model_cost_map):
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+    from litellm.llms.bedrock.common_utils import bedrock_converse_supports_strict_tools
+
+    assert AnthropicModelInfo._is_adaptive_thinking_model(model_name, "bedrock") is True
+    assert AnthropicModelInfo._is_always_on_thinking_model(model_name, "bedrock") is True
+    assert AnthropicModelInfo.forced_tool_use_unsupported(model_name) is True
+    assert bedrock_converse_supports_strict_tools(model_name) is False
