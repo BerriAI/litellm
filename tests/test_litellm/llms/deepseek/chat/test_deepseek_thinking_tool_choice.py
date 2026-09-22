@@ -13,21 +13,58 @@ def _function_tool(name: str) -> dict:
 
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.parametrize(
-    ("model", "thinking", "tool_choice", "drop_params", "expected"),
+    (
+        "model",
+        "thinking",
+        "tool_choice",
+        "request_drop_params",
+        "global_drop_params",
+        "expected",
+    ),
     [
-        ("deepseek-v4-pro", {"type": "enabled"}, "required", True, "auto"),
+        (
+            "deepseek-v4-pro",
+            {"type": "enabled"},
+            "required",
+            True,
+            False,
+            "auto",
+        ),
+        (
+            "deepseek-v4-pro",
+            {"type": "enabled"},
+            "required",
+            False,
+            True,
+            "auto",
+        ),
         (
             "deepseek-v4-pro",
             {"type": "enabled"},
             {"type": "function", "function": {"name": "shell"}},
             True,
+            False,
             "auto",
         ),
-        ("deepseek-v4-pro", {"type": "enabled"}, "none", False, "none"),
-        ("deepseek-v4-pro", {"type": "enabled"}, "auto", False, "auto"),
-        ("deepseek-v4-pro", {"type": "enabled"}, None, False, None),
-        ("deepseek-v4-pro", {"type": "disabled"}, "required", False, "required"),
-        ("deepseek-chat", {"type": "enabled"}, "required", False, "required"),
+        ("deepseek-v4-pro", {"type": "enabled"}, "none", False, False, "none"),
+        ("deepseek-v4-pro", {"type": "enabled"}, "auto", False, False, "auto"),
+        ("deepseek-v4-pro", {"type": "enabled"}, None, False, False, None),
+        (
+            "deepseek-v4-pro",
+            {"type": "disabled"},
+            "required",
+            False,
+            False,
+            "required",
+        ),
+        (
+            "deepseek-chat",
+            {"type": "enabled"},
+            "required",
+            False,
+            False,
+            "required",
+        ),
     ],
 )
 async def test_transform_request_normalizes_tool_choice_for_thinking(
@@ -35,9 +72,12 @@ async def test_transform_request_normalizes_tool_choice_for_thinking(
     model: str,
     thinking: dict[str, str],
     tool_choice: object | None,
-    drop_params: bool,
+    request_drop_params: bool,
+    global_drop_params: bool,
     expected: object | None,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
     config = DeepSeekChatConfig()
     tool_choice_param = {"tool_choice": tool_choice} if tool_choice is not None else {}
     request = {
@@ -48,7 +88,7 @@ async def test_transform_request_normalizes_tool_choice_for_thinking(
             "tools": [_function_tool("shell"), _function_tool("read_file")],
             **tool_choice_param,
         },
-        "litellm_params": {"drop_params": drop_params},
+        "litellm_params": {"drop_params": request_drop_params},
         "headers": {},
     }
 
