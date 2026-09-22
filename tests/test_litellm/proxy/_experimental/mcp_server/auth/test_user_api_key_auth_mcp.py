@@ -1817,7 +1817,8 @@ class TestMCPPublicRouteGuard:
                 await MCPRequestHandler.process_mcp_request(scope)
             assert exc_info.value.status_code == 401
 
-    async def test_legitimate_well_known_path_still_bypasses_auth(self):
+    @pytest.mark.parametrize("bearer", [None, "llm_caccess_stale", "llm_crefresh_stale"])
+    async def test_legitimate_well_known_path_still_bypasses_auth(self, bearer):
         """
         Real OAuth discovery routes registered under /.well-known/ must remain
         public so unauthenticated clients can fetch them per RFC 8414/9728.
@@ -1826,16 +1827,21 @@ class TestMCPPublicRouteGuard:
             "type": "http",
             "method": "GET",
             "path": "/.well-known/oauth-protected-resource",
-            "headers": [],
+            "headers": [(b"authorization", f"Bearer {bearer}".encode())] if bearer else [],
         }
 
         # No mock needed — public path should not call user_api_key_auth at all
         with patch(
             "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
         ) as mock_auth:
-            auth_result, *_rest = await MCPRequestHandler.process_mcp_request(scope)
+            auth_result, mcp_header, _, server_headers, oauth_headers, raw_headers = (
+                await MCPRequestHandler.process_mcp_request(scope)
+            )
             mock_auth.assert_not_called()
             assert isinstance(auth_result, UserAPIKeyAuth)
+            assert "litellm.mcp.connection_grant" not in scope
+            assert not mcp_header and not server_headers and not oauth_headers
+            assert "authorization" not in raw_headers
 
 
 @pytest.mark.asyncio
@@ -9449,7 +9455,7 @@ class TestScopedSessionAdmission:
         (None, "connection-target", 401),
     ],
 )
-@pytest.mark.parametrize("grant_state", ["valid", "expired", "refresh", "oversized"])
+@pytest.mark.parametrize("grant_state", ["valid", "expired", "refresh", "oversized", "other-resource"])
 @pytest.mark.parametrize("server_mode", ["managed", "delegated"])
 async def test_connection_credential_requires_exact_key_and_server(
     monkeypatch, key, selector, expected, grant_state, server_mode
@@ -9485,7 +9491,9 @@ async def test_connection_credential_requires_exact_key_and_server(
     )
     monkeypatch.setattr(admission, "user_api_key_auth", AsyncMock(return_value=auth))
     binding = ConnectionBinding(
-        key_hash=hash_token("sk-original"), server_id=server.server_id, resource="https://gateway.example/mcp"
+        key_hash=hash_token("sk-original"),
+        server_id=server.server_id,
+        resource="https://other.example/mcp" if grant_state == "other-resource" else "https://gateway.example/mcp",
     )
     issued = json.loads(
         flow.mint_connection_tokens(
@@ -9528,11 +9536,18 @@ async def test_connection_credential_requires_exact_key_and_server(
         assert exc.value.status_code == expected_status
         if (
             server_mode == "managed"
-            and key == "sk-original"
+            and key is not None
             and selector == "connection-target"
-            and grant_state != "valid"
         ):
-            assert "resource_metadata=" in exc.value.headers["www-authenticate"]
+            from urllib.parse import parse_qs, urlparse
+
+            challenge = exc.value.headers["www-authenticate"]
+            metadata_url = challenge.split('resource_metadata="', 1)[1].split('"', 1)[0]
+            bootstrap = parse_qs(urlparse(metadata_url).query)["connection"][0]
+            assert flow.open_connection_bootstrap(bootstrap) == ConnectionBinding(
+                key_hash=hash_token(key), server_id=server.server_id, resource="https://gateway.example/mcp"
+            )
+            assert exc.value.headers["Cache-Control"] == "no-store"
         assert flow.CONNECTION_SCOPE_KEY not in scope
         return
     _, _, _, server_headers, oauth_headers, raw_headers = await MCPRequestHandler.process_mcp_request(scope)

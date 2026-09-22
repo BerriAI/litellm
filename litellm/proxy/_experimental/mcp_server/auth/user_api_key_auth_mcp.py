@@ -462,7 +462,8 @@ class MCPRequestHandler:
 
         request_route: Final = get_request_route(request)
         # Only OAuth metadata routes registered under /.well-known/ are public.
-        if request_route.startswith("/.well-known/"):
+        is_public_metadata: Final = request_route.startswith("/.well-known/")
+        if is_public_metadata:
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif has_explicit_litellm_key:
             # An explicit x-litellm-api-key is always a LiteLLM credential, even
@@ -552,7 +553,7 @@ class MCPRequestHandler:
 
         scope.pop(CONNECTION_SCOPE_KEY, None)
         connection_header: Final = headers.get("authorization")
-        if is_connection_credential(connection_header):
+        if is_connection_credential(connection_header) and not is_public_metadata:
             scope[CONNECTION_SCOPE_KEY] = await MCPRequestHandler._admit_connection_credential(
                 request=request,
                 request_route=request_route,
@@ -627,10 +628,14 @@ class MCPRequestHandler:
             resource=f"{get_request_base_url(request)}/mcp",
         )
         connection: Final = open_connection_credential(connection_header)
-        if connection is None:
+        if connection is None or connection.binding != expected_binding:
             raise HTTPException(
                 status_code=401,
-                detail="Invalid or expired MCP connection credential",
+                detail=(
+                    "Invalid or expired MCP connection credential"
+                    if connection is None
+                    else "Connection credential belongs to a different key or resource"
+                ),
                 headers=MappingProxyType(
                     {
                         "www-authenticate": connection_challenge(request, expected_binding),
@@ -638,8 +643,6 @@ class MCPRequestHandler:
                     }
                 ),
             )
-        if connection.binding != expected_binding:
-            raise HTTPException(status_code=401, detail="Connection credential belongs to a different key or resource")
         return connection
 
     @staticmethod
@@ -1216,7 +1219,13 @@ class MCPRequestHandler:
             raise HTTPException(status_code=401, detail="Invalid or expired credential")
 
     @staticmethod
-    async def _enforce_admitted_live_policy(admitted: UserAPIKeyAuth, request: Request, route: str) -> None:
+    async def _enforce_admitted_live_policy(
+        admitted: UserAPIKeyAuth,
+        request: Request,
+        route: str,
+        *,
+        request_data: dict[str, object] | None = None,
+    ) -> None:
         """Run the standard pipeline's authorization checks over the admitted identity.
 
         Mirrors the ``user_api_key_auth`` wrapper between the builder and its return: clear the
@@ -1246,7 +1255,7 @@ class MCPRequestHandler:
             await _run_centralized_common_checks(
                 user_api_key_auth_obj=admitted,
                 request=request,
-                request_data=await _read_request_body(request=request),
+                request_data=await _read_request_body(request=request) if request_data is None else request_data,
                 route=route,
             )
         except (HTTPException, ProxyException):

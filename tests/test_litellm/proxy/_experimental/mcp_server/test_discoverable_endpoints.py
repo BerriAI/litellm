@@ -12574,6 +12574,79 @@ def test_keyed_connection_headerless_exchange_and_rotating_refresh(keyed_oauth_c
     harness.vault.assert_not_called()
 
 
+def test_keyed_connection_consent_can_retry_failed_preparation(keyed_oauth_client, monkeypatch):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    harness = keyed_oauth_client
+    _, _, handle = _start_keyed_oauth(harness)
+    prepare = AsyncMock(side_effect=[HTTPException(status_code=503, detail="discovery unavailable"), harness.server])
+    monkeypatch.setattr(endpoints, "_server_with_oauth_endpoints", prepare)
+    payload = {"flow": handle, "decision": "approve"}
+
+    failed = harness.client.post("/authorize/connection/complete", data=payload)
+    assert failed.status_code == 503
+    assert "location" not in failed.headers
+    assert not failed.headers.get("set-cookie")
+    retried = harness.client.post("/authorize/connection/complete", data=payload)
+    assert retried.status_code == 303
+    assert retried.headers["location"].startswith("https://provider.example/authorize?")
+    harness.upstream.post.assert_not_awaited()
+
+
+@pytest.mark.parametrize("grant_type", ["authorization_code", "refresh_token"])
+def test_keyed_connection_exchange_can_retry_failed_preparation(keyed_oauth_client, monkeypatch, grant_type):
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints as endpoints
+
+    harness = keyed_oauth_client
+    code_payload = _complete_keyed_oauth(harness)
+    tokens = harness.client.post("/token", data=code_payload).json() if grant_type == "refresh_token" else None
+    payload = (
+        {"grant_type": grant_type, "client_id": code_payload["client_id"], "refresh_token": tokens["refresh_token"]}
+        if tokens is not None else code_payload
+    )
+    harness.upstream.post.reset_mock()
+    prepare = AsyncMock(side_effect=[HTTPException(status_code=503, detail="discovery unavailable"), harness.server])
+    monkeypatch.setattr(endpoints, "_server_with_oauth_endpoints", prepare)
+
+    failed = harness.client.post("/token", data=payload)
+    assert failed.status_code == 503
+    harness.upstream.post.assert_not_awaited()
+    retried = harness.client.post("/token", data=payload)
+    assert retried.status_code == 200, retried.text
+    assert retried.json()["access_token"].startswith("llm_caccess_")
+    harness.upstream.post.assert_awaited_once()
+
+
+@pytest.mark.parametrize("grant_type", ["authorization_code", "refresh_token"])
+@pytest.mark.parametrize("failure", ["response", "timeout"])
+def test_keyed_connection_dispatched_provider_failure_cannot_redeem_twice(keyed_oauth_client, grant_type, failure):
+    import httpx
+
+    harness = keyed_oauth_client
+    code_payload = _complete_keyed_oauth(harness)
+    tokens = harness.client.post("/token", data=code_payload).json() if grant_type == "refresh_token" else None
+    payload = (
+        {"grant_type": grant_type, "client_id": code_payload["client_id"], "refresh_token": tokens["refresh_token"]}
+        if tokens is not None else code_payload
+    )
+    harness.upstream.post.reset_mock()
+    harness.upstream.post.return_value = httpx.Response(
+        503, json={"error": "temporarily_unavailable"}, request=httpx.Request("POST", "https://provider.example/token")
+    )
+
+    if failure == "timeout":
+        harness.upstream.post.side_effect = httpx.ReadTimeout("provider response unavailable")
+        with pytest.raises(httpx.ReadTimeout):
+            harness.client.post("/token", data=payload)
+    else:
+        failed = harness.client.post("/token", data=payload)
+        assert failed.status_code >= 500
+    replayed = harness.client.post("/token", data=payload)
+    assert replayed.status_code == 400
+    assert replayed.json()["error"] == "invalid_grant"
+    harness.upstream.post.assert_awaited_once()
+
+
 @pytest.mark.parametrize("change", ["verifier", "redirect", "resource", "tamper"])
 def test_keyed_connection_rejects_bad_exchange_before_upstream(keyed_oauth_client, change):
     harness = keyed_oauth_client
@@ -12672,7 +12745,7 @@ def test_keyed_connection_client_cannot_enter_session_login_flow(keyed_oauth_cli
 
 
 @pytest.mark.parametrize("stage", ["authorize", "exchange", "refresh"])
-@pytest.mark.parametrize("policy", ["blocked", "expired", "denied_server", "denied_route", "allowed"])
+@pytest.mark.parametrize("policy", ["blocked", "expired", "denied_server", "denied_route", "over_budget", "allowed"])
 def test_keyed_connection_reloads_live_key_before_provider(keyed_oauth_client, monkeypatch, stage, policy):
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import gateway_dcr_flow as flow
@@ -12702,7 +12775,12 @@ def test_keyed_connection_reloads_live_key_before_provider(keyed_oauth_client, m
     lookup = AsyncMock(return_value=key)
     monkeypatch.setattr(auth_checks, "get_key_object", lookup)
     monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
-    monkeypatch.setattr(admission, "_run_centralized_common_checks", AsyncMock())
+    import litellm
+
+    common_checks = AsyncMock(
+        side_effect=litellm.BudgetExceededError(current_cost=2, max_budget=1) if policy == "over_budget" else None
+    )
+    monkeypatch.setattr(admission, "_run_centralized_common_checks", common_checks)
     monkeypatch.setitem(global_mcp_server_manager.registry, harness.server.server_id, harness.server)
     if stage == "authorize":
         challenge = urlsafe_b64encode(hashlib.sha256(payload["code_verifier"].encode()).digest()).rstrip(b"=").decode()
@@ -12718,25 +12796,30 @@ def test_keyed_connection_reloads_live_key_before_provider(keyed_oauth_client, m
             },
         )
     elif stage == "exchange":
-        response = harness.client.post("/token", data=payload)
+        response = harness.client.post("/token", data={**payload, "model": "untrusted\nforged log entry"})
     else:
         assert token is not None and token.status_code == 200
         response = harness.client.post(
             "/token",
             data={
+                "model": "untrusted\nforged log entry",
                 "grant_type": "refresh_token",
                 "client_id": payload["client_id"],
                 "refresh_token": token.json()["refresh_token"],
                 "resource": harness.binding.resource,
             },
         )
-    assert response.status_code == (200 if policy == "allowed" else 401 if policy in ("blocked", "expired") else 403), (
+    assert response.status_code == (200 if policy == "allowed" else 401 if policy in ("blocked", "expired") else 422 if policy == "over_budget" else 403), (
         response.text
     )
     lookup.assert_awaited_once()
     assert lookup.call_args.kwargs["hashed_token"] == harness.binding.key_hash
     assert harness.upstream.post.call_count == int(policy == "allowed" and stage != "authorize")
     harness.vault.assert_not_called()
+    if policy not in ("blocked", "expired", "denied_route"):
+        common_checks.assert_awaited_once()
+        assert common_checks.call_args.kwargs["request_data"] == {}
+        assert common_checks.call_args.kwargs["route"] == "/mcp"
 
 
 @pytest.mark.parametrize(

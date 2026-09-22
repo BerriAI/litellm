@@ -1041,6 +1041,7 @@ async def exchange_token_with_server(
     scope: str | None = None,
     client_token_endpoint_auth_method: MCPTokenEndpointAuthMethod | None = None,
     connection_binding: ConnectionBinding | None = None,
+    connection_claim: tuple[str, int] | None = None,
 ):
     _raise_if_not_oauth2(mcp_server)
     if grant_type not in ("authorization_code", "refresh_token"):
@@ -1197,6 +1198,10 @@ async def exchange_token_with_server(
         )
 
     async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+    if connection_claim is not None:
+        claimed: Final = await claim_connection_once(*connection_claim)
+        if claimed is not None:
+            return claimed
     try:
         response: Final = await async_client.post(
             token_url,
@@ -3092,11 +3097,8 @@ async def complete_connection(request: Request, flow: str = Form(...), decision:
     if opened is None or opened.jti != flow or decision not in ("approve", "deny"):
         return _oauth_error(400, "invalid_request", "Invalid or expired consent")
     server: Final = await validate_connection_binding(request, opened.binding)
-    claim: Final = await claim_connection_once(f"consent:{opened.jti}", opened.exp)
-    if claim is not None:
-        return claim
-    if decision == "deny":
-        denied: Final = RedirectResponse(
+    response: Final = (
+        RedirectResponse(
             append_connection_query(
                 opened.redirect_uri,
                 (
@@ -3106,21 +3108,25 @@ async def complete_connection(request: Request, flow: str = Form(...), decision:
             ),
             status_code=302,
         )
-        cookie_path, _ = _cookie_path_and_secure(request)
-        denied.delete_cookie(cookie_name, path=cookie_path)
-        return denied
-    response: Final = await authorize_with_server(
-        request,
-        server,
-        opened.client_id,
-        opened.redirect_uri,
-        opened.state,
-        opened.code_challenge,
-        "S256",
-        "code",
-        opened.scope,
-        connection=opened,
+        if decision == "deny"
+        else await authorize_with_server(
+            request,
+            server,
+            opened.client_id,
+            opened.redirect_uri,
+            opened.state,
+            opened.code_challenge,
+            "S256",
+            "code",
+            opened.scope,
+            connection=opened,
+        )
     )
+    if response.status_code >= 400:
+        return response
+    claim: Final = await claim_connection_once(f"consent:{opened.jti}", opened.exp)
+    if claim is not None:
+        return claim
     cookie_path, _ = _cookie_path_and_secure(request)
     response.delete_cookie(cookie_name, path=cookie_path)
     return response
@@ -3153,9 +3159,6 @@ async def exchange_connection_token(
             or not _pkce_verifier_matches(code_verifier, opened.authorization.code_challenge)
         ):
             return _oauth_error(400, "invalid_grant", "Invalid authorization code or PKCE verifier")
-        claim: Final = await claim_connection_once(f"code:{opened.jti}", opened.exp)
-        if claim is not None:
-            return claim
         return await exchange_token_with_server(
             request,
             server,
@@ -3167,6 +3170,7 @@ async def exchange_connection_token(
             code_verifier,
             scope=opened.authorization.scope,
             connection_binding=binding,
+            connection_claim=(f"code:{opened.jti}", opened.exp),
         )
     if grant_type == "refresh_token":
         refreshed: Final = open_connection_credential(refresh_token or "", refresh=True)
@@ -3174,9 +3178,6 @@ async def exchange_connection_token(
             return _oauth_error(400, "invalid_grant", "Invalid refresh credential")
         if scope and not frozenset(scope.split()).issubset((refreshed.scope or "").split()):
             return _oauth_error(400, "invalid_scope", "Refresh cannot expand the granted scopes")
-        claimed: Final = await claim_connection_once(f"refresh:{refreshed.jti}", refreshed.exp)
-        if claimed is not None:
-            return claimed
         return await exchange_token_with_server(
             request,
             server,
@@ -3189,5 +3190,6 @@ async def exchange_connection_token(
             refresh_token=refreshed.token.get_secret_value(),
             scope=scope or refreshed.scope,
             connection_binding=binding,
+            connection_claim=(f"refresh:{refreshed.jti}", refreshed.exp),
         )
     return _oauth_error(400, "unsupported_grant_type", "Unsupported connection grant type")

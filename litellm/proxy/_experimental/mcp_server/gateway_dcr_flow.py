@@ -1632,7 +1632,9 @@ async def validate_connection_binding(request: Request, binding: ConnectionBindi
     if binding.resource != f"{get_request_base_url(request)}/mcp":
         raise HTTPException(status_code=400, detail="Invalid connection resource")
     key: Final = await MCPRequestHandler._reload_admitted_key(binding.key_hash)  # pyright: ignore[reportPrivateUsage]  # reuse key revocation and SCIM checks
-    await MCPRequestHandler._enforce_admitted_live_policy(key.model_copy(), request, "/mcp")  # pyright: ignore[reportPrivateUsage]  # enforce the same MCP route and budget policy
+    await MCPRequestHandler._enforce_admitted_live_policy(  # pyright: ignore[reportPrivateUsage]  # enforce the same MCP route and budget policy
+        key.model_copy(), request, "/mcp", request_data={}
+    )
     allowed: Final = await MCPRequestHandler.get_allowed_mcp_servers(key)
     server: Final = global_mcp_server_manager.get_mcp_server_by_id(
         binding.server_id, client_ip=IPAddressUtils.get_mcp_client_ip(request)
