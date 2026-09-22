@@ -168,7 +168,7 @@ describe("buildComplexityRouterConfig", () => {
   });
 
   it.each(["capability", "llm_v2", "heuristic"] as const)(
-    "disables the removed overrides only for forecast creates: %s",
+    "preserves explicit context-window opt-in beside forecast restrictions: %s",
     (classifierType) => {
       const forecast = classifierType !== "heuristic";
       const params = {
@@ -180,14 +180,10 @@ describe("buildComplexityRouterConfig", () => {
       };
       const config = buildComplexityRouterConfig(params);
       expect(config.adaptive).toBe(!forecast);
-      expect(config.enable_context_window_escalation).toBe(!forecast);
+      expect(config.enable_context_window_escalation).toBe(true);
+      expect(config.context_window_escalation_buffer).toBe(0.9);
       expect(config.escalation_keywords).toEqual(forecast ? [] : ["LITELLM ESCALATE"]);
-      for (const key of [
-        "adaptive_weights",
-        "adaptive_eligible",
-        "tier_distance_penalty",
-        "context_window_escalation_buffer",
-      ]) {
+      for (const key of ["adaptive_weights", "adaptive_eligible", "tier_distance_penalty"]) {
         expect(Object.hasOwn(config, key)).toBe(!forecast);
       }
       if (forecast) {
@@ -226,13 +222,14 @@ describe("buildComplexityRouterConfig", () => {
     expect(config).toEqual(expected);
   });
 
-  it("carries an explicit context-window escalation opt-out and buffer, false included", () => {
+  it.each([undefined, false, true])("preserves the context-window escalation setting: %s", (enabled) => {
     const config = buildComplexityRouterConfig({
       ...baseParams,
-      enableContextWindowEscalation: false,
+      enableContextWindowEscalation: enabled,
       contextWindowEscalationBuffer: 0.9,
     });
-    expect(config.enable_context_window_escalation).toBe(false);
+    expect(config.enable_context_window_escalation).toBe(enabled);
+    expect(Object.hasOwn(config, "enable_context_window_escalation")).toBe(enabled !== undefined);
     expect(config.context_window_escalation_buffer).toBe(0.9);
   });
 
