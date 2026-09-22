@@ -27,6 +27,8 @@ EMPTY_TRANSFORM_INPUT: Final[RealtimeResponseTransformInput] = {
     "current_delta_type": None,
 }
 MODEL: Final = f"sarvam/{DEFAULT_SARVAM_REALTIME_MODEL}"
+
+pytestmark: Final = pytest.mark.usefixtures("local_model_cost_map")
 ONE_SECOND_OF_SILENCE: Final = b"\x00\x00" * 16_000
 
 
@@ -36,6 +38,8 @@ def _session_update(
     language: str | None = None,
     model: str | None = None,
 ) -> str:
+    """``turn_detection="omit"`` leaves the key out entirely, the way a client that only changes its language
+    sends a partial update; ``None`` sends an explicit null, which disables turn detection."""
     transcription: Final[dict[str, str]] = {
         **({"model": model} if model is not None else {}),
         **({"language": language} if language is not None else {}),
@@ -48,7 +52,11 @@ def _session_update(
                 "audio": {
                     "input": {
                         **({"format": {"type": "audio/pcm", "rate": rate}} if rate is not None else {}),
-                        "turn_detection": None if turn_detection is None else {"type": turn_detection},
+                        **(
+                            {}
+                            if turn_detection == "omit"
+                            else {"turn_detection": None if turn_detection is None else {"type": turn_detection}}
+                        ),
                         "transcription": transcription,
                     }
                 },
@@ -133,9 +141,52 @@ def test_unusable_api_base_is_rejected(api_base: str):
         build_sarvam_connection(api_base, MODEL)
 
 
-def test_unsupported_model_is_rejected():
+@pytest.mark.parametrize("api_base", ["ws://stt.internal.example", "http://198.51.100.7:8123"])
+def test_cleartext_to_a_remote_host_is_rejected_because_the_key_is_a_connection_header(api_base: str):
+    with pytest.raises(ValueError, match="loopback"):
+        build_sarvam_connection(api_base, MODEL)
+
+
+@pytest.mark.parametrize(
+    ("api_base", "expected_netloc"),
+    [
+        ("ws://localhost:8123", "localhost:8123"),
+        ("ws://127.0.0.1:8123", "127.0.0.1:8123"),
+        ("ws://[::1]:8123", "[::1]:8123"),
+    ],
+)
+def test_a_loopback_test_double_stays_reachable_over_cleartext(api_base: str, expected_netloc: str):
+    url = build_sarvam_connection(api_base, MODEL).url
+
+    assert url.startswith(f"ws://{expected_netloc}/speech-to-text-realtime/ws?")
+
+
+def test_a_model_the_registry_does_not_serve_on_the_realtime_endpoint_is_rejected():
     with pytest.raises(SarvamProtocolError, match="model"):
         build_sarvam_connection(None, "sarvam/whisper-large")
+
+
+def test_a_model_registered_for_the_realtime_endpoint_is_accepted_without_a_code_change():
+    """Support reads the model registry, so a new Sarvam realtime model ships as a cost map entry."""
+    import litellm
+
+    litellm.register_model(
+        {
+            "sarvam/saaras:v9-realtime": {
+                "litellm_provider": "sarvam",
+                "mode": "audio_transcription",
+                "supported_endpoints": ["/v1/realtime"],
+            }
+        }
+    )
+
+    assert build_sarvam_connection(None, "sarvam/saaras:v9-realtime").model == "saaras:v9-realtime"
+
+
+def test_a_sarvam_chat_model_is_not_served_on_the_realtime_endpoint():
+    """The registry entry has to say audio_transcription on /v1/realtime, not merely exist under sarvam/."""
+    with pytest.raises(SarvamProtocolError, match="model"):
+        build_sarvam_connection(None, "sarvam/sarvam-m")
 
 
 @pytest.mark.parametrize(
@@ -270,6 +321,41 @@ def test_session_begin_becomes_an_openai_transcription_session():
     assert session["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 8_000}
     assert session["audio"]["input"]["transcription"] == {"model": "saaras:v3-realtime", "language": "ta-IN"}
     assert session["audio"]["input"]["turn_detection"] == {"type": "server_vad"}
+
+
+def test_a_later_update_that_only_changes_the_language_keeps_manual_endpointing():
+    """Turn detection left out of a partial update means unchanged. Reverting to VAD here would silently turn
+    the client's audio buffer commits into no-ops."""
+    config = _configured(turn_detection=None)
+
+    language_only = _sent(config, _session_update(turn_detection="omit", language="ta"))
+    config.transform_realtime_request(_append(ONE_SECOND_OF_SILENCE), MODEL)
+    committed = _sent(config, _client_event("input_audio_buffer.commit"))
+
+    assert language_only == [{"event": "config.update", "language_code": "ta-IN"}]
+    assert [frame["event"] for frame in committed] == ["speech_end", "flush"]
+
+
+def test_applied_settings_reach_the_client_as_a_session_updated_event():
+    """Sarvam opens on its own defaults, so a client that configures the session after session.created only
+    learns the language and turn detection that took effect from the config.updated acknowledgement."""
+    config = _configured()
+    _backend(config, event="session.begin", request_id="req-42", config={})
+    config.transform_realtime_request(_session_update(language="hi", turn_detection=None), MODEL)
+
+    events = _backend(config, event="config.updated", applied=["language_code", "endpointing"])
+
+    assert [event["type"] for event in events] == ["session.updated"]
+    session = events[0]["session"]
+    assert session["id"] == "req-42"
+    assert session["audio"]["input"]["transcription"]["language"] == "hi-IN"
+    assert session["audio"]["input"]["turn_detection"] is None
+
+
+def test_an_acknowledgement_before_the_session_exists_is_dropped():
+    config = _configured()
+
+    assert _backend(config, event="config.updated", applied=["language_code"]) == []
 
 
 def test_session_begin_reports_manual_endpointing_as_disabled_turn_detection():
@@ -411,7 +497,7 @@ def test_provider_errors_reach_the_client_as_openai_error_events():
     assert "language not supported" in events[0]["error"]["message"]
 
 
-@pytest.mark.parametrize("event", ["config.updated", "pong", "something.new"])
+@pytest.mark.parametrize("event", ["pong", "something.new"])
 def test_backend_events_without_an_openai_equivalent_are_dropped(event: str):
     config = _configured()
 

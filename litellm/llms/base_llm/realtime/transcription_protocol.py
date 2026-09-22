@@ -16,6 +16,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeServerVadTurnDetection,
     OpenAIRealtimeTranscriptionSession,
     OpenAIRealtimeTranscriptionSessionCreated,
+    OpenAIRealtimeTranscriptionSessionUpdated,
     OpenAIRealtimeTranscriptionSettings,
 )
 from litellm.types.realtime import RealtimeInputAudioTranscriptionDurationUsage, RealtimeInputAudioTranscriptionUsage
@@ -218,6 +219,17 @@ def transcription_session_created_event(
 ) -> OpenAIRealtimeTranscriptionSessionCreated:
     event: Final[OpenAIRealtimeTranscriptionSessionCreated] = {
         "type": "session.created",
+        "event_id": new_event_id(),
+        "session": session,
+    }
+    return event
+
+
+def transcription_session_updated_event(
+    session: OpenAIRealtimeTranscriptionSession,
+) -> OpenAIRealtimeTranscriptionSessionUpdated:
+    event: Final[OpenAIRealtimeTranscriptionSessionUpdated] = {
+        "type": "session.updated",
         "event_id": new_event_id(),
         "session": session,
     }

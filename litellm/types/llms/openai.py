@@ -2270,6 +2270,12 @@ class OpenAIRealtimeTranscriptionSessionCreated(TypedDict):
     session: ReadOnly[OpenAIRealtimeTranscriptionSession]
 
 
+class OpenAIRealtimeTranscriptionSessionUpdated(TypedDict):
+    type: ReadOnly[Literal["session.updated"]]
+    event_id: ReadOnly[str]
+    session: ReadOnly[OpenAIRealtimeTranscriptionSession]
+
+
 class OpenAIRealtimeInputAudioTranscriptionDelta(TypedDict):
     type: ReadOnly[Literal["conversation.item.input_audio_transcription.delta"]]
     event_id: ReadOnly[str]
@@ -2349,6 +2355,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated
+    | OpenAIRealtimeTranscriptionSessionUpdated
     | OpenAIRealtimeErrorEvent
 )
 

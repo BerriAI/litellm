@@ -3,12 +3,14 @@ import json
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from ipaddress import ip_address
 from types import MappingProxyType
 from typing import Final
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from pydantic import JsonValue
 
+import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -26,6 +28,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     speech_event,
     transcription_session,
     transcription_session_created_event,
+    transcription_session_updated_event,
 )
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.secret_managers.main import get_secret_str
@@ -46,12 +49,13 @@ from litellm.types.realtime import (
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
+from litellm.types.utils import LlmProviders
 
 DEFAULT_SARVAM_REALTIME_API_BASE: Final = "wss://api.sarvam.ai"
 SARVAM_REALTIME_PATH: Final = "/speech-to-text-realtime/ws"
 SARVAM_REALTIME_ENCODING: Final = "linear16"
 DEFAULT_SARVAM_REALTIME_MODEL: Final = "saaras:v3-realtime"
-SUPPORTED_MODELS: Final = frozenset({"saaras:v3-realtime", "saaras:v4"})
+REALTIME_ENDPOINT: Final = "/v1/realtime"
 SUPPORTED_SAMPLE_RATES: Final = frozenset({8_000, 16_000})
 AUTO_LANGUAGE: Final = "auto"
 SUPPORTED_LANGUAGE_CODES: Final = (
@@ -89,10 +93,28 @@ class SarvamProtocolError(RealtimeTranscriptionProtocolError):
     pass
 
 
+def is_realtime_transcription_model(model: str) -> bool:
+    """Support follows the model registry rather than a list in this file, so a new Sarvam realtime model
+    only needs a cost map entry. Only an exact hit counts: the registry resolves unknown names to a family."""
+    registry_key: Final = f"{LlmProviders.SARVAM.value}/{model}"
+    try:
+        model_info: Final = litellm.get_model_info(model=registry_key, custom_llm_provider=LlmProviders.SARVAM.value)
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
+        return False
+    return (
+        model_info["key"] == registry_key
+        and model_info.get("mode") == "audio_transcription"
+        and REALTIME_ENDPOINT in (model_info.get("supported_endpoints") or ())
+    )
+
+
 def normalize_model(model: str) -> str:
-    normalized: Final = model.removeprefix("sarvam/").strip()
-    if normalized not in SUPPORTED_MODELS:
-        raise SarvamProtocolError(f"unsupported Sarvam realtime model: {model}")
+    normalized: Final = model.removeprefix(f"{LlmProviders.SARVAM.value}/").strip()
+    if not is_realtime_transcription_model(normalized):
+        raise SarvamProtocolError(
+            f"unsupported Sarvam realtime model: {model}. Add it to the model cost map with "
+            f'"mode": "audio_transcription" and "supported_endpoints": ["{REALTIME_ENDPOINT}"]'
+        )
     return normalized
 
 
@@ -129,6 +151,20 @@ def _connection_sample_rate(query: str) -> SarvamSampleRate:
     return 8_000 if int(declared[0]) == 8_000 else 16_000
 
 
+def _is_loopback(hostname: str) -> bool:
+    if hostname == "localhost":
+        return True
+    try:
+        return ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
+def _netloc(hostname: str, port: int | None) -> str:
+    host: Final = f"[{hostname}]" if ":" in hostname else hostname
+    return host if port is None else f"{host}:{port}"
+
+
 def build_sarvam_connection(api_base: str | None, model: str) -> SarvamConnection:
     """Sarvam fixes ``encoding`` and ``sample_rate`` at connect time, so the rate is read from ``api_base``.
 
@@ -140,15 +176,18 @@ def build_sarvam_connection(api_base: str | None, model: str) -> SarvamConnectio
     scheme: Final = _WEBSOCKET_SCHEMES.get(parsed.scheme)
     if scheme is None or not parsed.hostname or parsed.username is not None or parsed.password is not None:
         raise ValueError("Sarvam api_base must be an absolute wss:// or https:// URL without credentials")
+    if scheme == "ws" and not _is_loopback(parsed.hostname):
+        # The subscription key travels as a connection header, so cleartext is only ever for a local test double.
+        raise ValueError("Sarvam api_base must use wss:// or https:// unless it points at a loopback address")
     sample_rate: Final = _connection_sample_rate(parsed.query)
-    netloc: Final = parsed.hostname if parsed.port is None else f"{parsed.hostname}:{parsed.port}"
+    netloc: Final = _netloc(parsed.hostname, parsed.port)
     query: Final = urlencode(
-        {
-            "model": normalized_model,
-            "language_code": AUTO_LANGUAGE,
-            "encoding": SARVAM_REALTIME_ENCODING,
-            "sample_rate": str(sample_rate),
-        }
+        (
+            ("model", normalized_model),
+            ("language_code", AUTO_LANGUAGE),
+            ("encoding", SARVAM_REALTIME_ENCODING),
+            ("sample_rate", str(sample_rate)),
+        )
     )
     return SarvamConnection(
         model=normalized_model,
@@ -177,15 +216,21 @@ def _validate_audio_format(update: TranscriptionSessionUpdate, sample_rate: Sarv
         )
 
 
-def _parse_endpointing(update: TranscriptionSessionUpdate) -> SarvamEndpointing:
+def _parse_endpointing(update: TranscriptionSessionUpdate, current: SarvamEndpointing) -> SarvamEndpointing:
+    """A later ``session.update`` that changes only the language leaves turn detection out entirely, which must
+    keep the endpointing the session already runs on rather than reverting it to VAD."""
     if update.turn_detection_disabled:
         return "manual"
-    if update.turn_detection_type not in (None, "server_vad"):
+    if update.turn_detection is None:
+        return current
+    if update.turn_detection_type != "server_vad":
         raise SarvamProtocolError("Sarvam realtime supports server_vad turn detection or null")
     return "vad"
 
 
-def parse_session_update(payload: str, connection: SarvamConnection) -> SarvamSessionUpdate:
+def parse_session_update(
+    payload: str, connection: SarvamConnection, endpointing: SarvamEndpointing
+) -> SarvamSessionUpdate:
     update: Final = parse_transcription_session_update(payload, SarvamProtocolError)
     if update.session_type not in (None, "transcription", "realtime"):
         raise SarvamProtocolError("Sarvam realtime supports transcription sessions only")
@@ -198,7 +243,7 @@ def parse_session_update(payload: str, connection: SarvamConnection) -> SarvamSe
     _validate_audio_format(update, connection.sample_rate)
     return SarvamSessionUpdate(
         language=None if update.language is None else normalize_language_code(update.language),
-        endpointing=_parse_endpointing(update),
+        endpointing=_parse_endpointing(update, endpointing),
     )
 
 
@@ -284,6 +329,7 @@ class SarvamRealtimeConfig(BaseRealtimeConfig):
         self._connection: SarvamConnection | None = None
         self._language: str = AUTO_LANGUAGE
         self._endpointing: SarvamEndpointing = "vad"
+        self._session_id: str | None = None
         self._speech_open: bool = False
         self._forwarded_audio_bytes: int = 0
         self._reported_seconds: float | None = None
@@ -297,7 +343,7 @@ class SarvamRealtimeConfig(BaseRealtimeConfig):
         key: Final = (api_key or get_secret_str("SARVAM_API_KEY") or "").strip()
         if not key:
             raise ValueError("api_key is required for Sarvam API calls")
-        return {**headers, "api-subscription-key": key}
+        return {**headers, "api-subscription-key": key}  # mutable-ok: BaseRealtimeConfig returns a plain header dict
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
         connection: Final = build_sarvam_connection(api_base, model)
@@ -325,7 +371,7 @@ class SarvamRealtimeConfig(BaseRealtimeConfig):
                 return ()
             case unsupported:
                 verbose_logger.debug("Sarvam realtime: dropping unsupported client event %s", unsupported)
-                return ()
+        return ()
 
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         """Sarvam's own ``audio_duration_s`` is the billed quantity; the forwarded audio only covers a session
@@ -368,20 +414,29 @@ class SarvamRealtimeConfig(BaseRealtimeConfig):
         return connection
 
     def _configure(self, message: str) -> tuple[str, ...]:
-        update: Final = parse_session_update(message, self._require_connection())
+        update: Final = parse_session_update(message, self._require_connection(), self._endpointing)
         language: Final = update.language or self._language
         language_changed: Final = language != self._language
         endpointing_changed: Final = update.endpointing != self._endpointing
         self._language = language
         self._endpointing = update.endpointing
-        if not language_changed and not endpointing_changed:
-            return ()
-        empty: Final[SarvamConfigUpdate] = {"event": "config.update"}
-        with_language: Final[SarvamConfigUpdate] = {**empty, "language_code": language} if language_changed else empty
-        changes: Final[SarvamConfigUpdate] = (
-            {**with_language, "endpointing": update.endpointing} if endpointing_changed else with_language
-        )
-        return (json.dumps(changes, separators=(",", ":")),)
+        if language_changed and endpointing_changed:
+            both: Final[SarvamConfigUpdate] = {
+                "event": "config.update",
+                "language_code": language,
+                "endpointing": update.endpointing,
+            }
+            return (json.dumps(both, separators=(",", ":")),)
+        if language_changed:
+            language_only: Final[SarvamConfigUpdate] = {"event": "config.update", "language_code": language}
+            return (json.dumps(language_only, separators=(",", ":")),)
+        if endpointing_changed:
+            endpointing_only: Final[SarvamConfigUpdate] = {
+                "event": "config.update",
+                "endpointing": update.endpointing,
+            }
+            return (json.dumps(endpointing_only, separators=(",", ":")),)
+        return ()
 
     def _append_audio(self, request: Mapping[str, JsonValue]) -> tuple[str, ...]:
         audio: Final = decode_pcm16_append(request.get("audio"), None, SarvamProtocolError)
@@ -421,6 +476,8 @@ class SarvamRealtimeConfig(BaseRealtimeConfig):
                 return self._partial(frame)
             case "transcript.final":
                 return self._final(frame)
+            case "config.updated":
+                return self._session_updated()
             case "session.end":
                 self._reported_seconds = _audio_seconds(frame)
                 return ()
@@ -428,15 +485,25 @@ class SarvamRealtimeConfig(BaseRealtimeConfig):
                 return (error_event(self._error_message(frame)),)
             case ignored:
                 verbose_logger.debug("Sarvam realtime: no client event for backend event %s", ignored)
-                return ()
+        return ()
 
     def _session_created(self, frame: Mapping[str, JsonValue]) -> OpenAIRealtimeEvents:
         request_id: Final = json_string(frame.get("request_id"), "session.begin request_id", SarvamProtocolError)
         if not request_id:
             raise SarvamProtocolError("session.begin event has an invalid request_id")
-        return transcription_session_created_event(
-            openai_session(self._require_connection(), request_id, self._language, self._endpointing == "vad")
-        )
+        self._session_id = request_id
+        return transcription_session_created_event(self._openai_session(request_id))
+
+    def _session_updated(self) -> tuple[OpenAIRealtimeEvents, ...]:
+        """Sarvam opens the socket on its own defaults and acknowledges each ``config.update`` separately, so a
+        client that configures the session after ``session.created`` only learns what took effect from here."""
+        session_id: Final = self._session_id
+        if session_id is None:
+            return ()
+        return (transcription_session_updated_event(self._openai_session(session_id)),)
+
+    def _openai_session(self, session_id: str) -> OpenAIRealtimeTranscriptionSession:
+        return openai_session(self._require_connection(), session_id, self._language, self._endpointing == "vad")
 
     def _speech_started(self, utterance_idx: int) -> tuple[OpenAIRealtimeEvents, ...]:
         state: Final = self._utterances.state(utterance_idx)
