@@ -40,9 +40,6 @@ class GenAIEventRecorder:
         stack_trace: str | None,
         timestamp_ns: int | None,
     ) -> None:
-        # ``exception.type`` and ``exception.message`` are the semconv-required
-        # pair and always ride the event; only the recommended stacktrace is
-        # conditional on the payload carrying one.
         stacktrace: Final = ((ExceptionEvent.STACKTRACE, stack_trace),) if stack_trace else ()
         attributes: Final = dict(
             (
@@ -72,7 +69,7 @@ class GenAIEventRecorder:
                 severity_number=SeverityNumber.WARN,
                 body=message,
                 attributes=attributes,
-                event_name=GenAIEvent.OPERATION_EXCEPTION,  # pyright: ignore[reportCallIssue]  # kwarg exists only on OTel 1.44+, absent from the pinned API signature
+                event_name=GenAIEvent.OPERATION_EXCEPTION,  # pyright: ignore[reportCallIssue]  # kwarg exists only on OTel 1.38+, absent from the pinned API signature
             )
         )
         self.event_logger.emit(record)
