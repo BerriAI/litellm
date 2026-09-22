@@ -21,7 +21,7 @@ def _get_config_value(optional_params: object, attribute_name: str) -> str | Non
     return value
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
+def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> RecoGuardrail:
     import litellm
 
     optional_params: Final = getattr(litellm_params, "optional_params", None)
