@@ -90,6 +90,7 @@ mod tests {
                 "chat_completions",
                 "achat_completions",
                 "ResponsesWebSocketConnection",
+                "NativeDiagnosticProcessor",
                 "TokenCounter",
                 "Tokenizer",
                 "gil_stats",
