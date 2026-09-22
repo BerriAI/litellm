@@ -100,6 +100,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.llms.azure_ai.common_utils import (
+    azure_ai_supports_native_responses,
+    foundry_chat_rejects_function_tools_while_reasoning,
+)
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
@@ -1106,10 +1110,18 @@ def responses_api_bridge_check(
     #   provider with a custom api_base and gpt-5.4+ model names serve tools without
     #   reasoning fine and have no /responses route, so they keep pre-existing
     #   behavior (bridge only on an explicit reasoning_effort).
+    # - Azure AI Foundry's OpenAI v1 hosts (azure_ai provider) enforce it later in the series:
+    #   an explicit effort with function tools is rejected from gpt-5.6 on, and the unset
+    #   effort only from gpt-6 on (gpt-5.6 serves tools with reasoning silently off), so the
+    #   azure_ai gate keys on those measured boundaries instead of gpt-5.4+.
     # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
     has_function_tool: Final = any(
-        (tool.get("type") == "function" if isinstance(tool, dict) else getattr(tool, "type", None) == "function")
+        (
+            tool.get("type") == "function" and (isinstance(tool.get("function"), dict) or "name" in tool)
+            if isinstance(tool, dict)
+            else getattr(tool, "type", None) == "function"
+        )
         for tool in (tools or ())
     )
     if isinstance(reasoning_effort, dict):
@@ -1118,28 +1130,35 @@ def responses_api_bridge_check(
         reasoning_active = reasoning_effort != "none"
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
-    # by Azure OpenAI. Resolve the effective base arg>global>env>default exactly as the chat handler
-    # does, so a custom base set via litellm.api_base or OPENAI_BASE_URL/OPENAI_API_BASE isn't misread
-    # as the default and bridged to a /responses route it lacks. A whitespace-only base collapses to
-    # the default too.
+    # by Azure OpenAI through the azure provider. Resolve the effective OpenAI base arg>global>env>default
+    # exactly as the chat handler does, so a custom base set via litellm.api_base or
+    # OPENAI_BASE_URL/OPENAI_API_BASE isn't misread as the default and bridged to a /responses route it
+    # lacks. A whitespace-only base collapses to the default too.
     resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
+    on_foundry_openai_endpoint: Final = custom_llm_provider == "azure_ai" and azure_ai_supports_native_responses(
+        model, api_base
+    )
     on_constraint_enforcing_endpoint: Final = (
         custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
     )
-    if (
-        custom_llm_provider in ("openai", "azure")
-        and model_info.get("mode") != "responses"
-        and OpenAIGPT5Config.is_model_gpt_5_model(model)
-        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
+    chat_rejects_function_tools: Final = (
+        has_function_tool
+        and reasoning_active
         and (
-            (reasoning_effort is not None and reasoning_summary is not None)
-            or (
+            foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
+            if on_foundry_openai_endpoint
+            else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
-                and has_function_tool
-                and reasoning_active
                 and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
             )
         )
+    )
+    if (
+        (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)
+        and model_info.get("mode") != "responses"
+        and OpenAIGPT5Config.is_model_gpt_5_model(model)
+        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
+        and ((reasoning_effort is not None and reasoning_summary is not None) or chat_rejects_function_tools)
     ):
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
@@ -3549,6 +3568,63 @@ def _complete_vercel_ai_gateway(
     return response
 
 
+def _complete_edenai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    api_base: Final = litellm.EdenAIChatConfig.get_api_base(ctx.api_base)
+    api_key: Final = litellm.EdenAIChatConfig.get_api_key(ctx.api_key or litellm.api_key)
+    response: Final = base_llm_http_handler.completion(
+        model=ctx.model,
+        messages=ctx.messages,
+        api_base=api_base,
+        custom_llm_provider="edenai",
+        model_response=ctx.model_response,
+        encoding=_get_encoding(),
+        logging_obj=ctx.logging,
+        optional_params=ctx.optional_params,
+        timeout=ctx.timeout,
+        litellm_params=ctx.litellm_params,
+        shared_session=ctx.shared_session,
+        acompletion=ctx.acompletion,
+        stream=ctx.stream,
+        api_key=api_key,
+        headers=ctx.headers or litellm.headers,
+        client=_dispatch_client_http(ctx),
+        provider_config=ctx.provider_config,
+    )
+    ctx.logging.post_call(input=ctx.messages, api_key=api_key, original_response=response)
+    return response
+
+
+def _complete_fal_ai(ctx: _CompletionDispatchContext) -> _CompletionDispatchResult:
+    if ctx.stream:
+        raise litellm.FalAIError(
+            status_code=400,
+            message="fal_ai chat completions do not support streaming",
+        )
+    api_base: Final = litellm.FalAIChatConfig.get_api_base(ctx.api_base)
+    api_key: Final = litellm.FalAIChatConfig.get_api_key(ctx.api_key or litellm.api_key)
+    response: Final = base_llm_http_handler.completion(
+        model=ctx.model,
+        messages=ctx.messages,
+        api_base=api_base,
+        custom_llm_provider="fal_ai",
+        model_response=ctx.model_response,
+        encoding=_get_encoding(),
+        logging_obj=ctx.logging,
+        optional_params=ctx.optional_params,
+        timeout=ctx.timeout,
+        litellm_params=ctx.litellm_params,
+        shared_session=ctx.shared_session,
+        acompletion=ctx.acompletion,
+        stream=ctx.stream,
+        api_key=api_key,
+        headers=ctx.headers or litellm.headers,
+        client=_dispatch_client_http(ctx),
+        provider_config=ctx.provider_config,
+    )
+    ctx.logging.post_call(input=ctx.messages, api_key=api_key, original_response=response)
+    return response
+
+
 def _complete_vertex_ai_beta(
     ctx: _CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -5752,6 +5828,10 @@ def completion(
             response = _complete_minimax(_dispatch_ctx)
         elif custom_llm_provider == "hosted_vllm":
             response = _complete_hosted_vllm(_dispatch_ctx)
+        elif custom_llm_provider == "edenai":
+            response = _complete_edenai(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
+        elif custom_llm_provider == "fal_ai":
+            response = _complete_fal_ai(_dispatch_ctx)  # rebind-ok: dispatch chain binds response per branch
         elif (
             # A known OpenAI model name only decides the route when nothing else
             # resolved a provider. get_llm_provider() already maps these names to
@@ -6420,6 +6500,22 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params=litellm_params_dict,
                 headers=headers or {},
+            )
+        elif custom_llm_provider == "edenai":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
             )
         elif (
             custom_llm_provider == "openai_like"
@@ -8123,7 +8219,23 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "openai" or (
+    if custom_llm_provider == "edenai":
+        litellm_params_dict["api_base"] = api_base
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            text_to_speech_provider_config=text_to_speech_provider_config or litellm.EdenAITextToSpeechConfig(),
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
+    elif custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
         and custom_llm_provider not in AZURE_OPENAI_AUDIO_PROVIDERS
     ):

@@ -1,6 +1,6 @@
 import re
 from collections.abc import Awaitable, Callable, Iterator
-from typing import Any, Final, TypeVar
+from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -398,11 +398,8 @@ class PrismaDBExceptionHandler:
 
         ``is_database_service_unavailable_error`` classifies a single exception
         by type, which a caller that catches a raw DB failure and re-raises a
-        domain exception of a different type defeats. ``get_user_object`` in
-        ``litellm/proxy/auth/auth_checks.py`` is the concrete case: it wraps
-        every DB error, a genuine outage included, in a bare ``ValueError``
-        whose original error survives only as ``__context__``. A type check on
-        the ``ValueError`` misses the outage, so the caller would mistake an
+        domain exception of a different type defeats. A type check on the
+        wrapper misses the outage, so the caller would mistake an
         infrastructure fault for an auth failure. Walking the chain recovers the
         real signal, which is the PEP 3134 way to inspect a wrapped cause.
 
@@ -446,8 +443,20 @@ def _coerce_timeout(value: object, fallback: float) -> float:
 _ReadResultT: Final = TypeVar("_ReadResultT")
 
 
+class _DBReconnectClient(Protocol):
+    """The one method `call_with_db_reconnect_retry` needs from a Prisma client."""
+
+    async def attempt_db_reconnect(
+        self,
+        *,
+        reason: str,
+        timeout_seconds: float | None = None,
+        lock_timeout_seconds: float | None = None,
+    ) -> bool: ...
+
+
 async def call_with_db_reconnect_retry(
-    prisma_client: Any,
+    prisma_client: _DBReconnectClient,
     coro_factory: Callable[[], Awaitable[_ReadResultT]],
     *,
     reason: str,

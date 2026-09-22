@@ -73,6 +73,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPServerAccess,
     _is_mcp_admitted_user_subject,
 )
+from litellm.proxy._experimental.mcp_server.contracts import OperationContext
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
@@ -195,9 +196,6 @@ from litellm.types.mcp_server.mcp_server_manager import (
 from litellm.types.utils import CallTypes
 
 if TYPE_CHECKING:
-    from mcp.client.session import ClientRequestContext
-    from mcp.types import CreateMessageRequestParams
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
@@ -1218,7 +1216,7 @@ async def _resolve_byok_mcp_auth_header(
     if not mcp_server.is_byok:
         return mcp_auth_header
 
-    from litellm.proxy._experimental.mcp_server.server import (
+    from litellm.proxy._experimental.mcp_server.operations import (
         _check_byok_credential,
         _get_byok_credential,
     )
@@ -1577,77 +1575,25 @@ def _normalize_mcp_server_cost_info(mcp_info: MCPInfo) -> None:
     mcp_info["mcp_server_cost_info"] = normalized
 
 
-def _create_sampling_callback(user_api_key_auth: UserAPIKeyAuth | None = None):
-    """
-    Create a sampling callback for MCP ClientSession.
-    Returns a callable that handles sampling/createMessage requests from
-    upstream MCP servers by routing them through litellm.acompletion().
-    """
+def _create_sampling_callback(
+    user_api_key_auth: UserAPIKeyAuth | None = None,
+    raw_headers: Mapping[str, str] | None = None,
+    client_ip: str | None = None,
+    operation_context: OperationContext | None = None,
+):
     if not MCP_SAMPLING_AVAILABLE:
         return None
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import create_sampling_callback
 
-    async def _sampling_callback(
-        context: "ClientRequestContext",
-        params: "CreateMessageRequestParams",
-    ):
-        import litellm
-        from litellm.proxy._experimental.mcp_server.sampling_handler import (
-            handle_sampling_create_message,
-        )
-        from litellm.proxy._experimental.mcp_server.server import (
-            get_active_auth_context,
-        )
-
-        auth_context: Final = get_active_auth_context()
-        resolved_auth: Final = user_api_key_auth or (auth_context.user_api_key_auth if auth_context else None)
-        # Forward original HTTP headers and client IP so that
-        # header-dependent guardrails, tag-based routing, trace
-        # correlation, and forward_llm_provider_auth_headers work
-        # correctly for sampling sub-calls.
-        _raw_headers: Final = getattr(auth_context, "raw_headers", None)
-        _client_ip: Final = getattr(auth_context, "client_ip", None)
-
-        return await handle_sampling_create_message(
-            context=context,
-            params=params,
-            default_model=getattr(litellm, "default_mcp_sampling_model", None),
-            user_api_key_auth=resolved_auth,
-            raw_headers=_raw_headers,
-            client_ip=_client_ip,
-        )
-
-    return _sampling_callback
+    return create_sampling_callback(user_api_key_auth, raw_headers, client_ip, operation_context)
 
 
 def _create_elicitation_callback():
-    """
-    Create an elicitation callback for MCP ClientSession.
-    Returns a callable that handles elicitation/create requests from
-    upstream MCP servers. In gateway mode, this relays to the downstream
-    client; in tool bridge mode, it returns a decline response.
-    """
     if not MCP_ELICITATION_AVAILABLE:
         return None
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import create_elicitation_callback
 
-    async def _elicitation_callback(context, params):
-        from litellm.proxy._experimental.mcp_server.elicitation_handler import (
-            handle_elicitation_request,
-        )
-        from litellm.proxy._experimental.mcp_server.server import get_active_mcp_session
-
-        # In Gateway mode, we relay the elicitation request to the downstream client
-        # that triggered the current operation.
-        downstream_session: Final = get_active_mcp_session()
-        downstream_capabilities = getattr(downstream_session, "capabilities", None) if downstream_session else None
-
-        return await handle_elicitation_request(
-            context=context,
-            params=params,
-            downstream_session=downstream_session,
-            downstream_capabilities=downstream_capabilities,
-        )
-
-    return _elicitation_callback
+    return create_elicitation_callback()
 
 
 def _record_mcp_guardrail_evaluations(
@@ -2500,9 +2446,8 @@ class MCPServerManager:
             # Filter blank scopes (e.g. YAML ``scopes: [""]``) the same way the DB-build path does, so
             # an all-blank list normalizes to None rather than a ``("",)`` tuple that skips the
             # entra_obo fail-closed scope precondition and POSTs an empty scope to the IdP.
-            resolved_scopes = self._extract_scopes(server_config.get("scopes")) or (
-                gated_oauth_metadata.scopes if gated_oauth_metadata else None
-            )
+            configured_scopes = self._extract_scopes(server_config.get("scopes"))
+            resolved_scopes = configured_scopes or (gated_oauth_metadata.scopes if gated_oauth_metadata else None)
             resolved_authorization_url = manual_authorization_url or (
                 gated_oauth_metadata.authorization_url if gated_oauth_metadata else None
             )
@@ -2579,6 +2524,7 @@ class MCPServerManager:
                 client_secret=server_config.get("client_secret", None),
                 oauth2_flow=self._explicit_oauth2_flow(config_oauth2_flow),
                 scopes=resolved_scopes,
+                configured_scopes=tuple(configured_scopes) if configured_scopes else None,
                 issuer=effective_issuer,
                 issuer_is_anchored=use_issuer_anchor,
                 authorization_url=resolved_authorization_url,
@@ -3055,6 +3001,18 @@ class MCPServerManager:
             if scopes_value is not None:
                 scopes = self._extract_scopes(scopes_value)
 
+        stored_scopes: Final[object] = credentials_dict.get("scopes") if credentials_dict else None
+        scopes_as_objects: Final = (
+            cast(Sequence[object], stored_scopes)  # cast-ok: list shape validated below
+            if isinstance(stored_scopes, list)
+            else ()
+        )
+        configured_scopes: Final = (
+            tuple(scope for scope in scopes_as_objects if isinstance(scope, str))
+            if scopes_as_objects and all(isinstance(scope, str) and scope for scope in scopes_as_objects)
+            else None
+        )
+
         name_for_prefix: Final = mcp_server.alias or mcp_server.server_name or mcp_server.server_id
 
         mcp_info: Final[MCPInfo] = _mcp_info.copy()
@@ -3129,6 +3087,7 @@ class MCPServerManager:
             client_secret=client_secret_value or getattr(mcp_server, "client_secret", None),
             oauth2_flow=self._explicit_oauth2_flow(getattr(mcp_server, "oauth2_flow", None)),
             scopes=resolved_scopes,
+            configured_scopes=configured_scopes,
             issuer=effective_issuer,
             issuer_is_anchored=use_issuer_anchor,
             authorization_url=manual_authorization_url or getattr(gated_oauth_metadata, "authorization_url", None),
@@ -3373,17 +3332,13 @@ class MCPServerManager:
         listable but uninvokable.
 
         Empty inside a toolset scope: toolset_mcp_route / dynamic_mcp_route set
-        ``_mcp_active_toolset_id`` before calling the handler, pinning the request to the toolset's
+        the caller's server-only ``mcp_toolset_id`` before calling the handler, pinning the request to the toolset's
         own servers (checking op.mcp_toolsets==[] instead would false-positive on DB-default rows
         where Postgres initialises the column to ARRAY[]::TEXT[]).
 
         ``allow_all_server_ids`` / ``submitted_server_ids`` are injectable so the server union,
         which precomputes both for its fallback path, does not compute them twice."""
-        from litellm.proxy._experimental.mcp_server.mcp_context import (  # noqa: PLC0415
-            _mcp_active_toolset_id,
-        )
-
-        if _mcp_active_toolset_id.get() is not None:
+        if user_api_key_auth is not None and user_api_key_auth.mcp_toolset_id is not None:
             return set()
         if allow_all_server_ids is None:
             allow_all_server_ids = self.get_allow_all_keys_server_ids()
@@ -4151,6 +4106,8 @@ class MCPServerManager:
         subject_token: str | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         cred_provider: UpstreamCredentialProvider | None = None,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -4199,7 +4156,13 @@ class MCPServerManager:
 
         # Create sampling and elicitation callbacks for this client
         sampling_cb = (
-            _create_sampling_callback(user_api_key_auth=user_api_key_auth) if resolved_server.allow_sampling else None
+            _create_sampling_callback(
+                operation_context=OperationContext(
+                    _caller=user_api_key_auth, raw_headers=raw_headers, client_ip=client_ip
+                )
+            )
+            if resolved_server.allow_sampling
+            else None
         )
         elicitation_cb: Final = _create_elicitation_callback() if resolved_server.allow_elicitation else None
 
@@ -4344,6 +4307,7 @@ class MCPServerManager:
         raw_headers: dict[str, str] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         oauth2_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> list[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -4433,6 +4397,8 @@ class MCPServerManager:
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
             )
 
             ## HANDLE OPENAPI TOOLS
@@ -4543,6 +4509,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> list[Prompt]:
         try:
             headers: Final = (
@@ -4563,6 +4530,8 @@ class MCPServerManager:
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
@@ -4586,6 +4555,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> list[Resource]:
         try:
             headers: Final = (
@@ -4606,6 +4576,8 @@ class MCPServerManager:
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
@@ -4629,6 +4601,7 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         add_prefix: bool = True,
         raw_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> list[ResourceTemplate]:
         try:
             headers: Final = (
@@ -4649,6 +4622,8 @@ class MCPServerManager:
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
             )
             credential_fingerprint: Final = await client.discovery_auth_fingerprint()
             key: Final = self._discovery_key(
@@ -4672,6 +4647,7 @@ class MCPServerManager:
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> ReadResourceResult:
         """Read resource contents from a specific MCP server."""
 
@@ -4692,6 +4668,9 @@ class MCPServerManager:
             extra_headers=extra_headers,
             stdio_env=stdio_env,
             subject_token=subject_token,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+            user_api_key_auth=user_api_key_auth,
         )
 
         return await client.read_resource(url)
@@ -4705,6 +4684,7 @@ class MCPServerManager:
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> GetPromptResult:
         """Fetch a specific prompt definition from a single MCP server."""
 
@@ -4725,6 +4705,9 @@ class MCPServerManager:
             extra_headers=extra_headers,
             stdio_env=stdio_env,
             subject_token=subject_token,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
+            user_api_key_auth=user_api_key_auth,
         )
 
         get_prompt_request_params: Final = GetPromptRequestParams(
@@ -5599,7 +5582,7 @@ class MCPServerManager:
     async def pre_call_tool_check(
         self,
         name: str,
-        arguments: dict[str, Any],
+        arguments: _ToolArguments,
         server_name: str,
         user_api_key_auth: UserAPIKeyAuth | None,
         proxy_logging_obj: ProxyLogging | None,
@@ -5805,6 +5788,8 @@ class MCPServerManager:
         stdio_env: dict[str, str] | None,
         subject_token: str | None,
         user_api_key_auth: UserAPIKeyAuth | None,
+        raw_headers: Mapping[str, str] | None = None,
+        client_ip: str | None = None,
     ) -> CallToolResult:
         """Call a token_exchange (OBO) tool; on an upstream 401/403 re-mint the token once and retry.
 
@@ -5830,6 +5815,8 @@ class MCPServerManager:
                 stdio_env=stdio_env,
                 subject_token=subject_token,
                 user_api_key_auth=user_api_key_auth,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
             )
             return await retry_client.call_tool(call_tool_params, host_progress_callback=host_progress_callback)
 
@@ -5847,6 +5834,7 @@ class MCPServerManager:
         host_progress_callback: Callable | None = None,
         hook_extra_headers: dict[str, str] | None = None,
         user_api_key_auth: UserAPIKeyAuth | None = None,
+        client_ip: str | None = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -5991,6 +5979,8 @@ class MCPServerManager:
             stdio_env=stdio_env,
             subject_token=subject_token,
             user_api_key_auth=user_api_key_auth,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
 
         call_tool_params: Final = MCPCallToolRequestParams(
@@ -6014,6 +6004,8 @@ class MCPServerManager:
                         stdio_env=stdio_env,
                         subject_token=subject_token,
                         user_api_key_auth=user_api_key_auth,
+                        raw_headers=raw_headers,
+                        client_ip=client_ip,
                     )
 
             tool_call_coro = _obo_call_tool_limited()
@@ -6189,7 +6181,7 @@ class MCPServerManager:
             return oauth2_headers
 
         try:
-            from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+            from litellm.proxy._experimental.mcp_server.operations import (  # noqa: PLC0415
                 _get_user_oauth_extra_headers_from_db,
             )
 
@@ -6295,6 +6287,7 @@ class MCPServerManager:
         host_progress_callback: Callable | None = None,
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
+        client_ip: str | None = None,
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -6421,6 +6414,7 @@ class MCPServerManager:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                client_ip=client_ip,
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
@@ -7094,6 +7088,11 @@ class MCPServerManager:
             spec_path=server.spec_path,
             transport=server.transport,
             auth_type=server.auth_type,
+            credentials=(
+                {"scopes": list(server.configured_scopes)}  # mutable-ok: MCPCredentials requires a JSON-array list
+                if server.configured_scopes
+                else None
+            ),
             created_at=server.created_at,
             updated_at=server.updated_at,
             teams=[],

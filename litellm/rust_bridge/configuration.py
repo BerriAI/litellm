@@ -84,7 +84,7 @@ def reset_rust_configuration() -> None:
 def rust(enabled: bool | None) -> None:
     """Set the process override for optional Rust paths.
 
-    ``PYTHON_ONLY`` and ``RUST_REQUIRED`` routes in the catalog ignore this switch,
+    ``PYTHON_ONLY`` and ``RUST_REQUIRED`` entries in the catalog ignore this switch,
     and an explicit ``LITELLM_RUST`` environment value wins over it.
     """
     _CONFIGURATION.override = enabled

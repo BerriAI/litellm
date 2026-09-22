@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from starlette.routing import BaseRoute, Match
-from starlette.types import Receive, Scope, Send
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.route_priority import hot_routes_first
@@ -203,6 +203,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/cursor/",
             "/deepgram/",
             "/eu.assemblyai/",
+            "/fal_ai/",
             "/gemini/",
             "/gigachat/",
             "/milvus/",
@@ -212,6 +213,7 @@ LAZY_FEATURES: Final[tuple[LazyFeature, ...]] = (
             "/openai_passthrough/",
             "/transcribe",
             "/typesafe/",
+            "/openrouter/",
             "/vertex-ai/",
             "/vertex_ai/",
             "/vllm/",
@@ -304,7 +306,7 @@ class LazyFeatureMiddleware:
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         fastapi_app: "FastAPI",
         features: tuple[LazyFeature, ...] = LAZY_FEATURES,
     ):

@@ -52,6 +52,7 @@ from litellm.llms.deepgram.common_utils import (
     deepgram_listen_requested_model,
     deepgram_listen_websocket_target,
 )
+from litellm.llms.fal_ai.cost_calculator import fal_ai_queue_base
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.passthrough.main import AsyncPassthroughStreamingResponse
@@ -421,6 +422,56 @@ async def cohere_proxy_route(
     return received_value
 
 
+def _fal_target(endpoint: str) -> httpx.URL:
+    base_target_url: Final = fal_ai_queue_base()
+    encoded_endpoint: Final = httpx.URL(endpoint).path
+    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
+    base_url: Final = httpx.URL(base_target_url)
+    return base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
+    )
+
+
+@router.api_route(
+    "/fal_ai/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
+    tags=["Fal AI Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
+)
+async def fal_ai_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    updated_url: Final = _fal_target(endpoint)
+    fal_ai_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="fal_ai",
+        region_name=None,
+    )
+    if fal_ai_api_key is None:
+        raise HTTPException(
+            status_code=401,
+            detail="FAL_AI_API_KEY is not set and no fal_ai pass-through deployment credentials are configured",
+        )
+    if "/requests/" not in endpoint:
+        priced_model: Final = f"fal_ai/{endpoint}"
+        if priced_model not in (litellm.model_cost or {}):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{priced_model} has no pricing entry; only priced Fal endpoints can be submitted through /fal_ai",
+            )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={
+            "Authorization": f"Key {fal_ai_api_key}"
+        },  # mutable-ok: pass-through request headers require a mutable mapping
+        custom_llm_provider="fal_ai",
+        is_streaming_request=False,
+    )
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
 @router.api_route(
     "/vllm/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -574,6 +625,42 @@ async def typesafe_proxy_route(
             "Content-Type": "application/json",
         },
         custom_llm_provider="typesafe",
+        is_streaming_request=False,
+    )
+    return await endpoint_func(request, fastapi_response, user_api_key_dict)
+
+
+@router.api_route(
+    "/openrouter/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],  # mutable-ok: FastAPI route metadata requires a list
+    tags=["OpenRouter Pass-through", "pass-through"],  # mutable-ok: FastAPI route metadata requires a list
+)
+async def openrouter_proxy_route(
+    endpoint: str,
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    base_target_url: Final = get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
+    api_root: Final = base_target_url.removesuffix("/").removesuffix("/v1")
+    encoded_endpoint: Final = httpx.URL(endpoint).path
+    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
+    base_url: Final = httpx.URL(api_root)
+    updated_url: Final = base_url.copy_with(
+        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
+    )
+    openrouter_api_key: Final = passthrough_endpoint_router.get_credentials(
+        custom_llm_provider="openrouter",
+        region_name=None,
+    )
+    endpoint_func: Final = create_pass_through_route(
+        endpoint=endpoint,
+        target=str(updated_url),
+        custom_headers={  # mutable-ok: pass-through request headers require a mutable mapping
+            "Authorization": f"Bearer {openrouter_api_key}",
+            "Content-Type": "application/json",
+        },
+        custom_llm_provider="openrouter",
         is_streaming_request=False,
     )
     return await endpoint_func(request, fastapi_response, user_api_key_dict)
