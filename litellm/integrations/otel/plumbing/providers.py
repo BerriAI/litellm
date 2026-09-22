@@ -58,6 +58,7 @@ from litellm.integrations.otel.plumbing.context import (
     request_destinations,
     suppressed_backends,
 )
+from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 
 if TYPE_CHECKING:
     from opentelemetry.metrics import Meter
@@ -192,7 +193,6 @@ def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
         return InMemorySpanExporter()
     if kind in _OTLP_HTTP_JSON_KINDS:
         from litellm.integrations.otel.plumbing.otlp_json import OTLPJsonSpanExporter
-        from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 
         tls: Final = resolve_otlp_http_tls("TRACES")
         return OTLPJsonSpanExporter(
@@ -205,8 +205,6 @@ def _exporter_from_spec(spec: ExporterSpec) -> SpanExporter:
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
             OTLPSpanExporter as HTTPExporter,
         )
-
-        from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 
         http_tls: Final = resolve_otlp_http_tls("TRACES")
         return HTTPExporter(
@@ -911,8 +909,6 @@ def build_metric_reader(config: OpenTelemetryV2Config) -> "MetricReader":
             OTLPMetricExporter as HTTPMetricExporter,
         )
 
-        from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
-
         tls: Final = resolve_otlp_http_tls("METRICS")
         exporter: Any = HTTPMetricExporter(
             endpoint=_otlp_metrics_endpoint(config.endpoint),
@@ -975,8 +971,6 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
         from opentelemetry.exporter.otlp.proto.http._log_exporter import (
             OTLPLogExporter as HTTPLogExporter,
         )
-
-        from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 
         tls: Final = resolve_otlp_http_tls("LOGS")
         return HTTPLogExporter(
