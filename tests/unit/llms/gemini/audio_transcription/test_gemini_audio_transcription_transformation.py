@@ -220,6 +220,22 @@ class TestTransformRequest:
             "diarization_mode": "speaker",
         }
 
+    def test_global_drop_params_removes_keywords_with_word_timestamps(self, config, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+        request_data = config.transform_audio_transcription_request(
+            model="gemini-3.5-transcribe",
+            audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+            optional_params={
+                "keywords": ["alpha"],
+                "timestamp_granularities": ["word"],
+            },
+            litellm_params={},
+        )
+        transcription_config = request_data.data["generation_config"]["transcription_config"]
+        assert "custom_vocabulary" not in transcription_config
+        assert transcription_config["mode"]["timestamp_granularities"] == ("word",)
+
     def test_word_timestamp_granularity_maps_to_verbatim_diarization_mode(self, config):
         request_data = config.transform_audio_transcription_request(
             model="gemini-3.5-transcribe",
@@ -252,6 +268,18 @@ class TestTransformRequest:
                 "diarization_mode": "speaker",
             }
         }
+
+    @pytest.mark.parametrize("response_format", ["srt", "vtt"])
+    def test_keywords_with_subtitle_response_format_raise(self, config, response_format, monkeypatch):
+        monkeypatch.setattr(litellm, "drop_params", False)
+
+        with pytest.raises(litellm.UnsupportedParamsError, match="custom vocabulary with word timestamps"):
+            config.transform_audio_transcription_request(
+                model="gemini-3.5-transcribe",
+                audio_file=("sample.wav", AUDIO_BYTES, "audio/wav"),
+                optional_params={"keywords": ["alpha"], "response_format": response_format},
+                litellm_params={},
+            )
 
     @pytest.mark.parametrize("response_format", ["json", "text", "verbose_json"])
     def test_non_subtitle_response_format_sends_no_mode(self, config, response_format):
