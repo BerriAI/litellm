@@ -185,7 +185,7 @@ def _request_spans(exporter: InMemorySpanExporter) -> int:
 
 
 def _arize_kwargs(callback_vars: dict[str, str] | None = None) -> dict[str, object]:
-    kwargs = {
+    kwargs: dict[str, object] = {
         "model": "gpt-4",
         "litellm_params": {"metadata": {}},
         "standard_logging_object": {
@@ -250,9 +250,9 @@ async def test_success_and_error_rates_are_independent():
 
 @pytest.mark.asyncio
 async def test_one_draw_per_request_across_sync_and_async_handlers():
-    draws = []
+    draws: list[int] = []
 
-    def counting_draw():
+    def counting_draw() -> float:
         draws.append(1)
         return 0.5
 
@@ -272,7 +272,7 @@ async def test_unparsable_sampling_rate_exports_rather_than_dropping():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad", ["nan", "inf", "-inf", "1.5", "-0.1"])
-async def test_out_of_range_sampling_rate_exports_rather_than_dropping(bad):
+async def test_out_of_range_sampling_rate_exports_rather_than_dropping(bad: str):
     logger, exporter = _sampled_arize_logger(random_draw=lambda: 0.99)
     await logger.async_log_success_event(_arize_kwargs({"arize_success_sampling_rate": bad}), None, _START, _END)
     assert _request_spans(exporter) == 1
