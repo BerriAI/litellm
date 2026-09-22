@@ -1,11 +1,14 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
+use litellm_auth_aws::AwsAuthConfig;
 use litellm_cache::CacheType;
+use litellm_cache_qdrant_semantic::{OpenAiEmbedderConfig, QdrantSemanticConfig, Quantization};
 use litellm_cache_redis::{RedisNode, RedisTopology};
+use litellm_cache_s3::{S3CacheConfig, S3Endpoint};
 use pyo3::{
-    exceptions::{PyTypeError, PyValueError},
+    exceptions::{PyAttributeError, PyTypeError, PyValueError},
     prelude::*,
-    types::{PyAny, PyDict, PyList, PyString},
+    types::{PyAny, PyBool, PyDict, PyList, PyString},
 };
 
 use super::{native::NativeResponseCache, request::duration};
@@ -24,6 +27,10 @@ pub(super) struct MemoryCacheConfig {
     pub(super) default_ttl: Duration,
     pub(super) capacity: usize,
     pub(super) max_entry_bytes: usize,
+}
+
+pub(super) struct DiskCacheConfig {
+    pub(super) directory: PathBuf,
 }
 
 #[derive(Debug, PartialEq)]
@@ -75,9 +82,29 @@ pub(super) struct RedisCacheConfig {
     pub(super) connection: RedisConnectionConfig,
 }
 
+#[derive(Debug, PartialEq)]
+pub(super) struct GcsCacheConfig {
+    pub(super) bucket_name: String,
+    pub(super) key_prefix: String,
+    pub(super) path_service_account: Option<String>,
+}
+
 pub(super) struct AzureBlobCacheConfig {
     pub(super) account_url: String,
     pub(super) container: String,
+}
+
+#[allow(
+    dead_code,
+    reason = "embedding settings are projected so drift falls back to Python"
+)]
+pub(super) struct RedisSemanticCacheConfig {
+    pub(super) redis_url: String,
+    pub(super) index_name: String,
+    pub(super) similarity_threshold: f64,
+    pub(super) embedding_model: String,
+    pub(super) embedding_max_input_tokens: Option<u64>,
+    pub(super) embedding_timeout: Option<f64>,
 }
 
 struct RedisClientProjection<'py> {
@@ -91,10 +118,45 @@ struct RedisClientProjection<'py> {
 
 const REDIS_PY_DEFAULT_MAX_CONNECTIONS: usize = 1 << 31;
 
+#[allow(dead_code, reason = "consumed by the cache activation follow-up")]
+pub(super) struct ValkeySemanticCacheConfig {
+    pub(super) similarity_threshold: f64,
+    pub(super) index_name: String,
+    pub(super) embedding_model: String,
+    pub(super) connection: RedisConnectionConfig,
+}
+
+pub(super) struct QdrantSemanticCacheConfig {
+    pub(super) grpc_url: String,
+    pub(super) api_key: Option<String>,
+    pub(super) collection_name: String,
+    pub(super) similarity_threshold: f64,
+    pub(super) vector_size: u64,
+    pub(super) embedding: OpenAiEmbedderConfig,
+    pub(super) quantization: Quantization,
+}
+
+impl QdrantSemanticCacheConfig {
+    pub(super) fn to_qdrant_config(&self) -> QdrantSemanticConfig {
+        QdrantSemanticConfig {
+            collection_name: self.collection_name.clone(),
+            similarity_threshold: self.similarity_threshold,
+            vector_size: self.vector_size,
+            quantization: self.quantization.clone(),
+        }
+    }
+}
+
 pub(super) enum CacheBackendConfig {
     Memory(MemoryCacheConfig),
     Redis(Box<RedisCacheConfig>),
+    S3(Box<S3CacheConfig>),
+    Gcs(GcsCacheConfig),
+    ValkeySemantic(Box<ValkeySemanticCacheConfig>),
+    Disk(DiskCacheConfig),
     AzureBlob(AzureBlobCacheConfig),
+    RedisSemantic(Box<RedisSemanticCacheConfig>),
+    QdrantSemantic(Box<QdrantSemanticCacheConfig>),
 }
 
 #[allow(dead_code, reason = "consumed by the cache activation follow-up")]
@@ -109,6 +171,13 @@ pub(super) enum UnsupportedCacheConfig {
     RedisCredentials,
     RedisConnection,
     RedisOption,
+    S3Client,
+    S3Credentials,
+    S3Option,
+    GcsBucket,
+    DiskStore,
+    QdrantEndpoint,
+    SemanticEmbedding,
 }
 
 impl UnsupportedCacheConfig {
@@ -119,6 +188,15 @@ impl UnsupportedCacheConfig {
             Self::RedisCredentials => "native Redis credentials require Python",
             Self::RedisConnection => "native Redis connection type is not implemented",
             Self::RedisOption => "native Redis configuration requires Python",
+            Self::S3Client => "native S3 client type is not implemented",
+            Self::S3Credentials => "native S3 credentials require Python",
+            Self::S3Option => "native S3 configuration requires Python",
+            Self::GcsBucket => "native GCS cache requires a configured bucket name",
+            Self::DiskStore => "native disk cache requires the built-in diskcache store",
+            Self::QdrantEndpoint => {
+                "native Qdrant requires the default REST port so the gRPC port can be derived"
+            }
+            Self::SemanticEmbedding => "native semantic embedding requires Python",
         }
     }
 }
@@ -161,21 +239,54 @@ impl NativeCacheConfig {
                 }))),
                 Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
             },
+            Some(CacheType::S3) => match project_s3(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::S3(Box::new(backend)),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
+            Some(CacheType::Gcs) => match project_gcs(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::Gcs(backend),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
+            Some(CacheType::ValkeySemantic) => match project_valkey_semantic(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::ValkeySemantic(Box::new(backend)),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
+            Some(CacheType::Disk) => match project_disk(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::Disk(backend),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
+            Some(CacheType::QdrantSemantic) => match project_qdrant_semantic(&backend)? {
+                Ok(backend) => Ok(CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::QdrantSemantic(Box::new(backend)),
+                }))),
+                Err(reason) => Ok(CacheConfigProjection::Unsupported(reason)),
+            },
             Some(CacheType::AzureBlob) => project_azure_blob(&backend).map(|backend| {
                 CacheConfigProjection::Native(Box::new(Self {
                     policy,
                     backend: CacheBackendConfig::AzureBlob(backend),
                 }))
             }),
-            Some(
-                CacheType::RedisSemantic
-                | CacheType::ValkeySemantic
-                | CacheType::S3
-                | CacheType::Disk
-                | CacheType::QdrantSemantic
-                | CacheType::Gcs,
-            )
-            | None => Ok(CacheConfigProjection::Unsupported(
+            Some(CacheType::RedisSemantic) => project_redis_semantic(&backend).map(|backend| {
+                CacheConfigProjection::Native(Box::new(Self {
+                    policy,
+                    backend: CacheBackendConfig::RedisSemantic(Box::new(backend)),
+                }))
+            }),
+            None => Ok(CacheConfigProjection::Unsupported(
                 UnsupportedCacheConfig::Backend,
             )),
         }
@@ -185,9 +296,17 @@ impl NativeCacheConfig {
         let default_ttl = match &self.backend {
             CacheBackendConfig::Memory(config) => Some(config.default_ttl),
             CacheBackendConfig::Redis(config) => Some(config.default_ttl),
-            CacheBackendConfig::AzureBlob(_) => None,
+            CacheBackendConfig::S3(_) => None,
+            CacheBackendConfig::ValkeySemantic(_) => Some(Duration::ZERO),
+            CacheBackendConfig::Disk(_)
+            | CacheBackendConfig::AzureBlob(_)
+            | CacheBackendConfig::Gcs(_)
+            | CacheBackendConfig::RedisSemantic(_)
+            | CacheBackendConfig::QdrantSemantic(_) => None,
         };
-        if service.default_ttl() != default_ttl {
+        if !matches!(self.backend, CacheBackendConfig::ValkeySemantic(_))
+            && service.default_ttl() != default_ttl
+        {
             return Some("facade and native backend default TTLs must match");
         }
         match &self.backend {
@@ -212,6 +331,115 @@ impl NativeCacheConfig {
             CacheBackendConfig::Redis(config) => (service.namespace()
                 != config.namespace.as_deref())
             .then_some("facade and native backend namespaces must match"),
+            CacheBackendConfig::S3(_) if service.kind() != "s3" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::S3(config) if service.bucket() != Some(config.bucket.as_str()) => {
+                Some("facade and native backend buckets must match")
+            }
+            CacheBackendConfig::S3(config)
+                if service.key_prefix() != Some(config.key_prefix.as_str()) =>
+            {
+                Some("facade and native backend key prefixes must match")
+            }
+            CacheBackendConfig::S3(config) if service.region() != Some(config.region.as_str()) => {
+                Some("facade and native backend regions must match")
+            }
+            CacheBackendConfig::S3(config)
+                if service.endpoint()
+                    != config
+                        .endpoint
+                        .as_ref()
+                        .map(|endpoint| endpoint.url.as_str()) =>
+            {
+                Some("facade and native backend endpoints must match")
+            }
+            CacheBackendConfig::S3(_) => None,
+            CacheBackendConfig::Gcs(_) if service.kind() != "gcs" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::Gcs(config)
+                if service
+                    .gcs_backend()
+                    .is_none_or(|backend| backend.bucket_name() != config.bucket_name) =>
+            {
+                Some("facade and native backend buckets must match")
+            }
+            CacheBackendConfig::Gcs(config)
+                if service
+                    .gcs_backend()
+                    .is_none_or(|backend| backend.key_prefix() != config.key_prefix) =>
+            {
+                Some("facade and native backend key prefixes must match")
+            }
+            CacheBackendConfig::Gcs(config)
+                if service.gcs_backend().is_none_or(|backend| {
+                    backend.path_service_account() != config.path_service_account.as_deref()
+                }) =>
+            {
+                Some("facade and native backend credentials must match")
+            }
+            CacheBackendConfig::Gcs(_) => None,
+            CacheBackendConfig::ValkeySemantic(config) => {
+                if service.kind() != "valkey-semantic" {
+                    return Some("facade and native backend types must match");
+                }
+                let Some((threshold, index_name)) = service.semantic_config() else {
+                    return Some("facade and native backend types must match");
+                };
+                (threshold != config.similarity_threshold || index_name != config.index_name)
+                    .then_some("facade and native semantic settings must match")
+            }
+            CacheBackendConfig::Disk(_) if service.kind() != "disk" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::Disk(config) => {
+                let Some(directory) = service.directory() else {
+                    return Some("facade and native backend types must match");
+                };
+                let native = std::fs::canonicalize(directory).ok();
+                let facade = std::fs::canonicalize(&config.directory).ok();
+                (native != facade).then_some("facade and native backend directories must match")
+            }
+            CacheBackendConfig::RedisSemantic(_) if service.kind() != "redis_semantic" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::RedisSemantic(config)
+                if service.index_name() != Some(config.index_name.as_str()) =>
+            {
+                Some("facade and native backend index names must match")
+            }
+            CacheBackendConfig::RedisSemantic(config)
+                if service.similarity_threshold()
+                    != Some(f64::from(config.similarity_threshold as f32)) =>
+            {
+                Some("facade and native backend similarity thresholds must match")
+            }
+            CacheBackendConfig::RedisSemantic(_) => None,
+            CacheBackendConfig::QdrantSemantic(config) if service.kind() != "qdrant_semantic" => {
+                Some("facade and native backend types must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.collection_name() != Some(config.collection_name.as_str()) =>
+            {
+                Some("facade and native backend collections must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.similarity_threshold() != Some(config.similarity_threshold) =>
+            {
+                Some("facade and native backend similarity thresholds must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.vector_size() != Some(config.vector_size) =>
+            {
+                Some("facade and native backend vector sizes must match")
+            }
+            CacheBackendConfig::QdrantSemantic(config)
+                if service.embedding_model() != Some(config.embedding.model.as_str()) =>
+            {
+                Some("facade and native backend embedding models must match")
+            }
+            CacheBackendConfig::QdrantSemantic(_) => None,
             CacheBackendConfig::AzureBlob(config) => match service.azure_blob_identity() {
                 None => Some("facade and native backend types must match"),
                 Some((account_url, container))
@@ -222,6 +450,105 @@ impl NativeCacheConfig {
                 Some(_) => None,
             },
         }
+    }
+}
+
+#[inline(never)]
+fn project_qdrant_semantic(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<QdrantSemanticCacheConfig, UnsupportedCacheConfig>> {
+    let rest_url = backend.getattr("qdrant_api_base")?.extract::<String>()?;
+    let parsed = match url::Url::parse(&rest_url) {
+        Ok(value) => value,
+        Err(_) => return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint)),
+    };
+    if !matches!(parsed.scheme(), "http" | "https")
+        || (!parsed.path().is_empty() && parsed.path() != "/")
+        || parsed.query().is_some()
+        || parsed.host_str().is_none()
+        || parsed.port() != Some(6333)
+    {
+        return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint));
+    }
+    let mut grpc_url = parsed;
+    if grpc_url.set_port(Some(6334)).is_err() {
+        return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint));
+    }
+    grpc_url.set_path("");
+    grpc_url.set_query(None);
+
+    if optional_attribute(backend, "embedding_max_input_tokens")?
+        .is_some_and(|value| !value.is_none())
+    {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    }
+    let configured_model = backend.getattr("embedding_model")?.extract::<String>()?;
+    let embedding_model = configured_model
+        .strip_prefix("openai/")
+        .unwrap_or(&configured_model)
+        .to_owned();
+    if !embedding_model.starts_with("text-embedding-") {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    }
+    let proxy_server = py_sys_module(backend.py())?;
+    if let Some(proxy_server) = proxy_server {
+        let router = proxy_server.getattr("llm_router")?;
+        let model_list = proxy_server.getattr("llm_model_list")?;
+        let embedding_router = backend.py().import("litellm.caching._embedding_router")?;
+        if !embedding_router
+            .getattr("resolve_embedding_router")?
+            .call1((configured_model.as_str(), router, model_list))?
+            .is_none()
+        {
+            return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+        }
+    }
+    let litellm = backend.py().import("litellm")?;
+    for name in ["api_key", "openai_key", "api_base"] {
+        if !litellm.getattr(name)?.is_none() {
+            return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+        }
+    }
+    let Ok(embedding_api_key) = std::env::var("OPENAI_API_KEY") else {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    };
+    if embedding_api_key.is_empty() {
+        return Ok(Err(UnsupportedCacheConfig::SemanticEmbedding));
+    }
+    let embedding_api_base = std::env::var("OPENAI_BASE_URL")
+        .or_else(|_| std::env::var("OPENAI_API_BASE"))
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_owned());
+    let timeout = optional_attribute(backend, "embedding_timeout")?
+        .map(|value| value.extract::<Option<f64>>())
+        .transpose()?
+        .flatten()
+        .map(duration)
+        .transpose()?;
+    Ok(Ok(QdrantSemanticCacheConfig {
+        grpc_url: grpc_url.to_string().trim_end_matches('/').to_owned(),
+        api_key: optional_string(backend.getattr("qdrant_api_key")?)?,
+        collection_name: backend.getattr("collection_name")?.extract()?,
+        similarity_threshold: backend.getattr("similarity_threshold")?.extract()?,
+        vector_size: backend.getattr("vector_size")?.extract::<u64>()?,
+        embedding: OpenAiEmbedderConfig {
+            api_base: embedding_api_base,
+            api_key: embedding_api_key,
+            model: embedding_model,
+            timeout,
+        },
+        quantization: Quantization::Binary,
+    }))
+}
+
+fn py_sys_module(py: Python<'_>) -> PyResult<Option<Bound<'_, PyAny>>> {
+    match py
+        .import("sys")?
+        .getattr("modules")?
+        .get_item("litellm.proxy.proxy_server")
+    {
+        Ok(module) => Ok(Some(module)),
+        Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => Ok(None),
+        Err(error) => Err(error),
     }
 }
 
@@ -241,6 +568,27 @@ fn project_azure_blob(backend: &Bound<'_, PyAny>) -> PyResult<AzureBlobCacheConf
 }
 
 #[inline(never)]
+pub(super) fn project_redis_semantic(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<RedisSemanticCacheConfig> {
+    Ok(RedisSemanticCacheConfig {
+        redis_url: backend.getattr("_redis_url")?.extract::<String>()?,
+        index_name: backend
+            .getattr("_index_name")?
+            .extract::<Option<String>>()?
+            .unwrap_or_else(|| "litellm_semantic_cache_index".into()),
+        similarity_threshold: backend.getattr("similarity_threshold")?.extract::<f64>()?,
+        embedding_model: backend.getattr("embedding_model")?.extract::<String>()?,
+        embedding_max_input_tokens: backend
+            .getattr("embedding_max_input_tokens")?
+            .extract::<Option<u64>>()?,
+        embedding_timeout: backend
+            .getattr("embedding_timeout")?
+            .extract::<Option<f64>>()?,
+    })
+}
+
+#[inline(never)]
 fn project_memory(backend: &Bound<'_, PyAny>) -> PyResult<MemoryCacheConfig> {
     let max_size_kib = backend.getattr("max_size_per_item")?.extract::<usize>()?;
     Ok(MemoryCacheConfig {
@@ -250,6 +598,38 @@ fn project_memory(backend: &Bound<'_, PyAny>) -> PyResult<MemoryCacheConfig> {
             .checked_mul(1024)
             .ok_or_else(|| PyValueError::new_err("memory cache item limit is too large"))?,
     })
+}
+
+#[inline(never)]
+fn project_gcs(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<GcsCacheConfig, UnsupportedCacheConfig>> {
+    let bucket_name = match backend.getattr("bucket_name")?.extract::<Option<String>>() {
+        Ok(Some(bucket_name)) if !bucket_name.is_empty() => bucket_name,
+        _ => return Ok(Err(UnsupportedCacheConfig::GcsBucket)),
+    };
+    Ok(Ok(GcsCacheConfig {
+        bucket_name,
+        key_prefix: backend.getattr("key_prefix")?.extract::<String>()?,
+        path_service_account: backend
+            .getattr("path_service_account")?
+            .extract::<Option<String>>()?,
+    }))
+}
+
+#[inline(never)]
+fn project_disk(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<DiskCacheConfig, UnsupportedCacheConfig>> {
+    let store = backend.getattr("disk_cache")?;
+    if !instance_class_is(&store, "diskcache.core", "Cache")?
+        || !instance_class_is(&store.getattr("_disk")?, "diskcache.core", "Disk")?
+    {
+        return Ok(Err(UnsupportedCacheConfig::DiskStore));
+    }
+    Ok(Ok(DiskCacheConfig {
+        directory: PathBuf::from(store.getattr("directory")?.extract::<String>()?),
+    }))
 }
 
 #[inline(never)]
@@ -347,6 +727,77 @@ fn project_redis(
 }
 
 #[inline(never)]
+fn project_s3(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<S3CacheConfig, UnsupportedCacheConfig>> {
+    let client = backend.getattr("s3_client")?;
+    if !instance_class_is(&client, "botocore.client", "S3")? {
+        return Ok(Err(UnsupportedCacheConfig::S3Client));
+    }
+    let meta = client.getattr("meta")?;
+    let Some(region) = optional_string(meta.getattr("region_name")?)? else {
+        return Ok(Err(UnsupportedCacheConfig::S3Option));
+    };
+    let Some(endpoint_url) = optional_string(meta.getattr("endpoint_url")?)? else {
+        return Ok(Err(UnsupportedCacheConfig::S3Option));
+    };
+    let client_config = meta.getattr("config")?;
+    for name in ["s3", "proxies", "client_cert"] {
+        if optional_attribute(&client_config, name)?.is_some_and(|value| !value.is_none()) {
+            return Ok(Err(UnsupportedCacheConfig::S3Option));
+        }
+    }
+    let signature = match optional_attribute(&client_config, "signature_version")? {
+        Some(value) => value.extract::<Option<String>>()?,
+        None => None,
+    };
+    if signature.as_deref() != Some("s3v4") {
+        return Ok(Err(UnsupportedCacheConfig::S3Option));
+    }
+    let insecure = endpoint_url.starts_with("http://");
+    let verify = optional_attribute_chain(&client, &["_endpoint", "http_session", "_verify"])?;
+    let verified = verify
+        .and_then(|value| value.cast::<PyBool>().ok().map(|value| value.is_true()))
+        .unwrap_or(false);
+    if !verified && !insecure {
+        return Ok(Err(UnsupportedCacheConfig::S3Option));
+    }
+    let credentials = optional_attribute_chain(&client, &["_request_signer", "_credentials"])?
+        .ok_or(UnsupportedCacheConfig::S3Credentials);
+    let credentials = match credentials {
+        Ok(credentials) if !credentials.is_none() => credentials,
+        _ => return Ok(Err(UnsupportedCacheConfig::S3Credentials)),
+    };
+    let auth = if credentials.getattr("method")?.extract::<String>()?.as_str() == "explicit" {
+        AwsAuthConfig {
+            access_key_id: credentials
+                .getattr("access_key")?
+                .extract::<Option<String>>()?,
+            secret_access_key: credentials
+                .getattr("secret_key")?
+                .extract::<Option<String>>()?,
+            session_token: credentials.getattr("token")?.extract::<Option<String>>()?,
+            region_name: Some(region.clone()),
+            ..Default::default()
+        }
+    } else {
+        AwsAuthConfig {
+            region_name: Some(region.clone()),
+            ..Default::default()
+        }
+    };
+    let default_endpoint = endpoint_url == format!("https://s3.{region}.amazonaws.com")
+        || (region == "us-east-1" && endpoint_url == "https://s3.amazonaws.com");
+    Ok(Ok(S3CacheConfig {
+        bucket: backend.getattr("bucket_name")?.extract::<String>()?,
+        key_prefix: backend.getattr("key_prefix")?.extract::<String>()?,
+        region,
+        endpoint: (!default_endpoint).then_some(S3Endpoint { url: endpoint_url }),
+        auth,
+    }))
+}
+
+#[inline(never)]
 fn project_standalone_client<'py>(
     client: &Bound<'py, PyAny>,
 ) -> PyResult<Result<RedisClientProjection<'py>, UnsupportedCacheConfig>> {
@@ -380,7 +831,7 @@ fn project_standalone_client<'py>(
 
 #[inline(never)]
 fn project_cluster_client<'py>(
-    source: &Bound<'py, PyDict>,
+    source: &Bound<'_, PyDict>,
     client: &Bound<'py, PyAny>,
 ) -> PyResult<Result<RedisClientProjection<'py>, UnsupportedCacheConfig>> {
     let Some(startup_nodes) = startup_nodes(source)? else {
@@ -469,6 +920,71 @@ fn port(value: i64) -> PyResult<u16> {
 }
 
 #[inline(never)]
+fn project_valkey_semantic(
+    backend: &Bound<'_, PyAny>,
+) -> PyResult<Result<ValkeySemanticCacheConfig, UnsupportedCacheConfig>> {
+    let client = backend.getattr("sync_client")?;
+    let pool = client.getattr("connection_pool")?;
+    let Ok((resolved, is_tls)) = project_connection_pool(&pool)? else {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    };
+    for key in ["credential_provider", "redis_connect_func"] {
+        if has_value(&resolved, key)? {
+            return Ok(Err(UnsupportedCacheConfig::RedisCredentials));
+        }
+    }
+    if is_tls {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    let connection = RedisConnectionConfig {
+        host: required_string(&resolved, "host")?,
+        port: u16::try_from(required_i64(&resolved, "port")?)
+            .map_err(|_| PyValueError::new_err("invalid Redis port"))?,
+        database: optional_i64(&resolved, "db")?.unwrap_or(0),
+        username: optional_dict_string(&resolved, "username")?,
+        password: optional_dict_string(&resolved, "password")?,
+        protocol: RedisProtocol::Resp2,
+        pool_size: pool.getattr("max_connections")?.extract::<usize>()?,
+        read_timeout: None,
+        connect_timeout: None,
+        socket_keepalive: None,
+        health_check_interval: Duration::ZERO,
+        client_name: None,
+        tls: None,
+    };
+    if connection.host.is_empty() {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    Ok(Ok(ValkeySemanticCacheConfig {
+        similarity_threshold: backend.getattr("similarity_threshold")?.extract()?,
+        index_name: backend.getattr("index_name")?.extract()?,
+        embedding_model: backend.getattr("embedding_model")?.extract()?,
+        connection,
+    }))
+}
+
+#[inline(never)]
+fn project_connection_pool<'py>(
+    pool: &Bound<'py, PyAny>,
+) -> PyResult<Result<(Bound<'py, PyDict>, bool), UnsupportedCacheConfig>> {
+    if !instance_class_is(pool, "redis.connection", "ConnectionPool")? {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    }
+    let resolved = pool.getattr("connection_kwargs")?.cast_into::<PyDict>()?;
+    let connection_class = resolved
+        .get_item("connection_class")?
+        .unwrap_or(pool.getattr("connection_class")?);
+    let is_tls = if class_is(&connection_class, "redis.connection", "Connection")? {
+        false
+    } else if class_is(&connection_class, "redis.connection", "SSLConnection")? {
+        true
+    } else {
+        return Ok(Err(UnsupportedCacheConfig::RedisConnection));
+    };
+    Ok(Ok((resolved, is_tls)))
+}
+
+#[inline(never)]
 fn project_tls(values: &Bound<'_, PyDict>) -> PyResult<RedisTlsConfig> {
     Ok(RedisTlsConfig {
         certificate_requirement: certificate_requirement(values)?,
@@ -547,6 +1063,31 @@ fn optional_attribute_string(value: &Bound<'_, PyAny>, name: &str) -> PyResult<O
         }
         Err(error) => Err(error),
     }
+}
+
+#[inline(never)]
+fn optional_attribute<'py>(
+    value: &Bound<'py, PyAny>,
+    name: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    match value.getattr(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.is_instance_of::<PyAttributeError>(value.py()) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+#[inline(never)]
+fn optional_attribute_chain<'py>(
+    value: &Bound<'py, PyAny>,
+    names: &[&str],
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    names
+        .iter()
+        .try_fold(Some(value.clone()), |current, name| match current {
+            Some(current) => optional_attribute(&current, name),
+            None => Ok(None),
+        })
 }
 
 #[inline(never)]
@@ -637,12 +1178,13 @@ mod tests {
     use pyo3::{prelude::*, types::PyDict};
 
     use litellm_cache_redis::{RedisNode, RedisTopology};
+    use litellm_cache_redis_semantic::RedisSemanticConfig;
 
     use super::{
-        CacheBackendConfig, CacheConfigProjection, CertificateRequirement, NativeCacheConfig,
-        RedisProtocol,
+        CacheBackendConfig, CacheConfigProjection, CachePolicy, CertificateRequirement,
+        GcsCacheConfig, NativeCacheConfig, RedisProtocol, UnsupportedCacheConfig,
     };
-    use crate::cache::native::NativeResponseCache;
+    use crate::cache::{embedder::PythonEmbedder, native::NativeResponseCache};
 
     fn cluster_facade<'py>(py: Python<'py>, startup_nodes: &str, hook: &str) -> Bound<'py, PyAny> {
         facade(
@@ -716,6 +1258,49 @@ mod tests {
     }
 
     #[test]
+    fn redis_semantic_service_mismatch_accepts_backend_precision_threshold() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "backend = SimpleNamespace(_redis_url='redis://127.0.0.1/', _index_name='semantic_idx', similarity_threshold=0.8, embedding_model='text-embedding-3-small', embedding_max_input_tokens=None, embedding_timeout=None)\n\
+                 facade = SimpleNamespace(type='redis-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let backend = facade.getattr("cache").unwrap();
+            let embedder = PythonEmbedder::new(backend.clone().unbind());
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("Redis semantic cache should be supported");
+            };
+            let CacheBackendConfig::RedisSemantic(config) = config.backend else {
+                panic!("expected Redis semantic configuration");
+            };
+            let service = NativeResponseCache::redis_semantic(
+                &config.redis_url,
+                embedder,
+                RedisSemanticConfig {
+                    index_name: config.index_name.clone(),
+                    similarity_threshold: config.similarity_threshold as f32,
+                },
+            )
+            .unwrap();
+            let matching_config = NativeCacheConfig {
+                policy: CachePolicy {
+                    mode: "default-on".into(),
+                    ttl: None,
+                    namespace: None,
+                    supported_call_types: None,
+                    redis_flush_size: None,
+                    semantic_cache_scope: "key".into(),
+                },
+                backend: CacheBackendConfig::RedisSemantic(config),
+            };
+            assert_eq!(matching_config.service_mismatch(&service), None);
+        });
+    }
+
+    #[test]
     fn projects_resolved_redis_tls_configuration() {
         Python::initialize();
         Python::attach(|py| {
@@ -755,6 +1340,87 @@ mod tests {
             assert_eq!(tls.ca_data.as_deref(), Some("CA DATA"));
             assert_eq!(tls.client_certificate.as_deref(), Some("/client.pem"));
             assert_eq!(tls.client_key.as_deref(), Some("/client.key"));
+        });
+    }
+
+    #[test]
+    fn projects_valkey_semantic_configuration() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "pool = ConnectionPool()\n\
+                 pool.connection_class = Connection\n\
+                 pool.max_connections = 12\n\
+                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390, 'db': 2}\n\
+                 client = SimpleNamespace(connection_pool=pool)\n\
+                 backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
+                 facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("Valkey semantic cache should be supported");
+            };
+            let CacheBackendConfig::ValkeySemantic(valkey) = config.backend else {
+                panic!("expected Valkey semantic configuration");
+            };
+            assert_eq!(valkey.similarity_threshold, 0.85);
+            assert_eq!(valkey.index_name, "semantic_idx");
+            assert_eq!(valkey.embedding_model, "text-embedding-3-small");
+            assert_eq!(valkey.connection.host, "cache.internal");
+            assert_eq!(valkey.connection.port, 6390);
+            assert_eq!(valkey.connection.database, 2);
+            assert_eq!(valkey.connection.pool_size, 12);
+            assert_eq!(valkey.connection.protocol, RedisProtocol::Resp2);
+            assert!(valkey.connection.tls.is_none());
+        });
+    }
+
+    #[test]
+    fn valkey_semantic_tls_stays_on_python() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "pool = ConnectionPool()\n\
+                 pool.connection_class = SSLConnection\n\
+                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390}\n\
+                 client = SimpleNamespace(connection_pool=pool)\n\
+                 backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
+                 facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("TLS Valkey semantic cache should stay on Python");
+            };
+            assert_eq!(
+                reason.message(),
+                "native Redis connection type is not implemented"
+            );
+        });
+    }
+
+    #[test]
+    fn valkey_semantic_dynamic_auth_stays_on_python() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "pool = ConnectionPool()\n\
+                 pool.connection_class = Connection\n\
+                 pool.connection_kwargs = {'host': 'cache.internal', 'port': 6390, 'credential_provider': object()}\n\
+                 client = SimpleNamespace(connection_pool=pool)\n\
+                 backend = SimpleNamespace(similarity_threshold=0.85, index_name='semantic_idx', embedding_model='text-embedding-3-small', sync_client=client)\n\
+                 facade = SimpleNamespace(type='valkey-semantic', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("dynamic Valkey authentication must stay on Python");
+            };
+            assert_eq!(reason.message(), "native Redis credentials require Python");
         });
     }
 
@@ -818,6 +1484,71 @@ mod tests {
                     .unwrap()
                     .certificate_requirement,
                 CertificateRequirement::None
+            );
+        });
+    }
+
+    #[test]
+    fn projects_gcs_configuration() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "backend = SimpleNamespace(bucket_name='bucket', key_prefix='cache/', path_service_account='credentials.json')\n\
+                 facade = SimpleNamespace(type='gcs', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Native(config) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("GCS cache should be supported");
+            };
+            let CacheBackendConfig::Gcs(gcs) = config.backend else {
+                panic!("expected GCS configuration");
+            };
+            assert_eq!(
+                gcs,
+                GcsCacheConfig {
+                    bucket_name: "bucket".into(),
+                    key_prefix: "cache/".into(),
+                    path_service_account: Some("credentials.json".into()),
+                }
+            );
+            let matching = NativeResponseCache::gcs(
+                litellm_cache_gcs::GcsConfig {
+                    bucket_name: "bucket".into(),
+                    gcs_path: Some("cache/".into()),
+                    path_service_account: Some("credentials.json".into()),
+                    endpoint: litellm_cache_gcs::DEFAULT_ENDPOINT.into(),
+                },
+                Some("token".into()),
+            )
+            .unwrap();
+            let matching_config = NativeCacheConfig {
+                policy: config.policy,
+                backend: CacheBackendConfig::Gcs(gcs),
+            };
+            assert_eq!(matching_config.service_mismatch(&matching), None);
+        });
+    }
+
+    #[test]
+    fn rejects_gcs_without_a_bucket_name() {
+        Python::initialize();
+        Python::attach(|py| {
+            let facade = facade(
+                py,
+                "backend = SimpleNamespace(bucket_name=None, key_prefix='', path_service_account=None)\n\
+                 facade = SimpleNamespace(type='gcs', mode='default-on', ttl=None, namespace=None, supported_call_types=None, redis_flush_size=None, semantic_cache_scope='key', cache=backend)",
+            );
+            let CacheConfigProjection::Unsupported(reason) =
+                NativeCacheConfig::project(&facade).unwrap()
+            else {
+                panic!("GCS cache without a bucket should be unsupported");
+            };
+            assert!(matches!(&reason, UnsupportedCacheConfig::GcsBucket));
+            assert_eq!(
+                reason.message(),
+                "native GCS cache requires a configured bucket name"
             );
         });
     }

@@ -1599,6 +1599,20 @@ export const claimOnboardingToken = async (
   }
 };
 
+export const changePasswordCall = async (
+  accessToken: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ user_id: string; message: string }> => {
+  return await apiClient.post(`/user/password/change`, {
+    accessToken,
+    body: {
+      current_password: currentPassword,
+      new_password: newPassword,
+    },
+  });
+};
+
 export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {
   try {
     const url = proxyBaseUrl
@@ -6253,6 +6267,7 @@ export const patchAgentCall = async (
     rpm_limit?: number | null;
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
+    access_group_ids?: string[];
   },
 ) => {
   try {

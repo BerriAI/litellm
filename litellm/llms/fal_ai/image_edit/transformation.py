@@ -61,7 +61,7 @@ def _read_image_bytes(image: object) -> bytes:
     raise ValueError(f"Unsupported image type for Fal AI image edit: {type(image).__name__}")
 
 
-def _to_data_url(image: object) -> str:
+def to_data_url(image: object) -> str:
     if isinstance(image, str):
         return image
     image_bytes: Final = _read_image_bytes(image)
@@ -143,7 +143,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
             raise ValueError("Fal AI image edit requires at least one input image")
         mask: Final = _first(image_edit_optional_request_params.get("mask"))
         mask_field: Final[Mapping[str, str]] = (
-            MappingProxyType({"mask_url": _to_data_url(mask)}) if mask is not None else MappingProxyType({})
+            MappingProxyType({"mask_url": to_data_url(mask)}) if mask is not None else MappingProxyType({})
         )
         provider_params: Final[Mapping[str, object]] = MappingProxyType(
             {
@@ -152,7 +152,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         )
         request_body: Final[dict[str, object]] = {  # mutable-ok: base class contract returns a dict
             "prompt": prompt,
-            "image_urls": tuple(_to_data_url(img) for img in images),
+            "image_urls": tuple(to_data_url(img) for img in images),
             **mask_field,
             **provider_params,
         }
