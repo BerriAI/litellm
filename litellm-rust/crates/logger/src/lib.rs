@@ -13,6 +13,11 @@ use tracing::{
 };
 use tracing_subscriber::{Layer, Registry, layer::Context, prelude::*};
 
+mod processing;
+mod redaction;
+
+pub use processing::{DiagnosticInput, DiagnosticOutput, Policy, Processor};
+pub use redaction::{REDACTED, SecretRedactor};
 pub use tracing::{Level, Metadata, debug, error, info, trace, warn};
 
 pub trait Sink: Send + Sync + 'static {

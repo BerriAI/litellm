@@ -4,8 +4,21 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm._logging import redact_secrets, session_id_var, trace_id_var, verbose_logger
-from litellm.rust_bridge import logger
+from litellm._logging import (
+    DiagnosticProcessingFilter,
+    _python_process_diagnostic,
+    redact_secrets,
+    session_id_var,
+    trace_id_var,
+    verbose_logger,
+)
+from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
+from litellm.litellm_core_utils.secret_redaction import (
+    _python_redact_internal_details,
+    _python_redact_string,
+    _python_redact_structured_value,
+)
+from litellm.rust_bridge import diagnostics, logger
 
 
 def test_native_records_preserve_metadata_and_redact_before_custom_handlers(
@@ -54,3 +67,71 @@ def test_native_logging_observes_level_changes(caplog: pytest.LogCaptureFixture)
         logger.emit(logging.WARNING, "visible", "native.rs", 1, "litellm_http", {}, ("", ""))
 
     assert [record.getMessage() for record in caplog.records] == ["visible"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "Authorization: Bearer abcdefghijklmnop",
+        "s3_secret_access_key=secret123",
+        "postgres://user:pass@database.internal/name",
+        '{"type":"service_account","private_key":"secret123"}',
+        "GET /v1?key=abcdefghij&page=2",
+    ),
+)
+def test_native_credential_patterns_match_python(text: str) -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    from litellm.rust_bridge._native import NativeDiagnosticProcessor
+
+    processor: Final = NativeDiagnosticProcessor(MINIMUM_CUSTOM_KEY_LENGTH)
+    assert processor.redact_text(text) == _python_redact_string(text)
+    assert processor.redact_structured_text("api_key", "secret123") == _python_redact_structured_value(
+        "api_key", "secret123"
+    )
+
+
+def test_native_client_redaction_matches_python() -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    from litellm.rust_bridge._native import NativeDiagnosticProcessor
+
+    text: Final = "error at /etc/secrets/config on db.internal\nTraceback (most recent call last):\nsecret"
+    processor: Final = NativeDiagnosticProcessor(MINIMUM_CUSTOM_KEY_LENGTH)
+    assert processor.redact_client_message(text) == _python_redact_internal_details(text)
+
+
+def test_native_diagnostic_batch_matches_python() -> None:
+    pytest.importorskip("litellm.rust_bridge._native")
+    from litellm.rust_bridge._native import NativeDiagnosticProcessor
+
+    message: Final = "é" * 110 + "sk-" + "q" * 48 + "界" * 1000
+    exception: Final = "document=" + "Q" * 200
+    stack: Final = "api_key=secret123"
+    leaves: Final = (("api_key", "secret123"), (None, "safe"))
+    processor: Final = NativeDiagnosticProcessor(MINIMUM_CUSTOM_KEY_LENGTH)
+    rust: Final = processor.process_diagnostic(message, exception, stack, leaves, (True, 20, 500))
+    python: Final = _python_process_diagnostic(message, exception, stack, leaves, True, 20, 500)
+
+    assert rust[:3] == python[:3]
+    assert tuple(rust[3]) == python[3]
+    assert rust[4] == python[4]
+    assert "sk-qq" not in rust[0]
+    assert len(rust[0]) <= 500
+    assert rust[3] == ["REDACTED", "safe"]
+
+
+def test_missing_native_diagnostic_processor_falls_back_before_record_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    diagnostics.PROCESSOR.override(None)
+    try:
+        record: Final = logging.makeLogRecord({"name": "LiteLLM", "levelno": logging.INFO, "msg": "api_key=secret123"})
+        assert DiagnosticProcessingFilter().filter(record) is True
+        assert record.getMessage() == "REDACTED"
+    finally:
+        diagnostics.PROCESSOR.reset()
+
+
+def test_unsupported_unicode_uses_safe_python_redaction(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1")
+    assert redact_secrets("broken\ud800 api_key=secret123") == "broken\ud800 REDACTED"

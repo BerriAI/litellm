@@ -2946,6 +2946,7 @@ name = "litellm-core-utils"
 version = "0.1.0"
 dependencies = [
  "fancy-regex 0.19.2",
+ "litellm-logger",
  "litellm-types",
  "rstest",
  "serde",
@@ -3072,6 +3073,9 @@ dependencies = [
 name = "litellm-logger"
 version = "0.1.0"
 dependencies = [
+ "fancy-regex 0.19.2",
+ "percent-encoding",
+ "rstest",
  "serde_json",
  "tokio",
  "tracing",
@@ -3085,6 +3089,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "bytes",
  "criterion",
+ "fancy-regex 0.19.2",
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",

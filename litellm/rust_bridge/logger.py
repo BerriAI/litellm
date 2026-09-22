@@ -7,7 +7,7 @@ from pydantic import JsonValue
 
 from litellm._logging import (
     CorrelationContextFilter,
-    SecretRedactionFilter,
+    DiagnosticProcessingFilter,
     session_id_var,
     set_session_id,
     set_trace_id,
@@ -15,7 +15,7 @@ from litellm._logging import (
     verbose_logger,
 )
 
-_REDACTION: Final = SecretRedactionFilter()
+_REDACTION: Final = DiagnosticProcessingFilter()
 _CORRELATION: Final = CorrelationContextFilter()
 
 
@@ -50,7 +50,10 @@ def emit(
             (),
             None,
             func=target,
-            extra={"rust_target": target, "rust_fields": dict(fields)},
+            extra={
+                "rust_target": target,
+                "rust_fields": dict(fields),
+            },  # mutable-ok: LogRecord requires JSON dict extras
         )
         _REDACTION.filter(record)
         _CORRELATION.filter(record)
