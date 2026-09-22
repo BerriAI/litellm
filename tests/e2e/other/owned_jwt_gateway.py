@@ -63,7 +63,7 @@ class OwnedJwtGateway:
 def owned_jwt_gateway(
     idp: Keycloak, directory: Path, cleanup: ExitStack, *, litellm_jwtauth: str, name: str
 ) -> OwnedJwtGateway:
-    for env_name in ("DATABASE_URL", "LITELLM_LICENSE", "LITELLM_SALT_KEY", "LITELLM_MASTER_KEY"):
+    for env_name in ("DATABASE_URL", "LITELLM_LICENSE", "LITELLM_MASTER_KEY"):
         assert os.environ.get(env_name), f"{env_name} is required for the owned JWT gateway"
     port: Final = available_port()
     base_url: Final = f"http://127.0.0.1:{port}"
