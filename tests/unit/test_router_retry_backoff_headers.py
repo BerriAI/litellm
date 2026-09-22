@@ -2,6 +2,8 @@
 Tests for router retry backoff behavior.
 """
 
+import asyncio
+from typing import Final
 from unittest.mock import patch
 
 import httpx
@@ -9,6 +11,58 @@ import pytest
 
 import litellm
 from litellm import Router
+from litellm.constants import MAX_RETRY_DELAY
+
+_BACKOFF_DETECTION_TIMEOUT: Final = MAX_RETRY_DELAY / 4
+
+
+def _router_with_single_failing_deployment(fallbacks: list[dict[str, list[str]]]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "mock_response": "answered by backup",
+                },
+            },
+        ],
+        num_retries=2,
+        retry_after=int(MAX_RETRY_DELAY),
+        fallbacks=fallbacks,
+    )
+
+
+@pytest.mark.asyncio
+async def test_single_deployment_group_with_fallback_does_not_back_off_before_falling_back():
+    router: Final = _router_with_single_failing_deployment(fallbacks=[{"primary": ["backup"]}])
+
+    response: Final = await asyncio.wait_for(
+        router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}]),
+        timeout=_BACKOFF_DETECTION_TIMEOUT,
+    )
+
+    assert response.choices[0].message.content == "answered by backup"
+
+
+@pytest.mark.asyncio
+async def test_fallback_configured_for_another_group_keeps_retry_backoff():
+    router: Final = _router_with_single_failing_deployment(fallbacks=[{"backup": ["primary"]}])
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            router.acompletion(model="primary", messages=[{"role": "user", "content": "Hello"}]),
+            timeout=_BACKOFF_DETECTION_TIMEOUT,
+        )
 
 
 @pytest.mark.asyncio

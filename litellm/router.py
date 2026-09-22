@@ -7776,6 +7776,9 @@ class Router:
                 raise
 
             verbose_router_logger.debug("Retrying request with num_retries: %s", num_retries)
+            fallback_available: Final = self._regular_fallback_available(
+                fallbacks=fallbacks, model_group=model_group, kwargs=kwargs
+            )
             # decides how long to sleep before retry
             retry_after: Final = self._time_to_sleep_before_retry(
                 e=original_exception,
@@ -7783,6 +7786,7 @@ class Router:
                 num_retries=num_retries,
                 healthy_deployments=_healthy_deployments,
                 all_deployments=_all_deployments,
+                fallback_available=fallback_available,
             )
 
             await asyncio.sleep(retry_after)
@@ -7853,6 +7857,7 @@ class Router:
                         num_retries=num_retries,
                         healthy_deployments=_healthy_deployments,
                         all_deployments=_all_deployments,
+                        fallback_available=fallback_available,
                     )
                     await asyncio.sleep(_timeout)
 
@@ -8010,6 +8015,7 @@ class Router:
         num_retries: int,
         healthy_deployments: list | None = None,
         all_deployments: list | None = None,
+        fallback_available: bool = False,
     ) -> int | float:
         """
         Calculate back-off, then retry
@@ -8018,6 +8024,8 @@ class Router:
             1. there are healthy deployments in the same model group
             2. there are fallbacks for the completion call
         """
+        if fallback_available:
+            return 0
 
         ## base case - single deployment
         if all_deployments is not None and len(all_deployments) == 1:
@@ -8482,8 +8490,14 @@ class Router:
             return self._has_content_policy_fallback(model_group, kwargs)
         if self._has_default_fallbacks():
             return True
-        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
-        if fallbacks is None:
+        return self._regular_fallback_available(
+            fallbacks=kwargs.get("fallbacks", self.fallbacks), model_group=model_group, kwargs=kwargs
+        )
+
+    def _regular_fallback_available(
+        self, fallbacks: list | None, model_group: str | None, kwargs: Mapping[str, Any]
+    ) -> bool:
+        if fallbacks is None or fallbacks_disabled_for_request(kwargs):
             return False
         resolved, _ = get_fallback_model_group_for_lookup_groups(
             fallbacks=fallbacks,
