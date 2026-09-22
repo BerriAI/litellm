@@ -9,9 +9,11 @@ same scenario therefore hits `/v1/messages`, `/v1/responses`, `/chat/completions
 and the rest identically, so a translation bug fixed on one endpoint but not
 another shows up as one red cell next to green ones.
 
-OpenAI and Anthropic cells are edge-wired and replayable; every other provider
-runs live in every fixture mode. Streaming cases only assert grammar and content,
-never provider timing, so replay stays fast.
+Every cell calls the proxy the way a customer does: the OpenAI SDK for the
+OpenAI-compatible surface and the Anthropic SDK for `/v1/messages`, each holding
+a fresh virtual key. OpenAI and Anthropic cells are edge-wired and replayable;
+every other provider runs live in every fixture mode. Streaming cases only assert
+grammar and content, never provider timing, so replay stays fast.
 
 The selected cells' deployments are registered as one batch before the first cell
 runs, so the module pays the data-plane reload budget once instead of once per
@@ -29,8 +31,8 @@ from typing import Final
 
 import pytest
 from _pytest.mark import ParameterSet
-from e2e_config import provider_edge_base, unique_marker
-from e2e_http import BinaryStream, StreamingResponse, require_successful_call, unwrap
+from anthropic.types import RawContentBlockDeltaEvent, TextBlock, TextDelta
+from e2e_config import SLOW_PROVIDER_TIMEOUT_SECONDS, provider_edge_base, unique_marker
 from endpoint_matrix import (
     AuthMode,
     LlmRoute,
@@ -42,19 +44,11 @@ from endpoint_matrix import (
     selected_auth_modes,
     selected_providers,
 )
-from endpoints_client import (
-    CompletionsResult,
-    EmbeddingsResult,
-    EndpointsClient,
-    ImagesResult,
-    MessagesResult,
-    ResponsesOutputTextDeltaEvent,
-    ResponsesResult,
-    ResponsesStreamEventType,
-)
 from lifecycle import ResourceManager
-from models import AnthropicMessagesBody, ChatBody, ChatMessage, CredentialCreateBody, ModelInfoBody, ModelNewBody
-from pydantic import BaseModel
+from models import CredentialCreateBody, ModelInfoBody, ModelNewBody
+from openai.types.responses import ResponseTextDeltaEvent
+from proxy_client import ProxyClient
+from sdk_clients import NO_PROXY_CACHE, SdkClients, response_header
 
 pytestmark = [pytest.mark.e2e]
 
@@ -76,174 +70,168 @@ def _counting_prompt() -> str:
     return f"Count from 1 to 10, one number per line. Request {unique_marker()}"
 
 
-class _ChatDelta(BaseModel):
-    content: str | None = None
-
-
-class _ChatChunkChoice(BaseModel):
-    delta: _ChatDelta = _ChatDelta()
-
-
-class _ChatChunk(BaseModel):
-    choices: list[_ChatChunkChoice] = []
-
-
-class _MessagesDelta(BaseModel):
-    text: str = ""
-
-
-class _MessagesEvent(BaseModel):
-    type: str
-    delta: _MessagesDelta | None = None
-
-
-def _assert_stream_established(result: StreamingResponse) -> None:
-    assert result.ok and result.is_streaming, f"stream was not established: {result}"
-    assert result.stream_error is None, f"stream carried an error event: {result.stream_error}"
-    assert len(result.stream_events) > 1, f"stream delivered a single event: {result.stream_events}"
-
-
-def _chat(client: EndpointsClient, key: str, model: str) -> None:
-    body: Final = ChatBody(
-        model=model, messages=[ChatMessage(role="user", content=_greeting_prompt())], max_tokens=MAX_TOKENS
+def _chat(sdk: SdkClients, key: str, model: str) -> None:
+    completion: Final = sdk.openai(key).chat.completions.create(
+        model=model, messages=[{"role": "user", "content": _greeting_prompt()}], max_tokens=MAX_TOKENS
     )
-    response: Final = unwrap(client.proxy.chat(key, body))
-    assert response.choices, f"/chat/completions returned no choices: {response}"
-    message: Final = response.choices[0].message
-    assert message is not None and (message.content or "").strip(), (
-        f"/chat/completions returned no assistant text: {response}"
+    assert completion.choices, f"/chat/completions returned no choices: {completion!r}"
+    assert (completion.choices[0].message.content or "").strip(), (
+        f"/chat/completions returned no assistant text: {completion!r}"
     )
 
 
-def _chat_stream(client: EndpointsClient, key: str, model: str) -> None:
-    body: Final = ChatBody(
-        model=model,
-        messages=[ChatMessage(role="user", content=_counting_prompt())],
-        max_tokens=MAX_TOKENS,
-        stream=True,
+def _chat_stream(sdk: SdkClients, key: str, model: str) -> None:
+    chunks: Final = tuple(
+        sdk.openai(key).chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": _counting_prompt()}],
+            max_tokens=MAX_TOKENS,
+            stream=True,
+        )
     )
-    result: Final = client.proxy.chat_stream(key, body)
-    _assert_stream_established(result)
-    text: Final = "".join(
-        choice.delta.content or ""
-        for event in result.stream_events
-        for choice in _ChatChunk.model_validate_json(event).choices
+    assert len(chunks) > 1, f"/chat/completions stream delivered a single chunk: {chunks!r}"
+    text: Final = "".join(choice.delta.content or "" for chunk in chunks for choice in chunk.choices)
+    assert text.strip(), f"/chat/completions stream carried no content deltas: {chunks[:3]!r}"
+
+
+def _completions(sdk: SdkClients, key: str, model: str) -> None:
+    completion: Final = sdk.openai(key).completions.create(
+        model=model, prompt=_greeting_prompt(), max_tokens=MAX_TOKENS, extra_body=NO_PROXY_CACHE
     )
-    assert text.strip(), f"/chat/completions stream carried no content deltas: {result.stream_events[:3]}"
+    assert completion.choices, f"/v1/completions returned no choices: {completion!r}"
+    assert completion.choices[0].text.strip(), f"/v1/completions returned no completion text: {completion!r}"
 
 
-def _completions(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final = client.text_completions(key, model, _greeting_prompt(), max_tokens=MAX_TOKENS)
-    require_successful_call(result)
-    parsed: Final = CompletionsResult.model_validate_json(result.body)
-    assert parsed.choices and (parsed.choices[0].text or "").strip(), (
-        f"/v1/completions returned no completion text: {result.body[:300]}"
-    )
-
-
-def _messages(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final = client.messages(key, model, _greeting_prompt(), max_tokens=MAX_TOKENS)
-    require_successful_call(result)
-    parsed: Final = MessagesResult.model_validate_json(result.body)
-    assert parsed.role == "assistant", f"/v1/messages did not answer as the assistant: {result.body[:300]}"
-    assert parsed.text.strip(), f"/v1/messages returned no text block: {result.body[:300]}"
-
-
-def _messages_stream(client: EndpointsClient, key: str, model: str) -> None:
-    body: Final = AnthropicMessagesBody(
+def _messages(sdk: SdkClients, key: str, model: str) -> None:
+    message: Final = sdk.anthropic(key).messages.create(
         model=model,
         max_tokens=MAX_TOKENS,
-        stream=True,
-        messages=[ChatMessage(role="user", content=_counting_prompt())],
+        messages=[{"role": "user", "content": _greeting_prompt()}],
+        extra_body=NO_PROXY_CACHE,
     )
-    result: Final = client.proxy.messages_stream(key, body)
-    _assert_stream_established(result)
-    events: Final = tuple(_MessagesEvent.model_validate_json(event) for event in result.stream_events)
+    assert message.role == "assistant", f"/v1/messages did not answer as the assistant: {message!r}"
+    text: Final = "".join(block.text for block in message.content if isinstance(block, TextBlock))
+    assert text.strip(), f"/v1/messages returned no text block: {message.content!r}"
+
+
+def _messages_stream(sdk: SdkClients, key: str, model: str) -> None:
+    events: Final = tuple(
+        sdk.anthropic(key).messages.create(
+            model=model,
+            max_tokens=MAX_TOKENS,
+            messages=[{"role": "user", "content": _counting_prompt()}],
+            stream=True,
+            extra_body=NO_PROXY_CACHE,
+        )
+    )
     types: Final = tuple(event.type for event in events)
-    assert types[0] == "message_start", f"/v1/messages stream did not open with message_start: {types[:3]}"
+    assert types and types[0] == "message_start", f"/v1/messages stream did not open with message_start: {types[:3]}"
     assert types[-1] == "message_stop", f"/v1/messages stream did not close with message_stop: {types[-3:]}"
     text: Final = "".join(
-        event.delta.text for event in events if event.type == "content_block_delta" and event.delta is not None
+        event.delta.text
+        for event in events
+        if isinstance(event, RawContentBlockDeltaEvent) and isinstance(event.delta, TextDelta)
     )
     assert text.strip(), f"/v1/messages stream carried no text deltas: {types}"
 
 
-def _responses(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final = client.responses(key, model, _greeting_prompt())
-    require_successful_call(result)
-    parsed: Final = ResponsesResult.model_validate_json(result.body)
-    assert parsed.status == "completed", f"/v1/responses did not complete: {result.body[:300]}"
-    assert parsed.text.strip(), f"/v1/responses returned no output text: {result.body[:300]}"
+def _responses(sdk: SdkClients, key: str, model: str) -> None:
+    response: Final = sdk.openai(key).responses.create(model=model, input=_greeting_prompt(), extra_body=NO_PROXY_CACHE)
+    assert response.status == "completed", f"/v1/responses did not complete: {response!r}"
+    assert response.output_text.strip(), f"/v1/responses returned no output text: {response.output!r}"
 
 
-def _responses_stream(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final = client.responses(key, model, _counting_prompt(), stream=True)
-    _assert_stream_established(result)
-    types: Final = tuple(ResponsesStreamEventType.model_validate_json(event).type for event in result.stream_events)
-    assert types[-1] == "response.completed", f"/v1/responses stream did not end with response.completed: {types[-3:]}"
-    text: Final = "".join(
-        ResponsesOutputTextDeltaEvent.model_validate_json(event).delta
-        for event, event_type in zip(result.stream_events, types, strict=True)
-        if event_type == "response.output_text.delta"
+def _responses_stream(sdk: SdkClients, key: str, model: str) -> None:
+    events: Final = tuple(
+        sdk.openai(key).responses.create(model=model, input=_counting_prompt(), stream=True, extra_body=NO_PROXY_CACHE)
     )
+    types: Final = tuple(event.type for event in events)
+    assert types and types[-1] == "response.completed", (
+        f"/v1/responses stream did not end with response.completed: {types[-3:]}"
+    )
+    text: Final = "".join(event.delta for event in events if isinstance(event, ResponseTextDeltaEvent))
     assert text.strip(), f"/v1/responses stream carried no output_text deltas: {types}"
 
 
-def _embeddings(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final = client.embeddings(key, model, f"the quick brown fox {unique_marker()}")
-    require_successful_call(result)
-    vector: Final = EmbeddingsResult.model_validate_json(result.body).first_vector
-    assert len(vector) > 1, f"/embeddings returned no vector: {result.body[:300]}"
-    assert any(component != 0 for component in vector), "/embeddings returned an all-zero vector"
-
-
-def _audio_speech(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final = client.audio_speech(key, model, "The matrix speaks.")
-    require_successful_call(result)
-    assert "audio" in (result.content_type or ""), (
-        f"/v1/audio/speech content-type is not audio: {result.content_type!r}"
+def _embeddings(sdk: SdkClients, key: str, model: str) -> None:
+    embeddings: Final = sdk.openai(key).embeddings.create(
+        model=model, input=f"the quick brown fox {unique_marker()}", encoding_format="float", extra_body=NO_PROXY_CACHE
     )
-    assert result.body, "/v1/audio/speech returned an empty body"
+    assert embeddings.data, f"/embeddings returned no data: {embeddings!r}"
+    vector: Final = embeddings.data[0].embedding
+    assert len(vector) > 1, f"/embeddings returned no vector: {embeddings!r}"
+    assert any(component != 0.0 for component in vector), "/embeddings returned an all-zero vector"
 
 
-def _audio_speech_stream(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final[BinaryStream] = client.audio_speech_stream(key, model, "The matrix speaks, streamed.")
-    assert result.status_code == 200, f"/v1/audio/speech stream failed: {result.status_code} {result.error_body}"
-    assert "audio" in (result.content_type or ""), f"streamed speech content-type is not audio: {result.content_type!r}"
-    assert result.chunk_count > 0 and result.total_bytes > 0, f"streamed speech delivered no audio bytes: {result}"
+def _audio_speech(sdk: SdkClients, key: str, model: str) -> None:
+    response: Final = sdk.openai(key).audio.speech.with_raw_response.create(
+        model=model, voice="alloy", input="The matrix speaks."
+    )
+    content_type: Final = response_header(response.headers, "content-type")
+    assert "audio" in (content_type or ""), f"/v1/audio/speech content-type is not audio: {content_type!r}"
+    assert response.content, "/v1/audio/speech returned an empty body"
 
 
-def _audio_transcriptions(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final = unwrap(client.transcribe(key, model, filename=WEATHER_WAV.name, content=WEATHER_WAV.read_bytes()))
-    text: Final = result.text.strip()
+def _audio_speech_stream(sdk: SdkClients, key: str, model: str) -> None:
+    with sdk.openai(key).audio.speech.with_streaming_response.create(
+        model=model,
+        voice="alloy",
+        input="Streaming speech should arrive in several audio chunks so playback can start early.",
+    ) as response:
+        content_type: Final = response_header(response.headers, "content-type")
+        transfer_encoding: Final = response_header(response.headers, "transfer-encoding")
+        total_bytes: Final = sum(len(chunk) for chunk in response.iter_bytes(chunk_size=8192))
+    assert "audio" in (content_type or ""), f"streamed speech content-type is not audio: {content_type!r}"
+    assert "chunked" in (transfer_encoding or ""), (
+        f"/v1/audio/speech did not stream: transfer-encoding={transfer_encoding!r}"
+    )
+    assert total_bytes > 0, "streamed speech delivered no audio bytes"
+
+
+def _audio_transcriptions(sdk: SdkClients, key: str, model: str) -> None:
+    transcription: Final = sdk.openai(key).audio.transcriptions.create(
+        model=model, file=(WEATHER_WAV.name, WEATHER_WAV.read_bytes(), "audio/wav")
+    )
+    text: Final = transcription.text.strip()
     assert "weather" in text.lower(), f"transcript of a spoken weather question does not mention weather: {text!r}"
 
 
-def _images_generations(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final = client.images(key, model, "A single red circle on a white background")
-    require_successful_call(result)
-    images: Final = ImagesResult.model_validate_json(result.body)
-    assert images.data, f"/v1/images/generations returned no images: {result.body[:300]}"
-    assert images.data[0].b64_json or images.data[0].url, f"generated image has no payload: {images.data[0]}"
+def _images_generations(sdk: SdkClients, key: str, model: str) -> None:
+    images: Final = sdk.openai(key).images.generate(
+        model=model,
+        prompt="A single red circle on a white background",
+        n=1,
+        size="1024x1024",
+        timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+    )
+    assert images.data, f"/v1/images/generations returned no images: {images!r}"
+    assert images.data[0].b64_json or images.data[0].url, f"generated image has no payload: {images.data[0]!r}"
 
 
-def _images_edits(client: EndpointsClient, key: str, model: str) -> None:
-    edited: Final = unwrap(client.image_edit(key, model, "Add a small red circle in the center", EDIT_PNG))
-    assert edited.data, f"/v1/images/edits returned no images: {edited}"
-    assert edited.data[0].b64_json or edited.data[0].url, f"edited image has no payload: {edited.data[0]}"
+def _images_edits(sdk: SdkClients, key: str, model: str) -> None:
+    edited: Final = sdk.openai(key).images.edit(
+        model=model,
+        image=("image.png", EDIT_PNG, "image/png"),
+        prompt="Add a small red circle in the center",
+        timeout=SLOW_PROVIDER_TIMEOUT_SECONDS,
+    )
+    assert edited.data, f"/v1/images/edits returned no images: {edited!r}"
+    assert edited.data[0].b64_json or edited.data[0].url, f"edited image has no payload: {edited.data[0]!r}"
 
 
-def _moderations(client: EndpointsClient, key: str, model: str) -> None:
-    result: Final = unwrap(client.moderations(key, model, f"I enjoy long walks on sunny days. {unique_marker()}"))
-    assert len(result.results) == 1, f"/v1/moderations did not return one verdict for one input: {result}"
-    assert result.results[0].categories, f"/v1/moderations verdict carries no categories: {result.results[0]}"
+def _moderations(sdk: SdkClients, key: str, model: str) -> None:
+    moderation: Final = sdk.openai(key).moderations.create(
+        model=model, input=f"I enjoy long walks on sunny days. {unique_marker()}"
+    )
+    assert len(moderation.results) == 1, f"/v1/moderations did not return one verdict for one input: {moderation!r}"
+    assert not moderation.results[0].flagged, f"/v1/moderations flagged a benign sentence: {moderation.results[0]!r}"
 
 
 @dataclass(frozen=True, slots=True)
 class EndpointCase:
     endpoint: MatrixEndpoint
     streaming: Streaming
-    run: Callable[[EndpointsClient, str, str], None]
+    run: Callable[[SdkClients, str, str], None]
 
 
 ENDPOINT_CASES: Final[tuple[EndpointCase, ...]] = (
@@ -327,9 +315,7 @@ def _deployment_body(key: DeploymentKey, provider: Provider, credential_name: st
 
 
 @pytest.fixture(scope="module")
-def deployments(
-    request: pytest.FixtureRequest, endpoints_client: EndpointsClient
-) -> Iterator[Mapping[DeploymentKey, str]]:
+def deployments(request: pytest.FixtureRequest, proxy: ProxyClient) -> Iterator[Mapping[DeploymentKey, str]]:
     """One deployment per (provider, endpoint, auth mode) among the selected cells, written
     as a single batch, plus one stored credential per provider that any selected cell
     references by name. Yields deployment key -> model alias; tears everything down."""
@@ -344,7 +330,7 @@ def deployments(
         {route: f"e2e-matrix-cred-{unique_marker()}" for route in stored}
     )
     for route, name in credentials.items():
-        endpoints_client.proxy.create_credential(
+        proxy.create_credential(
             CredentialCreateBody(credential_name=name, credential_values=dict(credential_values(providers[route])))
         )
     try:
@@ -353,15 +339,15 @@ def deployments(
             _deployment_body(key, providers[key[0]], credentials[key[0]] if key[2] == "stored_credential" else None)
             for key in keys
         )
-        model_ids: Final = endpoints_client.proxy.register_models(bodies)
+        model_ids: Final = proxy.register_models(bodies)
         try:
             yield MappingProxyType(dict(zip(keys, (body.model_name for body in bodies), strict=True)))
         finally:
             for model_id in model_ids:
-                endpoints_client.delete_model(model_id)
+                proxy.delete_model(model_id)
     finally:
         for name in credentials.values():
-            endpoints_client.proxy.delete_credential(name)
+            proxy.delete_credential(name)
 
 
 class TestEndpointMatrix:
@@ -369,8 +355,8 @@ class TestEndpointMatrix:
     def test_endpoint_answers_through_every_provider_and_auth_mode(
         self,
         cell: MatrixCell,
-        endpoints_client: EndpointsClient,
+        sdk: SdkClients,
         resources: ResourceManager,
         deployments: Mapping[DeploymentKey, str],
     ) -> None:
-        cell.case.run(endpoints_client, resources.key(), deployments[cell.deployment])
+        cell.case.run(sdk, resources.key(), deployments[cell.deployment])
