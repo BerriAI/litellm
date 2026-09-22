@@ -435,13 +435,26 @@ def test_the_provider_registry_serves_the_sarvam_realtime_config():
 
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize("model", ["saaras:v3-realtime", "saaras:v4"])
-def test_session_duration_is_billed_at_the_registered_per_second_rate(model: str):
-    """The realtime cost path prices a transcription session from the registry, not from deployment level
-    custom pricing, so both realtime models need a per-second rate to bill anything at all."""
+def test_the_realtime_models_are_registered_as_transcription_models(model: str):
+    """Sarvam prices in INR, which this registry cannot hold, so the entry carries no rate. It still has to
+    describe the model, or the endpoint cannot resolve it and sessions log neither duration nor cost."""
+    import litellm
+
+    registry = litellm.get_model_info(model=f"sarvam/{model}", custom_llm_provider="sarvam")
+
+    assert registry["mode"] == "audio_transcription"
+    assert "/v1/realtime" in (registry.get("supported_endpoints") or ())
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_a_priced_deployment_bills_the_seconds_the_session_reported():
+    """An operator who converts Sarvam's INR rate themselves gets that rate applied to the reported audio."""
     import litellm
     from litellm.cost_calculator import handle_realtime_transcription_cost_calculation
 
-    registry = litellm.get_model_info(model=f"sarvam/{model}", custom_llm_provider="sarvam")
+    litellm.register_model(
+        {"sarvam/saaras:v3-realtime": {"litellm_provider": "sarvam", "input_cost_per_second": 0.00009}}
+    )
     completed = [
         {
             "type": "conversation.item.input_audio_transcription.completed",
@@ -450,9 +463,7 @@ def test_session_duration_is_billed_at_the_registered_per_second_rate(model: str
     ]
 
     cost = handle_realtime_transcription_cost_calculation(
-        results=completed, custom_llm_provider="sarvam", litellm_model_name=model
+        results=completed, custom_llm_provider="sarvam", litellm_model_name="saaras:v3-realtime"
     )
 
-    assert registry["mode"] == "audio_transcription"
-    assert registry["input_cost_per_second"] > 0
-    assert cost == pytest.approx(18.3 * registry["input_cost_per_second"])
+    assert cost == pytest.approx(18.3 * 0.00009)

@@ -58887,14 +58887,9 @@
         "source": "https://docs.libertai.io/apis/text/"
     },
     "sarvam/saaras:v3-realtime": {
-        "input_cost_per_second": 8.7178e-05,
         "litellm_provider": "sarvam",
         "metadata": {
-            "calculation": "Rs 30/hour / 3600 = Rs 0.00833333/second, at 95.59 INR/USD",
-            "note": "Sarvam publishes speech to text in INR, billed per second; this registry is USD only",
-            "original_pricing_per_hour_inr": 30,
-            "usd_inr_rate": 95.59,
-            "usd_inr_rate_source": "https://api.frankfurter.dev/v1/latest?from=USD&to=INR (2026-09-22)"
+            "note": "Sarvam prices speech to text in INR per hour, billed per second; this registry is USD only, so sessions log their billed audio duration and no cost"
         },
         "mode": "audio_transcription",
         "source": "https://docs.sarvam.ai/api/pricing",
@@ -58903,14 +58898,9 @@
         ]
     },
     "sarvam/saaras:v4": {
-        "input_cost_per_second": 8.7178e-05,
         "litellm_provider": "sarvam",
         "metadata": {
-            "calculation": "Rs 30/hour / 3600 = Rs 0.00833333/second, at 95.59 INR/USD",
-            "note": "Sarvam publishes speech to text in INR, billed per second; this registry is USD only",
-            "original_pricing_per_hour_inr": 30,
-            "usd_inr_rate": 95.59,
-            "usd_inr_rate_source": "https://api.frankfurter.dev/v1/latest?from=USD&to=INR (2026-09-22)"
+            "note": "Sarvam prices speech to text in INR per hour, billed per second; this registry is USD only, so sessions log their billed audio duration and no cost"
         },
         "mode": "audio_transcription",
         "source": "https://docs.sarvam.ai/api/pricing",
