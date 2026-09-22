@@ -60,8 +60,6 @@ class GenAIEventRecorder:
                 )
             ),
         )
-        # The SDK LogRecord carries the resource the 1.28 exporters require and
-        # exists only up to the pin; newer lines dropped it for the API record.
         record: Final[LogRecord] = (
             SDK_LOG_RECORD(**fields, resource=self.resource)
             if SDK_LOG_RECORD is not None
