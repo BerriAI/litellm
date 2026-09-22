@@ -1769,7 +1769,9 @@ class Logging(LiteLLMLoggingBaseClass):
             if isinstance(result_hidden_params, dict)
             else getattr(result_hidden_params, "additional_headers", None)
         )
-        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(priced_result, "_hidden_params"):
+        if isinstance(priced_result, (BaseModel, HttpxBinaryResponseContent)) and hasattr(
+            priced_result, "_hidden_params"
+        ):
             hidden_params: Final = result_hidden_params
             if (
                 "response_cost" in hidden_params and hidden_params["response_cost"] is not None
