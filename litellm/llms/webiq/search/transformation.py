@@ -7,7 +7,6 @@ import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse, SearchResult
-from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -44,7 +43,7 @@ def _query_with_domains(query: str, domains: object) -> str:
 
 
 class WebIQSearchConfig(BaseSearchConfig):
-    WEBIQ_API_BASE: Final = "https://api.microsoft.ai/v3"
+    DEFAULT_API_BASE: Final = "https://api.microsoft.ai/v3"
 
     @staticmethod
     def ui_friendly_name() -> str:
@@ -61,8 +60,8 @@ class WebIQSearchConfig(BaseSearchConfig):
             caller_api_key=api_key,
             caller_api_base=api_base,
             key_env_vars=("WEBIQ_API_KEY",),
-            base_env_var="WEBIQ_API_BASE",
-            default_api_base=self.WEBIQ_API_BASE,
+            base_env_var=None,
+            default_api_base=self.DEFAULT_API_BASE,
         )
         if not resolved_key:
             raise ValueError("Set WEBIQ_API_KEY or pass api_key for Microsoft Web IQ search")
@@ -79,7 +78,7 @@ class WebIQSearchConfig(BaseSearchConfig):
         data: dict[str, object] | list[dict[str, object]] | None = None,  # mutable-ok: BaseSearchConfig interface
         **kwargs: object,  # kwargs-ok: BaseSearchConfig interface
     ) -> str:
-        base: Final = (api_base or get_secret_str("WEBIQ_API_BASE") or self.WEBIQ_API_BASE).rstrip("/")
+        base: Final = (api_base or self.DEFAULT_API_BASE).rstrip("/")
         return base if base.endswith("/search/web") else f"{base}/search/web"
 
     def transform_search_request(
@@ -135,9 +134,21 @@ class WebIQSearchConfig(BaseSearchConfig):
                     snippet=result.content,
                     date=result.lastUpdatedAt or None,
                     last_updated=result.lastUpdatedAt or None,
-                    **(result.model_extra or MappingProxyType({})),
+                    **MappingProxyType(
+                        {
+                            key: value
+                            for key, value in (result.model_extra or MappingProxyType({})).items()
+                            if key not in SearchResult.model_fields
+                        }
+                    ),
                 )
                 for result in parsed.webResults
             ],
-            **(parsed.model_extra or MappingProxyType({})),
+            **MappingProxyType(
+                {
+                    key: value
+                    for key, value in (parsed.model_extra or MappingProxyType({})).items()
+                    if key not in SearchResponse.model_fields
+                }
+            ),
         )

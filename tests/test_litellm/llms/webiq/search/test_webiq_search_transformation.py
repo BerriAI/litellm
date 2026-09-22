@@ -13,7 +13,6 @@ from litellm.llms.webiq.search.transformation import WebIQSearchConfig
 @pytest.fixture(autouse=True)
 def webiq_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.delenv("WEBIQ_API_KEY", raising=False)
-    monkeypatch.delenv("WEBIQ_API_BASE", raising=False)
     monkeypatch.setattr(  # test-quality-ok: select HTTPX so respx can intercept the external HTTP boundary
         litellm, "disable_aiohttp_transport", True
     )
@@ -23,7 +22,7 @@ def webiq_environment(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 def test_search_maps_request_and_preserves_sources(respx_mock: respx.MockRouter) -> None:
-    endpoint: Final = f"{WebIQSearchConfig.WEBIQ_API_BASE}/search/web"
+    endpoint: Final = f"{WebIQSearchConfig.DEFAULT_API_BASE}/search/web"
     route: Final = respx_mock.post(endpoint).respond(
         json={
             "webResults": [
@@ -82,12 +81,11 @@ def test_search_maps_request_and_preserves_sources(respx_mock: respx.MockRouter)
     }
 
 
-async def test_asearch_uses_environment_credentials_and_custom_endpoint(
+async def test_asearch_uses_environment_credentials_at_default_endpoint(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("WEBIQ_API_KEY", "environment-key")
-    monkeypatch.setenv("WEBIQ_API_BASE", "https://webiq.example/v3/")
-    route: Final = respx_mock.post("https://webiq.example/v3/search/web").respond(json={"webResults": []})
+    route: Final = respx_mock.post(f"{WebIQSearchConfig.DEFAULT_API_BASE}/search/web").respond(json={"webResults": []})
 
     response: Final = await litellm.asearch(query="no matches", search_provider="webiq")
 
@@ -100,9 +98,25 @@ async def test_asearch_uses_environment_credentials_and_custom_endpoint(
     }
 
 
+async def test_asearch_uses_explicit_credentials_at_custom_endpoint(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://webiq.example/v3/search/web").respond(json={"webResults": []})
+
+    response: Final = await litellm.asearch(
+        query="no matches", search_provider="webiq", api_key="custom-key", api_base="https://webiq.example/v3/"
+    )
+
+    assert response.model_dump() == {"object": "search", "results": []}
+    assert route.calls.last.request.headers["x-apikey"] == "custom-key"
+    assert json.loads(route.calls.last.request.content) == {
+        "query": "no matches",
+        "contentFormat": "passage",
+        "maxLength": 5000,
+    }
+
+
 @pytest.mark.parametrize("updated", [None, "", "2026-02-01T00:00:00Z"])
 def test_optional_updated_date_never_uses_crawl_time(respx_mock: respx.MockRouter, updated: str | None) -> None:
-    respx_mock.post(f"{WebIQSearchConfig.WEBIQ_API_BASE}/search/web").respond(
+    respx_mock.post(f"{WebIQSearchConfig.DEFAULT_API_BASE}/search/web").respond(
         json={
             "webResults": [
                 {
@@ -120,7 +134,7 @@ def test_optional_updated_date_never_uses_crawl_time(respx_mock: respx.MockRoute
 
 
 def test_missing_optional_dates_and_result_order(respx_mock: respx.MockRouter) -> None:
-    respx_mock.post(f"{WebIQSearchConfig.WEBIQ_API_BASE}/search/web").respond(
+    respx_mock.post(f"{WebIQSearchConfig.DEFAULT_API_BASE}/search/web").respond(
         json={
             "webResults": [
                 {"title": title, "url": f"https://example.com/{title}", "content": title}
@@ -137,7 +151,7 @@ def test_missing_optional_dates_and_result_order(respx_mock: respx.MockRouter) -
 
 @pytest.mark.parametrize("body", ["not json", "{}", '{"webResults": null}', '{"webResults": [{}]}'])
 def test_malformed_response_is_not_reported_as_empty_success(respx_mock: respx.MockRouter, body: str) -> None:
-    respx_mock.post(f"{WebIQSearchConfig.WEBIQ_API_BASE}/search/web").respond(text=body)
+    respx_mock.post(f"{WebIQSearchConfig.DEFAULT_API_BASE}/search/web").respond(text=body)
     with pytest.raises(openai.APIError, match="invalid search response") as error:
         litellm.search(query="query", search_provider="webiq", api_key="key")
     assert error.value.status_code == 502
@@ -145,7 +159,7 @@ def test_malformed_response_is_not_reported_as_empty_success(respx_mock: respx.M
 
 @pytest.mark.parametrize("status", [401, 403, 429, 503])
 def test_upstream_http_errors_keep_status(respx_mock: respx.MockRouter, status: int) -> None:
-    respx_mock.post(f"{WebIQSearchConfig.WEBIQ_API_BASE}/search/web").respond(
+    respx_mock.post(f"{WebIQSearchConfig.DEFAULT_API_BASE}/search/web").respond(
         status_code=status, json={"error": {"message": "upstream failure"}}, headers={"Retry-After": "2"}
     )
     with pytest.raises(openai.APIError, match="upstream failure") as error:
@@ -220,3 +234,48 @@ def test_explicit_key_wins_and_headers_are_not_mutated(monkeypatch: pytest.Monke
 def test_missing_key_fails_before_network() -> None:
     with pytest.raises(ValueError, match="WEBIQ_API_KEY"):
         WebIQSearchConfig().validate_environment({})
+
+
+@pytest.mark.parametrize(
+    "result_metadata, response_metadata",
+    [
+        ({"snippet": "upstream", "date": "upstream", "last_updated": "upstream"}, {}),
+        ({}, {"results": "upstream", "object": "upstream"}),
+    ],
+)
+def test_metadata_cannot_replace_standard_search_fields(
+    respx_mock: respx.MockRouter, result_metadata: dict[str, str], response_metadata: dict[str, str]
+) -> None:
+    respx_mock.post(f"{WebIQSearchConfig.DEFAULT_API_BASE}/search/web").respond(
+        json={
+            "webResults": [
+                {
+                    "title": "Title",
+                    "url": "https://example.com",
+                    "content": "Passage",
+                    "lastUpdatedAt": "2026-01-02T00:00:00Z",
+                    "language": "en",
+                    **result_metadata,
+                }
+            ],
+            "traceId": "trace-1",
+            **response_metadata,
+        }
+    )
+
+    response: Final = litellm.search(query="query", search_provider="webiq", api_key="key")
+
+    assert response.model_dump() == {
+        "object": "search",
+        "results": [
+            {
+                "title": "Title",
+                "url": "https://example.com",
+                "snippet": "Passage",
+                "date": "2026-01-02T00:00:00Z",
+                "last_updated": "2026-01-02T00:00:00Z",
+                "language": "en",
+            }
+        ],
+        "traceId": "trace-1",
+    }
