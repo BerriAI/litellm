@@ -106,6 +106,54 @@ def test_proxy_stream_usage_visibility_keeps_exact_persisted_charge(gateway: Gat
                 assert float(rows[0]["spend"]) == pytest.approx(0.019)
 
 
+@pytest.mark.covers("other.streaming.messages_bridge.empty_choices_usage_chunk_completes_stream")
+def test_messages_stream_completes_through_trailing_empty_choices_usage_chunk(gateway: Gateway) -> None:
+    identity: Final = "messages-empty-choices-" + uuid.uuid4().hex
+    with wire_server(lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model="azure/gpt-4o-mini", api_base=wire.url + "/v1")
+        with gateway.client.stream(
+            "POST",
+            "/v1/messages",
+            json={"model": model, "max_tokens": 64, "stream": True, "messages": [{"role": "user", "content": identity}]},
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        ) as response:
+            assert response.status_code == 200, response.read().decode()
+            events: Final = tuple(json.loads(line.removeprefix("data: ")) for line in response.iter_lines() if line.startswith("data: "))
+    assert tuple(event["type"] for event in events) == ("message_start", "content_block_start", "content_block_delta", "content_block_delta", "content_block_stop", "message_delta", "message_stop"), f"observed events: {events!r}"
+    assert "".join(event["delta"]["text"] for event in events if event["type"] == "content_block_delta") == "Hello 雪 café"
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["usage"] == {"input_tokens": 11, "output_tokens": 4}
+    requests: Final = wire.drain()
+    assert len(requests) == 1
+    outbound: Final = json.loads(requests[0].body)
+    assert outbound["stream"] is True and outbound["stream_options"] == {"include_usage": True}, f"observed outbound body: {outbound!r}"
+
+
+@pytest.mark.covers("other.streaming.responses_bridge.empty_choices_chunks_complete_stream")
+def test_responses_stream_completes_through_empty_choices_metadata_and_usage_chunks(gateway: Gateway) -> None:
+    identity: Final = "responses-empty-choices-" + uuid.uuid4().hex
+    metadata: Final = b"data: " + json.dumps({"id": identity, "object": "chat.completion.chunk", "created": 1, "model": "gpt-4o-mini", "choices": [], "prompt_filter_results": [{"prompt_index": 0, "content_filter_results": {}}]}, ensure_ascii=False).encode() + b"\n\n"
+    frames: Final = (metadata, *text_stream(identity))
+    with wire_server(lambda request: Reply(content_type="text/event-stream", chunks=frames)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model="deepseek/gpt-4o-mini", api_base=wire.url + "/v1")
+        with gateway.client.stream(
+            "POST",
+            "/v1/responses",
+            json={"model": model, "input": identity, "stream": True},
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        ) as response:
+            assert response.status_code == 200, response.read().decode()
+            events: Final = tuple(json.loads(line.removeprefix("data: ")) for line in response.iter_lines() if line.startswith("data: ") and line != "data: [DONE]")
+    assert "".join(event["delta"] for event in events if event["type"] == "response.output_text.delta") == "Hello 雪 café", f"observed events: {events!r}"
+    assert tuple(event["type"] for event in events if event["type"] != "response.output_text.delta") == ("response.created", "response.in_progress", "response.output_item.added", "response.content_part.added", "response.output_text.done", "response.content_part.done", "response.output_item.done", "response.completed"), f"observed events: {events!r}"
+    assert events[-1]["type"] == "response.completed"
+    assert events[-1]["response"]["usage"] == {"input_tokens": 11, "output_tokens": 4, "output_tokens_details": {"reasoning_tokens": 0, "text_tokens": 4}, "total_tokens": 15}
+    requests: Final = wire.drain()
+    assert len(requests) == 1
+    outbound: Final = json.loads(requests[0].body)
+    assert outbound["stream"] is True and outbound["stream_options"] == {"include_usage": True}, f"observed outbound body: {outbound!r}"
+
+
 @pytest.mark.covers("other.streaming.failure.truncated_transport_raises_and_control_recovers")
 def test_truncated_http_stream_is_an_error_and_next_stream_succeeds() -> None:
     import litellm
