@@ -1,16 +1,24 @@
 use std::sync::{Arc, Mutex};
 
+use futures_util::future::BoxFuture;
+use litellm_auth_gcp::VertexAuth;
 use litellm_host::{
     event::{CallEvent, MachineEvent, WireRequest},
     host::{Host, HostOp, HostResult},
     machine::{HostFailure, Machine, MachineStep},
 };
-use litellm_llms::{
-    base_llm::ocr::{
-        error::Error as OcrError,
-        transformation::{LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig},
+use litellm_http::{
+    HttpClientPool, HttpSettings, Resolution,
+    media::{PublicDnsResolver, UrlPolicy},
+};
+use litellm_llms::base_llm::inference::secrets::{SecretSource, Secrets};
+use litellm_llms::base_llm::ocr::{
+    error::Error as OcrError,
+    handler::OcrClient,
+    settings::OcrSettings,
+    transformation::{
+        BaseOcrConfig, LiteLLMOcrResponse, OCR_RESPONSE_MAX_BYTES, OcrTransportConfig,
     },
-    custom_httpx::llm_http_handler::OcrClient,
 };
 use rstest::rstest;
 use serde_json::{Value, json};
@@ -22,6 +30,32 @@ use super::{
     wire::{OcrWireRequest, decode_request},
 };
 use crate::ocr::route::{LocalOcrHost, OcrOp, OcrOpResult, ocr_machine};
+
+struct RecordingSecretSource {
+    names: Arc<Mutex<Vec<&'static str>>>,
+    values: &'static [(&'static str, &'static str)],
+    api_base: String,
+}
+
+impl SecretSource for RecordingSecretSource {
+    fn resolve<'a>(
+        &'a self,
+        names: &'a [&'static str],
+    ) -> BoxFuture<'a, Result<Secrets, litellm_secrets::Error>> {
+        *self.names.lock().unwrap() = names.to_vec();
+        let values = self.values;
+        let api_base = self.api_base.clone();
+        Box::pin(async move {
+            Ok(Arc::new(move |name: &str| match name {
+                "MISTRAL_AZURE_API_BASE" => Some(api_base.clone()),
+                _ => values
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.to_string()),
+            }) as Secrets)
+        })
+    }
+}
 
 #[rstest]
 #[case::mistral("mistral/model", json!({}))]
@@ -170,26 +204,99 @@ async fn facade_retains_native_response_when_requested() {
     );
 }
 
+#[rstest]
+#[case::plain_key(&[("MISTRAL_API_KEY", "plain")], "plain")]
+#[case::azure_key_wins(&[("MISTRAL_AZURE_API_KEY", "azure"), ("MISTRAL_API_KEY", "plain")], "azure")]
+#[case::empty_azure_key_falls_through(&[("MISTRAL_AZURE_API_KEY", ""), ("MISTRAL_API_KEY", "plain")], "plain")]
 #[tokio::test]
-async fn facade_uses_the_injected_http_client() {
+async fn mistral_env_fallbacks_follow_python_through_the_injected_secret_source(
+    #[case] secrets: &'static [(&'static str, &'static str)],
+    #[case] expected_key: &str,
+) {
     let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
-    let mut default_headers = reqwest::header::HeaderMap::new();
-    default_headers.insert(
-        "x-transport-owner",
-        reqwest::header::HeaderValue::from_static("host"),
-    );
-    let provider_http = reqwest::Client::builder()
-        .default_headers(default_headers)
-        .build()
-        .unwrap();
-    crate::ocr::client::perform(
-        &OcrClient::new(provider_http).unwrap(),
-        wire_request("mistral/model", &base, json!({})),
-    )
-    .await
+    let names = Arc::new(Mutex::new(Vec::new()));
+    let client = ocr_client().with_secrets(Arc::new(RecordingSecretSource {
+        names: names.clone(),
+        values: secrets,
+        api_base: base.clone(),
+    }));
+    let request = decode_request(OcrWireRequest {
+        model: "mistral/model".into(),
+        document: json!({"type":"document_url","document_url":"data:application/pdf;base64,YWJj"}),
+        api_key: None,
+        api_base: None,
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: Default::default(),
+        input_sources: Default::default(),
+        timeout_seconds: Some(2.0),
+    })
     .unwrap();
+
+    crate::ocr::client::perform(&client, request).await.unwrap();
     server.await.unwrap();
-    assert!(seen.lock().unwrap()[0].contains("x-transport-owner: host"));
+    assert_eq!(
+        *names.lock().unwrap(),
+        litellm_llms::mistral::ocr::transformation::MistralOcrConfig.secret_names()
+    );
+    assert!(seen.lock().unwrap()[0].contains(&format!("authorization: Bearer {expected_key}")));
+}
+
+#[tokio::test]
+async fn mistral_ocr_resolves_provider_secrets_before_transformation() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let names = Arc::new(Mutex::new(Vec::new()));
+    let client = ocr_client().with_secrets(Arc::new(RecordingSecretSource {
+        names: names.clone(),
+        values: &[("MISTRAL_API_KEY", "source-key")],
+        api_base: base.clone(),
+    }));
+    let request = decode_request(OcrWireRequest {
+        model: "mistral/mistral-ocr-latest".into(),
+        document: json!({
+            "type":"document_url",
+            "document_url":"data:application/pdf;base64,YWJj"
+        }),
+        api_key: None,
+        api_base: None,
+        custom_llm_provider: None,
+        extra_headers: None,
+        optional_params: Default::default(),
+        input_sources: Default::default(),
+        timeout_seconds: Some(2.0),
+    })
+    .unwrap();
+
+    crate::ocr::client::perform(&client, request).await.unwrap();
+    server.await.unwrap();
+    assert_eq!(
+        *names.lock().unwrap(),
+        litellm_llms::mistral::ocr::transformation::MistralOcrConfig.secret_names()
+    );
+    assert!(seen.lock().unwrap()[0].contains("authorization: Bearer source-key"));
+}
+
+#[tokio::test]
+async fn ocr_client_uses_the_injected_http_pool_configuration() {
+    let (base, seen, server) = mock_server(vec![MockResponse::json(json!({"pages":[]}))]).await;
+    let settings = HttpSettings {
+        user_agent: Some("host-owned/1".into()),
+        ..HttpSettings::default()
+    };
+    let client = OcrClient::new(
+        &HttpClientPool::new(Arc::new(PublicDnsResolver)),
+        &Resolution::from(&settings).config,
+        UrlPolicy::default(),
+        VertexAuth::default(),
+        OcrSettings::default(),
+        Arc::new(litellm_llms::base_llm::inference::secrets::EnvironmentSecrets),
+    )
+    .unwrap();
+    crate::ocr::client::perform(&client, wire_request("mistral/model", &base, json!({})))
+        .await
+        .unwrap();
+    server.await.unwrap();
+    assert!(seen.lock().unwrap()[0].contains("user-agent: host-owned/1"));
 }
 
 fn event_name(event: &CallEvent) -> &'static str {
@@ -620,7 +727,7 @@ async fn read_bounded_response(response: Vec<u8>, limit: usize) -> Result<bytes:
         .unwrap();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(2),
-        litellm_llms::custom_httpx::llm_http_handler::read_response_bytes(response, limit),
+        litellm_llms::base_llm::ocr::handler::read_response_bytes(response, limit),
     )
     .await;
     server.abort();
@@ -672,10 +779,7 @@ async fn oversized_error_retains_http_status_and_bounded_diagnostics_without_dra
         .await
         .unwrap_err();
     match error {
-        OcrError::Transport(litellm_llms::custom_httpx::transport::Error::Http {
-            status,
-            body,
-        }) => {
+        OcrError::Transport(litellm_http::transport::Error::Http { status, body }) => {
             assert_eq!(status, 429);
             assert_eq!(body, prefix);
         }

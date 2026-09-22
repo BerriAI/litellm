@@ -7,7 +7,7 @@ import re
 from collections.abc import Mapping, MutableMapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypeVar
 
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictBool, TypeAdapter, ValidationError
@@ -39,6 +39,8 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.model_listing import ModelInfoResponse
+
+_MessageT = TypeVar("_MessageT")
 
 DROP_FORCED_TOOL_CHOICE_WARNING: Final = (
     "Downgrading forced tool_choice to 'auto' for model=%s (drop_params=True): this model rejects tool_choice type "
@@ -75,6 +77,21 @@ _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
+
+
+def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.utils import supports_prompt_caching
+
+    try:
+        provider: Final = custom_llm_provider if custom_llm_provider is not None else get_llm_provider(model=model)[1]
+    except Exception:  # noqa: BLE001  # Optional caching must not block an unroutable request
+        return False
+    return (
+        provider in ("anthropic", "bedrock", "vertex_ai", "azure_ai")
+        and "claude" in model.lower()
+        and supports_prompt_caching(model=model, custom_llm_provider=provider)
+    )
 
 
 def is_claude_code_user_agent(user_agent: str) -> bool:
@@ -1106,7 +1123,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
-def strip_advisor_blocks_from_messages(messages: list[Any], replace_with_text: bool = False) -> list[Any]:
+def strip_advisor_blocks_from_messages(messages: list[_MessageT], replace_with_text: bool = False) -> list[_MessageT]:
     """
     Remove (or replace) server_tool_use (name='advisor') and advisor_tool_result blocks
     from assistant message content.
@@ -1213,7 +1230,7 @@ def is_anthropic_invalid_thinking_block_error(error_text: str) -> bool:
     return "must contain thinking" in lower
 
 
-def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[Any]:
+def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) -> list[object]:
     """
     Return a new message list with thinking / redacted_thinking content blocks removed
     from each message. Used to recover from invalid thinking signatures on retry.
@@ -1221,7 +1238,7 @@ def strip_thinking_blocks_from_anthropic_messages(messages: list[Any]) -> list[A
     Messages whose content is a list and becomes empty after stripping are omitted,
     since Anthropic rejects empty content arrays.
     """
-    out: Final[list[Any]] = []
+    out: Final[list[object]] = []
     for m in messages:
         if not isinstance(m, dict):
             out.append(m)
@@ -1435,12 +1452,19 @@ class _ReplayedWebSearchResult(BaseModel):
     encrypted_content: str = ""
 
 
+class _ReplayedWebSearchToolResultError(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["web_search_tool_result_error"]
+    error_code: str = ""
+
+
 class _ReplayedWebSearchToolResult(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     type: Literal["web_search_tool_result"]
     tool_use_id: str
-    content: tuple[_ReplayedWebSearchResult, ...]
+    content: tuple[_ReplayedWebSearchResult, ...] | _ReplayedWebSearchToolResultError
 
 
 class _ReplayedServerToolUse(BaseModel):
@@ -1464,17 +1488,12 @@ def _flattenable_web_search_tool_result(block: object) -> _ReplayedWebSearchTool
     """
     The parsed block when it is a ``web_search_tool_result`` carrying no
     ``encrypted_content``, else None for anything Anthropic itself issued.
-
-    An empty ``content`` list is flattenable too. It is what the interceptor emits
-    when a search legitimately returns nothing and when a search raises, and it
-    carries neither evidence to preserve nor an ``encrypted_content`` to respect,
-    so leaving it in place only buys the 400 this whole function exists to avoid.
     """
     try:
         parsed: Final = _WEB_SEARCH_TOOL_RESULT_ADAPTER.validate_python(block)
     except ValidationError:
         return None
-    if any(result.encrypted_content for result in parsed.content):
+    if isinstance(parsed.content, tuple) and any(result.encrypted_content for result in parsed.content):
         return None
     return parsed
 
@@ -1486,8 +1505,12 @@ def _replayed_server_tool_use(block: object) -> _ReplayedServerToolUse | None:
         return None
 
 
-def _render_web_search_results(query: str, results: tuple[_ReplayedWebSearchResult, ...]) -> str:
+def _render_web_search_results(
+    query: str, results: tuple[_ReplayedWebSearchResult, ...] | _ReplayedWebSearchToolResultError
+) -> str:
     header: Final = f"Web search results for '{query}':" if query else "Web search results:"
+    if isinstance(results, _ReplayedWebSearchToolResultError):
+        return f"{header}\n\nSearch failed: {results.error_code or 'unavailable'}"
     if not results:
         return f"{header}\n\nNo results were returned."
     body: Final = "\n\n".join(

@@ -5,7 +5,7 @@ import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import runtime
-from litellm.rust_bridge.catalog import Context, Route
+from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.rust_bridge.transcription.native import (
     NATIVE_ATRANSCRIPTION,
@@ -74,7 +74,7 @@ class BedrockAudioTranscriptionRustDispatch:
             )
 
         return runtime.run(
-            Context(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
+            RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
             binding=NATIVE_TRANSCRIPTION,
             native=native,
             python=_no_python_implementation,
@@ -107,7 +107,7 @@ class BedrockAudioTranscriptionRustDispatch:
             )
 
         return await runtime.arun(
-            Context(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
+            RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
             binding=NATIVE_ATRANSCRIPTION,
             native=native,
             python=_no_async_python_implementation,

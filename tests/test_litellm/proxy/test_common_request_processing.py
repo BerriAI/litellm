@@ -495,7 +495,7 @@ class TestProxyBaseLLMRequestProcessing:
             )
 
         assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-        assert exc_info.value.code == "429"
+        assert exc_info.value.code == "422"
         tag_budget_check.assert_awaited_once()
         _, call_kwargs = tag_budget_check.call_args
         assert call_kwargs["tags"] == ("guardrail-tag",)
@@ -702,7 +702,7 @@ class TestProxyBaseLLMRequestProcessing:
             )
 
         assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-        assert exc_info.value.code == "429"
+        assert exc_info.value.code == "422"
         assert "guardrail-tag" in exc_info.value.message
 
     @pytest.mark.asyncio
@@ -2342,6 +2342,39 @@ class TestCommonRequestProcessingHelpers:
         )
         assert isinstance(response, JSONResponse)
         assert response.headers["x-litellm-model-id"] == "fallback-deployment"
+
+    @staticmethod
+    async def _first_chunk_error_response(**create_response_kwargs):
+        async def mock_generator():
+            yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return await create_response(
+            mock_generator(),
+            "text/event-stream",
+            {"x-litellm-call-id": "call-8302"},
+            **create_response_kwargs,
+        )
+
+    async def test_create_response_first_chunk_error_carries_the_call_id_when_opted_in(self):
+        """A stream that fails on its first chunk answers as JSON, and with
+        include_call_id_in_error_body on that JSON names the request like the
+        non-streaming error path does, byte-identical to the header."""
+        response = await self._first_chunk_error_response(general_settings={"include_call_id_in_error_body": True})
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 403
+        assert response.headers["x-litellm-call-id"] == "call-8302"
+        assert json.loads(response.body) == {
+            "error": {"code": 403, "message": "forbidden", "litellm_call_id": "call-8302"}
+        }
+
+    async def test_create_response_first_chunk_error_body_is_unchanged_by_default(self):
+        response = await self._first_chunk_error_response()
+
+        assert isinstance(response, JSONResponse)
+        assert response.headers["x-litellm-call-id"] == "call-8302"
+        assert json.loads(response.body) == {"error": {"code": 403, "message": "forbidden"}}
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
         """Regression for #28384: every StreamingResponse create_response returns
@@ -9121,6 +9154,62 @@ class TestStreamingResponseHeadersFollowFallback:
         assert isinstance(result, JSONResponse)
         assert result.status_code == 400
         assert result.headers["x-litellm-applied-guardrails"] == "stream-blocker"
+
+    @pytest.mark.asyncio
+    async def test_streaming_first_chunk_error_carries_the_call_id_when_opted_in(self, monkeypatch):
+        """The opt-in reaches the streaming path through base_process_llm_request, so a stream
+        that fails on its first chunk answers with the call id inside its JSON error body,
+        byte-identical to the x-litellm-call-id header."""
+
+        def select_data_generator(**kwargs):
+            async def generator():
+                yield 'data: {"error": {"code": 403, "message": "forbidden"}}\n\n'
+                yield "data: [DONE]\n\n"
+
+            return generator()
+
+        logging_obj = MagicMock()
+        logging_obj.litellm_call_id = "lit-8302-call"
+        logging_obj._defer_async_logging = False
+        logging_obj._on_deferred_stream_complete = None
+        logging_obj.cost_breakdown = None
+        processor = ProxyBaseLLMRequestProcessing(
+            data={"model": "oa", "stream": True, "litellm_logging_obj": logging_obj}
+        )
+
+        proxy_logging_obj = MagicMock(spec=ProxyLogging)
+        proxy_logging_obj.during_call_hook = AsyncMock(return_value=None)
+        proxy_logging_obj.update_request_status = AsyncMock(return_value=None)
+        proxy_logging_obj.post_call_success_hook = AsyncMock(
+            side_effect=lambda data, user_api_key_dict, response: response
+        )
+        proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
+
+        async def fake_route_request(**kwargs):
+            async def call():
+                return SimpleNamespace(_hidden_params={}, fallback_headers_adopted=False)
+
+            return call()
+
+        monkeypatch.setattr(litellm.proxy.common_request_processing, "route_request", fake_route_request)
+
+        result = await processor.base_process_llm_request(
+            request=Request(scope={"type": "http", "headers": []}),
+            fastapi_response=Response(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            route_type="acompletion",
+            proxy_logging_obj=proxy_logging_obj,
+            general_settings={"include_call_id_in_error_body": True},
+            proxy_config=MagicMock(spec=ProxyConfig),
+            select_data_generator=select_data_generator,
+            is_streaming_request=True,
+            skip_pre_call_logic=True,
+        )
+
+        assert isinstance(result, JSONResponse)
+        assert result.status_code == 403
+        assert result.headers["x-litellm-call-id"] == "lit-8302-call"
+        assert json.loads(result.body)["error"]["litellm_call_id"] == "lit-8302-call"
 
 
 class _MessagesFallbackStream:

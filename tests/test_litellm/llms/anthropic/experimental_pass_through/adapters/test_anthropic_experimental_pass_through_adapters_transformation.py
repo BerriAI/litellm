@@ -2109,13 +2109,52 @@ def test_should_not_add_cache_control_for_non_anthropic_model():
     for model in [
         CACHE_CONTROL_NON_ANTHROPIC_MODEL,
         "openai/gpt-4-turbo",
-        "gemini-pro",
     ]:
         target = {}
         adapter._add_cache_control_if_applicable(
             {"cache_control": cache_control}, target, model
         )
         assert "cache_control" not in target
+
+
+def test_should_add_cache_control_for_gemini_model():
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    cache_control = {"type": "ephemeral", "ttl": "1h"}
+
+    for model in [
+        "gemini-3.5-flash",
+        "gemini/gemini-3.5-flash",
+        "gemini-3.1-pro-preview",
+        "vertex_ai/gemini-2.5-pro",
+    ]:
+        target = {}
+        adapter._add_cache_control_if_applicable(
+            {"cache_control": cache_control}, target, model
+        )
+        assert target.get("cache_control") == cache_control
+
+
+def test_cache_control_preserved_in_text_content_for_gemini():
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": "This is cached content",
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model="gemini/gemini-3.5-flash"
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
 
 
 def test_should_not_add_cache_control_when_none():

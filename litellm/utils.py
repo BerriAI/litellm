@@ -40,14 +40,11 @@ from types import MappingProxyType
 import dotenv
 import httpx
 import openai
-import tiktoken
 from httpx import Proxy
 from httpx._utils import get_environment_proxies
 from openai.lib import _parsing, _pydantic
 from openai.types.chat.completion_create_params import ResponseFormat
 from pydantic import BaseModel
-from tiktoken import Encoding
-from tokenizers import Tokenizer
 
 import litellm
 import litellm.litellm_core_utils
@@ -81,12 +78,20 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    bind_budget_reservation_to_callbacks,
+    normalize_drop_params,
+    unbind_budget_reservation_from_callbacks,
+)
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
+from litellm.rust_bridge import tokenizer as tokenizer_dispatch
+from litellm.rust_bridge.catalog import decision
+from litellm.rust_bridge.configuration import Decision
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -284,6 +289,8 @@ claude_json_str = json.dumps(json_data)
 import importlib.metadata
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Union, cast, get_args
+
+from typing_extensions import assert_never
 
 from litellm import utils as litellm_utils
 
@@ -1880,7 +1887,10 @@ def client(original_function):
 
             # Type assertion: logging_obj is guaranteed to be non-None after function_setup
             assert logging_obj is not None, "logging_obj should not be None after function_setup"
+            if not _is_litellm_internal_call:
+                bind_budget_reservation_to_callbacks(logging_obj.litellm_params)
 
+            kwargs["litellm_logging_obj"] = logging_obj
             modified_kwargs: Final = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -2008,7 +2018,7 @@ def client(original_function):
                         result=result,
                         call_type=call_type,
                     )
-            elif call_type == CallTypes.arealtime.value:
+            elif call_type in (CallTypes.arealtime.value, CallTypes.aresponses_websocket.value):
                 return result
             ### POST-CALL RULES ###
             post_call_processing(
@@ -2080,6 +2090,7 @@ def client(original_function):
             # the failure hook ran, so a slow callback doesn't inflate the reported duration.
             end_time = _deployment_call_end_time if _deployment_call_end_time is not None else datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
             if logging_obj and not _is_litellm_internal_call:
+                unbind_budget_reservation_from_callbacks(logging_obj.litellm_params)
                 try:
                     logging_obj.failure_handler(
                         e, traceback_exception, start_time, end_time
@@ -2246,17 +2257,27 @@ def _select_tokenizer(model: str, custom_tokenizer: CustomHuggingfaceTokenizer |
             identifier=custom_tokenizer["identifier"],
             revision=custom_tokenizer["revision"],
             auth_token=custom_tokenizer["auth_token"],
+            backend=_huggingface_tokenizer_backend(),
         )
     return _select_tokenizer_helper(model=model)
 
 
+def _huggingface_tokenizer_backend() -> Decision:
+    """The backend `tokenizer_dispatch.from_str` / `from_pretrained` will select right now.
+
+    Cached HuggingFace tokenizers are keyed on it, so flipping `LITELLM_RUST` or
+    `litellm.rust(...)` reaches a fresh object instead of the other backend's."""
+    return decision(tokenizer_dispatch.HUGGINGFACE_CONTEXT)
+
+
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
-def _select_custom_tokenizer_helper(identifier: str, revision: str, auth_token: str | None) -> SelectTokenizerResponse:
+def _select_custom_tokenizer_helper(
+    identifier: str, revision: str, auth_token: str | None, backend: Decision
+) -> SelectTokenizerResponse:
     verbose_logger.debug("Loading custom HuggingFace tokenizer %s (revision %s)", identifier, revision)
     return create_pretrained_tokenizer(identifier=identifier, revision=revision, auth_token=auth_token)
 
 
-@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
     if litellm.disable_hf_tokenizer_download is True:
         return _return_openai_tokenizer(model)
@@ -2266,6 +2287,10 @@ def _select_tokenizer_helper(model: str) -> SelectTokenizerResponse:
         if result is not None:
             return result
     except Exception as e:
+        from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
+
+        if isinstance(e, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
+            raise
         verbose_logger.debug("Error selecting tokenizer: %s", e)
 
     # default - tiktoken
@@ -2300,19 +2325,26 @@ def _return_huggingface_tokenizer(model: str) -> SelectTokenizerResponse | None:
     kind: Final = huggingface_tokenizer_kind(model)
     if kind is None:
         return None
-    return {"type": "huggingface_tokenizer", "tokenizer": _load_huggingface_tokenizer(kind)}
+    return {
+        "type": "huggingface_tokenizer",
+        "tokenizer": _load_huggingface_tokenizer(kind, _huggingface_tokenizer_backend()),
+    }
 
 
-def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> Tokenizer:
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind, backend: Decision) -> HuggingFace:
+    """One tokenizer per kind and backend; `backend` is the cache key, the dispatch re-derives it."""
     match kind:
         case "cohere":
-            return Tokenizer.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
+            return tokenizer_dispatch.from_pretrained("Xenova/c4ai-command-r-v01-tokenizer")
         case "anthropic":
-            return Tokenizer.from_str(claude_json_str)
+            return tokenizer_dispatch.anthropic()
         case "llama2":
-            return Tokenizer.from_pretrained("hf-internal-testing/llama-tokenizer")
+            return tokenizer_dispatch.from_pretrained("hf-internal-testing/llama-tokenizer")
         case "llama3":
-            return Tokenizer.from_pretrained("Xenova/llama-3-tokenizer")
+            return tokenizer_dispatch.from_pretrained("Xenova/llama-3-tokenizer")
+        case _:
+            assert_never(kind)
 
 
 def encode(model="", text="", custom_tokenizer: dict | None = None):
@@ -2328,15 +2360,13 @@ def encode(model="", text="", custom_tokenizer: dict | None = None):
         enc: The encoded text.
     """
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
-    if isinstance(tokenizer_json["tokenizer"], Encoding):
-        enc = tokenizer_json["tokenizer"].encode(text, disallowed_special=())
-    else:
-        enc = tokenizer_json["tokenizer"].encode(text)
-    # Normalize: HuggingFace Tokenizer.encode() returns an Encoding object;
-    # extract .ids so the return type is always List[int].
-    if hasattr(enc, "ids"):
-        return enc.ids
-    return enc
+    if tokenizer_json["type"] == "openai_tokenizer":
+        openai_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
+            Encoding, tokenizer_json["tokenizer"]
+        )
+        return openai_tokenizer.encode(text, disallowed_special=())
+    encoded: Final = tokenizer_json["tokenizer"].encode(text)
+    return encoded.ids if hasattr(encoded, "ids") else encoded
 
 
 def decode(
@@ -2355,26 +2385,12 @@ def decode(
     """
     tokenizer_json: Final = custom_tokenizer or _select_tokenizer(model=model)
     if tokenizer_json["type"] == "huggingface_tokenizer":
-        if skip_special_tokens:
-            tokens = _strip_huggingface_special_token_ids(tokenizer_json["tokenizer"], tokens)
-        dec = tokenizer_json["tokenizer"].decode(tokens, skip_special_tokens=skip_special_tokens)
-        return dec
-    dec = tokenizer_json["tokenizer"].decode(tokens)
-    return dec
-
-
-def _strip_huggingface_special_token_ids(tokenizer: Tokenizer, tokens: Sequence[int]) -> Sequence[int]:
-    try:
-        added_tokens_decoder: Final = tokenizer.get_added_tokens_decoder()
-    except Exception:
-        return tokens
-
-    special_token_ids: Final = {
-        token_id for token_id, added_token in added_tokens_decoder.items() if getattr(added_token, "special", False)
-    }
-    if not special_token_ids:
-        return tokens
-    return [token for token in tokens if token not in special_token_ids]
+        ids: Final = strip_special_tokens(tokenizer_json["tokenizer"], tokens) if skip_special_tokens else tokens
+        hf_tokenizer: Final = cast(  # cast-ok: [LIT006] caller's explicit type tag selects this interface
+            HuggingFace, tokenizer_json["tokenizer"]
+        )
+        return hf_tokenizer.decode(ids, skip_special_tokens=skip_special_tokens)
+    return tokenizer_json["tokenizer"].decode(tokens)
 
 
 def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: str | None = None):
@@ -2390,7 +2406,7 @@ def create_pretrained_tokenizer(identifier: str, revision="main", auth_token: st
     dict: A dictionary with the tokenizer and its type.
     """
 
-    tokenizer: Final = Tokenizer.from_pretrained(identifier, revision=revision, token=auth_token)
+    tokenizer: Final = tokenizer_dispatch.from_pretrained(identifier, revision=revision, token=auth_token)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -2405,7 +2421,7 @@ def create_tokenizer(json: str):
     dict: A dictionary with the tokenizer and its type.
     """
 
-    tokenizer: Final = Tokenizer.from_str(json)
+    tokenizer: Final = tokenizer_dispatch.from_str(json)
     return {"type": "huggingface_tokenizer", "tokenizer": tokenizer}
 
 
@@ -2845,6 +2861,14 @@ def supports_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None
         model=model,
         custom_llm_provider=custom_llm_provider,
         key="supports_prompt_cache_breakpoint",
+    )
+
+
+def supports_thinking_cache_preservation(model: str, custom_llm_provider: str | None = None) -> bool:
+    return _supports_factory(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        key="supports_thinking_cache_preservation",
     )
 
 
@@ -3304,6 +3328,9 @@ def register_model(
         elif value.get("litellm_provider") == "vercel_ai_gateway":
             if key not in litellm.vercel_ai_gateway_models:
                 litellm.vercel_ai_gateway_models.add(key)
+        elif value.get("litellm_provider") == "edenai":
+            if key not in litellm.edenai_models:
+                litellm.edenai_models.add(key)
         elif value.get("litellm_provider") == "vertex_ai-text-models":
             if key not in litellm.vertex_text_models:
                 litellm.vertex_text_models.add(key)
@@ -4886,6 +4913,9 @@ def get_optional_params(
     return optional_params
 
 
+EXTRA_BODY_ROUTING_KEYS: Final = frozenset({"model"})
+
+
 def add_provider_specific_params_to_optional_params(
     optional_params: dict,
     passed_params: dict,
@@ -4911,10 +4941,8 @@ def add_provider_specific_params_to_optional_params(
                 **extra_body,
             }
 
-            if additional_drop_params is not None:
-                processed_extra_body = {k: v for k, v in initial_extra_body.items() if k not in additional_drop_params}
-            else:
-                processed_extra_body = initial_extra_body
+            dropped_keys: Final = EXTRA_BODY_ROUTING_KEYS | frozenset(additional_drop_params or ())
+            processed_extra_body: Final = {k: v for k, v in initial_extra_body.items() if k not in dropped_keys}
 
             _ensure_extra_body_is_safe: Final = getattr(sys.modules[__name__], "_ensure_extra_body_is_safe")
             optional_params["extra_body"] = _ensure_extra_body_is_safe(extra_body=processed_extra_body)
@@ -5342,6 +5370,13 @@ def _strip_stable_vertex_version(model_name) -> str:
     return re.sub(r"-\d+$", "", model_name)
 
 
+_DATED_SNAPSHOT_SUFFIX: Final = re.compile(r"-\d{4}-\d{2}-\d{2}$")
+
+
+def _strip_dated_snapshot_suffix(model_name: str) -> str:
+    return _DATED_SNAPSHOT_SUFFIX.sub("", model_name)
+
+
 def _get_base_bedrock_model(model_name) -> str:
     """
     Get the base model from the given model name.
@@ -5389,7 +5424,7 @@ def _strip_model_name(model: str, custom_llm_provider: str | None) -> str:
         strip_finetune: Final = _strip_openai_finetune_model_name(model_name=model)
         return strip_finetune
     else:
-        return model
+        return _strip_dated_snapshot_suffix(model_name=model)
 
 
 # Global case-insensitive lookup map for model_cost (built eagerly at module import)
@@ -5608,6 +5643,12 @@ def _get_model_info_from_generalization(
     return None
 
 
+def _strip_mantle_region_prefix(model: str) -> str:
+    from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
+
+    return split_mantle_region_prefix(model)[1]
+
+
 def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> PotentialModelNamesAndCustomLLMProvider:
     if custom_llm_provider is None:
         # Get custom_llm_provider
@@ -5640,20 +5681,30 @@ def _get_potential_model_names(model: str, custom_llm_provider: str | None) -> P
 
         split_model = strip_bedrock_routing_prefix(split_model)
 
+    region_free_split_model: Final = (
+        _strip_mantle_region_prefix(split_model) if custom_llm_provider == "bedrock_mantle" else split_model
+    )
+    region_free_combined_stripped_model_name: Final = (
+        f"bedrock_mantle/{_strip_model_name(model=region_free_split_model, custom_llm_provider=custom_llm_provider)}"
+        if custom_llm_provider == "bedrock_mantle"
+        else combined_stripped_model_name
+    )
     provider_model_info: Final = (
-        ProviderConfigManager.get_provider_model_info(model=split_model, provider=LlmProviders(custom_llm_provider))
+        ProviderConfigManager.get_provider_model_info(
+            model=region_free_split_model, provider=LlmProviders(custom_llm_provider)
+        )
         if custom_llm_provider in LlmProvidersSet
         else None
     )
     provider_cost_key: Final = (
-        provider_model_info.get_model_cost_key(split_model) if provider_model_info is not None else None
+        provider_model_info.get_model_cost_key(region_free_split_model) if provider_model_info is not None else None
     )
 
     return PotentialModelNamesAndCustomLLMProvider(
-        split_model=split_model,
+        split_model=region_free_split_model,
         combined_model_name=combined_model_name,
         stripped_model_name=stripped_model_name,
-        combined_stripped_model_name=combined_stripped_model_name,
+        combined_stripped_model_name=region_free_combined_stripped_model_name,
         provider_prefixed_model_name=provider_cost_key or provider_prefixed_model_name,
         custom_llm_provider=cast(str, custom_llm_provider),
     )
@@ -5815,6 +5866,7 @@ def _get_model_info_helper(
                 supports_assistant_prefill=None,
                 supports_prompt_caching=None,
                 supports_prompt_cache_breakpoint=None,
+                supports_thinking_cache_preservation=None,
                 supports_computer_use=None,
                 supports_pdf_input=None,
             )
@@ -6067,9 +6119,12 @@ def _get_model_info_helper(
                 output_cost_per_second_1080p=_model_info.get("output_cost_per_second_1080p", None),
                 output_cost_per_second_480p=_model_info.get("output_cost_per_second_480p", None),
                 output_cost_per_second_720p=_model_info.get("output_cost_per_second_720p", None),
+                output_cost_per_second_768p=_model_info.get("output_cost_per_second_768p", None),
+                output_cost_per_second_2k=_model_info.get("output_cost_per_second_2k", None),
                 output_cost_per_second_4k=_model_info.get("output_cost_per_second_4k", None),
                 output_cost_per_video_per_second=_model_info.get("output_cost_per_video_per_second", None),
                 output_cost_per_image=_model_info.get("output_cost_per_image", None),
+                output_cost_per_pixel=_model_info.get("output_cost_per_pixel", None),
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
@@ -6087,6 +6142,7 @@ def _get_model_info_helper(
                 supports_assistant_prefill=_model_info.get("supports_assistant_prefill", None),
                 supports_prompt_caching=_model_info.get("supports_prompt_caching", None),
                 supports_prompt_cache_breakpoint=_model_info.get("supports_prompt_cache_breakpoint", None),
+                supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_audio_output=_model_info.get("supports_audio_output", None),
                 supports_pdf_input=_model_info.get("supports_pdf_input", None),
@@ -6118,8 +6174,10 @@ def _get_model_info_helper(
                 tpm=_model_info.get("tpm", None),
                 rpm=_model_info.get("rpm", None),
                 ocr_cost_per_page=_model_info.get("ocr_cost_per_page", None),
+                ocr_cost_per_page_batches=_model_info.get("ocr_cost_per_page_batches", None),
                 ocr_cost_per_credit=_model_info.get("ocr_cost_per_credit", None),
                 annotation_cost_per_page=_model_info.get("annotation_cost_per_page", None),
+                annotation_cost_per_page_batches=_model_info.get("annotation_cost_per_page_batches", None),
                 provider_specific_entry=_model_info.get("provider_specific_entry", None),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
@@ -6535,6 +6593,11 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
+        elif custom_llm_provider == "edenai":
+            if "EDENAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("EDENAI_API_KEY")
         elif custom_llm_provider == "datarobot":
             if "DATAROBOT_API_TOKEN" in os.environ:
                 keys_in_environment = True
@@ -6785,6 +6848,12 @@ def validate_environment(
                 keys_in_environment = True
             else:
                 missing_keys.append("VERCEL_AI_GATEWAY_API_KEY")
+        ## edenai
+        elif model in litellm.edenai_models:
+            if "EDENAI_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("EDENAI_API_KEY")
         ## datarobot
         elif model in litellm.datarobot_models:
             if "DATAROBOT_API_TOKEN" in os.environ:
@@ -8108,6 +8177,7 @@ def validate_chat_completion_user_messages(messages: list[AllMessageValues]):
 
 def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
+    model: str = "",
 ) -> dict | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
@@ -8123,12 +8193,19 @@ def validate_chat_completion_tool_choice(
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice.get("type") is None or tool_choice.get("function") is None:
-            raise Exception(
-                f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec"
+            raise BadRequestError(
+                message=f"Invalid tool choice, tool_choice={tool_choice}. Please ensure tool_choice follows the OpenAI spec",
+                model=model,
+                llm_provider="",
             )
         return tool_choice
-    raise Exception(
-        f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
+    raise BadRequestError(
+        message=(
+            f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. "
+            "Please ensure tool_choice follows the OpenAI tool_choice spec"
+        ),
+        model=model,
+        llm_provider="",
     )
 
 
@@ -8277,6 +8354,8 @@ class ProviderConfigManager:
                 lambda: litellm.VercelAIGatewayConfig(),
                 False,
             ),
+            LlmProviders.EDENAI: (litellm.EdenAIChatConfig, False),
+            LlmProviders.FAL_AI: (litellm.FalAIChatConfig, False),
             LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
             LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
             LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),
@@ -8579,6 +8658,8 @@ class ProviderConfigManager:
             return SagemakerEmbeddingConfig.get_model_config(model)
         elif litellm.LlmProviders.PERPLEXITY == provider:
             return litellm.PerplexityEmbeddingConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAIEmbeddingConfig()
         return None
 
     @staticmethod
@@ -8653,6 +8734,13 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
+        elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
+            if "claude" in model_lower:
+                from litellm.llms.bedrock_mantle.messages.transformation import (
+                    BedrockMantleAnthropicMessagesConfig,
+                )
+
+                return BedrockMantleAnthropicMessagesConfig()
         elif litellm.LlmProviders.VERTEX_AI == provider:
             if "claude" in model_lower:
                 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.experimental_pass_through.transformation import (
@@ -8692,6 +8780,8 @@ class ProviderConfigManager:
                 )
 
                 return GithubCopilotAnthropicMessagesConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAIAnthropicMessagesConfig()
 
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -8730,6 +8820,10 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsAudioTranscriptionConfig()
+        elif litellm.LlmProviders.XAI == provider:
+            from litellm.llms.xai.audio_transcription.transformation import XAIAudioTranscriptionConfig
+
+            return XAIAudioTranscriptionConfig()
         elif litellm.LlmProviders.OPENAI == provider:
             if "gpt-4o" in model:
                 return litellm.OpenAIGPTAudioTranscriptionConfig()
@@ -8796,6 +8890,8 @@ class ProviderConfigManager:
             )
 
             return GeminiAudioTranscriptionConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAIAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8898,6 +8994,8 @@ class ProviderConfigManager:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.FIREWORKS_AI == provider:
             return litellm.FireworksAIResponsesAPIConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAIResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
             # Both decisions are data-driven from the model's price-map entry, with
             # no model-name logic. Capability (can it serve Responses?) comes from
@@ -8970,7 +9068,7 @@ class ProviderConfigManager:
         return litellm.OpenAITextCompletionConfig()
 
     @staticmethod
-    def get_provider_model_info(
+    def get_provider_model_info(  # noqa: C901  # provider dispatch table, one branch per provider
         model: str | None,
         provider: LlmProviders,
     ) -> BaseLLMModelInfo | None:
@@ -9007,6 +9105,8 @@ class ProviderConfigManager:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
+        elif LlmProviders.EDENAI == provider:
+            return litellm.EdenAIChatConfig()
         elif LlmProviders.BEDROCK == provider:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
@@ -9110,6 +9210,10 @@ class ProviderConfigManager:
             from litellm.llms.anthropic.files.transformation import AnthropicFilesConfig
 
             return AnthropicFilesConfig()
+        elif LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.files.transformation import MistralFilesConfig
+
+            return MistralFilesConfig()
         return None
 
     @staticmethod
@@ -9121,6 +9225,10 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
             return BedrockBatchesConfig()
+        elif LlmProviders.MISTRAL == provider:
+            from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+            return MistralBatchesConfig()
         return None
 
     @staticmethod
@@ -9347,6 +9455,8 @@ class ProviderConfigManager:
             )
 
             return get_modelscope_image_generation_config(model)
+        elif LlmProviders.EDENAI == provider:
+            return litellm.EdenAIImageGenerationConfig()
         return None
 
     @staticmethod
@@ -9374,10 +9484,16 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.videos.transformation import FalAIVideoConfig
+
+            return FalAIVideoConfig()
         elif LlmProviders.HOSTED_VLLM == provider:
             from litellm.llms.hosted_vllm.videos import get_hosted_vllm_video_config
 
             return get_hosted_vllm_video_config(model)
+        elif LlmProviders.EDENAI == provider:
+            return litellm.EdenAIVideoConfig()
         return None
 
     @staticmethod
@@ -9468,6 +9584,10 @@ class ProviderConfigManager:
             )
 
             return BlackForestLabsImageEditConfig()
+        elif LlmProviders.FAL_AI == provider:
+            from litellm.llms.fal_ai.image_edit import get_fal_ai_image_edit_config
+
+            return get_fal_ai_image_edit_config(model)
         elif LlmProviders.AZURE_AI == provider:
             from litellm.llms.azure_ai.image_edit import get_azure_ai_image_edit_config
 
@@ -9694,6 +9814,8 @@ class ProviderConfigManager:
             )
 
             return AWSPollyTextToSpeechConfig()
+        elif litellm.LlmProviders.EDENAI == provider:
+            return litellm.EdenAITextToSpeechConfig()
         return None
 
     @staticmethod

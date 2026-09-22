@@ -10,6 +10,8 @@ from litellm.types.llms.bedrock import AwsAuthParams, AwsSessionTag
 from litellm.types.utils import LiteLLMBatch
 
 if TYPE_CHECKING:
+    from botocore.config import Config
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 # AWS Bedrock model-invocation-job statuses → OpenAI Batch statuses.
@@ -29,6 +31,12 @@ _BEDROCK_MIJ_STATUS_TO_OPENAI: Final = {
 }
 
 _CANCEL_IDEMPOTENT_STATUSES: Final = frozenset({"cancelling", "cancelled", "completed", "failed", "expired"})
+
+
+def _sigv4_config() -> "Config":
+    from botocore.config import Config
+
+    return Config(signature_version="v4")
 
 
 def _extract_region_from_bedrock_arn(arn: str) -> str | None:
@@ -150,6 +158,7 @@ class BedrockBatchesHandler:
             aws_access_key_id=creds.access_key,
             aws_secret_access_key=creds.secret_key,
             aws_session_token=creds.token,
+            config=_sigv4_config(),
         )
 
         def job_status() -> "LiteLLMBatch":
@@ -309,6 +318,7 @@ class BedrockBatchesHandler:
             aws_access_key_id=creds.access_key,
             aws_secret_access_key=creds.secret_key,
             aws_session_token=creds.token,
+            config=_sigv4_config(),
         )
 
         if logging_obj is not None:

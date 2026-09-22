@@ -4,7 +4,7 @@ use litellm_core::messages::{
     route::{Messages, MessagesCall, MessagesOp, MessagesOpResult, MessagesOutput},
 };
 use litellm_host_python::{InvokeError, RouteHost, from_py, lookup, to_py};
-use litellm_llms::custom_httpx::transport::Error as TransportError;
+use litellm_http::transport::Error as TransportError;
 use pyo3::{
     exceptions::{PyException, PyValueError},
     gc::{PyTraverseError, PyVisit},

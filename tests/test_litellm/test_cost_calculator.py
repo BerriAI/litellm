@@ -21,7 +21,9 @@ from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     CallTypes,
+    Choices,
     LiteLLMRealtimeStreamLoggingObject,
+    Message,
     ModelInfo,
     ModelResponse,
     PromptTokensDetailsWrapper,
@@ -107,6 +109,28 @@ def test_completion_cost_uses_response_model_for_dynamic_routing(_local_model_co
     )
 
     assert cost > 0, "Cost should be calculated using response model"
+
+
+def test_completion_cost_strips_dated_azure_snapshot_model(_local_model_cost_map: None) -> None:
+    dated_response = ModelResponse(
+        model="gpt-5.6-luna-2099-01-01",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    dated_response._hidden_params = {"custom_llm_provider": "azure"}
+
+    undated_response = ModelResponse(
+        model="gpt-5.6-luna",
+        choices=[Choices(index=0, message=Message(role="assistant", content="hi"), finish_reason="stop")],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    undated_response._hidden_params = {"custom_llm_provider": "azure"}
+
+    dated_cost = litellm.completion_cost(completion_response=dated_response)
+    undated_cost = litellm.completion_cost(completion_response=undated_response)
+
+    assert dated_cost == undated_cost
+    assert dated_cost > 0
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
@@ -3498,6 +3522,97 @@ def test_cost_per_token_region_name_applies_to_provider_prefixed_model(_local_mo
     )
 
 
+def test_completion_cost_mantle_native_messages_prices_claude_from_the_bedrock_row(_local_model_cost_map):
+    """Mantle's native Messages API answers with Anthropic's canonical model name and the proxy
+    resolves a Mantle region for every call, so the first cost candidate is
+    bedrock_mantle/<region>/claude-sonnet-5. That name has no row of its own and must fall through to
+    the deployment's bare Bedrock row instead of stopping on an unpriced capability rule at $0."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-sonnet-5",
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    row = litellm.model_cost["anthropic.claude-sonnet-5"]
+    expected = 100 * row["input_cost_per_token"] + 10 * row["output_cost_per_token"]
+    assert expected > 0
+
+    for region_name in ("us-east-1", None):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model="bedrock_mantle/anthropic.claude-sonnet-5",
+            custom_llm_provider="bedrock_mantle",
+            region_name=region_name,
+        ) == pytest.approx(expected)
+
+
+def test_completion_cost_mantle_native_messages_prices_haiku_from_the_mantle_row(_local_model_cost_map):
+    """Mantle serves Anthropic's un-versioned haiku id, which has no bare Bedrock row (Bedrock's carries
+    the -20251001-v1:0 suffix), and Claude Code sends every small-fast-model call to it. Both the plain
+    and the region-prefixed deployment names must price from bedrock_mantle/anthropic.claude-haiku-4-5
+    instead of billing $0."""
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-haiku-4-5",
+        usage={"prompt_tokens": 100, "completion_tokens": 10, "total_tokens": 110},
+    )
+    row = litellm.model_cost["bedrock_mantle/anthropic.claude-haiku-4-5"]
+    expected = 100 * row["input_cost_per_token"] + 10 * row["output_cost_per_token"]
+    assert expected > 0
+
+    for model in (
+        "bedrock_mantle/anthropic.claude-haiku-4-5",
+        "bedrock_mantle/us-east-2/anthropic.claude-haiku-4-5",
+    ):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model=model,
+            custom_llm_provider="bedrock_mantle",
+        ) == pytest.approx(expected), model
+
+
+def test_completion_cost_legacy_mantle_route_prices_after_router_registration(local_model_cost_map):
+    """The proxy registers every deployment under its provider-prefixed key at boot. A
+    bedrock/mantle/<model> deployment must resolve to the bare Bedrock row there, otherwise the boot
+    entry is a cost-less capability rule that shadows the priced row and every call on the deployment,
+    /v1/chat/completions and /v1/messages alike, bills $0."""
+    from litellm import Router
+
+    Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-5",
+                "litellm_params": {
+                    "model": "bedrock/mantle/anthropic.claude-sonnet-5",
+                    "aws_region_name": "us-east-1",
+                },
+            }
+        ]
+    )
+    assert "bedrock/mantle/anthropic.claude-sonnet-5" not in litellm.model_cost
+
+    response = litellm.ModelResponse(
+        id="msg_x",
+        choices=[{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+        model="claude-sonnet-5",
+        usage={"prompt_tokens": 16, "completion_tokens": 4, "total_tokens": 20},
+    )
+    row = litellm.model_cost["anthropic.claude-sonnet-5"]
+    expected = 16 * row["input_cost_per_token"] + 4 * row["output_cost_per_token"]
+    assert expected > 0
+
+    for call_type in ("completion", "anthropic_messages"):
+        assert litellm.completion_cost(
+            completion_response=response,
+            model="mantle/anthropic.claude-sonnet-5",
+            custom_llm_provider="bedrock",
+            call_type=call_type,
+        ) == pytest.approx(expected), call_type
+
+
 def test_select_model_name_keeps_base_model_free_of_region(_local_model_cost_map):
     """An explicit base_model keeps pricing on that model's own key even when the request carries a
     region with different regional rates, so the private provider model never widens region pricing."""
@@ -4206,3 +4321,30 @@ def test_completion_cost_prices_responses_websocket_turns_per_service_tier():
     assert ws_cost == pytest.approx(_http_cost(100, 40, "default") + _http_cost(60, 10, "priority"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "default"))
     assert ws_cost != pytest.approx(_http_cost(160, 50, "priority"))
+
+
+QWEN3_NEXT_REGIONS: Final = ("ap-northeast-1", "ap-south-1", "ap-southeast-2", "eu-west-1", "eu-west-2", "sa-east-1")
+
+
+@pytest.mark.parametrize("region", QWEN3_NEXT_REGIONS)
+def test_cost_per_token_bedrock_qwen3_next_uses_regional_entry_not_us_rate(
+    monkeypatch: pytest.MonkeyPatch, region: str
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    regional: Final = litellm.model_cost[f"bedrock/{region}/qwen.qwen3-next-80b-a3b"]
+    us: Final = litellm.model_cost["qwen.qwen3-next-80b-a3b"]
+    assert regional["input_cost_per_token"] != us["input_cost_per_token"]
+    assert regional["output_cost_per_token"] != us["output_cost_per_token"]
+
+    prompt_tokens, completion_tokens = 1000, 500
+    prompt_usd, completion_usd = cost_per_token(
+        model=f"bedrock/{region}/qwen.qwen3-next-80b-a3b",
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        custom_llm_provider="bedrock",
+    )
+
+    assert prompt_usd == pytest.approx(prompt_tokens * regional["input_cost_per_token"])
+    assert completion_usd == pytest.approx(completion_tokens * regional["output_cost_per_token"])
