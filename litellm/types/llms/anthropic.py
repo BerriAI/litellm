@@ -704,7 +704,7 @@ class AnthropicResponse(BaseModel):
     stop_reason: AnthropicFinishReason | None
     """The reason that we stopped."""
 
-    stop_sequence: str | None
+    stop_sequence: str | None = None
     """Which custom stop sequence was generated, if any."""
 
     usage: AnthropicResponseUsageBlock

@@ -287,6 +287,24 @@ def test_anthropic_response_usage_block_preserves_server_tool_use():
     assert dumped_usage["server_tool_use"] == {"web_search_requests": 2}
 
 
+def test_anthropic_response_accepts_missing_stop_sequence():
+    from litellm.types.llms.anthropic import AnthropicResponse
+
+    response = AnthropicResponse.model_validate(
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-compatible-model",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+    )
+
+    assert response.stop_sequence is None
+
+
 @pytest.mark.parametrize(
     "model", ["gemini/gemini-2.0-flash-001", "gemini-2.0-flash-001"]
 )
