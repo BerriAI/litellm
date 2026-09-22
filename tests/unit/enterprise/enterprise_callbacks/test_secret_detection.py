@@ -10,11 +10,11 @@ Covers the three defects from the ticket:
   handling live only on the native path).
 """
 
+import cProfile
 import sys
 import tempfile
 import time
 from collections.abc import Callable
-from types import FrameType
 from typing import Final
 
 import pytest
@@ -670,7 +670,6 @@ def test_scan_message_stays_linear_on_repeated_sk_separators():
 
 
 _SCALE: Final = 4
-_COUNTED_PROFILE_EVENTS: Final = frozenset({"call", "c_call"})
 
 
 def _value_run(n: int) -> str:
@@ -694,18 +693,13 @@ def _assignment_flood(n: int) -> str:
 
 
 def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
-    calls: Final[list[None]] = []
-
-    def count(frame: FrameType, event: str, arg: object) -> None:
-        if event in _COUNTED_PROFILE_EVENTS:
-            calls.append(None)
-
-    sys.setprofile(count)
+    previous_profiler: Final = sys.getprofile()
+    profile: Final = cProfile.Profile()
     try:
-        guardrail.redact_text(content)
+        profile.runcall(guardrail.redact_text, content)
     finally:
-        sys.setprofile(None)
-    return len(calls)
+        sys.setprofile(previous_profiler)
+    return sum(entry.callcount for entry in profile.getstats())
 
 
 @pytest.mark.parametrize(
@@ -733,7 +727,7 @@ def test_scan_message_stays_linear_on_adversarial_credential_lines(
     small: Final = _calls_to_redact(guardrail, adversarial_content(size // _SCALE))
     large: Final = _calls_to_redact(guardrail, adversarial_content(size))
 
-    assert large <= 1.5 * _SCALE * small, (small, large)
+    assert large <= 1.25 * _SCALE * small, (small, large)
 
 
 def test_scan_message_redacts_whole_stripe_live_key():
