@@ -14,6 +14,9 @@ from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
 from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 from litellm.proxy.policy_engine.policy_registry import PolicyRegistry
 from litellm.types.proxy.policy_engine import (
+    Policy,
+    PolicyCondition,
+    PolicyGuardrails,
     PolicyMatchContext,
     PolicyScope,
 )
@@ -221,6 +224,34 @@ def _global_registries(monkeypatch):
     return policies
 
 
+def _inherited_registries(monkeypatch, parent_condition=None):
+    policies = PolicyRegistry()
+    policies.load_policies(
+        {
+            "parent": {
+                "guardrails": {"add": ["y"]},
+                **({"condition": parent_condition} if parent_condition else {}),
+            },
+            "child": {
+                "inherit": "parent",
+                "guardrails": {"add": ["x"]},
+                "condition": {"model": "claude.*"},
+            },
+            "fallback": {"guardrails": {"add": ["z"]}},
+        }
+    )
+    attachments = AttachmentRegistry()
+    attachments.load_attachments(
+        [
+            {"policy": "child", "scope": "*"},
+            {"policy": "fallback", "scope": "*", "default": True},
+        ]
+    )
+    monkeypatch.setattr(policy_registry_module, "get_policy_registry", lambda: policies)
+    monkeypatch.setattr(attachment_registry_module, "get_attachment_registry", lambda: attachments)
+    return policies
+
+
 class TestGetMatchingPoliciesFallback:
     def test_condition_failing_opt_in_falls_back_to_default(self, monkeypatch):
         _global_registries(monkeypatch)
@@ -244,3 +275,31 @@ class TestGetMatchingPoliciesFallback:
         PolicyMatcher.get_matching_policies(context=context)
 
         assert len(calls) == 1
+
+    def test_condition_missing_child_with_unconditional_parent_still_matches(self, monkeypatch):
+        _inherited_registries(monkeypatch)
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+
+        assert PolicyMatcher.get_matching_policies(context=context) == ["child"]
+
+    def test_child_whose_whole_chain_misses_falls_back_to_default(self, monkeypatch):
+        _inherited_registries(monkeypatch, parent_condition={"model": "claude.*"})
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+
+        assert PolicyMatcher.get_matching_policies(context=context) == ["fallback"]
+
+    def test_get_policies_with_matching_conditions_keeps_missing_policy_out(self):
+        policies = {
+            "real": Policy(
+                guardrails=PolicyGuardrails(add=["g"]),
+                condition=PolicyCondition(model="claude.*"),
+            ),
+        }
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+
+        assert (
+            PolicyMatcher.get_policies_with_matching_conditions(
+                policy_names=["nope"], context=context, policies=policies
+            )
+            == []
+        )

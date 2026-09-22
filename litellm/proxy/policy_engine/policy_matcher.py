@@ -12,6 +12,7 @@ from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext, PolicyScope
 
 
@@ -136,7 +137,7 @@ class PolicyMatcher:
         context: PolicyMatchContext,
         policies: dict[str, Policy] | None = None,
     ) -> Callable[[str], bool]:
-        """Predicate telling whether a policy exists and its condition matches the context."""
+        """Predicate telling whether a policy exists and any policy in its inheritance chain applies to the context."""
         resolved: Final = policies if policies is not None else PolicyMatcher._registry_policies()
         return lambda policy_name: bool(
             PolicyMatcher.get_policies_with_matching_conditions(
@@ -160,11 +161,14 @@ class PolicyMatcher:
         policies: dict[str, Policy] | None = None,
     ) -> list[str]:
         """
-        Filter policies to only those whose conditions match the context.
+        Filter policies to only those that apply to the given context.
 
-        A policy's condition matches if:
-        - The policy has no condition (condition is None), OR
-        - The policy's condition evaluates to True for the given context
+        A policy applies when any policy in its inheritance chain has no
+        condition or a condition that evaluates to True for the context. The
+        resolver then drops only the chain members whose own condition fails,
+        so a child whose condition misses still contributes the guardrails of
+        its unconditional ancestors. A missing policy resolves to an empty
+        chain and does not apply.
 
         Args:
             policy_names: List of policy names to filter
@@ -172,19 +176,18 @@ class PolicyMatcher:
             policies: Dictionary of all policies (if None, uses global registry)
 
         Returns:
-            List of policy names whose conditions match the context
+            List of policy names that apply to the context
         """
         from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
 
         resolved: Final = policies if policies is not None else PolicyMatcher._registry_policies()
 
-        matching_policies: Final = []
-        for policy_name in policy_names:
-            policy = resolved.get(policy_name)
-            if policy is None:
-                continue
-            # Policy matches if it has no condition OR condition evaluates to True
-            if policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context):
-                matching_policies.append(policy_name)
+        def chain_applies(policy_name: str) -> bool:
+            chain: Final = PolicyResolver.resolve_inheritance_chain(policy_name=policy_name, policies=resolved)
+            return any(
+                (policy := resolved.get(name)) is not None
+                and (policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context))
+                for name in chain
+            )
 
-        return matching_policies
+        return [policy_name for policy_name in policy_names if chain_applies(policy_name)]

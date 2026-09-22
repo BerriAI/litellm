@@ -199,3 +199,28 @@ class TestPolicyResolverWithConditions:
         )
         assert "pii_blocker" in resolved_gpt35.guardrails
         assert "child_guardrail" not in resolved_gpt35.guardrails
+
+    def test_resolve_guardrails_for_context_with_condition_missing_child_keeps_inherited_parent(self):
+        """Test a matched child whose condition misses still contributes unconditional parent guardrails."""
+        policies = {
+            "parent": Policy(
+                guardrails=PolicyGuardrails(add=["y"]),
+            ),
+            "child": Policy(
+                inherit="parent",
+                guardrails=PolicyGuardrails(add=["x"]),
+                condition=PolicyCondition(model="claude.*"),
+            ),
+        }
+
+        context_miss = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+        assert PolicyResolver.resolve_guardrails_for_context(
+            context=context_miss, policies=policies, policy_names=["child"]
+        ) == ["y"]
+
+        context_hit = PolicyMatchContext(team_alias="t", key_alias="k", model="claude-haiku")
+        assert set(
+            PolicyResolver.resolve_guardrails_for_context(
+                context=context_hit, policies=policies, policy_names=["child"]
+            )
+        ) == {"x", "y"}
