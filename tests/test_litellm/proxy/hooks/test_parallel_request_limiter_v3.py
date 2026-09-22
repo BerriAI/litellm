@@ -26,6 +26,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
     RateLimitDescriptor,
+    RateLimitedModel,
     RateLimitResponse,
     RequestRateLimiterStash,
     _request_stash,
@@ -3367,7 +3368,7 @@ async def test_pre_call_hook_keeps_internal_stash_out_of_request_body():
     stash = get_request_stash()
     assert stash is not None
     assert stash.reserved_tokens > 0
-    assert stash.reserved_model == "gpt-4o-mini"
+    assert stash.reserved_model == RateLimitedModel(requested="gpt-4o-mini", group="gpt-4o-mini")
     assert stash.reserved_scopes == frozenset({("api_key", _api_key)})
 
 
@@ -7103,3 +7104,49 @@ def test_success_tpm_accounting_charges_the_alias_target_bucket(
     assert not any(":alias" in key for key in charged_keys)
     team_pool_key: Final = handler.create_rate_limit_keys("model_per_team", "t:target", "tokens")
     assert (team_pool_key in charged_keys) is charges_team_model_pool
+
+
+@pytest.mark.asyncio
+async def test_success_tpm_accounting_keeps_the_admission_target_after_an_alias_reload() -> None:
+    alias_map: Final[dict[str, str]] = {"alias": "target-a"}
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), model_group_resolver=alias_map.get
+    )
+    key_metadata: Final = {"model_tpm_limit": {"target-a": 1000, "target-b": 1000}}
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-alias-reload"), metadata=key_metadata)
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=cache,
+        data={"model": "alias", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 10},
+        call_type="acompletion",
+    )
+    stash: Final = get_request_stash()
+    assert stash is not None
+    assert stash.reserved_model == RateLimitedModel(requested="alias", group="target-a")
+    assert stash.reserved_tokens > 0
+
+    alias_map["alias"] = "target-b"
+    response: Final = ModelResponse(
+        id="alias-reload",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="alias",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": auth.api_key}},
+        "litellm_params": {"metadata": {"model_group": "alias", "user_api_key_metadata": key_metadata}},
+        "model": "alias",
+    }
+
+    ops: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs, response_obj=response, rate_limit_type="total"
+    )
+
+    admission_bucket: Final = handler.create_rate_limit_keys("model_per_key", f"{auth.api_key}:target-a", "tokens")
+    charged: Final = {op["key"]: op["increment_value"] for op in ops}
+    assert charged[admission_bucket] == 150 - stash.reserved_tokens
+    assert not any(":target-b" in key for key in charged)

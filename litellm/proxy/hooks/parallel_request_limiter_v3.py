@@ -567,7 +567,7 @@ class RequestRateLimiterStash:
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_release_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False, compare=False)
     reserved_tokens: int = 0
-    reserved_model: str | None = None
+    reserved_model: RateLimitedModel | None = None
     reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
     itpm_reserved_tokens: int = 0
     itpm_reserved_scopes: frozenset[tuple[str, str]] = field(default_factory=frozenset)
@@ -3760,7 +3760,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     # the (actual - reserved) delta to those — unreserved
                     # scopes get charged the full actual usage instead.
                     stash.reserved_tokens = estimated_tokens
-                    stash.reserved_model = requested_model
+                    stash.reserved_model = self._rate_limited_model(requested_model)
                     stash.reserved_scopes = frozenset(
                         (d["key"], d["value"])
                         for d in descriptors
@@ -4507,9 +4507,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         reserved_scopes: Final[frozenset[tuple[str, str]]] = stash.reserved_scopes if stash is not None else frozenset()
         # Reconciliation must target the same model-scoped counter that the
         # pre-call reservation incremented. If a reservation was made,
-        # ``reserved_model`` is authoritative; otherwise fall back to the
-        # router's ``model_group`` (covers the no-reservation charge path).
-        reconcile_model: Final = self._rate_limited_model(reserved_model or model_group)
+        # ``reserved_model`` (resolved at admission, so an alias map reload
+        # mid-flight cannot move the charge) is authoritative; otherwise fall
+        # back to the router's ``model_group`` (the no-reservation charge path).
+        reconcile_model: Final = reserved_model if reserved_model is not None else self._rate_limited_model(model_group)
 
         pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = []
 
