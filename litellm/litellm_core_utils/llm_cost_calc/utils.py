@@ -52,6 +52,13 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 
+_IMAGE_TOKEN_RATE_KEYS: Final[tuple[str, ...]] = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_image_token",
+    "output_cost_per_image_token",
+)
+
 # Pre-resolved service-tier cost-key suffixes (e.g. "_priority"). Used per
 # request in the cost-calc path, so the f-strings are built once here instead
 # of being rebuilt for every model_info key on every call. Longest-first so a
@@ -762,6 +769,20 @@ def deployment_pricing(model_info: ModelInfo | None) -> ModelInfo | None:
     if not pricing:
         return None
     return cast(ModelInfo, pricing)  # cast-ok: a read-only subset of ModelInfo pricing keys, values validated above
+
+
+def prices_tokens(model_info: ModelInfo) -> bool:
+    """Whether the price table carries any token rate, so a token-priced calculator can bill from usage."""
+    return any(model_info.get(key) is not None for key in _IMAGE_TOKEN_RATE_KEYS)
+
+
+def flat_image_cost(model_info: ModelInfo | None, image_response: ImageResponse) -> float:
+    """The per-image price times the images returned; 0.0 when the table sets no per-image price."""
+    if model_info is None:
+        return 0.0
+    output_cost_per_image: Final = _get_cost_per_unit(model_info, "output_cost_per_image", default_value=None) or 0.0
+    num_images: Final = len(image_response.data) if image_response.data else 0
+    return output_cost_per_image * num_images
 
 
 def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: ModelInfo | None) -> ModelInfo:
@@ -1688,6 +1709,9 @@ def calculate_image_response_cost_from_usage(
     # ImageResponse may carry a default zeroed usage object even when provider
     # usage metadata is absent. Treat this as missing usage and fall back.
     if prompt_tokens == 0 and completion_tokens == 0 and total_tokens == 0:
+        return None
+
+    if model_info is not None and not prices_tokens(model_info):
         return None
 
     input_tokens_details: Final[object] = getattr(usage, "input_tokens_details", None)

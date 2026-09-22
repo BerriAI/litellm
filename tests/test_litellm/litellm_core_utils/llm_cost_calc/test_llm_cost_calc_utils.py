@@ -3736,3 +3736,35 @@ def test_route_image_generation_cost_gemini_bills_tokens_when_no_image_returned(
     )
 
     assert cost == pytest.approx(10 * 5e-07 + 1290 * 6e-05)
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("gemini", "gemini/unlisted-image-model"),
+        ("vertex_ai", "vertex_ai/unlisted-image-model"),
+        ("azure_ai", "unlisted-image-model"),
+        ("openai", "gpt-image-unlisted"),
+    ],
+)
+def test_route_image_generation_cost_bills_deployment_image_price_when_unlisted_model_reports_tokens(
+    _local_model_cost_map: None,
+    custom_llm_provider: str,
+    model: str,
+) -> None:
+    usage = ImageUsage(
+        input_tokens=10,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=10),
+        output_tokens=1290,
+        total_tokens=1300,
+    )
+
+    cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=_image_response(num_images=2, usage=usage),
+        custom_llm_provider=custom_llm_provider,
+        call_type="image_generation",
+        model_info={"output_cost_per_image": 0.05},
+    )
+
+    assert cost == pytest.approx(0.10)

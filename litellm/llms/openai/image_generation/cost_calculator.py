@@ -9,6 +9,7 @@ from typing import Final
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     calculate_image_response_cost_from_usage,
+    flat_image_cost,
     generic_cost_per_token,
     resolve_image_model_info,
 )
@@ -22,17 +23,17 @@ def cost_calculator(
     model_info: ModelInfo | None = None,
 ) -> float:
     """Calculate cost for OpenAI gpt-image models (token-based pricing)."""
-    usage: Final = getattr(image_response, "usage", None)
-    if usage is None:
-        verbose_logger.debug("No usage data available for %s, cannot calculate token-based cost", model)
-        return 0.0
-
     provider: Final = custom_llm_provider or "openai"
     price_table: Final = (
         None
         if model_info is None
         else resolve_image_model_info(model=model, custom_llm_provider=provider, model_info=model_info)
     )
+
+    usage: Final = getattr(image_response, "usage", None)
+    if usage is None:
+        verbose_logger.debug("No usage data available for %s, cannot calculate token-based cost", model)
+        return flat_image_cost(price_table, image_response)
 
     # A chat Usage with an explicit output breakdown: cost via generic_cost_per_token.
     if isinstance(usage, Usage) and usage.completion_tokens_details is not None:
@@ -60,4 +61,4 @@ def cost_calculator(
         )
         return prompt_cost + completion_cost
 
-    return 0.0
+    return flat_image_cost(price_table, image_response)

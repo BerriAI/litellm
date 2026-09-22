@@ -3,10 +3,20 @@ from typing import Any, Final
 
 import litellm
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
+    _get_cost_per_unit,
     calculate_image_response_cost_from_usage,
     resolve_image_model_info,
 )
 from litellm.types.utils import ImageResponse, ModelInfo
+
+
+def _input_cost_per_pixel(resolved: ModelInfo) -> float:
+    deployment_price: Final = _get_cost_per_unit(resolved, "input_cost_per_pixel", default_value=None)
+    if deployment_price is not None:
+        return deployment_price
+    model_cost_key: Final = resolved.get("key")
+    shared_entry: Final = litellm.model_cost.get(model_cost_key, {}) if model_cost_key is not None else {}
+    return shared_entry.get("input_cost_per_pixel") or 0.0
 
 
 def cost_calculator(
@@ -41,9 +51,7 @@ def cost_calculator(
         if output_cost_per_image:
             return output_cost_per_image * num_images
 
-        model_cost: Final = litellm.model_cost[_model_info["key"]]
-        input_cost_per_pixel: Final[float] = model_cost.get("input_cost_per_pixel") or 0.0
-        if input_cost_per_pixel:
+        if _input_cost_per_pixel(_model_info):
             from litellm.cost_calculator import default_image_cost_calculator
 
             width: Final = optional_params.get("width") if optional_params else None
@@ -54,10 +62,11 @@ def cost_calculator(
                 else size or image_response.size
             )
             return default_image_cost_calculator(
-                model=_model_info["key"],
+                model=_model_info.get("key", model),
                 custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
                 size=pixel_size,
                 n=num_images,
+                model_info=model_info,
             )
         return 0.0
 
