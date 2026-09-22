@@ -133,6 +133,7 @@ from litellm.proxy.utils import (
     normalize_route_for_root_path,
 )
 from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
@@ -927,6 +928,20 @@ class _PendingAutoRegister(NamedTuple):
     jwt_issuer: str | None = None
 
 
+async def _latest_active_key_hash_for_user(prisma_client: PrismaClient, user_id: str) -> str | None:
+    row: Final = await VerificationTokenRepository(prisma_client).table.find_first(
+        where={  # mutable-ok: the prisma where clause contract is a plain dict
+            "user_id": user_id,
+            "OR": [  # mutable-ok: prisma filter literal
+                {"expires": None},  # mutable-ok: prisma filter literal
+                {"expires": {"gt": datetime.now(timezone.utc)}},  # mutable-ok: prisma filter literal
+            ],
+        },
+        order={"created_at": "desc"},  # mutable-ok: prisma order literal
+    )
+    return None if row is None else row.token
+
+
 async def _auto_register_jwt_mapping(
     virtual_key_claim_field: str,
     claim_value: str,
@@ -945,8 +960,10 @@ async def _auto_register_jwt_mapping(
 ) -> UserAPIKeyAuth | None:
     """
     Auto-register: create a new virtual key + mapping for an unrecognised JWT
-    claim value. ``team_id`` and ``user_id`` must come from a successful
-    ``JWTAuthManager.auth_builder`` run — they encode the JWT identity AFTER
+    claim value, or point the mapping at a key the resolved user already owns
+    when ``auto_register_map_existing_key`` is set. ``team_id`` and ``user_id``
+    must come from a successful ``JWTAuthManager.auth_builder`` run — they
+    encode the JWT identity AFTER
     RBAC/scope/custom_validate/email-domain policy has been enforced. The key
     is stamped with those values so the cached future-request path inherits
     the same team/user/org limits the auth_builder path would have applied.
@@ -962,29 +979,38 @@ async def _auto_register_jwt_mapping(
         generate_key_helper_fn,
     )
 
-    # ``table_name="key"`` is required: without it, generate_key_helper_fn
-    # falls into the user-upsert branch (`table_name is None or "user"`) and
-    # attempts to insert into LiteLLM_UserTable with user_id=None, which fails
-    # the NOT NULL @id constraint. Every successful key-creation caller (e.g.
-    # /key/generate) passes table_name="key" explicitly.
-    key_data: Final = await generate_key_helper_fn(
-        llm_router=None,
-        request_type="key",
-        table_name="key",
-        team_id=team_id,
-        user_id=user_id,
-        organization_id=org_id,
-        agent_id=agent_id,
-        metadata={
-            "auto_registered": True,
-            "jwt_claim_field": virtual_key_claim_field,
-            "jwt_claim_value": claim_value,
-        },
+    existing_token_hash: Final = (
+        await _latest_active_key_hash_for_user(prisma_client, user_id)
+        if jwt_handler.litellm_jwtauth.auto_register_map_existing_key and user_id is not None
+        else None
     )
-    # generate_key_helper_fn returns the plaintext key in "token"; the persisted
-    # row in LiteLLM_VerificationToken uses its hash, so hash here to get the FK
-    # value referenced by LiteLLM_JWTKeyMapping.token.
-    token_hash = hash_token(key_data["token"])
+    minted: Final = existing_token_hash is None
+    if existing_token_hash is not None:
+        token_hash = existing_token_hash
+    else:
+        # ``table_name="key"`` is required: without it, generate_key_helper_fn
+        # falls into the user-upsert branch (`table_name is None or "user"`) and
+        # attempts to insert into LiteLLM_UserTable with user_id=None, which fails
+        # the NOT NULL @id constraint. Every successful key-creation caller (e.g.
+        # /key/generate) passes table_name="key" explicitly.
+        key_data: Final = await generate_key_helper_fn(
+            llm_router=None,
+            request_type="key",
+            table_name="key",
+            team_id=team_id,
+            user_id=user_id,
+            organization_id=org_id,
+            agent_id=agent_id,
+            metadata={  # mutable-ok: GenerateKeyRequest metadata is a plain dict field
+                "auto_registered": True,
+                "jwt_claim_field": virtual_key_claim_field,
+                "jwt_claim_value": claim_value,
+            },
+        )
+        # generate_key_helper_fn returns the plaintext key in "token"; the persisted
+        # row in LiteLLM_VerificationToken uses its hash, so hash here to get the FK
+        # value referenced by LiteLLM_JWTKeyMapping.token.
+        token_hash = hash_token(key_data["token"])
 
     try:
         await prisma_client.db.litellm_jwtkeymapping.create(
@@ -1011,15 +1037,18 @@ async def _auto_register_jwt_mapping(
                 virtual_key_claim_field,
                 claim_value,
             )
-            try:
-                await prisma_client.db.litellm_verificationtoken.delete(where={"token": token_hash})
-            except Exception as delete_err:
-                # Don't fail the request if cleanup fails — the orphan is
-                # unmapped and inert. Log so an operator can prune it later.
-                verbose_proxy_logger.warning(
-                    "JWT Key Mapping (auto_register): failed to delete orphaned key after race: %s",
-                    delete_err,
-                )
+            if minted:
+                try:
+                    await prisma_client.db.litellm_verificationtoken.delete(
+                        where={"token": token_hash}  # mutable-ok: prisma where clause contract is a plain dict
+                    )
+                except Exception as delete_err:
+                    # Don't fail the request if cleanup fails — the orphan is
+                    # unmapped and inert. Log so an operator can prune it later.
+                    verbose_proxy_logger.warning(
+                        "JWT Key Mapping (auto_register): failed to delete orphaned key after race: %s",
+                        delete_err,
+                    )
             token_hash = await get_jwt_key_mapping_object(
                 jwt_claim_name=virtual_key_claim_field,
                 jwt_claim_value=claim_value,
@@ -1049,7 +1078,8 @@ async def _auto_register_jwt_mapping(
     )
 
     verbose_proxy_logger.info(
-        "JWT Key Mapping (auto_register): created new virtual key for %s='%s'.",
+        "JWT Key Mapping (auto_register): %s virtual key for %s='%s'.",
+        "created new" if minted else "mapped existing",
         virtual_key_claim_field,
         claim_value,
     )
@@ -1063,7 +1093,8 @@ async def _auto_register_jwt_mapping(
         ).resolve(hashed_token=token_hash)
     )
     if auto_registered_key is not None:
-        auto_registered_key.org_id = org_id
+        if minted:
+            auto_registered_key.org_id = org_id
         auto_registered_key.end_user_id = end_user_id
         auto_registered_key.api_key = auto_registered_key.token
     return auto_registered_key
