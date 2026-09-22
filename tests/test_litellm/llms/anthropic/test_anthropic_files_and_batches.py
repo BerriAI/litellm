@@ -648,7 +648,7 @@ class TestAnthropicBatchesConfig:
         assert batch.id == "batch_789"
         assert batch.status == "cancelling"
         assert batch.cancelling_at is not None
-        assert batch.cancelled_at is not None
+        assert batch.cancelled_at is None
         assert batch.request_counts.total == 8  # 5 + 3
 
     def test_transform_retrieve_batch_response_invalid_json(self, config):
