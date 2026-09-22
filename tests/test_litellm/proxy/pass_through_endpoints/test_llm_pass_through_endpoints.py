@@ -7239,6 +7239,41 @@ class TestTinyFishProxyRoute:
         assert response.status_code == 400
         assert not route.called
 
+    @pytest.mark.parametrize(
+        "content,content_type",
+        [
+            ("url=https%3A%2F%2Fscrapeme.live%2Fshop&goal=g&stream=true", "application/x-www-form-urlencoded"),
+            ("url=https%3A%2F%2Fscrapeme.live%2Fshop&goal=g&use_vault=true", "application/x-www-form-urlencoded"),
+            ('{"url": "https://scrapeme.live/shop", "goal": "g", "use_vault": true}', "text/plain"),
+            ('[{"url": "https://scrapeme.live/shop", "goal": "g", "stream": true}]', "application/json"),
+        ],
+    )
+    def test_rejects_bodies_that_are_not_json_objects(
+        self, tinyfish_client: TestClient, content: str, content_type: str
+    ) -> None:
+        """A form-encoded body carried stream and use_vault past both field gates, because
+        the gates only saw fields the body parsed to as JSON."""
+        with respx.mock as upstream:
+            route = upstream.post("https://agent.tinyfish.ai/v1/automation/run").mock(
+                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "COMPLETED", "num_of_steps": 1})
+            )
+            response = tinyfish_client.post(
+                "/tinyfish/v1/automation/run", content=content, headers={"Content-Type": content_type}
+            )
+
+        assert response.status_code == 400
+        assert "JSON object" in response.json()["detail"]
+        assert not route.called
+
+    def test_cancel_without_body_forwards(self, tinyfish_client: TestClient) -> None:
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.post("https://agent.tinyfish.ai/v1/runs/run-1/cancel").mock(
+                return_value=httpx.Response(200, json={"run_id": "run-1", "status": "CANCELLED"})
+            )
+            response = tinyfish_client.post("/tinyfish/v1/runs/run-1/cancel")
+
+        assert (response.status_code, response.json()["status"]) == (200, "CANCELLED")
+
 
 class TestTinyFishRouteTimeout:
     def test_default_covers_upstream_run_cap(self, monkeypatch: pytest.MonkeyPatch) -> None:

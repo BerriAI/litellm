@@ -3277,17 +3277,23 @@ async def cursor_proxy_route(
     return received_value
 
 
-async def _tinyfish_body_field_names(request: Request) -> frozenset[str]:
+TINYFISH_JSON_OBJECT_BODY_DETAIL: Final = (
+    "TinyFish requests must be a JSON object body sent with Content-Type: application/json."
+)
+
+
+async def _tinyfish_json_object_field_names(request: Request) -> frozenset[str] | None:
+    content_type: Final = request.headers.get("content-type", "")
+    if content_type and not is_json_content_type(content_type):
+        return None
     raw_body: Final = await request.body()
     if not raw_body:
         return frozenset()
     try:
         parsed: Final[object] = json.loads(raw_body)  # any-ok: json.loads -> Any
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return frozenset()
-    if not isinstance(parsed, dict):
-        return frozenset()
-    return frozenset(parsed)
+        return None
+    return frozenset(parsed) if isinstance(parsed, dict) else None
 
 
 def _tinyfish_route_timeout() -> float | None:
@@ -3347,7 +3353,9 @@ async def tinyfish_proxy_route(
         )
 
     if request.method == "POST":
-        body_fields: Final = await _tinyfish_body_field_names(request)
+        body_fields: Final = await _tinyfish_json_object_field_names(request)
+        if body_fields is None:
+            raise HTTPException(status_code=400, detail=TINYFISH_JSON_OBJECT_BODY_DETAIL)
         envelope_fields: Final = tuple(sorted(body_fields & TINYFISH_REJECTED_ENVELOPE_FIELDS))
         if envelope_fields:
             raise HTTPException(
