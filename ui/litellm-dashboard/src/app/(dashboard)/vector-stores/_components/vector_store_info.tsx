@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { ArrowLeft, CircleHelp } from "lucide-react";
+import { ArrowLeft, CircleHelp, Lock } from "lucide-react";
 import { z } from "zod/v4";
 import {
   vectorStoreInfoCall,
@@ -15,6 +15,8 @@ import VectorStoreTester from "./VectorStoreTester";
 import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { StatusBadge } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -211,7 +213,13 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
             <ArrowLeft />
             Back to Vector Stores
           </Button>
-          <h1 className="text-xl font-semibold">Vector Store ID: {vectorStoreDetails.vector_store_id}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold">Vector Store ID: {vectorStoreDetails.vector_store_id}</h1>
+            <StatusBadge
+              tone={vectorStoreDetails.is_config ? "neutral" : "info"}
+              label={vectorStoreDetails.is_config ? "Config" : "DB"}
+            />
+          </div>
           <p className="text-sm text-muted-foreground">
             {vectorStoreDetails.vector_store_description || "No description"}
           </p>
@@ -220,9 +228,14 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       </div>
 
       {vectorStoreDetails.is_config && (
-        <p className="mb-4 text-sm text-muted-foreground">
-          Defined in config. Edit your YAML configuration to make changes
-        </p>
+        <Alert variant="info" className="mb-4">
+          <Lock className="size-4" aria-hidden />
+          <AlertTitle>Read only: defined in the config file</AlertTitle>
+          <AlertDescription>
+            This vector store comes from the proxy config YAML, so it cannot be edited or deleted on the dashboard.
+            Change or remove it in the config file and restart the proxy.
+          </AlertDescription>
+        </Alert>
       )}
 
       <Tabs defaultValue="details">

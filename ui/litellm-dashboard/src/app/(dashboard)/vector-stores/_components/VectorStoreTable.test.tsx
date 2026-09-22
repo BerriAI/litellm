@@ -59,7 +59,16 @@ describe("VectorStoreTable", () => {
 
   it("should render every column header", () => {
     render(<VectorStoreTable {...defaultProps} />);
-    for (const header of ["Vector Store ID", "Name", "Description", "Files", "Provider", "Created At", "Updated At"]) {
+    for (const header of [
+      "Vector Store ID",
+      "Name",
+      "Description",
+      "Source",
+      "Files",
+      "Provider",
+      "Created At",
+      "Updated At",
+    ]) {
       expect(screen.getByText(header)).toBeInTheDocument();
     }
   });
@@ -112,6 +121,18 @@ describe("VectorStoreTable", () => {
     expect(mockOnDelete).toHaveBeenCalledWith("vs-newer");
   });
 
+  it("should label each row's source as Config or DB", () => {
+    const configStore: VectorStore = { ...mockVectorStores[1], vector_store_id: "vs-config", is_config: true };
+    render(<VectorStoreTable {...defaultProps} data={[mockVectorStores[0], configStore]} />);
+    const rows = screen.getAllByRole("row").slice(1);
+    const dbRow = rows.find((row) => within(row).queryByText("vs-newer"));
+    const configRow = rows.find((row) => within(row).queryByText("vs-config"));
+    expect(within(dbRow!).getByText("DB")).toBeInTheDocument();
+    expect(within(dbRow!).queryByText("Config")).not.toBeInTheDocument();
+    expect(within(configRow!).getByText("Config")).toBeInTheDocument();
+    expect(within(configRow!).queryByText("DB")).not.toBeInTheDocument();
+  });
+
   it("should keep edit and delete disabled for a config-defined store while copy still works", async () => {
     const user = userEvent.setup();
     const configStore: VectorStore = { ...mockVectorStores[1], vector_store_id: "vs-config", is_config: true };
@@ -120,7 +141,9 @@ describe("VectorStoreTable", () => {
     const editItem = await screen.findByTestId("vector-store-action-edit");
     const deleteItem = screen.getByTestId("vector-store-action-delete");
     expect(editItem).toHaveAttribute("aria-disabled", "true");
+    expect(editItem).toHaveAttribute("title", expect.stringContaining("edit the config file"));
     expect(deleteItem).toHaveAttribute("aria-disabled", "true");
+    expect(deleteItem).toHaveAttribute("title", expect.stringContaining("edit the config file"));
     await user.click(editItem);
     await user.click(deleteItem);
     expect(mockOnEdit).not.toHaveBeenCalled();

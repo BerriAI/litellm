@@ -4,7 +4,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
-import { CellTooltip, DateCell, IdentityCell } from "@/components/shared/table_cells";
+import { CellTooltip, DateCell, IdentityCell, StatusBadge } from "@/components/shared/table_cells";
 import { getVectorStoreProviderLogoAndName } from "@/components/vector_store_providers";
 import { buttonVariants } from "@/components/ui/button";
 import {
@@ -17,6 +17,9 @@ import {
 import { VectorStore } from "@/components/vector_store_management/types";
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
+
+const CONFIG_EDIT_HINT = "Config vector stores cannot be edited on the dashboard. Please edit the config file.";
+const CONFIG_DELETE_HINT = "Config vector stores cannot be deleted on the dashboard. Please edit the config file.";
 
 function VectorStoreProviderCell({ provider }: { provider: string }) {
   const { displayName, logo } = getVectorStoreProviderLogoAndName(provider);
@@ -64,6 +67,7 @@ interface VectorStoreRowActionsProps {
 }
 
 function VectorStoreRowActions({ vectorStore, onEdit, onDelete }: VectorStoreRowActionsProps) {
+  const isFromConfig = vectorStore.is_config ?? false;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -76,7 +80,8 @@ function VectorStoreRowActions({ vectorStore, onEdit, onDelete }: VectorStoreRow
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuItem
           data-testid="vector-store-action-edit"
-          disabled={vectorStore.is_config}
+          disabled={isFromConfig}
+          title={isFromConfig ? CONFIG_EDIT_HINT : undefined}
           onClick={() => onEdit(vectorStore.vector_store_id)}
         >
           <Pencil />
@@ -93,7 +98,8 @@ function VectorStoreRowActions({ vectorStore, onEdit, onDelete }: VectorStoreRow
         <DropdownMenuItem
           variant="destructive"
           data-testid="vector-store-action-delete"
-          disabled={vectorStore.is_config}
+          disabled={isFromConfig}
+          title={isFromConfig ? CONFIG_DELETE_HINT : undefined}
           onClick={() => onDelete(vectorStore.vector_store_id)}
         >
           <Trash2 />
@@ -161,6 +167,18 @@ export const getVectorStoreTableColumns = ({
           {description || "-"}
         </span>
       );
+    },
+  },
+  {
+    id: "source",
+    accessorFn: (row) => row.is_config ?? false,
+    meta: { title: "Source", skeleton: "badge" },
+    header: ({ column }) => <DataTableSortHeader column={column} title="Source" />,
+    size: 110,
+    enableSorting: true,
+    cell: ({ row }) => {
+      const isFromConfig = row.original.is_config ?? false;
+      return <StatusBadge tone={isFromConfig ? "neutral" : "info"} label={isFromConfig ? "Config" : "DB"} />;
     },
   },
   {

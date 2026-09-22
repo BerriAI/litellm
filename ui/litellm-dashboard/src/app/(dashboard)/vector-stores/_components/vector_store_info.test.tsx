@@ -80,7 +80,9 @@ describe("VectorStoreInfoView", () => {
       />,
     );
     expect(await screen.findByText("Vector Store ID: vs-config")).toBeInTheDocument();
-    expect(screen.getByText("Defined in config. Edit your YAML configuration to make changes")).toBeInTheDocument();
+    expect(screen.getByText("Read only: defined in the config file")).toBeInTheDocument();
+    expect(screen.getByText("Config")).toBeInTheDocument();
+    expect(screen.queryByText("DB")).not.toBeInTheDocument();
     expect(screen.getByText("Vector Store Details")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit Vector Store" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Save/ })).not.toBeInTheDocument();
@@ -107,9 +109,8 @@ describe("VectorStoreInfoView", () => {
       />,
     );
     expect(await screen.findByText("Vector Store ID: vs-db")).toBeInTheDocument();
-    expect(
-      screen.queryByText("Defined in config. Edit your YAML configuration to make changes"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Read only: defined in the config file")).not.toBeInTheDocument();
+    expect(screen.getByText("DB")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Edit Vector Store" }).length).toBeGreaterThan(0);
   });
 
