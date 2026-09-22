@@ -25,6 +25,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROJECT_ITPM_DESCRIPTOR_KEY,
     PROJECT_OTPM_DESCRIPTOR_KEY,
+    RateLimitedModel,
     _AUDIO_BYTES_PER_TOKEN,
     _PROXY_MaxParallelRequestsHandler_v3 as RateLimitHandler,
 )
@@ -308,7 +309,7 @@ async def test_model_scope_refund_targets_reserved_model(rate_limiter):
 
     stash = get_or_create_request_stash()
     stash.reserved_tokens = 100
-    stash.reserved_model = reserved_model
+    stash.reserved_model = RateLimitedModel(requested=reserved_model, group=reserved_model)
     stash.reserved_scopes = frozenset({("model_per_team", f"{team_id}:{reserved_model}")})
 
     mock_kwargs = {
