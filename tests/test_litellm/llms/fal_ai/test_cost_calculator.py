@@ -7,6 +7,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.fal_ai.cost_calculator import cost_calculator, fal_ai_passthrough_cost
 from litellm.types.utils import ImageObject, ImageResponse
 
+
 @pytest.fixture(autouse=True)
 def _use_local_model_cost_map(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -203,3 +204,41 @@ def test_passthrough_trellis_2_without_resolution_falls_back_to_default_rate():
 
 def test_passthrough_unknown_model_returns_none():
     assert fal_ai_passthrough_cost("fal-ai/no-such-model", {"resolution": 512}) is None
+
+
+def test_passthrough_string_resolution_is_priced_like_the_integer(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/keyed-model",
+        {
+            "litellm_provider": "fal_ai",
+            "mode": "image_generation",
+            "output_cost_per_image": 0.3,
+            "output_cost_per_image_512": 0.25,
+            "output_cost_per_image_1536": 0.35,
+        },
+    )
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": "512"}) == 0.25
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": 512}) == 0.25
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": "1536"}) == 0.35
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": True}) == 0.3
+    assert fal_ai_passthrough_cost("fal-ai/keyed-model", {"resolution": 512.0}) == 0.3
+
+
+def test_passthrough_cost_is_none_only_when_no_price_applies_to_the_request(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/priceless-model",
+        {"litellm_provider": "fal_ai", "mode": "image_generation"},
+    )
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fal_ai/fal-ai/keyed-only-model",
+        {"litellm_provider": "fal_ai", "mode": "image_generation", "output_cost_per_image_512": 0.02},
+    )
+    assert fal_ai_passthrough_cost("fal-ai/priceless-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/priceless-model", {"resolution": 512}) is None
+    assert fal_ai_passthrough_cost("fal-ai/no-such-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {"resolution": 1024}) is None
+    assert fal_ai_passthrough_cost("fal-ai/keyed-only-model", {"resolution": "512"}) == 0.02

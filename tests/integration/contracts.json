@@ -190,6 +190,12 @@
     "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_charges_and_polls_pass_through_free": [
       "other.provider_wire.fal_ai.passthrough_queue_submit_charges_and_polls_do_not"
     ],
+    "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_prices_string_resolution_like_the_integer": [
+      "other.provider_wire.fal_ai.passthrough_queue_submit_prices_string_resolution_like_integer"
+    ],
+    "tests/integration/providers/test_fal_ai_passthrough_wire.py::test_fal_queue_submit_to_catalog_key_the_pricer_cannot_price_is_rejected_not_forwarded": [
+      "other.provider_wire.fal_ai.passthrough_queue_submit_rejects_unpriceable_catalog_key"
+    ],
     "tests/integration/providers/test_fal_ai_image_wire.py::test_fal_gpt_image_25_edit_inlines_upload_as_data_url_and_charges_keyed_row": [
       "other.provider_wire.fal_ai.image_edit_json_data_urls_and_keyed_pricing"
     ],
