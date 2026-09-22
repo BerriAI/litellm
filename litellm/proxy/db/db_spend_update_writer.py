@@ -1613,6 +1613,10 @@ class DBSpendUpdateWriter:
                 proxy_logging_obj=proxy_logging_obj,
                 daily_spend_transactions=cast(dict[str, _DailySpendTransactionT], transactions),
             )
+        except asyncio.CancelledError:
+            if transactions:
+                await queue.add_update(transactions)
+            raise
         except Exception as e:  # noqa: BLE001  # whatever failed here, the other tables must still flush
             if not transactions:
                 return
@@ -2368,7 +2372,8 @@ class DBSpendUpdateWriter:
                                 table=table, transactions=tuple(transactions_to_process.values())
                             )
                             sql, params = build_bulk_upsert(table=table, batch=merged_batch)
-                            await prisma_client.db.execute_raw(sql, *params)
+                            async with _spend_update_tx(prisma_client) as transaction:
+                                await transaction.execute_raw(sql, *params)
                         except Exception as batch_error:
                             if _spend_commit_failure_is_requeue_safe(batch_error):
                                 spend_log_error(
