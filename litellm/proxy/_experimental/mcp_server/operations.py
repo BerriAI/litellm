@@ -2198,7 +2198,7 @@ async def _fire_mcp_tool_call_logging(
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     logging_obj.post_call(original_response=result)
-    await logging_obj.async_post_mcp_tool_call_hook(
+    result = await logging_obj.async_post_mcp_tool_call_hook(
         kwargs=logging_obj.model_call_details,
         response_obj=result,
         start_time=start_time,

@@ -827,3 +827,38 @@ class TestCiscoAIDefenseJsonRpcSuccessEnvelope:
             assert unwrapped is verdict
         else:
             assert unwrapped == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["block", "redact"])
+async def test_cisco_native_hook_through_logging_preserves_sanitized_result(action):
+    from mcp.types import CallToolResult, TextContent
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    guardrail = _make_guardrail(
+        inspection_type="mcp", event_hook=["pre_mcp_call", "during_mcp_call"]
+    )
+    verdict = (
+        _violation_response(url=MCP_URL) if action == "block"
+        else _redact_response(sanitized_text="[REDACTED]", url=MCP_URL)
+    )
+    result = CallToolResult(
+        content=[TextContent(type="text", text="SECRET-1234")],
+        structured_content={"result": "SECRET-1234"},
+    )
+    logging_obj = Logging(
+        model="MCP: probe/search", messages=[], stream=False, call_type="call_mcp_tool",
+        start_time=datetime.now(), litellm_call_id="cisco-hook", function_id="cisco-hook",
+        dynamic_success_callbacks=[guardrail],
+    )
+    logging_obj.model_call_details.update({"name": "search", "arguments": {}, "original_response": result})
+    with _patch_inspection_post(guardrail, AsyncMock(return_value=verdict)):
+        returned = await logging_obj.async_post_mcp_tool_call_hook(
+            kwargs=logging_obj.model_call_details, response_obj=result,
+            start_time=datetime.now(), end_time=datetime.now(),
+        )
+    assert returned is result
+    assert "SECRET-1234" not in returned.model_dump_json()
+    assert returned.is_error is (action == "block")
+    assert ("Blocked by Cisco AI Defense" if action == "block" else "[REDACTED]") in returned.content[0].text
+    assert returned.structured_content == {"result": returned.content[0].text}
