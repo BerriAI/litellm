@@ -112,6 +112,17 @@ def merge_bedrock_aws_request_params(
     return request_params
 
 
+def s3_static_key_pair(params: Mapping[str, object]) -> tuple[str, str] | None:
+    """The s3_access_key_id / s3_secret_access_key pair when both are set, otherwise None."""
+    s3_access_key_id: Final = params.get("s3_access_key_id")
+    s3_secret_access_key: Final = params.get("s3_secret_access_key")
+    if not isinstance(s3_access_key_id, str) or not s3_access_key_id:
+        return None
+    if not isinstance(s3_secret_access_key, str) or not s3_secret_access_key:
+        return None
+    return s3_access_key_id, s3_secret_access_key
+
+
 # Lazy import cache to avoid circular imports and performance impact
 _get_model_info = None
 

@@ -67,6 +67,7 @@ LlmCapability = Literal[
     "batch_deployment",
     "count_tokens",
     "govcloud_partition",
+    "split_s3_credentials",
     "input_validation",
     "long_context_1m",
     "mid_conversation_system",

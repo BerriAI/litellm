@@ -926,3 +926,31 @@ def test_every_bedrock_config_get_error_class_keeps_provider_headers(config):
 
 def test_bedrock_get_error_class_audit_covers_every_surface():
     assert len(_bedrock_configs_with_get_error_class()) >= 30
+
+
+def test_s3_static_key_pair_returns_the_pair_when_both_keys_are_set():
+    from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+    assert s3_static_key_pair(
+        {
+            "aws_access_key_id": "bedrock-key",
+            "aws_secret_access_key": "bedrock-secret",
+            "s3_access_key_id": "s3-key",
+            "s3_secret_access_key": "s3-secret",
+        }
+    ) == ("s3-key", "s3-secret")
+
+
+@pytest.mark.parametrize(
+    "partial_s3_pair",
+    [
+        {},
+        {"s3_access_key_id": "s3-key"},
+        {"s3_secret_access_key": "s3-secret"},
+        {"s3_access_key_id": "", "s3_secret_access_key": ""},
+    ],
+)
+def test_s3_static_key_pair_is_none_without_a_full_pair(partial_s3_pair):
+    from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+    assert s3_static_key_pair({"aws_access_key_id": "bedrock-key", **partial_s3_pair}) is None
