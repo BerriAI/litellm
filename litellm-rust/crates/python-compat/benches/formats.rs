@@ -1,12 +1,18 @@
 //! Throughput of each format on a cached chat completion, and `literal_eval` cost by nesting.
 //!
+//! Run one group with `cargo bench -p litellm-python-compat -- cached_completion`, and compare
+//! against a stored run with `--save-baseline <name>` / `--baseline <name>`.
+//!
 //! `literal_eval/nesting` guards against backtracking: the `py_literal` grammar this parser
 //! replaced doubled its time per nested `[` or `{` (105 ms at depth 16), so cost must stay
 //! linear in depth for every container shape.
 
 use std::{hint::black_box, time::Duration};
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{
+    BatchSize, BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main,
+    measurement::WallTime,
+};
 use litellm_python_compat::{Value, json, literal::literal_eval, pickle, repr::repr};
 
 /// `str(entry)` for the `{timestamp, response}` envelope Python's sync Redis path writes.
@@ -31,6 +37,32 @@ fn cached_completion() -> String {
     )
 }
 
+/// Every text format, measured against the source bytes it reads or writes.
+fn text_formats(group: &mut BenchmarkGroup<'_, WallTime>, text: &str, value: &Value) {
+    group.throughput(Throughput::Bytes(text.len() as u64));
+    group.bench_function("literal_eval", |bencher| {
+        bencher.iter(|| literal_eval(black_box(text)))
+    });
+    group.bench_function("repr", |bencher| bencher.iter(|| repr(black_box(value))));
+    group.bench_function("json_dumps", |bencher| {
+        bencher.iter(|| json::dumps(black_box(value)))
+    });
+    group.bench_function("to_json", |bencher| {
+        bencher.iter(|| json::to_json(black_box(value)))
+    });
+}
+
+/// Pickle, measured against its own encoding rather than the source text.
+fn binary_formats(group: &mut BenchmarkGroup<'_, WallTime>, value: &Value, pickled: &[u8]) {
+    group.throughput(Throughput::Bytes(pickled.len() as u64));
+    group.bench_function("pickle_dumps", |bencher| {
+        bencher.iter(|| pickle::dumps(black_box(value)))
+    });
+    group.bench_function("pickle_loads", |bencher| {
+        bencher.iter(|| pickle::loads(black_box(pickled)))
+    });
+}
+
 fn formats(c: &mut Criterion) {
     let text = cached_completion();
     let value = literal_eval(&text).expect("benchmark payload is a literal");
@@ -38,50 +70,37 @@ fn formats(c: &mut Criterion) {
     let dumped = json::dumps(&value).expect("benchmark payload is JSON serializable");
 
     let mut group = c.benchmark_group("cached_completion");
-    group.throughput(Throughput::Bytes(text.len() as u64));
-    group.bench_function("literal_eval", |b| {
-        b.iter(|| literal_eval(black_box(&text)))
-    });
-    group.bench_function("repr", |b| b.iter(|| repr(black_box(&value))));
-    group.bench_function("json_dumps", |b| b.iter(|| json::dumps(black_box(&value))));
-    group.bench_function("to_json", |b| b.iter(|| json::to_json(black_box(&value))));
-    group.bench_function("from_json", |b| {
-        b.iter_batched(
+    text_formats(&mut group, &text, &value);
+    binary_formats(&mut group, &value, &pickled);
+    // `from_json` consumes its input, so each iteration gets a freshly parsed one.
+    group.throughput(Throughput::Bytes(dumped.len() as u64));
+    group.bench_function("from_json", |bencher| {
+        bencher.iter_batched(
             || serde_json::from_str::<serde_json::Value>(&dumped).expect("dumps output parses"),
             json::from_json,
-            criterion::BatchSize::SmallInput,
+            BatchSize::SmallInput,
         )
-    });
-    group.bench_function("pickle_dumps", |b| {
-        b.iter(|| pickle::dumps(black_box(&value)))
-    });
-    group.bench_function("pickle_loads", |b| {
-        b.iter(|| pickle::loads(black_box(&pickled)))
     });
     group.finish();
 }
 
-fn nested(open: &str, close: &str, depth: usize) -> String {
-    format!("{}1{}", open.repeat(depth), close.repeat(depth))
-}
+/// One nesting level of each container shape, as `(name, open, close)`.
+const SHAPES: [(&str, &str, &str); 3] = [
+    ("list", "[", "]"),
+    ("dict", "{'a': ", "}"),
+    ("tuple", "(", ",)"),
+];
 
 fn literal_nesting(c: &mut Criterion) {
     let mut group = c.benchmark_group("literal_eval/nesting");
     group.sample_size(10);
     group.measurement_time(Duration::from_secs(3));
     for depth in [4, 16, 64, 128] {
-        for (shape, open, close) in [
-            ("list", "[", "]"),
-            ("dict", "{'a': ", "}"),
-            ("tuple", "(", ",)"),
-        ] {
-            let text = nested(open, close, depth);
-            assert!(matches!(
-                literal_eval(&text),
-                Ok(Value::List(_) | Value::Dict(_) | Value::Tuple(_))
-            ));
-            group.bench_with_input(BenchmarkId::new(shape, depth), &text, |b, text| {
-                b.iter(|| literal_eval(black_box(text)))
+        for (shape, open, close) in SHAPES {
+            let text = format!("{}1{}", open.repeat(depth), close.repeat(depth));
+            group.throughput(Throughput::Bytes(text.len() as u64));
+            group.bench_with_input(BenchmarkId::new(shape, depth), &text, |bencher, text| {
+                bencher.iter(|| literal_eval(black_box(text)))
             });
         }
     }

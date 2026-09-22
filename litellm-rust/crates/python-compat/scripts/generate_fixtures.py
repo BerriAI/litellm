@@ -1,6 +1,6 @@
 """Regenerate generated/values.json: what CPython produces for each value in CORPUS.
 
-    python tests/fixtures/generate.py > generated/values.json
+    python scripts/generate_fixtures.py > generated/values.json
 
 Each row records `repr`, `str`, `json.dumps` (or its error), `bool`, and `pickle.dumps` at
 every protocol. `literal` says whether `ast.literal_eval(repr(value))` gives the value back,

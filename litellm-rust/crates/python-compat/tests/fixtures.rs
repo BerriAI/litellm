@@ -1,6 +1,6 @@
-//! Replays `generated/values.json`, which CPython wrote with `tests/fixtures/generate.py`.
+//! Replays `generated/values.json`, which CPython wrote with `scripts/generate_fixtures.py`.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fs::File, io::Write};
 
 use litellm_python_compat::{
     Value, json,
@@ -286,14 +286,13 @@ fn values_reached_only_through_pickle_match_python(fixtures: &Fixtures) {
 }
 
 /// Byte equality with CPython is not the contract: CPython adds memo opcodes and picks the
-/// smallest integer opcode. `verify_rust_pickles.py` checks that CPython reads these back;
-/// set `PYTHON_COMPAT_RUST_PICKLES` to a file path to export them.
+/// smallest integer opcode. `scripts/verify_rust_pickles.py` checks that CPython reads these
+/// back; set `PYTHON_COMPAT_RUST_PICKLES` to a file path to export them.
 #[rstest]
 fn pickle_dumps_round_trips_every_plain_literal(fixtures: &Fixtures) {
-    let rust_pickles = std::env::var_os("PYTHON_COMPAT_RUST_PICKLES");
-    if let Some(path) = &rust_pickles {
-        let _ = std::fs::remove_file(path);
-    }
+    // Truncate up front: the verifier must read this run's rows and nothing else.
+    let mut export = std::env::var_os("PYTHON_COMPAT_RUST_PICKLES")
+        .map(|path| File::create(path).expect("the export path is writable"));
     let mut mismatches = Mismatches::default();
     for row in fixtures
         .rows
@@ -313,14 +312,9 @@ fn pickle_dumps_round_trips_every_plain_literal(fixtures: &Fixtures) {
         };
         let decoded = pickle::loads(&data).expect("rust pickle decodes");
         mismatches.check(row, "pickle round trip", &row.repr, &repr(&decoded));
-        if let Some(path) = &rust_pickles {
-            use std::io::Write;
-            let mut file = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(path)
-                .unwrap();
-            writeln!(file, "{}\t{}", hex::encode(&data), repr(&value)).unwrap();
+        if let Some(file) = &mut export {
+            writeln!(file, "{}\t{}", hex::encode(&data), repr(&value))
+                .expect("the export file is writable");
         }
     }
     mismatches.finish();
