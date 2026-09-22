@@ -39,6 +39,7 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     CallTypes,
     CallTypesLiteral,
@@ -1589,14 +1590,9 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return self._is_anthropic_request(request_data, logging_obj)
 
     @staticmethod
-    def _message_role(message: object) -> str | None:
-        role: Final = message.get("role") if isinstance(message, dict) else None
-        return role if isinstance(role, str) else None
-
-    @staticmethod
-    def _message_texts(message: object) -> tuple[str, ...]:
+    def _message_texts(message: AllMessageValues) -> tuple[str, ...]:
         """Text entries the framework flattens out of one structured message."""
-        content: Final = message.get("content") if isinstance(message, dict) else None
+        content: Final = message.get("content")
         if isinstance(content, str):
             return (content,)
         if not isinstance(content, list):
@@ -1607,7 +1603,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def _text_source_message_indices(
         cls,
         texts: Sequence[str],
-        messages: Sequence[object],
+        messages: Sequence[AllMessageValues],
     ) -> tuple[int, ...] | None:
         """Map every ``texts`` entry to the index of the structured message it was flattened from.
 
@@ -1631,7 +1627,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def _get_latest_user_text_indices(
         cls,
         texts: Sequence[str],
-        messages: Sequence[object],
+        messages: Sequence[AllMessageValues],
     ) -> frozenset[int] | None:
         """Return text indices belonging to only the latest scannable human-authored (user or developer) message.
 
@@ -1642,7 +1638,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         if sources is None:
             return None
         latest_human: Final = max(
-            (idx for idx in set(sources) if cls._message_role(messages[idx]) in ("user", "developer")),
+            (idx for idx in set(sources) if messages[idx].get("role") in ("user", "developer")),
             default=None,
         )
         if latest_human is None:
@@ -1656,7 +1652,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
     def _get_scannable_text_indices(
         cls,
         texts: Sequence[str],
-        structured_messages: Sequence[object],
+        structured_messages: Sequence[AllMessageValues],
     ) -> frozenset[int] | None:
         """Derive which ``texts`` indices originate from user/system/developer messages.
 
@@ -1669,7 +1665,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         return frozenset(
             text_idx
             for text_idx, source in enumerate(sources)
-            if cls._message_role(structured_messages[source]) in ("user", "system", "developer")
+            if structured_messages[source].get("role") in ("user", "system", "developer")
         )
 
     @staticmethod
