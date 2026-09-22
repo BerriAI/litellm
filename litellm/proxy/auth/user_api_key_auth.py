@@ -90,6 +90,10 @@ from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.network import TrustedProxyConfig, resolve_network_context
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
+from litellm.proxy.auth.oso_authorization import (
+    OsoAuthorizer,
+    enforce_oso_model_authorization,
+)
 from litellm.proxy.auth.resolvers import CredentialRef, Principal
 from litellm.proxy.auth.resolvers.grants import (
     GrantResolver,
@@ -2678,6 +2682,7 @@ async def _run_centralized_common_checks(
     request: Request,
     request_data: dict[str, object],
     route: str,
+    oso_authorizer: OsoAuthorizer | None = None,
 ) -> None:
     """Run ``common_checks`` once at the ``user_api_key_auth`` wrapper
     boundary, regardless of which ``_user_api_key_auth_builder`` path
@@ -2736,6 +2741,15 @@ async def _run_centralized_common_checks(
         return
 
     if user_custom_auth is not None and not general_settings.get("custom_auth_run_common_checks", False):
+        await _enforce_configured_oso_authorization(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request=request,
+            request_data=request_data,
+            route=route,
+            general_settings=general_settings,
+            llm_router=llm_router,
+            oso_authorizer=oso_authorizer,
+        )
         return
 
     parent_otel_span: Final = user_api_key_auth_obj.parent_otel_span
@@ -2991,6 +3005,16 @@ async def _run_centralized_common_checks(
     finally:
         release_spend_counter_batch()
 
+    await _enforce_configured_oso_authorization(
+        user_api_key_auth_obj=user_api_key_auth_obj,
+        request=request,
+        request_data=request_data,
+        route=route,
+        general_settings=general_settings,
+        llm_router=llm_router,
+        oso_authorizer=oso_authorizer,
+    )
+
     if not skip_budget_checks:
         await _check_team_model_budget(
             valid_token=user_api_key_auth_obj,
@@ -3028,6 +3052,36 @@ async def _noop_none() -> None:
     """Sentinel coroutine for asyncio.gather when a fetch is unnecessary
     (e.g. token has no team_id). Keeps the result tuple positional."""
     return
+
+
+async def _enforce_configured_oso_authorization(
+    *,
+    user_api_key_auth_obj: UserAPIKeyAuth,
+    request: Request,
+    request_data: dict[str, object],
+    route: str,
+    general_settings: Mapping[str, object],
+    llm_router: litellm.Router | None,
+    oso_authorizer: OsoAuthorizer | None,
+) -> None:
+    if not RouteChecks.is_llm_api_route(route=route):
+        return
+    model: Final = _get_model_from_request_context(
+        request_data=request_data,
+        route=route,
+        request=request,
+        llm_router=llm_router,
+        team_id=user_api_key_auth_obj.team_id,
+    )
+    request_method: Final = request.method if "method" in request.scope else "POST"
+    await enforce_oso_model_authorization(
+        general_settings=general_settings,
+        valid_token=user_api_key_auth_obj,
+        model=model,
+        route=route,
+        request_method=request_method,
+        authorizer=oso_authorizer,
+    )
 
 
 async def _apply_key_end_user_default_budget_to_token(
