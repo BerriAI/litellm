@@ -1,6 +1,7 @@
 import datetime
 import time
-from types import MappingProxyType
+from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, cast
 
 import pytest
@@ -22,8 +23,13 @@ from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     CallTypes,
     Choices,
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
     LiteLLMRealtimeStreamLoggingObject,
     Message,
     ModelInfo,
@@ -684,6 +690,90 @@ def test_tiered_pricing_only_deployment_selects_router_model_id():
     )
     assert selected is not None
     assert router_model_id in selected
+
+
+@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
+def test_completion_cost_image_generation_reads_deployment_model_info_price_from_logging_metadata(
+    _local_model_cost_map: None, metadata_key: str
+) -> None:
+    cost = completion_cost(
+        completion_response=ImageResponse(data=[ImageObject(url="https://example.com/img.png")]),
+        model="fal_ai/fal-ai/unlisted-image-model",
+        call_type="image_generation",
+        custom_pricing=True,
+        litellm_logging_obj=SimpleNamespace(
+            litellm_params={metadata_key: {"model_info": {"output_cost_per_image": 0.08}}}
+        ),
+    )
+
+    assert cost == pytest.approx(0.08)
+
+
+def test_completion_cost_image_generation_registered_deployment_price_keeps_map_token_rates(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    deployment_id: Final = "gemini-image-deployment-priced-per-image"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        deployment_id,
+        {"mode": "image_generation", "litellm_provider": "gemini", "output_cost_per_image": 0.1},
+    )
+    usage: Final = ImageUsage(
+        input_tokens=10,
+        input_tokens_details=ImageUsageInputTokensDetails(image_tokens=0, text_tokens=10),
+        output_tokens=1290,
+        total_tokens=1300,
+    )
+
+    cost = completion_cost(
+        completion_response=ImageResponse(data=[ImageObject(url="https://example.com/img.png")], usage=usage),
+        model="gemini/gemini-3.1-flash-image-preview",
+        custom_llm_provider="gemini",
+        call_type="image_generation",
+        custom_pricing=True,
+        router_model_id=deployment_id,
+        litellm_logging_obj=SimpleNamespace(litellm_params={"metadata": {"model_info": {"id": deployment_id}}}),
+    )
+
+    assert cost == pytest.approx(10 * 5e-07 + 1290 * 6e-05)
+
+
+def test_completion_cost_image_generation_ignores_deployment_model_info_without_custom_pricing(
+    _local_model_cost_map: None,
+) -> None:
+    cost = completion_cost(
+        completion_response=ImageResponse(data=[ImageObject(url="https://example.com/img.png")]),
+        model="fal_ai/openai/gpt-image-2",
+        call_type="image_generation",
+        custom_pricing=False,
+        optional_params={"quality": "high", "image_size": {"width": 1024, "height": 1024}},
+        litellm_logging_obj=SimpleNamespace(
+            litellm_params={"litellm_metadata": {"model_info": {"output_cost_per_image": 0.5}}}
+        ),
+    )
+
+    assert cost == pytest.approx(0.211)
+
+
+async def test_router_image_generation_bills_litellm_params_output_cost_per_image() -> None:
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "img",
+                "litellm_params": {
+                    "model": "fal_ai/fal-ai/unlisted-image-model",
+                    "api_key": "sk-fake",
+                    "output_cost_per_image": 0.08,
+                },
+            }
+        ]
+    )
+
+    response = await router.aimage_generation(model="img", prompt="x", mock_response="https://example.com/img.png")
+
+    assert response._hidden_params["response_cost"] == pytest.approx(0.08)
 
 
 def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():

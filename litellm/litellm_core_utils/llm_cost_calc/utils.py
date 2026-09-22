@@ -24,6 +24,7 @@ from litellm.types.utils import (
     CallTypes,
     CompletionTokensDetailsWrapper,
     CostPerToken,
+    CustomPricingLiteLLMParams,
     DataResidency,
     ImageResponse,
     ModelInfo,
@@ -48,6 +49,15 @@ _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
 
 # Pre-resolved DataResidency enum values for fast membership checks
 _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
+
+_DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
+
+_IMAGE_TOKEN_RATE_KEYS: Final[tuple[str, ...]] = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_image_token",
+    "output_cost_per_image_token",
+)
 
 # Pre-resolved service-tier cost-key suffixes (e.g. "_priority"). Used per
 # request in the cost-calc path, so the f-strings are built once here instead
@@ -824,6 +834,53 @@ def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: floa
                 break  # Only try the first matching suffix
 
     return default_value
+
+
+def deployment_pricing(model_info: ModelInfo | None) -> ModelInfo | None:
+    """The prices a deployment sets itself, as floats; None when it sets none that parse."""
+    if model_info is None:
+        return None
+    priced_keys: Final = tuple(key for key in _DEPLOYMENT_PRICING_KEYS if model_info.get(key) is not None)
+    pricing: Final = MappingProxyType(
+        {
+            key: price
+            for key in priced_keys
+            if (price := _get_cost_per_unit(model_info, key, default_value=None)) is not None
+        }
+    )
+    if not pricing:
+        return None
+    return cast(ModelInfo, pricing)  # cast-ok: a read-only subset of ModelInfo pricing keys, values validated above
+
+
+def prices_tokens(model_info: ModelInfo) -> bool:
+    """Whether the price table carries any token rate, so a token-priced calculator can bill from usage."""
+    return any(model_info.get(key) is not None for key in _IMAGE_TOKEN_RATE_KEYS)
+
+
+def flat_image_cost(model_info: ModelInfo | None, image_response: ImageResponse) -> float:
+    """The per-image price times the images returned; 0.0 when the table sets no per-image price."""
+    if model_info is None:
+        return 0.0
+    output_cost_per_image: Final = _get_cost_per_unit(model_info, "output_cost_per_image", default_value=None) or 0.0
+    num_images: Final = len(image_response.data) if image_response.data else 0
+    return output_cost_per_image * num_images
+
+
+def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: ModelInfo | None) -> ModelInfo:
+    """The price table an image cost calculator consults for ``model``.
+
+    ``shared_backend_model_info`` keeps deployment prices off the shared ``{provider}/{model}`` key, so
+    a name lookup alone reads the public rate, and a model only the deployment prices has no entry at all.
+    """
+    if model_info is None:
+        return get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    try:
+        shared_model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        return model_info
+    resolved: Final[ModelInfo] = {**shared_model_info, **model_info}
+    return resolved
 
 
 def calculate_cache_writing_cost(
@@ -1711,6 +1768,7 @@ def calculate_image_response_cost_from_usage(
     model: str,
     image_response: ImageResponse,
     custom_llm_provider: str,
+    model_info: ModelInfo | None = None,
 ) -> float | None:
     """
     Calculate image generation cost from usage metadata when available.
@@ -1733,6 +1791,9 @@ def calculate_image_response_cost_from_usage(
     # ImageResponse may carry a default zeroed usage object even when provider
     # usage metadata is absent. Treat this as missing usage and fall back.
     if prompt_tokens == 0 and completion_tokens == 0 and total_tokens == 0:
+        return None
+
+    if model_info is not None and not prices_tokens(model_info):
         return None
 
     input_tokens_details: Final[object] = getattr(usage, "input_tokens_details", None)
@@ -1790,6 +1851,7 @@ def calculate_image_response_cost_from_usage(
         model=model,
         usage=normalized_usage,
         custom_llm_provider=custom_llm_provider,
+        model_info=model_info,
     )
     return prompt_cost + completion_cost
 
@@ -1850,9 +1912,15 @@ class CostCalculatorUtils:
         size: str | None = None,
         optional_params: dict | None = None,
         call_type: str | None = None,
+        model_info: ModelInfo | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
+
+        ``model_info`` is the deployment's own price table. Its valid prices are laid over the shared
+        cost-map entry and handed to the provider calculator, so per-image, per-pixel and per-token
+        deployment prices all apply while provider logic (token-first billing, grounding surcharges,
+        image counting) stays in one place. An unparseable price is logged and ignored.
         """
         from litellm.cost_calculator import default_image_cost_calculator
         from litellm.llms.azure_ai.image_generation.cost_calculator import (
@@ -1878,12 +1946,14 @@ class CostCalculatorUtils:
             quality or completion_response.quality or _requested_image_param(optional_params, "quality") or "standard"
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
+        pricing: Final = deployment_pricing(model_info)
 
         if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
             if isinstance(completion_response, ImageResponse):
                 return vertex_ai_image_cost_calculator(
                     model=model,
                     image_response=completion_response,
+                    model_info=pricing,
                 )
         elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
             if isinstance(completion_response, ImageResponse):
@@ -1902,6 +1972,7 @@ class CostCalculatorUtils:
             return recraft_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                model_info=pricing,
             )
         elif custom_llm_provider == litellm.LlmProviders.AIML.value:
             from litellm.llms.aiml.image_generation.cost_calculator import (
@@ -1911,6 +1982,7 @@ class CostCalculatorUtils:
             return aiml_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                model_info=pricing,
             )
         elif custom_llm_provider == litellm.LlmProviders.COMETAPI.value:
             from litellm.llms.cometapi.image_generation.cost_calculator import (
@@ -1920,6 +1992,7 @@ class CostCalculatorUtils:
             return cometapi_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                model_info=pricing,
             )
         elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
             if call_type in (
@@ -1933,6 +2006,7 @@ class CostCalculatorUtils:
                 return gemini_image_edit_cost_calculator(
                     model=model,
                     image_response=completion_response,
+                    model_info=pricing,
                 )
             from litellm.llms.gemini.image_generation.cost_calculator import (
                 cost_calculator as gemini_image_cost_calculator,
@@ -1941,6 +2015,7 @@ class CostCalculatorUtils:
             return gemini_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                model_info=pricing,
             )
         elif custom_llm_provider == litellm.LlmProviders.AZURE_AI.value:
             return azure_ai_image_cost_calculator(
@@ -1949,6 +2024,7 @@ class CostCalculatorUtils:
                 size=resolved_size,
                 n=resolved_n,
                 optional_params=optional_params,
+                model_info=pricing,
             )
         elif custom_llm_provider == litellm.LlmProviders.FAL_AI.value:
             from litellm.llms.fal_ai.cost_calculator import (
@@ -1959,6 +2035,7 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
                 optional_params=optional_params,
+                model_info=pricing,
             )
         elif custom_llm_provider == litellm.LlmProviders.RUNWAYML.value:
             from litellm.llms.runwayml.cost_calculator import (
@@ -1968,6 +2045,7 @@ class CostCalculatorUtils:
             return runwayml_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                model_info=pricing,
             )
         elif (
             custom_llm_provider == litellm.LlmProviders.OPENAI.value
@@ -1984,6 +2062,7 @@ class CostCalculatorUtils:
                     model=model,
                     image_response=completion_response,
                     custom_llm_provider=custom_llm_provider,
+                    model_info=pricing,
                 )
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(
@@ -1993,6 +2072,7 @@ class CostCalculatorUtils:
                 n=resolved_n,
                 size=resolved_size,
                 optional_params=optional_params,
+                model_info=pricing,
             )
         else:
             return default_image_cost_calculator(
@@ -2002,5 +2082,6 @@ class CostCalculatorUtils:
                 n=resolved_n,
                 size=resolved_size,
                 optional_params=optional_params,
+                model_info=pricing,
             )
         return 0.0

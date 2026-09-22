@@ -23,16 +23,22 @@ Surface = Literal["sdk", "proxy"]
 
 
 @dataclass(frozen=True, slots=True)
-class BugReport:
+class EnvironmentReport:
     surface: Surface
-    exception_type: str
-    litellm_frames: tuple[str, ...]
     litellm_version: str
     python_version: str
+    deployment: str | None
+    config_lines: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class BugReport:
+    environment: EnvironmentReport
+    exception_type: str
+    litellm_frames: tuple[str, ...]
     call_type: str | None
     custom_llm_provider: str | None
     stream: bool | None
-    config_lines: tuple[str, ...]
 
 
 def bug_report_enabled() -> bool:
@@ -69,6 +75,22 @@ def allowlisted(value: object, allowed: frozenset[str]) -> str | None:
     return value if isinstance(value, str) and value in allowed else None
 
 
+def _deployment(surface: Surface) -> str | None:
+    if surface == "sdk":
+        return "pip / Python SDK"
+    return "Docker" if os.path.exists("/.dockerenv") else None
+
+
+def build_environment_report(*, surface: Surface, config_lines: tuple[str, ...] = ()) -> EnvironmentReport:
+    return EnvironmentReport(
+        surface=surface,
+        litellm_version=litellm_version,
+        python_version=platform.python_version(),
+        deployment=_deployment(surface),
+        config_lines=config_lines,
+    )
+
+
 def build_bug_report(
     exc: BaseException,
     *,
@@ -79,20 +101,17 @@ def build_bug_report(
     config_lines: tuple[str, ...] = (),
 ) -> BugReport:
     return BugReport(
-        surface=surface,
+        environment=build_environment_report(surface=surface, config_lines=config_lines),
         exception_type=type(exc).__name__,
         litellm_frames=_get_litellm_frames(exc),
-        litellm_version=litellm_version,
-        python_version=platform.python_version(),
         call_type=call_type,
         custom_llm_provider=allowlisted(custom_llm_provider, KNOWN_PROVIDERS),
         stream=stream if isinstance(stream, bool) else None,
-        config_lines=config_lines,
     )
 
 
 def _domain(report: BugReport) -> str:
-    if report.surface == "sdk":
+    if report.environment.surface == "sdk":
         return "Python SDK: the litellm package itself"
     if report.custom_llm_provider is not None:
         return "LLM translation: a specific provider's request or response"
@@ -119,11 +138,11 @@ def _description(report: BugReport, frames: tuple[str, ...], config_lines: tuple
         "```\n\n```\n\n"
         f"Exception: `{report.exception_type}`\n\n"
         f"{frame_block}"
-        f"Surface: {report.surface}\n"
+        f"Surface: {report.environment.surface}\n"
         f"Endpoint / call: {report.call_type or 'unknown'}\n"
         f"Provider: {report.custom_llm_provider or 'unknown'}\n"
-        f"LiteLLM: {report.litellm_version}\n"
-        f"Python: {report.python_version}\n"
+        f"LiteLLM: {report.environment.litellm_version}\n"
+        f"Python: {report.environment.python_version}\n"
         f"{stream_line}"
         f"{config_block}"
     )
@@ -131,17 +150,13 @@ def _description(report: BugReport, frames: tuple[str, ...], config_lines: tuple
 
 def _issue_url(report: BugReport, frames: tuple[str, ...], config_lines: tuple[str, ...]) -> str:
     deployment: Final[tuple[tuple[str, str], ...]] = (
-        (("deployment", "pip / Python SDK"),)
-        if report.surface == "sdk"
-        else (("deployment", "Docker"),)
-        if os.path.exists("/.dockerenv")
-        else ()
+        () if report.environment.deployment is None else (("deployment", report.environment.deployment),)
     )
     fields: Final = (
         ("template", "bug_report.yml"),
         ("labels", "bug"),
         ("title", _title(report, frames)),
-        ("version", report.litellm_version),
+        ("version", report.environment.litellm_version),
         ("domain", _domain(report)),
         ("description", _description(report, frames, config_lines)),
     ) + deployment
@@ -150,7 +165,7 @@ def _issue_url(report: BugReport, frames: tuple[str, ...], config_lines: tuple[s
 
 def bug_report_issue_url(report: BugReport) -> str:
     frames: Final = report.litellm_frames
-    config_lines: Final = report.config_lines
+    config_lines: Final = report.environment.config_lines
     candidates: Final = (
         *((frames, config_lines[:count]) for count in range(len(config_lines), -1, -1)),
         *((frames[index:], ()) for index in range(1, len(frames) + 1)),
