@@ -8,7 +8,7 @@ import pytest
 from hypothesis import Phase, example, given, settings, strategies as st
 from openai import OpenAI
 
-from integration._support.client import Gateway, eventually
+from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, wire_server
 
@@ -192,6 +192,34 @@ def test_perplexity_stream_with_cost_breakdown_object_completes_and_bills_total_
         rows: Final = eventually(lambda: read_rows('SELECT spend, prompt_tokens, completion_tokens FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (identity,)), lambda values: len(values) == 1, seconds=70)
         assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"]) == (11, 4)
         assert float(rows[0]["spend"]) == pytest.approx(total_cost)
+
+
+@pytest.mark.covers("other.streaming.fallback.empty_leading_chunk_then_disconnect_streams_fallback_with_usage_and_spend")
+def test_primary_stream_with_empty_first_chunk_then_disconnect_falls_back_and_bills_the_fallback(gateway: Gateway) -> None:
+    identity: Final = "stream-empty-fallback-" + uuid.uuid4().hex
+    empty_first: Final = b"data: " + json.dumps({"id": identity + "-primary", "object": "chat.completion.chunk", "created": 1, "model": "gpt-4o-mini", "choices": [], "usage": {"prompt_tokens": 11, "completion_tokens": 0, "total_tokens": 11}}).encode() + b"\n\n"
+    with gateway.scenario() as scenario:
+        with wire_server(lambda request: Reply(content_type="text/event-stream", chunks=(empty_first, b":" + b"x" * 4_000_000 + b"\n\n", empty_first), abort_after=2)) as primary, wire_server(lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))) as fallback:
+            primary_model: Final = scenario.model(api_base=primary.url + "/v1", input_cost_per_token=0.001, output_cost_per_token=0.002)
+            fallback_model: Final = scenario.model(api_base=fallback.url + "/v1", input_cost_per_token=0.001, output_cost_per_token=0.002)
+            original_fallbacks: Final = object_value(gateway.get("/router/settings")["current_values"]).get("fallbacks")
+            gateway.post("/config/update", {"router_settings": {"fallbacks": [{primary_model: [fallback_model]}]}})
+            scenario.cleanups.callback(gateway.post, "/config/update", {"router_settings": {"fallbacks": original_fallbacks}})
+            body: Final = {"model": primary_model, "messages": [{"role": "user", "content": identity}], "stream": True, "stream_options": {"include_usage": True}}
+            with gateway.client.stream("POST", "/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {gateway.key}"}) as response:
+                lines: Final = tuple(line for line in response.iter_lines() if line.startswith("data:"))
+            assert response.status_code == 200, lines
+            assert lines[-1] == "data: [DONE]", lines
+            events: Final = tuple(json.loads(line.removeprefix("data:")) for line in lines[:-1])
+            assert all("error" not in event for event in events), lines
+            assert "".join(choice["delta"].get("content") or "" for event in events for choice in event["choices"]) == "Hello 雪 café", lines
+            usages: Final = tuple(event["usage"] for event in events if event.get("usage") is not None)
+            assert (usages[-1]["prompt_tokens"], usages[-1]["completion_tokens"]) == (11, 4), lines
+            assert tuple(json.loads(request.body)["messages"] for request in primary.drain()) == (body["messages"],)
+            assert tuple(json.loads(request.body)["messages"] for request in fallback.drain()) == (body["messages"],)
+            rows: Final = eventually(lambda: read_rows('SELECT spend, prompt_tokens, completion_tokens, status FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (identity,)), lambda values: len(values) == 1, seconds=70)
+            assert (rows[0]["prompt_tokens"], rows[0]["completion_tokens"], rows[0]["status"]) == (11, 4, "success"), rows
+            assert float(rows[0]["spend"]) == pytest.approx(0.019), rows
 
 
 @pytest.mark.covers("other.streaming.failure.truncated_transport_raises_and_control_recovers")
