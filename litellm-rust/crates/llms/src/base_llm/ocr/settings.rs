@@ -1,8 +1,6 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use litellm_core_utils::settings::Lookup;
-
-pub type Secrets = Arc<dyn Lookup + Send + Sync>;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OcrSettings {

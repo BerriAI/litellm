@@ -13,7 +13,7 @@ from litellm.responses.dispatch import (
 )
 from litellm.rust_bridge import catalog
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import Route, Rule
+from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.responses.entrypoints import (
     NATIVE_ARESPONSES,
@@ -26,7 +26,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 
 INPUT: Final = [{"role": "user", "content": "hi"}]
 PYTHON_RULES: Final = ()
-RUST_RULES: Final = (Rule(Route.RESPONSES, Rollout.RUST_REQUIRED),)
+RUST_RULES: Final = (RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),)
 
 
 def _response(model: str = "gpt-4o") -> ResponsesAPIResponse:
@@ -102,7 +102,8 @@ async def test_async_python_route_forwards_original_call_shape() -> None:
     response: Final = _response()
 
     async def python(
-        *call_args: object, **call_kwargs: object  # kwargs-ok: records call shape
+        *call_args: object,
+        **call_kwargs: object,  # kwargs-ok: records call shape
     ) -> ResponsesAPIResponse:
         captured.append((call_args, call_kwargs))
         return response
@@ -143,9 +144,7 @@ def test_native_receives_normalized_request_and_original_call_shape() -> None:
         "custom_llm_provider": "anthropic",
         "litellm_metadata": metadata,
     }
-    captured: Final[
-        list[tuple[LiteLLMResponsesRequest, tuple[object, ...], Mapping[str, object]]]
-    ] = []
+    captured: Final[list[tuple[LiteLLMResponsesRequest, tuple[object, ...], Mapping[str, object]]]] = []
     response: Final = _response("anthropic/claude-sonnet-4-5")
 
     def python(*call_args: object, **call_kwargs: object) -> ResponsesAPIResponse:  # kwargs-ok: rejected fallback
@@ -228,9 +227,7 @@ def test_internal_async_marker_bypasses_native() -> None:
         ((), {}),
     ),
 )
-def test_binding_errors_delegate_unchanged_to_python(
-    args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> None:
+def test_binding_errors_delegate_unchanged_to_python(args: tuple[object, ...], kwargs: Mapping[str, object]) -> None:
     captured: Final[list[tuple[tuple[object, ...], Mapping[str, object]]]] = []
     response: Final = _response()
 

@@ -17,6 +17,11 @@ pub fn parse_str_bool(value: &str) -> Option<bool> {
     token.eq_ignore_ascii_case("false").then_some(false)
 }
 
+/// `redis-py` string Booleans: only `1`, `true`, and `yes` (case-insensitive) are true.
+pub fn parse_redis_bool(value: &str) -> bool {
+    value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("yes")
+}
+
 impl<'de> DeserializeAs<'de, i64> for LaxI64 {
     fn deserialize_as<D: Deserializer<'de>>(deserializer: D) -> Result<i64, D::Error> {
         deserializer.deserialize_any(Self)

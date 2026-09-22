@@ -92,6 +92,10 @@ impl BaseOcrConfig for ReductoParseV3Config {
     type ProviderRequest = ReductoV3Request;
     type Environment = Vec<(String, String)>;
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec![REDUCTO_API_KEY_ENV]
+    }
+
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &["formatting", "retrieval", "settings"]
     }
@@ -179,6 +183,10 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
     type OcrParams = ReductoLegacyParams;
     type ProviderRequest = ReductoLegacyRequest;
     type Environment = Vec<(String, String)>;
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec![REDUCTO_API_KEY_ENV]
+    }
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &["enhance"]

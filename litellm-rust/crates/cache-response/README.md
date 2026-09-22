@@ -36,6 +36,8 @@ Callers supply Unix time for response freshness. Backend TTL uses its own clock.
 
 The extension keeps a private test harness for memory and Redis single and batch response lookup and storage. Batch lookup returns ordered values plus missing indices for embedding partial-hit wiring. No bridge-only cache type is part of the public API
 
+The bridge also exposes a production-shaped response cache runtime selected through the Rust catalog. Its shipped rule set is empty, so current SDK, Router, and proxy calls stay on Python and do not construct native cache resources. Tests can inject a rule and build the native memory runtime from an ordinary Python `Cache` configuration without changing the legacy cache classes
+
 Object responses are written as they are, and every other response shape is written as a serialized string, which is the pair of shapes Python reads. A string on the wire is therefore always a serialized response, so string-valued responses round trip. Typed backends such as memory never pass through the codec
 
 The resolver reads the namespace's `cache` attribute each time it resolves. A captured binding retains the selected service for its operation, including background writes. `None` disables caching. Custom Python cache objects keep their original methods, arguments, returned awaitables, exceptions, and caller-task execution

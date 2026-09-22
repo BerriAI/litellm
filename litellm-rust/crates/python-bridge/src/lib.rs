@@ -7,6 +7,11 @@ mod http;
 mod marshal;
 mod python_settings;
 mod routes;
+#[allow(
+    dead_code,
+    reason = "secret-manager foundations await rollout activation"
+)]
+mod secrets;
 mod token_counter;
 
 #[pymodule(gil_used = true)]
@@ -43,7 +48,7 @@ mod _native {
         let dict = module.dict();
         dict.set_item("_CacheTestHandle", py.get_type::<CacheTestHandle>())?;
         dict.set_item("_CacheTestResolver", py.get_type::<CacheTestResolver>())?;
-        dict.set_item("_CacheTestBinding", py.get_type::<ResolvedCache>())
+        dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())
     }
 }
 

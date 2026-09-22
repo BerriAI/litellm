@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm.llms.anthropic.experimental_pass_through.messages import handler as main
-from litellm.rust_bridge.catalog import Context, Delivery, Route
+from litellm.rust_bridge.catalog import Delivery, Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
@@ -71,8 +71,8 @@ def _public_request(
     )
 
 
-def _context(request: LiteLLMMessagesRequest) -> Context:
-    return Context(
+def _context(request: LiteLLMMessagesRequest) -> RouteContext:
+    return RouteContext(
         Route.MESSAGES,
         provider=request.custom_llm_provider,
         model=request.model,

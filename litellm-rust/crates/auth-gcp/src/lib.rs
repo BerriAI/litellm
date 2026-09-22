@@ -23,6 +23,16 @@ const VERTEXAI_PROJECT_ENV: &str = "VERTEXAI_PROJECT";
 const VERTEXAI_LOCATION_ENV: &str = "VERTEXAI_LOCATION";
 const VERTEX_LOCATION_ENV: &str = "VERTEX_LOCATION";
 
+pub const SECRET_NAMES: &[&str] = &[
+    VERTEX_AI_API_KEY_ENV,
+    VERTEXAI_API_KEY_ENV,
+    VERTEXAI_CREDENTIALS_ENV,
+    GOOGLE_APPLICATION_CREDENTIALS_ENV,
+    VERTEXAI_PROJECT_ENV,
+    VERTEXAI_LOCATION_ENV,
+    VERTEX_LOCATION_ENV,
+];
+
 #[derive(Clone, Debug, Default)]
 pub struct VertexConfig {
     credentials: Option<Sourced<SecretValue>>,
@@ -406,6 +416,7 @@ fn auth_acquisition_error(error: gcp_auth::Error) -> Error {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use serde_json::json;
@@ -473,6 +484,27 @@ mod tests {
                 &BTreeMap::new()
             )
             .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn secret_names_cover_environment_reads() {
+        let seen = Arc::new(std::sync::Mutex::new(BTreeSet::<String>::new()));
+        let recorded = seen.clone();
+        let env = |name: &str| {
+            recorded.lock().unwrap().insert(name.to_string());
+            None
+        };
+        let auth = auth(Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+        auth.validate_environment(Vec::new(), None, &VertexConfig::default(), &env)
+            .await
+            .unwrap();
+        get_vertex_ai_location(&VertexConfig::default(), &env);
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .all(|name| SECRET_NAMES.contains(&name.as_str()))
         );
     }
 

@@ -622,6 +622,26 @@ mod tests {
     }
 
     #[test]
+    fn secret_names_cover_environment_reads() {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::BTreeSet::<String>::new(),
+        ));
+        let recorded = seen.clone();
+        let env = |name: &str| {
+            recorded.lock().unwrap().insert(name.to_string());
+            None
+        };
+        resolve_aws_region(None, &Map::new(), &env);
+        aws_auth_config(&Map::new(), &env);
+        assert!(
+            seen.lock()
+                .unwrap()
+                .iter()
+                .all(|name| crate::constants::SECRET_NAMES.contains(&name.as_str()))
+        );
+    }
+
+    #[test]
     fn a_region_comes_from_the_call_then_the_model_then_the_environment() {
         let params = Map::from_iter([("aws_region_name".to_string(), Value::from("eu-west-1"))]);
         let region_name = |key: &str| (key == AWS_REGION_NAME).then(|| "ap-south-1".to_string());

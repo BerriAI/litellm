@@ -7,7 +7,7 @@ mod resolver;
 mod state;
 
 pub use error::Error;
-pub use handler::{SecretManager, get_secret_from_manager};
+pub use handler::{ExternalSecretManager, SecretManager, get_secret_from_manager};
 pub use litellm_secrets_types::{
     AccessMode, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };

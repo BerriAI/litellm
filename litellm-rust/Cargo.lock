@@ -2894,6 +2894,7 @@ dependencies = [
  "litellm-host",
  "litellm-http",
  "litellm-llms",
+ "litellm-secrets",
  "litellm-types",
  "mime_guess",
  "moka",
@@ -3006,6 +3007,7 @@ dependencies = [
  "litellm-framing",
  "litellm-host",
  "litellm-http",
+ "litellm-secrets",
  "litellm-types",
  "reqwest 0.12.28",
  "rstest",
@@ -3024,6 +3026,7 @@ dependencies = [
 name = "litellm-python-bridge"
 version = "0.1.0"
 dependencies = [
+ "aws-sdk-secretsmanager",
  "bytes",
  "criterion",
  "futures-util",
@@ -3047,6 +3050,9 @@ dependencies = [
  "litellm-host-python",
  "litellm-http",
  "litellm-llms",
+ "litellm-secrets",
+ "litellm-secrets-aws",
+ "litellm-secrets-types",
  "litellm-token-counter",
  "litellm-types",
  "pyo3",
@@ -3062,6 +3068,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "url",
+ "wiremock",
 ]
 
 [[package]]

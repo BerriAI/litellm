@@ -22,7 +22,12 @@ pub(crate) async fn perform_ocr_request(
 ) -> Result<LiteLLMOcrResponse, Error> {
     request.response_format()?;
     let config = request.config;
-    let request = prepare_request(request, caller_document, client);
+    let secrets = client
+        .secret_source()
+        .resolve(&config.secret_names())
+        .await
+        .map_err(|error| Error::Secret(std::sync::Arc::new(error)))?;
+    let request = prepare_request(request, caller_document, client, secrets);
     let hooks = OcrCallHooks::new(host.clone(), &request, config);
     config.ocr(client, &request, &hooks).await
 }

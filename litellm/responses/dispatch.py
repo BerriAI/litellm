@@ -5,7 +5,7 @@ from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding sele
 
 from litellm.responses import main
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-from litellm.rust_bridge.catalog import Context, Delivery, Route
+from litellm.rust_bridge.catalog import Delivery, Route, RouteContext
 from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
 from litellm.rust_bridge.public_call import bind, optional_bool, optional_mapping, optional_str, signature
 from litellm.rust_bridge.responses.entrypoints import (
@@ -64,8 +64,8 @@ def _public_request(
     )
 
 
-def _context(request: LiteLLMResponsesRequest) -> Context:
-    return Context(
+def _context(request: LiteLLMResponsesRequest) -> RouteContext:
+    return RouteContext(
         Route.RESPONSES,
         provider=request.custom_llm_provider,
         model=request.model,
