@@ -150,8 +150,6 @@ class TestProviderSpecificHeaderUtils:
     def test_case_insensitive_dict_operations(self):
         """Test the underlying _CaseInsensitiveDict class for 100% coverage."""
         from litellm.litellm_core_utils.get_provider_specific_headers import _CaseInsensitiveDict
-        import pytest
-
         d = _CaseInsensitiveDict({"Authorization": "Bearer 123", "anthropic-version": "2023-06-01"})
 
         assert d["Authorization"] == "Bearer 123"
