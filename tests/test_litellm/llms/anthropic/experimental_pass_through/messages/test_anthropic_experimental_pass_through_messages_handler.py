@@ -1574,7 +1574,9 @@ async def test_anthropic_messages_forwards_safeguards_and_dangerous_tool_use_bet
     safeguards, safeguard_results = _claude_code_auto_mode_request()
     captured: dict[str, object] = {}
 
-    with patch.object(VertexBase, "_ensure_access_token", return_value=("test-token", "test-project")):
+    with patch.object(  # test-quality-ok: the GCP token exchange runs before the faked HTTP boundary
+        VertexBase, "_ensure_access_token", return_value=("test-token", "test-project")
+    ):
         response = await handler.anthropic_messages(
             max_tokens=16,
             messages=[{"role": "user", "content": "hi"}],
