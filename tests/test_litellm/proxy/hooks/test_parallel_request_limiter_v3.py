@@ -6965,3 +6965,141 @@ def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_t
         "Rate limit exceeded for api_key: sk-test. Limit type: requests. "
         f"Current limit: 2, Remaining: 0. Limit resets at: {expected_reset}"
     )
+
+
+def _resolve_alias_to_target(model: str) -> str | None:
+    return "target" if model == "alias" else None
+
+
+async def _rpm_request(handler: _PROXY_MaxParallelRequestsHandler, cache: DualCache, auth: UserAPIKeyAuth, model: str) -> None:
+    await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data={"model": model}, call_type="acompletion")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_name, second_name", [("target", "alias"), ("alias", "target")])
+async def test_model_group_alias_shares_deployment_default_rpm_bucket_with_its_target(
+    monkeypatch: pytest.MonkeyPatch, first_name: str, second_name: str
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "target",
+                "litellm_params": {"model": "openai/gpt-test", "api_key": "test-key", "default_api_key_rpm_limit": 2},
+                "model_info": {"id": "target-deployment"},
+            }
+        ],
+        model_group_alias={"alias": "target"},
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-alias-default"))
+
+    await _rpm_request(handler, cache, auth, first_name)
+    await _rpm_request(handler, cache, auth, first_name)
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, auth, second_name)
+
+    assert exc.value.status_code == 429
+    assert "model_per_key" in str(exc.value.detail)
+    assert f"{auth.api_key}:target" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_name, second_name", [("target", "alias"), ("alias", "target")])
+@pytest.mark.parametrize(
+    "limits, counter_scope",
+    [
+        ({"metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_key"),
+        (
+            {
+                "team_id": "t",
+                "metadata": {"model_rpm_limit": {"other-model": 100}},
+                "team_metadata": {"model_rpm_limit": {"target": 1}},
+            },
+            "model_per_team",
+        ),
+        ({"org_id": "o", "organization_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_organization"),
+        ({"project_id": "p", "project_metadata": {"model_rpm_limit": {"target": 1}}}, "model_per_project"),
+    ],
+    ids=["key_metadata", "team_metadata", "organization_metadata", "project_metadata"],
+)
+async def test_model_group_alias_shares_metadata_model_rpm_bucket_with_its_target(
+    limits: dict[str, object], counter_scope: str, first_name: str, second_name: str
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), model_group_resolver=_resolve_alias_to_target
+    )
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-alias-metadata"), **limits)
+
+    await _rpm_request(handler, cache, auth, first_name)
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, auth, second_name)
+
+    assert exc.value.status_code == 429
+    assert counter_scope in str(exc.value.detail)
+    assert ":target" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_model_rpm_limit_keyed_by_the_alias_name_still_limits_alias_requests_only() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache), model_group_resolver=_resolve_alias_to_target
+    )
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-alias-keyed"), metadata={"model_rpm_limit": {"alias": 1}})
+
+    await _rpm_request(handler, cache, auth, "alias")
+    with pytest.raises(HTTPException) as exc:
+        await _rpm_request(handler, cache, auth, "alias")
+    assert exc.value.status_code == 429
+    assert "model_per_key" in str(exc.value.detail)
+
+    await _rpm_request(handler, cache, auth, "target")
+
+
+@pytest.mark.parametrize(
+    "key_metadata, charges_team_model_pool",
+    [({}, True), ({"model_tpm_limit": {"target": 500}}, False)],
+    ids=["no_key_override", "key_owns_target_tpm_limit"],
+)
+def test_success_tpm_accounting_charges_the_alias_target_bucket(
+    key_metadata: dict[str, object], charges_team_model_pool: bool
+) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), model_group_resolver=_resolve_alias_to_target
+    )
+    response: Final = ModelResponse(
+        id="alias-tpm",
+        object="chat.completion",
+        created=int(datetime.now().timestamp()),
+        model="alias",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+        choices=[],
+    )
+    kwargs: Final = {
+        "standard_logging_object": {
+            "metadata": {"user_api_key_hash": hash_token("sk-alias-tpm"), "user_api_key_team_id": "t"}
+        },
+        "litellm_params": {
+            "metadata": {
+                "model_group": "alias",
+                "user_api_key_metadata": key_metadata,
+                "user_api_key_team_metadata": {"model_tpm_limit": {"target": 500}},
+            }
+        },
+        "model": "alias",
+    }
+
+    ops: Final = handler._build_success_event_pipeline_operations(
+        kwargs=kwargs, response_obj=response, rate_limit_type="output"
+    )
+
+    charged_keys: Final = {op["key"] for op in ops}
+    assert handler.create_rate_limit_keys("model_per_key", f"{hash_token('sk-alias-tpm')}:target", "tokens") in charged_keys
+    assert not any(":alias" in key for key in charged_keys)
+    team_pool_key: Final = handler.create_rate_limit_keys("model_per_team", "t:target", "tokens")
+    assert (team_pool_key in charged_keys) is charges_team_model_pool
