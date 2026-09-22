@@ -2015,13 +2015,19 @@ def client(original_function):
                     print_verbose(f"Error while checking max token limit: {e}")
 
             # MODEL CALL
+            call_kwargs: Final = (
+                {**kwargs, "input": _caching_handler_response.embedding_uncached_input}
+                if _caching_handler_response is not None
+                and _caching_handler_response.embedding_uncached_input is not None
+                else kwargs
+            )
             try:
-                result = await original_function(*args, **kwargs)
+                result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:
                     await async_post_call_failure_deployment_hook(
-                        request_data=kwargs,
+                        request_data=call_kwargs,
                         exception=deployment_error,
                         call_type=call_type,
                     )
@@ -2062,7 +2068,7 @@ def client(original_function):
             post_call_processing(
                 original_response=result,
                 model=model,
-                optional_params=kwargs,
+                optional_params=call_kwargs,
                 original_function=original_function,
                 rules_obj=rules_obj,
             )
@@ -2070,7 +2076,7 @@ def client(original_function):
             _call_type_enum: Final = _CALL_TYPE_ENUM_MAP.get(call_type)
             if _call_type_enum is not None:
                 result = await async_post_call_success_deployment_hook(
-                    request_data=kwargs,
+                    request_data=call_kwargs,
                     response=result,
                     call_type=_call_type_enum,
                 )
@@ -2079,7 +2085,7 @@ def client(original_function):
             await _llm_caching_handler.async_set_cache(
                 result=result,
                 original_function=original_function,
-                kwargs=kwargs,
+                kwargs=call_kwargs,
                 args=args,
             )
 
