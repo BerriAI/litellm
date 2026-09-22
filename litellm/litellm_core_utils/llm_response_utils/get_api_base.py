@@ -11,24 +11,20 @@ from ...types.router import LiteLLM_Params
 
 
 def _api_base_without_login(provider: str) -> str | None:
-    match provider:
-        case "github_copilot":
-            return litellm.GithubCopilotConfig().api_base_without_login()
-        case "chatgpt":
-            return litellm.ChatGPTConfig().api_base_without_login()
-        case _:
-            return None
+    if provider == "github_copilot":
+        return litellm.GithubCopilotConfig().api_base_without_login()
+    if provider == "chatgpt":
+        return litellm.ChatGPTConfig().api_base_without_login()
+    return None
 
 
 def _provider_default_api_base(model: str, custom_llm_provider: str | None, stream: bool) -> str | None:
-    match custom_llm_provider:
-        case "gemini":
-            action: Final = "streamGenerateContent" if stream else "generateContent"
-            return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}"
-        case "openai":
-            return "https://api.openai.com"
-        case _:
-            return None
+    if custom_llm_provider == "gemini":
+        action: Final = "streamGenerateContent" if stream else "generateContent"
+        return f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{action}"
+    if custom_llm_provider == "openai":
+        return "https://api.openai.com"
+    return None
 
 
 def get_api_base(model: str, optional_params: dict | LiteLLM_Params) -> str | None:
